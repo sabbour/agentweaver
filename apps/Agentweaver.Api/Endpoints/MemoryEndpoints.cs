@@ -13,6 +13,7 @@ using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
@@ -62,6 +63,7 @@ app.MapGet("/api/projects/{id}/memory", async (
         .Select(m => new
         {
             m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
+            m.SourceKind, m.SourceIdentity, m.SourceRunId, m.TrustState, m.ApprovedBy, m.ApprovedAt,
             created_at = m.CreatedAt, updated_at = m.UpdatedAt,
         })
         .ToList();
@@ -96,6 +98,7 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
         .Select(m => new
         {
             m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
+            m.SourceKind, m.SourceIdentity, m.SourceRunId, m.TrustState, m.ApprovedBy, m.ApprovedAt,
             created_at = m.CreatedAt, updated_at = m.UpdatedAt,
         })
         .ToList();
@@ -111,6 +114,8 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -120,21 +125,32 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
     if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
     if (string.IsNullOrWhiteSpace(request.Type) || string.IsNullOrWhiteSpace(request.Content))
         return Results.BadRequest(new { error = "type and content are required." });
+    var memoryType = request.Type.Trim().ToLowerInvariant();
+    var importance = (request.Importance ?? "medium").Trim().ToLowerInvariant();
+    if (!MemoryWritePolicy.IsMemoryType(memoryType))
+        return Results.BadRequest(new { error = "type must be core_context, learning, pattern, or update." });
+    if (!MemoryWritePolicy.IsImportance(importance))
+        return Results.BadRequest(new { error = "importance must be low, medium, or high." });
+
+    var (author, authorFailure) = await RunAuthorship.ResolveAsync(
+        httpContext, id, name, runResolver, turnTokens, ct);
+    if (authorFailure is not null) return authorFailure;
 
     var now = DateTimeOffset.UtcNow;
-    var tags = request.Tags;
-    var normalizedTags = !string.IsNullOrWhiteSpace(tags)
-        ? "," + string.Join(",", tags.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0)) + ","
-        : null;
+    var normalizedTags = MemoryWritePolicy.NormalizeTags(request.Tags);
     var memory = new AgentMemory
     {
         ProjectId = id,
-        AgentName = name,
-        Type = request.Type!,
-        Importance = request.Importance ?? "medium",
+        AgentName = author!.AgentName,
+        Type = memoryType,
+        Importance = importance,
         Content = request.Content!,
         Tags = normalizedTags,
         SessionId = request.SessionId,
+        SourceKind = author.SourceKind,
+        SourceIdentity = author.SourceIdentity,
+        SourceRunId = author.SourceRunId,
+        TrustState = MemoryTrustStates.Pending,
         CreatedAt = now,
         UpdatedAt = now,
     };
@@ -146,8 +162,55 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
     return Results.Created($"/api/projects/{id}/agents/{name}/memory/{memory.Id}", new
     {
         memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
+        memory.SourceKind, memory.SourceIdentity, memory.SourceRunId, memory.TrustState,
         created_at = memory.CreatedAt,
     });
+});
+
+// POST /api/projects/{id}/agents/{name}/memory/{memId}/promote
+app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/promote", async (
+    string id,
+    string name,
+    int memId,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+
+    var (approver, authorFailure) = await RunAuthorship.ResolveAsync(
+        httpContext, id, requestedAgentName: null, runResolver, turnTokens, ct);
+    if (authorFailure is not null) return authorFailure;
+    if (approver!.SourceKind == MemorySourceKinds.Run)
+    {
+        if (!approver.IsCoordinator)
+            return Results.Json(new { error = "coordinator_approval_required" }, statusCode: StatusCodes.Status403Forbidden);
+    }
+    else if (await ProjectAuthorization.RequireAccessAsync(
+        httpContext, project, configuration, ProjectRole.Owner, ct) is { } forbid)
+    {
+        return forbid;
+    }
+
+    var memory = await memoryDb.AgentMemory.FindAsync(new object[] { memId }, ct);
+    if (memory is null || memory.ProjectId != id || !string.Equals(memory.AgentName, name, StringComparison.OrdinalIgnoreCase))
+        return Results.NotFound();
+    if (memory.TrustState == MemoryTrustStates.Approved)
+        return Results.Ok(new { memory.Id, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt });
+
+    memory.TrustState = MemoryTrustStates.Approved;
+    memory.ApprovedBy = approver.SourceIdentity;
+    memory.ApprovedAt = DateTimeOffset.UtcNow;
+    memory.UpdatedAt = memory.ApprovedAt.Value;
+    await memoryDb.SaveChangesAsync(ct);
+    return Results.Ok(new { memory.Id, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt });
 });
 
 // GET /api/projects/{id}/agents/{name}/memory/{memId}
@@ -171,6 +234,7 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory/{memId}", async (
     return Results.Ok(new
     {
         memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
+        memory.SourceKind, memory.SourceIdentity, memory.SourceRunId, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt,
         created_at = memory.CreatedAt, updated_at = memory.UpdatedAt,
     });
 });

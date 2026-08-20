@@ -50,8 +50,8 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         var projectId = await CreateProjectAsync();
         var pid = ProjectId.Parse(projectId);
 
-        // Seed a Ready, unclaimed task captured by the OWNER (so the owner client owns the resulting
-        // coordinator run and can read its detail endpoints — IsOwner compares run.SubmittingUser).
+        // Preserve the display GitHub login separately from the durable auth subject used by the
+        // resulting background run.
         var backlogStore = _factory.Services.GetRequiredService<IBacklogTaskStore>();
         var task = new BacklogTask
         {
@@ -61,7 +61,8 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
             Description = "deterministic pickup",
             State       = BacklogTaskState.Ready,
             OrderKey    = "n",
-            CapturedBy  = CoordinatorWebApplicationFactory.OwnerUser,
+            CapturedBy  = "owner-github-login",
+            CapturedByUserId = CoordinatorWebApplicationFactory.OwnerUser,
             CreatedAt   = DateTimeOffset.UtcNow,
             CommittedAt = DateTimeOffset.UtcNow,
             ClaimedAt   = null,
@@ -93,6 +94,10 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
             "the coordinator-run detail endpoint resolves by run_id; pickup must not 404");
         var run = await runResp.Content.ReadFromJsonAsync<JsonElement>();
         run.GetProperty("status").GetString().Should().Be("in_progress");
+        var persistedRun = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId));
+        persistedRun!.SubmittingUser.Should().Be(
+            CoordinatorWebApplicationFactory.OwnerUser,
+            "background pickup must carry the durable auth subject, not the display GitHub login");
         // Identity parity with interactive coordinator runs: no distinct workflow_run_id.
         var wf = run.GetProperty("workflow_run_id");
         (wf.ValueKind == JsonValueKind.Null || wf.GetString() == runId)

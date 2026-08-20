@@ -125,7 +125,9 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
                 throw new InvalidOperationException(
                     "Outcome-spec reply classification requires a submitting user identity; installation-scope Copilot auth is not permitted.");
 
-            var scope = _scopeProvider.Resolve(context.SubmittingUser);
+            var scope = await _scopeProvider
+                .ResolveAsync(context.SubmittingUser, context.ProjectId, ct)
+                .ConfigureAwait(false);
             if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     "Outcome-spec reply classification requires a user Copilot token scope; installation-scope Copilot auth is not permitted.");

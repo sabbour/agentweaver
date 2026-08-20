@@ -190,6 +190,7 @@ export interface Project {
   blueprint_generation_model: string | null;
   workflow_generation_model: string | null;
   outcome_spec_generation_model: string | null;
+  preview_approval_timeout_minutes?: number;
   available: boolean;
   state: ProjectState;
   created_at: string;
@@ -201,6 +202,13 @@ export interface Project {
 
 export interface WebhookSecretRotationResponse {
   secret: string;
+}
+
+export interface GitHubWebhookProvisioningResponse {
+  hook_id: number;
+  created: boolean;
+  repository: string;
+  payload_url: string;
 }
 
 export interface Blueprint {
@@ -271,6 +279,14 @@ export interface UpdateProjectProviderSettingsRequest {
   blueprint_generation_model?: string | null;
   workflow_generation_model?: string | null;
   outcome_spec_generation_model?: string | null;
+}
+
+export interface UpdateProjectPreviewSettingsRequest {
+  approval_timeout_minutes: number;
+}
+
+export interface ProjectPreviewSettingsResponse {
+  approval_timeout_minutes: number;
 }
 
 export interface CreateProjectRunRequest {
@@ -564,6 +580,17 @@ export interface ProjectAccessOverview {
   effective_github_login?: string | null;
   effective_github_permission?: string | null;
   github_identity_permissions?: ProjectGitHubIdentityPermission[] | null;
+}
+
+export interface ProjectGitHubIdentity {
+  project_id: string;
+  project_override_login: string | null;
+  effective_login: string | null;
+  effective_avatar_url: string | null;
+  copilot_entitled: boolean | null;
+  is_default: boolean | null;
+  linked_at: string | null;
+  resolution_source: string;
 }
 
 
@@ -1284,7 +1311,9 @@ export interface WorkflowSummaryDto {
   error: string | null;
   is_built_in: boolean;
   is_default: boolean;
+  /** Legacy first-trigger alias. */
   trigger?: WorkflowTriggerDto | null;
+  triggers?: WorkflowTriggerDto[];
 }
 
 export interface WorkflowTriggerDto {
@@ -1343,6 +1372,9 @@ export interface WorkflowDetailDto {
   is_default: boolean;
   nodes: WorkflowNodeDto[];
   edges: WorkflowEdgeDto[];
+  /** Legacy first-trigger alias. */
+  trigger?: WorkflowTriggerDto | null;
+  triggers?: WorkflowTriggerDto[];
 }
 
 // Workflow graph descriptor (US6). Matches GraphDescriptor shape for WorkflowGraphPanel.

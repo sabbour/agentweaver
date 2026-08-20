@@ -168,45 +168,152 @@ Three things are deliberately distinct:
 - **A2A agent-turn remoting** (the [A2A bridge](./a2a-bridge.md)) moves an entire *agent turn* — the SDK
   session and its tool loop — out to the per-run pod. That is the pod-per-run story above. It is
   **orthogonal** to backend selection: the in-pod AgentHost still runs each `run_command` through *its
-  own* `ISandboxExecutor`. When `AgentHost:SandboxMode=kata`, that executor is direct passthrough
-  because the AgentHost process already lives inside the per-run Kata VM; nesting bubblewrap would
-  require mount privileges deliberately withheld by the pod security context.
+  own* `ISandboxExecutor`. When `AgentHost:SandboxMode=kata`, that executor is
+  `PodExecSandboxClient`: it forwards every model-controlled command to the **executor sidecar
+  container** of the same pod, where `KataBwrapExecutor` builds the per-run mount namespace. The Kata
+  VM isolates the pod from the node, the sidecar container isolates model-controlled processes from
+  AgentHost, and bubblewrap removes the shared PVC root from each shell/preview child process.
 
 Read the whole isolation stack top-down: pod-per-run decides *which process hosts the agent turn* (worker
 vs. per-run pod, via A2A); the executor abstraction decides *how each command inside that turn is
-isolated* (MXC / bwrap / Kata-pod claim); and the governance gate decides *whether the command may run at
+isolated* (MXC / bwrap / Kata-pod claim plus an in-pod mount namespace); and the governance gate decides *whether the command may run at
 all* given the selected backend's `IsRealIsolation`. On a laptop these collapse onto one host — the agent
 turn runs in-process and commands isolate via MXC or bubblewrap; in-cluster they fan out — the agent turn
-runs in its own Kata VM and commands execute directly within that VM. The contract a reader has to remember is
+runs in its own Kata VM and commands execute in a run-scoped mount view within that VM. The contract a reader has to remember is
 single: *one command in, one uniform result out, isolation chosen per host and announced by
 `sandbox.selected`.*
 
-This Kata passthrough is an explicit deployment-level security tradeoff. `RunCommandTool` constructs
-`SandboxCommand` with `Environment: null`, so it does not add credentials to the child environment.
-The child still inherits the AgentHost process environment, however, and direct execution removes
-bubblewrap's PID/filesystem view. A same-UID adversarial command may therefore inspect in-pod process
-metadata or projected credentials through `/proc`; that residual risk is accepted because the
-disposable per-run Kata VM is the primary isolation boundary.
+Every Kata AgentHost pod still mounts the shared RWX `/workspace` PVC because linked git worktrees
+refer to git metadata outside the worktree directory and the generic warm pool cannot vary pod
+mounts after adoption. The pod therefore applies the per-run policy at the **process/mount
+boundary**, not by parsing shell syntax. Two containers share the pod:
 
-Because the Kata passthrough removes bubblewrap's filesystem view, the per-run **filesystem policy
-must be enforced by the executor itself**. Every Kata AgentHost pod also mounts the *shared* RWX
-`/workspace` PVC (used by all runs across all projects), so an adversarial command whose declared
-working directory stays inside its own tree could otherwise reach a sibling project through an
-absolute path (`cat /workspace/<other-project>/secrets`, `git -C /workspace/<other-project> …`).
-Two layers close this (#476): `ShellCommandValidator` (host-side, at the `run_command` tool) and
-`PassthroughExecutor` (executor boundary, consuming the `SandboxCommand.FilesystemPolicy`) both run
-`SharedWorkspacePathGuard`, which scans the command *text* for absolute paths that resolve under a
-protected shared-mount root (default `/workspace`, override via `AGENTWEAVER_PROTECTED_SHARED_ROOTS`)
-but outside the run's own allowed roots, and rejects them before the shell starts. This is
-defense-in-depth — a text filter cannot see every obfuscation — so it complements, rather than
-replaces, the tracked follow-up of giving each run a private per-run volume instead of the shared
-`/workspace` mount.
+- `agentweaver-agent-host` hosts the agent turn and the run's brokered GitHub token. It never
+  executes a model-controlled command.
+- `agentweaver-exec` (same image, `--exec-agent`) executes every model-controlled command inside
+  `KataBwrapExecutor`'s per-run mount namespace. It is a real, runtime-created PID namespace with a
+  runtime-provided procfs, holds no Kubernetes or AAD identity, and shares only the pod network
+  namespace (so preview ports stay reachable) and the two workspace volumes.
+
+Within that structure:
+
+- only the current run worktree, its explicitly registered run HOME, authorized run-scoped scratch,
+  pod-private tmp, and the exact linked
+  worktree git metadata are bind-mounted; git control metadata is read-only, while the platform
+  performs the durable commit after the turn;
+- the PVC root and sibling worktrees are absent, so absolute paths, variable indirection, `..`,
+  symlinks, and direct Python/.NET file APIs cannot resolve them;
+- `/proc` is the executor container's own procfs, bound into the run's mount namespace. It contains
+  only that container's processes, so CoreCLR process discovery works while AgentHost's process tree
+  is not merely hidden but **absent from the namespace**;
+- the child environment is cleared and rebuilt from a minimal baseline plus explicitly supplied
+  values; and
+- the sidecar runs a real bwrap capability probe **before it binds its socket** — if bubblewrap
+  cannot build the mount namespace the daemon exits and the container never serves, so there is no
+  window in which a command could run unisolated; and
+- AgentHost runs a **one-shot startup probe** against that socket and refuses to start unless the
+  sidecar answers, proving it is reachable, isolated (the probe re-runs the bwrap capability check
+  server-side on every request), and in a *different* PID namespace than AgentHost. It is a startup
+  gate, not a periodic health check: afterwards each individual command still fails closed with exit
+  126 if the socket ever stops answering. There is no passthrough fallback in Kata mode.
+
+#### Why a sidecar and not a nested PID namespace
+
+The original design asked bubblewrap for `--unshare-pid --proc /proc`. That cannot work in **any**
+Kubernetes container: the kernel's `mount_too_revealing()` check refuses a fresh procfs inside an
+unprivileged user namespace whenever the visible procfs has masked or covered submounts, and every
+container runtime — Kata's guest agent included — masks `/proc/kcore`, `/proc/keys`,
+`/proc/timer_list`, `/proc/interrupts` and read-only-binds `/proc/bus`, `/proc/fs`, `/proc/irq`,
+`/proc/sys`, `/proc/sysrq-trigger`. In production this surfaced as
+`bwrap: Can't mount proc on /newroot/proc: Operation not permitted` and, because the isolation probe
+is fail-closed, a 0/2 warm pool. CI never caught it because GitHub runners are VMs with an unmasked
+`/proc`.
+
+Every way to make the nested mount succeed weakens the boundary — `procMount: Unmasked`,
+`CAP_SYS_ADMIN`, a privileged container, or a synthetic `/proc`. Dropping `--unshare-pid` while
+keeping `--proc` is worse than useless: bubblewrap then silently binds the outer `/proc`, so the
+sandbox *looks* isolated and is not. A second container gets the same guarantee for free, because the
+runtime creates the PID namespace and the matching procfs itself — no capability, no privilege, no
+host namespace. Bubblewrap keeps doing the per-run mount scoping it *can* still do, with
+`--bind /proc /proc` and no PID claim it cannot back.
+
+The AgentHost↔sidecar channel is a Unix domain socket on a pod-private `emptyDir` mounted into only
+those two containers, never bound into a sandboxed child's mount namespace, and guarded by a 32-byte
+token written mode-0600 next to it and compared in constant time. Long-lived preview processes are
+supervised by a relay child of AgentHost that holds the connection: if the relay or AgentHost dies,
+the sidecar sees the disconnect and terminates the sandboxed process group, preserving
+die-with-parent semantics across the container boundary.
+
+`ShellCommandValidator` and `SharedWorkspacePathGuard` remain compounding controls, but the security
+claim for #476 no longer depends on command text.
+
+#### Process lifetime without a nested PID namespace
+
+Because the sandbox deliberately does not claim a PID namespace of its own, nothing implicitly reaps
+what a command leaves behind, and two kernel details of the Kata guest matter:
+
+- `/proc/<pid>/task/<pid>/children` does **not** exist there (`CONFIG_PROC_CHILDREN` is off), so
+  neither the executor nor .NET's `Process.Kill(entireProcessTree: true)` may depend on it. The
+  executor therefore discovers the sandboxed process by scanning `/proc/*/stat` for the single entry
+  whose PPID is the bubblewrap process it just started, and reads that entry's process-group id from
+  the same line. Because `--new-session` already made that child a session and process-group leader
+  and the workload is exec'd directly (no extra `setsid` indirection), the pid it finds *is* the
+  run's process-group id. The scan polls until bubblewrap has forked (bounded by a deadline) and
+  fails closed if bubblewrap exits first or if the resolved group is the executor's own.
+  Bubblewrap's `--info-fd` is deliberately **not** used: pointing it at fd 1 closes the workload's
+  stdout (every write then fails with `EBADF`), and .NET's `ProcessStartInfo` cannot hand an
+  arbitrary extra pipe to the child, so there is no spare descriptor to point it at instead.
+- `--die-with-parent` only SIGKILLs bubblewrap's immediate child. Anything the command daemonised
+  (a Roslyn build server, a watcher) would survive. So every command path — one-shot `exec` as well
+  as supervised preview processes — ends by terminating that process group (`TERM`, then `KILL`),
+  and the executor refuses to signal a group that is its own. For one-shot `exec` that reap happens
+  **before** the executor drains stdout/stderr: a daemonised grandchild inherits the command's
+  output pipes, so waiting for end-of-file first would stall the whole command until that leftover
+  process happened to exit, and report a spurious timeout.
+
+Commands in one pod share the executor container's PID namespace with each other. That is the
+correct boundary rather than a gap: a sandbox pod is claimed by exactly one run, and the boundary
+that carries credentials — AgentHost, its brokered GitHub token, and the pod's workload identity —
+is a *different* container in a different PID namespace, which the sidecar re-verifies on every
+probe.
+
+##### Disclosure: intra-run argv visibility
+
+One consequence of that shared PID namespace is worth stating explicitly rather than leaving to be
+rediscovered. `/proc/<pid>/cmdline`, `/proc/<pid>/stat` and `/proc/<pid>/status` are world-readable
+and are **not** gated by procfs' ptrace check, so a sandboxed command can read the *command line* of
+other processes running in the same executor container — that is, other commands of the **same run**,
+and the sidecar daemon's own argv. It cannot read their environment, memory, cwd or mount root:
+`/proc/<pid>/environ`, `/proc/<pid>/mem`, `/proc/<pid>/cwd` and `/proc/<pid>/root` are gated by
+`ptrace_may_access`, and every command runs in its own user namespace (`--unshare-user`), which is
+neither an ancestor nor a descendant of the sidecar's or of a sibling command's, so those accesses
+are refused.
+
+The blast radius is therefore one run's own commands, and the contract that follows is: **secrets
+belong in the environment (or a file inside the run's own mount view), never in a command line.**
+That is how the runtime already passes the brokered token — the executor clears the child
+environment and rebuilds it from explicitly supplied values, and those values are unreadable across
+the user-namespace boundary. Cross-run and AgentHost-facing exposure is unaffected: sibling runs are
+in different pods, and AgentHost is in a different PID namespace in this one.
+
+### Contract with #481
+
+#481 remains the pod-wide storage redesign: relocate authoritative worktrees off the API HOME tree,
+empirically prove `volumeClaimTemplates` warm-pool behavior on the pinned controller, provision a
+private volume/source snapshot for every run, define authenticated write-back/resume semantics, and
+securely sanitize/delete the volume. It may then remove the shared PVC mount from the AgentHost pod
+entirely. #476 does **not** create dynamic PVCs, templates, or pools and does not alter controller
+adoption; it guarantees that model-triggerable shell and preview child processes cannot see the
+shared root while preserving existing linked-worktree operation. Until #481 lands, linked worktrees
+still receive read-only access to their repository's shared common git metadata, so commits and refs
+already present in that same repository are not a per-run confidentiality boundary; other projects'
+worktrees and git metadata remain absent.
 
 ## The agent-sandbox controller (MXC vs. the controller)
 
 In-cluster, the sandbox pod a run executes in is not created by Agentweaver directly and is **not** MXC.
 It is provisioned by the upstream **agent-sandbox controller** ([`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox)),
-which Agentweaver installs in `scripts/azure/steps/10-create-cluster.mjs` (default `v0.4.6`). The naming overlap
+which Agentweaver installs in `scripts/azure/steps/10-create-cluster.mjs` (default `v0.5.3`). The naming overlap
 trips people up, so pin it down:
 
 - **MXC** = `Sabbour.Mxc.Sdk` / `wxc-exec.exe`, the **local-host** command-isolation runtime behind the
@@ -373,7 +480,7 @@ stages the nested directory as ordinary files, and restores the metadata even on
 The discovery walk is deliberately bounded operationally:
 
 - it checks cancellation while popping and enumerating directories;
-- it prunes `.git`, `.agentweaver-home`, `.next`, `bin`, `build`, `dist`, `node_modules`, and `obj`
+- it prunes `.git`, `.next`, `bin`, `build`, `dist`, `node_modules`, and `obj`
   unless that directory is itself a nested repository root;
 - it does not traverse reparse points; and
 - filesystem access failures become a typed `writeback_invalid` failure instead of silently producing
@@ -384,21 +491,26 @@ that an implementation turn intentionally created inside an otherwise ignored pa
 
 ##### One HOME/XDG cache contract for every toolchain
 
-Each pod-local checkout gets an ignored `.agentweaver-home` directory containing:
+Every non-operator AgentHost run gets a HOME outside the checkout at
+`<execution-scratch>/runtime-home/<run-hash>`. After resolving the final Shared or pod-local
+working directory, `PodLocalWorkspaceManager` creates the HOME and its XDG children, then
+registers that exact path through `IRunWorkspaceRegistrar` — in Kata mode that registration travels
+over the executor socket and is applied by the sidecar's `KataBwrapExecutor`:
 
-| Variable | Relative value |
+| Variable | Registered value |
 | --- | --- |
-| `HOME` | `.agentweaver-home` |
-| `XDG_CACHE_HOME` | `.agentweaver-home/.cache` |
-| `XDG_DATA_HOME` | `.agentweaver-home/.local/share` |
-| `XDG_CONFIG_HOME` | `.agentweaver-home/.config` |
+| `HOME` | `<runtime-home>` |
+| `XDG_CACHE_HOME` | `<runtime-home>/.cache` |
+| `XDG_DATA_HOME` | `<runtime-home>/.local/share` |
+| `XDG_CONFIG_HOME` | `<runtime-home>/.config` |
 
 This tech-agnostic contract replaced the former matrix of npm-, Yarn-, and pnpm-specific variables.
 Tools that follow HOME/XDG conventions now place caches and state on the same fast scratch disk
-without every new ecosystem requiring another environment-variable exception. The directory is added
-to `.git/info/exclude`, so cache state cannot enter write-back. The WSL/bubblewrap executor also
-derives and binds the same sandbox home inside the isolated command, preserving the contract across
-the local executor boundary.
+without every new ecosystem requiring another environment-variable exception. Because the runtime
+HOME is outside the checkout, it cannot enter write-back. Kata shell and preview children fail closed
+until the workspace and runtime HOME are both registered, bind only the registered HOME read-write,
+and rebuild HOME/XDG from that immutable registration. Inherited or command-supplied HOME/XDG values
+cannot select another mount or override the registered values.
 
 Preview command discovery still reads the API-visible tree, but `PreviewStep` maps the resolved
 relative cwd into the verified local checkout. The preview therefore sees the exact dependencies and
@@ -670,6 +782,354 @@ To rebuild pod-per-run from these ideas:
 8. **Gate the whole thing behind `Sandbox:AgentExecutionMode`** so production can run `pod-per-run`
    while retaining `in-api` as an instant rollback path.
 
+## Capability contract: what a run can actually do
+
+An agent that discovers halfway through a task that the sandbox cannot perform an operation is
+indistinguishable from a bug. The executor therefore publishes a **capability contract** — a
+`capabilities` op on the pod-private executor protocol
+(`packages/Agentweaver.SandboxExec/SandboxCapabilities.cs`) — that states, for every developer
+workload we support, whether it works here, why not if it doesn't, and what would change that. An
+operation the platform genuinely cannot perform is declared explicitly; it is never silently
+omitted from the list, and never reported as supported.
+
+| Capability | State on the Linux Kata executor | Why |
+| --- | --- | --- |
+| `npm_install` | **Supported** | Installs into the run's own workspace over the sandbox's egress allowlist; no system-root write is needed. |
+| `nuget_restore` | **Supported** | `dotnet restore`/`run` write to the run's workspace and per-run NuGet cache. |
+| `preview_port_binding` | **Supported** | The app binds loopback inside the sandbox; AgentHost forwards it to the preview Gateway, because both containers of the run's pod share one network namespace. |
+| `apt_install` | **Supported** (via the per-run writable system root, below) | `apt-get install` needs a writable `/usr`, `/var` and `/etc`; the run gets a private overlay of them. |
+| `image_build` | **RequiresExternalService** until a builder sidecar is present | BuildKit cannot run in the sandbox container at all — see below. An opt-in builder sidecar in the run's own Kata VM provides it; availability is probed from the socket, not assumed. |
+| `winget_install` | **UnsupportedOnPlatform** | winget is Windows-only; see "winget and the Windows executor". |
+
+`Unavailable` and `RequiresExternalService` mean "a deployment change would fix this".
+`UnsupportedOnPlatform` means "no configuration of this executor will ever do it — move the work to
+another executor". Callers branch on that distinction; both carry a remediation string.
+
+`npm_install`, `nuget_restore` and `apt_install` all depend on the sandbox reaching public package
+registries, so it is worth being precise about what egress is *actually* enforced today rather than
+what the surrounding sections describe. Kubernetes NetworkPolicies are additive, and the
+controller-generated per-template policy permits all ports to public CIDRs; unioned with the narrow
+base policy, the effective rule is broader than the "HTTPS only" description implies, and the Azure
+IMDS address is reachable from a sandbox run. That is a confidentiality gap rather than an isolation
+break — the run still has no host namespaces, no hostPath, no service-account token, and no
+cross-run workspace access — and it is **pre-existing**, tracked in issue #759 with the measurement
+that found it. It is recorded here because a reader comparing this document against the cluster
+should not have to discover the discrepancy themselves.
+
+### The per-run writable system root
+
+Package managers that install into the system root cannot work against a read-only image, so each
+run that needs one gets a **private, disposable system root**:
+
+- `apps/Agentweaver.AgentHost/sandbox/awx-run-root` creates an unprivileged **user + mount
+  namespace**, mounts a size-bounded **tmpfs**, layers `/usr` and `/var` as **overlays** whose upper
+  directories live on that tmpfs, and copies `/etc` onto it. It then holds those namespaces open for
+  the lifetime of the run.
+- The executor re-enters them per command with `nsenter --target <pid> --user --mount
+  --preserve-credentials`, and runs the *same* bubblewrap command line inside — same namespace
+  flags, `--cap-drop ALL`, `--die-with-parent`, same mount plan. The only difference is that `/usr`,
+  `/etc` and `/var` are bound from the run's private overlay instead of read-only from the image.
+
+Properties that make this safe:
+
+- **No pod-level privilege is added.** The pod spec is unchanged: non-root, `allowPrivilegeEscalation:
+  false`, all capabilities dropped, `RuntimeDefault` seccomp, no host namespaces, no hostPath.
+  "Root" inside the run's user namespace is the sandbox's own unprivileged uid everywhere else.
+- **Nothing escapes the run.** The upper layer is a tmpfs private to one user namespace: another
+  run, the AgentHost container, and the node never see what was installed.
+- **Nothing persists.** When the holder exits, the namespaces and the tmpfs die with it, so a run
+  cannot leave anything behind in the image or on the node. Installed packages last for the run,
+  not beyond it.
+- **Failure is strictly more restrictive.** If the helper is missing or any mount fails, the
+  executor logs it, reports `apt_install` as `Unavailable`, and runs the command against the
+  read-only image system root exactly as before. There is no path where a failure grants more.
+- **It is RAM.** The overlay upper must be tmpfs — under Kata every persistent pod volume is
+  virtiofs, which cannot back an overlay upper — so the writable system root counts against the
+  container's memory limit. It defaults to 1 GiB
+  (`AGENTWEAVER_EXEC_WRITABLE_ROOT_SIZE`) and can be disabled entirely with
+  `AGENTWEAVER_EXEC_WRITABLE_ROOT=0`.
+
+One image requirement follows from the kernel, and is worth stating because it looks surprising in a
+diff: **directories under `/usr` and `/var` are owned by uid 1000 in the image**. The run's user
+namespace can map exactly one id (mapping a *range* needs an effective `CAP_SETUID`, which a
+`runAsNonRoot` + `allowPrivilegeEscalation=false` container cannot hold), so root-owned directories
+are unmapped inside it — and overlayfs must copy a directory up before anything can be created in
+it, which fails with `EOVERFLOW` when the directory's owner has no representation in the namespace.
+This grants model-controlled code nothing: it never sees the image's `/usr` and `/var` directly,
+only the read-only bind or the per-run overlay.
+
+A second kernel limitation needs a small apt hook. dpkg installs a package's directories by
+extracting each under a temporary `.dpkg-new` name and renaming it into place; renaming a directory
+across overlay layers requires overlayfs's `redirect_dir` feature, and the kernel refuses
+`redirect_dir=on` for a mount created in a non-initial user namespace. Without help, `apt-get
+install` downloads and unpacks correctly and then fails with `Invalid cross-device link`. dpkg only
+performs that rename when the directory does not already exist, so
+`apps/Agentweaver.AgentHost/sandbox/awx-apt-predirs` — registered as apt's `DPkg::Pre-Install-Pkgs`
+hook — pre-creates the directories of the packages apt is about to install, which is an ordinary
+`mkdir` in the overlay's upper layer. It creates directories and nothing else.
+
+### Image builds need a separate builder, in this pod's own VM
+
+Building container images **in the sandbox container** is not a policy choice we can relax, and
+every step below was measured on the live cluster rather than assumed:
+
+1. `buildkitd` must create a cgroup and perform mounts for every build step, which needs
+   `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`. The sandbox container holds **no** capabilities
+   (measured `CapEff: 0000000000000000`).
+2. `CAP_SYS_ADMIN` is **rejected by PodSecurity `baseline`**, which the `agentweaver` namespace
+   enforces. Measured verbatim:
+   `pods "…" is forbidden: violates PodSecurity "baseline:latest": non-default capabilities
+   (container "…" must not include "NET_ADMIN", "SYS_ADMIN" in securityContext.capabilities.add)`.
+3. Rootless `buildkitd` is not an escape hatch: it needs a sub-UID *range*, and mapping a range
+   requires `newuidmap` to carry file capabilities. The Kata guest filesystem cannot store
+   `security.capability` xattrs at all — `setcap` returns **`Not supported`** — so `newuidmap`
+   fails with "Could not set caps". `rootlesskit` has no single-id fallback either; it exits with
+   `No subuid ranges found`.
+
+So the builder is a **separate container**. The question is *where*.
+
+#### Why not a shared broker
+
+The first implementation was one shared BuildKit broker reached over mTLS. It was rejected in
+review, correctly. The sandbox must hold a client certificate and the `buildctl` binary for
+`docker build` to work at all, so a run can ignore the `awx-docker` shim and call the daemon
+directly — and BuildKit exposes `debug histories`, `debug logs <ref>` and `debug get <digest>` to
+any authenticated client. One run could therefore enumerate another run's build references and
+download its logs and content blobs. **A daemon shared between mutually untrusted runs cannot be
+the boundary between them**, and no amount of shim hardening fixes that, because the shim is not
+in the trust path.
+
+#### The builder sidecar that does work
+
+`k8s/optional/sandbox-buildkit-sidecar.yaml` is opt-in and off by default. It puts `buildkitd` in
+the sandbox pod itself, reached over a pod-local unix socket at `/run/buildkit/buildkitd.sock`.
+Because a sandbox pod **is** a Kata VM, the builder, its cache, its history and its content store
+live and die inside that one run's VM. There is no shared daemon, no network endpoint, and no
+credential to hand to untrusted code.
+
+Eight findings shaped it, each of which breaks builds — or breaks isolation — if reverted:
+
+- **Rootful, not rootless**, for the reason above. Rootless *does* work on ordinary AKS nodes, but
+  only with seccomp **and** AppArmor `Unconfined` — `baseline` forbids both, and an escape would
+  land beside the API and worker pods on a shared kernel. Rootful inside a per-run Kata VM is the
+  stronger position: the VM is the boundary.
+- **`CAP_NET_ADMIN` is required, and `CAP_BPF` does not substitute.** `runc` attaches a
+  `BPF_CGROUP_DEVICE` program for the cgroup v2 device controller, and the kernel gates
+  `BPF_PROG_QUERY` on `CAP_NET_ADMIN`. Without it every `RUN` fails with
+  `bpf_prog_query(BPF_CGROUP_DEVICE) failed: operation not permitted`. Adding `CAP_BPF` instead was
+  tested and does not help.
+- **The 14 default container capabilities must be present.** `runc` cannot raise a build step's
+  capabilities above its own bounding set, so dropping them produces
+  `unable to apply caps: operation not permitted` on every `RUN`.
+- **The container must override the pod's `runAsNonRoot` *and* `runAsGroup`.** The base template
+  sets `runAsNonRoot: true`, `runAsUser: 1000`, `runAsGroup: 1000` at pod level and each line is
+  inherited unless overridden. Without `runAsNonRoot: false` the kubelet refuses to start the
+  container at all (`CreateContainerConfigError: container's runAsUser breaks non-root policy`);
+  with it but without `runAsGroup: 0` the daemon runs as uid 0 / gid 1000 and every build step dies
+  in `runc` with `open container mntns: open /proc/N/ns/mnt: permission denied`. Neither shows up in
+  a standalone probe pod that omits the pod-level `securityContext` — both were found by patching
+  the real template.
+- **`CAP_SYS_PTRACE` is required in CNI network mode.** `runc` opens `/proc/<pid>/ns/mnt` of its own
+  init process to join the prepared namespace; without it, build steps fail with the same
+  `open container mntns` error. It does not appear under host networking. It is scoped to the
+  builder's own PID namespace — the pod does not set `shareProcessNamespace`, so the builder cannot
+  see, let alone trace, a process in the sandbox container, and build steps do not inherit it
+  (measured `CapEff: 00000000a80425fb`, identical with and without it on the daemon).
+- **BuildKit state must be tmpfs.** A default `emptyDir` in a Kata pod is **virtiofs**, which does
+  not implement xattrs, so the OCI exporter fails at the final step with
+  `failed to get xattr …: operation not supported` *after* every layer has already built. `tmpfs`
+  lives in the guest and supports xattrs. The cost is that build state is RAM, charged against the
+  container's memory limit.
+- **`/sys/fs/cgroup` must be remounted read-write.** Kubernetes mounts it read-only for
+  unprivileged containers (`EROFS` otherwise). Inside a Kata guest that tree is the VM's own, so
+  the remount cannot reach the node's cgroups — which is why this is acceptable here and would not
+  be on a shared-kernel node.
+
+The socket is published under `/run`, deliberately **not** under `/mnt`: the per-run writable
+system root mounts a tmpfs over `/mnt`, which would mask anything published there and break every
+sandboxed command, not just builds.
+
+#### Build steps do not run in the pod's network namespace
+
+This is the one place where the first working version of this design was not safe, so it is worth
+being explicit about what changed and why.
+
+Under `--oci-worker-net host` a `RUN` step joins the **pod's** network namespace. `runc` grants
+build steps the default capability set, and `CAP_NET_RAW` is in it — and it cannot be dropped,
+because `runc` refuses to start any step whose capabilities exceed the daemon's bounding set. So a
+Dockerfile could open an `AF_PACKET` socket on the pod's interfaces. Demonstrated on the live
+cluster before this change:
+
+```
+#6 CapEff:  00000000a80425fb
+#6 2: eth0    inet 10.244.2.183/32 ... scope global eth0
+#6 tcpdump: listening on any, link-type LINUX_SLL2 ...
+```
+
+That is a real escalation rather than a theoretical one, because not all in-pod traffic is
+encrypted: `AgentHost__McpEndpoint` is plain `http://`, and the run owner's GitHub token and turn
+bearer token arrive over the in-pod `POST /configure` call. Model-controlled code is specifically
+designed **not** to hold those credentials, so a build step that can sniff them would obtain
+something the sandbox is built to withhold.
+
+The builder therefore runs with `--oci-worker-net cni` and a CNI configuration that attaches
+nothing: each build step gets a fresh network namespace containing only a `lo` interface. Measured
+after the change, on the same cluster, from the unprivileged uid-1000 container:
+
+| Property | Evidence |
+| --- | --- |
+| Build steps are in a different netns from the pod | `RUN_NETNS=net:[4026532186]` vs caller/pod `net:[4026531840]`. |
+| Nothing but loopback is attached | `IFACES=lo`, and `/sys/class/net/lo/flags` is `0x9` (`IFF_UP｜IFF_LOOPBACK`). |
+| No name resolution in a build step | `DNS_BLOCKED_GOOD`. |
+| No network egress in a build step | `NET_IN_RUN_BLOCKED_GOOD`, `IMDS_BLOCKED_GOOD`. |
+| Builds still work end to end | `BUILD_EXIT=0` and a 28,738,560-byte OCI tar containing `blobs/sha256/…`. |
+
+Two consequences, stated plainly rather than buried:
+
+- **A `RUN` step has no network.** `RUN apt-get install …`, `RUN npm install` and any other
+  network-dependent build step do **not** work. Package installation from the run's allowed egress
+  is unaffected *in the sandbox shell itself*, which keeps normal pod networking; only in-build
+  networking is removed.
+- **Base images still pull.** The daemon resolves and fetches them itself from the pod's netns,
+  under the pod's NetworkPolicy, which is why the build above succeeded at all.
+
+`--oci-worker-net bridge` was tried as a middle ground and does not work here. The CNI bridge plugin
+must write `/proc/sys/net/ipv4/ip_forward`; `/proc/sys` is read-only
+(`failed to enable forwarding: … read-only file system`), a `mount -o remount,rw /proc/sys` makes
+every build step fail with `open container mntns: permission denied`, and pod-level `sysctls` are
+rejected (`SysctlForbidden: net.ipv4.ip_forward not allowlisted`), which would require a kubelet
+change on the node. Re-enabling in-build networking by returning to host networking would put
+attacker-controlled `RUN` steps back on the pod's netns with `NET_RAW`, so it is deliberately not
+offered as a flag.
+
+#### The builder holds no identity
+
+`buildkitd` is added to `azure.workload.identity/skip-containers` and mounts an empty `emptyDir`
+over `/var/run/secrets/kubernetes.io/serviceaccount`, exactly as the executor sidecar already does.
+The annotation value must be **semicolon**-separated (`agentweaver-exec;buildkitd`) — the deployed
+azure-workload-identity webhook (measured at image tag `v1.5.1-17`) parses `skip-containers` as one
+semicolon-delimited list, so a comma-joined value matches neither container name and the webhook
+silently injects the federated token into both anyway. This was caught live on AKS Kata (SHA
+`04b3fdc6`): with the comma-joined value in place, `kubectl exec -c buildkitd -- env | grep -c
+^AZURE_` returned `4` and `/var/run/secrets/azure/tokens/azure-identity-token` existed and was
+readable — a real credential leak into the builder, and into `agentweaver-exec` as well. Measured
+in the builder container after the fix: the service-account directory contains only `.` and `..`,
+no `token` file exists, `/var/run/secrets/azure/tokens/` does not exist, and `env | grep -c
+^AZURE_` returns `0`. The socket it publishes is `srw-rw---- root 1000`, which is what lets the
+uid-1000 sandbox container connect without granting it anything else.
+
+#### What was measured, and the trade-off
+
+On the live AKS Kata cluster, from a sandbox-shaped pod (agent container `runAsUser: 1000`,
+`drop: ["ALL"]`, measured `CapEff: 0000000000000000`, no service-account token):
+
+| Property | Evidence |
+| --- | --- |
+| Build runs **inside the run's VM**, not on the node | The `RUN` step reports kernel `6.6.137.mshv1-1.azl3`; the node runs `6.6.137.mshv2-1.azl3`. |
+| Full build incl. `RUN` and OCI export | `BUILD_EXIT=0`; `RUN` output recovered from the exported layers, and a 28,738,560-byte OCI tar whose entries begin `blobs/sha256/…`. |
+| Cross-run isolation | A second run's `buildctl debug histories` and `du` are **empty** while the first run shows 2 histories and 617 MB of cache. The shared-broker leak is structurally gone. |
+| No host/node access | No docker or containerd socket; no service-account token; kubelet `10250` unreachable. |
+| Strict NetworkPolicy holds | IMDS blocked from **both** containers. Adding a route to `169.254.169.254` from inside the guest *succeeds* and IMDS stays blocked — Cilium enforces on the host side of the VM boundary, so in-guest `NET_ADMIN` cannot defeat it. Builds still succeed through the DNS + 443 allowance. |
+| Build steps are not privileged | `RUN` steps get the runc default set (`CapEff: 00000000a80425fb`), and the daemon refuses the escape hatch: `granting entitlement security.insecure is not allowed by build daemon configuration`. |
+| The builder cannot reach the shared workspace | With `CAP_SYS_ADMIN`, the builder still cannot see the RWX workspace: it is not in its mount table, sibling PIDs are invisible (the pod does **not** set `shareProcessNamespace`), `/proc/<pid>/root` traversal finds nothing, and no guest block devices are exposed. |
+| Deterministic cleanup | Deleting the pod destroys the VM and its RAM-backed build state in 8s; the sibling run is unaffected. |
+
+**The trade-off, stated plainly for review.** A run that can reach this socket can drive a
+root-capable build daemon inside its own VM. `security.insecure` is refused and build steps are
+runc-confined, so this is not a direct privilege grant — but a `buildkitd` vulnerability would be a
+root-in-guest compromise. It is bounded by the Kata VM: no node access, no other run's data, no
+credential. Compared with a sandbox that has no builder at all, this is a real reduction in
+defence-in-depth, which is exactly why it is **opt-in** and not part of the base template.
+
+**Two invariants this design depends on.** Both are properties of the manifest, so a future edit
+could silently remove them:
+
+1. The builder container must **never** mount the workspace volume.
+2. The pod must **never** set `shareProcessNamespace: true`, which would merge the PID namespaces
+   and expose `/proc/<pid>/root` of the container holding the workspace.
+
+**Pod Security Admission.** `SYS_ADMIN`/`NET_ADMIN`/`SYS_PTRACE` are outside the `baseline`
+allow-list, so build-enabled sandbox pods need a namespace whose PSA level admits them for that one
+container. Do **not** relax `agentweaver` itself — it hosts the control plane. On a stock cluster
+the sidecar is absent, the socket does not exist, and the capability contract reports `image_build`
+as `RequiresExternalService`; availability is probed from the socket, never inferred from an
+environment variable. The probe is protocol-level, not existence-level: it connects and sends the
+HTTP/2 client preface, and only reports `Supported` when the peer answers with a SETTINGS frame. A
+crashed daemon leaves its socket inode behind, and a sidecar that is still starting will accept
+without speaking gRPC — both would otherwise be advertised as a working builder to a caller whose
+every build then fails at connect time.
+
+**Registry publishing: what actually stops it, and what merely helps.** The real reason a build
+cannot publish is that **there is no credential to publish with** — the builder holds no registry
+credentials, no service-account token and no workload identity (measured above), so an authenticated
+push has nothing to authenticate with.
+
+`awx-docker` refuses `--push` and validates `--output` by parsing it as CSV field by field —
+rejecting `--output type=image,name=…,push=true`, `type=registry`, a quoted `"push=true"` field, a
+second `type=` anywhere in the value, and any quoted field at all — with exit 2, while allowing
+`type=oci|docker|tar|local`; with no socket present it exits 3 with the contract's explanation
+instead of a connection error. (A substring scan was not enough: `buildctl` reads this value as CSV,
+so `type=image,name=x,"push=true",k=type=oci` would have been read as a pushing image build while a
+last-match scan saw a permitted `oci`.) That is **ergonomics and defence-in-depth, not a boundary** —
+`buildctl` ships in the AgentHost image and `BUILDKIT_HOST` is exported, so a run can call the
+daemon directly and skip the shim entirely. This is the same reasoning that ruled out the shared
+broker above: the shim is not in the trust path, so no property may rest on it. Stated as an
+invariant: *every* guarantee in this section must hold when the shim is bypassed, and each one
+listed here does — they rest on the absent credential, the empty build netns, and the per-run VM.
+
+Per-run builders were tracked as issue #761; this design closes it.
+
+### Reproducing the capability evidence
+
+`scripts/validation/collect-kata-evidence.mjs` collects the transcript. It renders the shipped
+`k8s/base/sandbox-template-agenthost.yaml` under a validation name, and — whenever the requested
+cases include `buildkit` — applies the shipped `k8s/optional/sandbox-buildkit-sidecar.yaml` patch
+with `kubectl patch --local`, so what gets deployed is exactly *patch(reviewed manifest)* rather
+than a hand-written copy. The warm pool must then reach 3/3 ready containers, not 2/2.
+
+```bash
+node scripts/validation/collect-kata-evidence.mjs \
+  --image <registry>/agentweaver-agent-host:<tag> \
+  --phase capability --cases npm,nuget,apt,buildkit,preview
+```
+
+Two properties make the transcript trustworthy rather than merely plausible. Every `kubectl exec`
+that runs a probe is checked, so a probe that died produces a failed collection instead of a
+truncated transcript; and inside the probe, each positive proof is marked `required`, so a build
+that failed, a registry that was unreachable or a missing builder socket ends the run loudly. The
+build case drives the shipped `docker`/`awx-docker` shim over the pod-private socket — the artifact
+a run actually gets on its PATH, which is how a shim gap in `--progress plain` was found and fixed —
+and captures the build's own exit status directly rather than
+through a pipeline, because `docker build … | tail` reports `tail`'s status and would turn a failed
+build into a passing proof.
+
+### How the preview hop was verified
+
+The preview chain has two hops, and they were proven separately rather than as one run, so it is
+worth being precise about which evidence covers which:
+
+- **App → forwarder.** The app binds `127.0.0.1` only; a fetch of that loopback address from inside
+  the sandbox returns the app's own payload. The forwarder reaches it because both containers of the
+  run's pod share one network namespace — the same property the exec sidecar relies on.
+- **Gateway → pod.** A request to `https://<name>.<zone>/` through `agentweaver-preview-gateway`
+  returns **HTTP 200** with the expected body: real DNS-free SNI to the gateway's public address,
+  real TLS termination against the zone wildcard certificate, a matched `HTTPRoute`, and a routed
+  backend.
+
+What has *not* been captured as a single end-to-end transcript is one run doing both at once. The
+forwarder itself is unchanged by this work, so nothing here alters that hop; it is called out so the
+evidence is not read as more than it is.
+
+### winget
+
+`winget` is the Windows Package Manager, and the sandbox is a Linux container inside a **Linux** Kata
+VM, so it cannot execute there — not with an added capability, a mount, or a policy change. The
+contract reports `winget_install` as `UnsupportedOnPlatform` with the remediation "use `apt-get` for
+Linux runs, or a Windows executor backend", so callers get a machine-readable *no with a reason*
+rather than a silent omission or a mysterious failure. A Windows executor backend is **out of scope
+here and deferred** to issue #760. The state is deliberately distinct from `Unavailable`: no
+redeployment of the Linux executor will ever change it.
+
 ## Security invariants
 
 - The orchestration graph, HITL decisions, and run record live in the **worker**, never in the pod — a
@@ -682,6 +1142,11 @@ To rebuild pod-per-run from these ideas:
 - The pod is **disposable and re-creatable**: durable state lives in the shared workspace volume and the
   brokered checkpoint, so killing a pod loses no run.
 - The whole capability is **reversible by a single flag** (`Sandbox:AgentExecutionMode=in-api`).
+- A run that installs system packages does so into a **per-run, RAM-backed, disposable** system
+  root; the pod's privilege envelope is unchanged, and nothing installed is visible to another run,
+  to the AgentHost container, or to the node.
+- Container image builds are **never** performed inside the sandbox pod, because the privileges
+  BuildKit needs would let the builder cross the run boundary inside the shared Kata VM.
 
 ## Orphaned-pod reaper and Kubernetes-owned admission
 
@@ -743,13 +1208,17 @@ Where this lives:
 | --- | --- |
 | Scratch checkout creation, immutable commit/tree verification | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:38-139` |
 | Alternate index, commit creation, literal non-force push | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:152-326` |
-| HOME/XDG directory creation and environment | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:459-483` |
+| HOME/XDG directory creation and Kata registration | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs` |
 | Cancellable, pruned nested-repository discovery | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:575-628` |
 | Nested metadata removal, content staging, gitlink rejection | `apps/Agentweaver.AgentHost/PodLocalWorkspaceManager.cs:631-735` |
 | Writable-turn finalization after the agent response | `apps/Agentweaver.AgentHost/A2ATurnBridgeAgent.cs:198-250` |
 | Existing in-pod GitHub token store | `apps/Agentweaver.AgentHost/PodGitHubTokenStore.cs:6-49` |
 | Local-writable launch coordinates | `apps/Agentweaver.Api/Sandbox/IRunAgentHostContextResolver.cs:65-99` |
 | API-side descriptor validation and authoritative fast-forward | `apps/Agentweaver.Api/Git/WorktreeManager.cs:482-644` |
+| Immutable Kata HOME mount and child environment | `packages/Agentweaver.SandboxExec/KataBwrapExecutor.cs` |
+| Executor-sidecar wire protocol, daemon, client, and relay | `packages/Agentweaver.SandboxExec/PodExec/` |
+| Fail-closed sidecar probe at AgentHost startup | `apps/Agentweaver.AgentHost/Program.cs` |
+| Executor sidecar container and its volumes | `k8s/base/sandbox-template-agenthost.yaml` |
 | HOME propagation through WSL/bubblewrap | `packages/Agentweaver.SandboxExec/WslMxcSandboxExecutor.cs:130-158` |
 | Disk-backed 8 GiB `execution-scratch` emptyDir | `k8s/base/sandbox-template-agenthost.yaml:139-175` |
 

@@ -122,6 +122,54 @@ npm run azure:deploy-from-commit -- <sha-or-ref>
 - Configure `APPLICATIONINSIGHTS_CONNECTION_STRING` **and** a Log Analytics workspace id (`APPLICATIONINSIGHTS_WORKSPACE_ID` or `ApplicationInsights:WorkspaceId`) unless your connection string already embeds `WorkspaceId`.
 - If App Insights is not configured, or no workspace id can be resolved, the metrics endpoint returns empty arrays so the dashboard degrades gracefully.
 
+### AgentHost assembly recovery diagnostics
+
+Assembly RAI and Build & Test use the coordinator run's warm-pool AgentHost. Recovery is
+bounded and reason-specific:
+
+- `agenthost_configure_copilot_token_refreshed` means AgentHost explicitly rejected the
+  configured Copilot credential, the API rotated that exact user/account scope, and Build &
+  Test will recreate the one-time-configured pod once.
+- `agenthost_configure_copilot_unauthorized` means no different credential could be
+  produced. The failure is not retried; the submitting user must repair GitHub/Copilot
+  authorization.
+- `agenthost_pod_reaped` triggers one inline pod redispatch for a non-terminal run.
+  `agenthost_pod_reaped_recovery_exhausted` means the replacement was also unavailable and
+  stops further automatic redispatch.
+
+Logs include `RunId`, pod name, reason, recovery action, and bounded attempt counts. Token
+values are never logged. These reasons distinguish pod lifecycle churn from credential
+failure so operators should not treat either path as a generic retryable AgentHost error.
+
+## Diagnosing agent turn infrastructure failures
+
+Agent turns executed through AgentHost use structured terminal reasons.
+`agent_turn_internal_error` with `retryable: true` is the fallback for an unstructured
+`run.failed`, an unsupported or unset A2A event, or a pod bridge turn that throws before
+emitting a structured terminal. Other A2A exceptions use `a2a_transport_failure`, whose
+retryability follows the transport error. A clean stream that ends without
+`agent.turn.end` uses retryable `agent_host_turn_incomplete`. In the collective Build &
+Test stage, the assembly reason prefixes the applicable reason with `build_test_infra_`,
+for example `build_test_infra_agent_host_turn_incomplete`.
+
+This fallback does not hide more specific outcomes. Caller cancellation remains
+cancellation, and typed timeouts or failures retain their original error code and
+retryability. A retryable terminal means the workflow may safely consider a bounded
+retry or redispatch; it never converts the interrupted turn into a success.
+
+To investigate:
+
+1. Inspect the persisted run events with `GET /api/runs/{id}/events` and record the
+   `errorCode`, `retryable`, message, and diagnostic fields.
+2. Correlate the run id with worker and AgentHost logs to determine whether the pod,
+   transport, or turn failed.
+3. Retry or redispatch through the normal run/coordinator controls only after confirming
+   that the task is still valid.
+
+Diagnostics in the run event are deliberately bounded, flattened to one line, and
+credential-redacted. They are safe context for triage, not a replacement for
+restricted server-side logs.
+
 ## Related scripts
 
 | Command | Purpose |

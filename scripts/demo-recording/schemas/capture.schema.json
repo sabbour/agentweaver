@@ -22,6 +22,7 @@
         "id": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
         "startUrl": { "type": ["string", "null"] },
         "freshNavigation": { "type": "boolean" },
+        "captureMode": { "enum": ["authenticated", "unauthenticated"] },
         "disableApprovalWatcher": { "type": "boolean" },
         "approvalWatcherGraceMs": { "type": "integer", "minimum": 0 },
         "videoPath": { "type": "string", "minLength": 1 },

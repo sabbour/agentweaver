@@ -9,6 +9,7 @@ public sealed class BacklogTaskRecord
     public string State { get; set; } = "";
     public string OrderKey { get; set; } = "";
     public string CapturedBy { get; set; } = "";
+    public string? CapturedByUserId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? CommittedAt { get; set; }
     public DateTimeOffset? ClaimedAt { get; set; }

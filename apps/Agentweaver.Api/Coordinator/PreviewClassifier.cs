@@ -76,13 +76,14 @@ public sealed class CopilotPreviewClassifier : IPreviewClassifier
     }
 
     public Task<bool?> ClassifyApplicabilityAsync(PreviewApplicabilityClassificationContext context, CancellationToken ct) =>
-        ClassifyAsync(context.RunId, context.SubmittingUser, ApplicabilityCharter, BuildApplicabilityPrompt(context), "preview applicability", "preview_required", ct);
+        ClassifyAsync(context.RunId, context.ProjectId, context.SubmittingUser, ApplicabilityCharter, BuildApplicabilityPrompt(context), "preview applicability", "preview_required", ct);
 
     public Task<bool?> ClassifyPreviewOnlyFeedbackAsync(PreviewFeedbackClassificationContext context, CancellationToken ct) =>
-        ClassifyAsync(context.RunId, context.SubmittingUser, FeedbackCharter, BuildFeedbackPrompt(context), "preview-only feedback", "preview_only", ct);
+        ClassifyAsync(context.RunId, context.ProjectId, context.SubmittingUser, FeedbackCharter, BuildFeedbackPrompt(context), "preview-only feedback", "preview_only", ct);
 
     private async Task<bool?> ClassifyAsync(
         string runId,
+        string? projectId,
         string submittingUser,
         string charter,
         string prompt,
@@ -95,7 +96,9 @@ public sealed class CopilotPreviewClassifier : IPreviewClassifier
             if (string.IsNullOrWhiteSpace(submittingUser))
                 throw new InvalidOperationException($"{classificationName} classification requires a submitting user identity.");
 
-            var scope = _scopeProvider.Resolve(submittingUser);
+            var scope = await _scopeProvider
+                .ResolveAsync(submittingUser, projectId, ct)
+                .ConfigureAwait(false);
             if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
                 throw new InvalidOperationException($"{classificationName} classification requires a user Copilot token scope.");
 

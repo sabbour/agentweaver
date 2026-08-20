@@ -7,11 +7,10 @@ name: CI
 # keeping the suites off a single shared runner keeps the signal reliable.
 #
 # Commands mirror the ones documented in CONTRIBUTING.md exactly:
-#   - dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
-#   - node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
-#   - npm --prefix apps/web run test
-#   - npm --prefix apps/web run lint
-#   - npm run docs:build
+#   - node scripts/ci/validate.mjs --profile ci --area dotnet
+#   - node scripts/ci/validate.mjs --profile ci --area node,harness
+#   - node scripts/ci/validate.mjs --profile ci --area web
+#   - node scripts/ci/validate.mjs --profile ci --area docs
 #
 # A `changes` job classifies the PR/push diff by path group first, and every
 # suite job below only runs `if:` its group actually changed (a change to this
@@ -70,14 +69,23 @@ jobs:
               - '.github/workflows/**'
             web:
               - 'apps/web/**'
+              - 'scripts/ci/shared-deps.mjs'
+              - 'scripts/ci/validate.mjs'
               - '.github/workflows/**'
             node-toolchain:
               - 'scripts/azure/**'
               - 'scripts/changesets/**'
               - 'scripts/ci/**'
+              - 'scripts/demo-recording/**'
+              - 'scripts/ui-harness/**'
+              - 'scripts/harness-judge/**'
+              - 'scripts/harness-shared/**'
+              - 'scripts/persona-briefs/**'
               - '.github/workflows/**'
             docs:
               - 'docs/**'
+              - 'scripts/ci/shared-deps.mjs'
+              - 'scripts/ci/validate.mjs'
               - '.github/workflows/**'
             diagrams:
               - 'docs/diagrams/**'
@@ -101,20 +109,84 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/*.props', '**/*.targets', 'global.json') }}
+          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', 'nuget.config', 'Directory.*', '**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
           restore-keys: |
-            nuget-${{ runner.os }}-
+            nuget-${{ runner.os }}-${{ runner.arch }}-
 
-      # CopilotSkipCliDownload=true keeps the GitHub.Copilot.SDK MSBuild target
-      # from trying to fetch a platform copilot CLI binary during build. It is
-      # required on ARM64/Windows dev machines and harmless on an x64 runner --
-      # kept here for parity with the documented local command.
-      - name: Run .NET tests
-        run: dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj -p:CopilotSkipCliDownload=true
+      # Restore is locked, build runs once, and tests reuse that exact output.
+      # bin/obj remain private to this checkout.
+      - name: Run .NET validation
+        run: node scripts/ci/validate.mjs --profile ci --area dotnet
+
+      # Every sandbox proof that needs a real bubblewrap runtime carries
+      # [Trait("Category", "KataRuntime")], so this gate can never drift away from a
+      # renamed test the way a hardcoded FullyQualifiedName list did. AGENTWEAVER_REQUIRE_BWRAP=1
+      # turns "bubblewrap missing/unusable" from a silent early return into a failure.
+      - name: Run Kata Linux runtime regressions
+        env:
+          AGENTWEAVER_REQUIRE_BWRAP: "1"
+          KATA_RUNTIME_FILTER: Category=KataRuntime
+          KATA_RUNTIME_MIN_TESTS: "34"
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          # The gate is worthless if bwrap is absent or cannot create a user namespace.
+          # `bwrap --version` proves the binary; the product's own availability probe
+          # (asserted by KataRuntimeGate_HasARealBubblewrapRuntimeWhenTheGateRequiresOne)
+          # proves the namespaces, using exactly the flags the executor uses.
+          bwrap --version
+          # Ubuntu 24.04 runners ship kernel.apparmor_restrict_unprivileged_userns=1, which
+          # denies the uid map bwrap needs ("setting up uid map: Permission denied"). This is
+          # runner configuration only: it changes nothing about the production pod, which is
+          # unprivileged, drops ALL capabilities and runs under Kata. Without it the gate can
+          # only ever report "runtime unusable", which is precisely the silent hole this step
+          # exists to close, so a failure to relax it is left to fail the job below.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          # Smoke-test the exact namespace set the executor uses before spending a test run.
+          bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc --dev /dev \
+            -- /bin/true
+          echo "bubblewrap user+pid namespaces are usable on this runner."
+          echo "::group::Tests selected by ${KATA_RUNTIME_FILTER}"
+          dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
+            --no-build --no-restore -p:CopilotSkipCliDownload=true \
+            --list-tests --filter "${KATA_RUNTIME_FILTER}" \
+            | tee kata-runtime-selected.txt
+          echo "::endgroup::"
+          selected=$(grep -cE '^[[:space:]]+Agentweaver\.Tests\.' kata-runtime-selected.txt || echo 0)
+          echo "Selected ${selected} Kata runtime tests (minimum ${KATA_RUNTIME_MIN_TESTS})."
+          if [ "${selected}" -lt "${KATA_RUNTIME_MIN_TESTS}" ]; then
+            echo "::error::${KATA_RUNTIME_FILTER} selected ${selected} tests, expected at least ${KATA_RUNTIME_MIN_TESTS}. The trait was probably dropped from a sandbox regression."
+            exit 1
+          fi
+          dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
+            --no-build \
+            --no-restore \
+            -p:CopilotSkipCliDownload=true \
+            --filter "${KATA_RUNTIME_FILTER}" \
+            --logger "trx;LogFileName=kata-runtime.trx" \
+            --results-directory kata-runtime-results
+
+      - name: Upload Kata runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kata-runtime-regressions
+          path: |
+            kata-runtime-selected.txt
+            kata-runtime-results
+          if-no-files-found: warn
 
   node-toolchain-tests:
     name: Node toolchain tests
@@ -128,11 +200,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: scripts/ui-harness/package-lock.json
 
-      # The scripts/azure toolchain uses only Node built-ins (no dependencies),
-      # so there is nothing to install -- run the built-in test runner directly.
-      - name: Run Node toolchain tests
-        run: node --test scripts/azure/tests/*.test.mjs scripts/changesets/tests/*.test.mjs scripts/ci/tests/*.test.mjs
+      - name: Install Chromium for UI harness integration tests
+        run: |
+          node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness --isolated
+          npx --prefix scripts/ui-harness playwright install --with-deps chromium
+
+      - name: Run Node toolchain and UI harness tests
+        run: node scripts/ci/validate.mjs --profile ci --area node,harness
 
   web-tests:
     name: Web tests
@@ -149,36 +226,20 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
-      - name: Install web dependencies
-        run: npm ci
-        working-directory: apps/web
-
-      - name: Run web tests (Vitest)
-        run: npm run test
-        working-directory: apps/web
+      # Tests and lint deliberately share one job so npm ci runs only once.
+      # The lightweight Web lint status job below preserves the existing
+      # branch-protection check name.
+      - name: Run web tests and lint
+        run: node scripts/ci/validate.mjs --profile ci --area web
 
   web-lint:
     name: Web lint
-    needs: changes
-    if: needs.changes.outputs.web == 'true'
+    needs: [changes, web-tests]
+    if: always() && needs.changes.outputs.web == 'true' && needs.web-tests.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
-
-      - name: Install web dependencies
-        run: npm ci
-        working-directory: apps/web
-
-      - name: Run web lint (ESLint)
-        run: npm run lint
-        working-directory: apps/web
+      - name: Confirm co-located lint passed
+        run: echo "Web lint passed in the Web tests job."
 
   docs-build:
     name: Docs build
@@ -195,14 +256,10 @@ jobs:
           cache: npm
           cache-dependency-path: docs/package-lock.json
 
-      - name: Install docs dependencies
-        run: npm ci
-        working-directory: docs
-
       # Builds the VitePress site (source of truth for sabbour.me/agentweaver).
       # Catches broken markdown, dead config, and landing-page regressions.
       - name: Build docs site
-        run: npm run docs:build
+        run: node scripts/ci/validate.mjs --profile ci --area docs
 
   diagrams-in-sync:
     name: Architecture diagrams are in sync
@@ -219,7 +276,7 @@ jobs:
           cache: npm
 
       - name: Install root dependencies
-        run: npm ci
+        run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
 
       # README.md's "Block diagram" and architecture-aks.md's "Component
       # diagram"s are pre-rendered as static PNGs from Fluent-styled React
@@ -249,6 +306,6 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
+      - run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
       - run: npm run version:check
       - run: npm run changeset:check -- --base origin/${{ github.base_ref }}

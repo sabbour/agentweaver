@@ -1,5 +1,114 @@
 # Changelog
 
+## 0.18.2
+
+### Patch Changes
+
+- f0c53da: Keep the Create-from-GitHub dialog open when toggling the linked-account filter, and default the repository list to the currently selected GitHub account (including the gallery account switcher) instead of silently clearing the filter after repos load.
+- 7c6e24c: fix(web): shell "Allow once" approval now works from coordinator view
+
+  Root causes and fixes:
+
+  - **isShell detection**: `coordinator.child_approval_required` events with a `commandHash` field are shell approvals bubbled from child runs. Detection was extended so `InThreadApprovalGate` correctly identifies them as shell approvals and calls `approveShell`/`denyShell` instead of `approveTool`/`denyTool`.
+  - **Wrong run ID**: Shell approval API calls now target the child run (`childRunId` from event payload) instead of the coordinator run, preventing 404s from the backend.
+  - **Resolution tracking**: `buildCoordinatorTurns` now uses `commandHash` as a fallback key when `requestId` is absent, so resolved shell approvals display correctly.
+  - **Disabled state**: `ApprovalGate` now accepts a `disabled` prop that is passed through to both "Allow once" and "Deny" buttons; the gate disables while a request is in flight.
+  - **UX**: Added a "Review" button in the "Needs input" MessageBar that scrolls to the pending approval gate, reducing the chance of it being missed.
+
+## 0.18.1
+
+### Patch Changes
+
+- 3cae2ee: Restore Kata AgentHost readiness by moving model-controlled command execution into a hardened executor sidecar container, replacing a bubblewrap PID/procfs namespace that the kernel cannot create inside any Kubernetes container. Sandboxed process groups are now resolved and terminated without `/proc/<pid>/task/<pid>/children`, which the Kata guest kernel does not provide, so preview processes start reliably and no command can leak daemonised processes into the executor container.
+- 6568b87: Give sandboxed runs a real developer toolchain and publish what the sandbox can actually do. A run
+  that needs system packages now gets a per-run writable system root — `/usr` and `/var` overlaid onto
+  a size-bounded tmpfs inside its own user namespace, `/etc` copied — so `apt-get install` works
+  without adding a single pod privilege, and everything installed is discarded with the run and is
+  invisible to other runs, to AgentHost, and to the node. The executor also answers a new
+  `capabilities` request describing every supported workload (npm, NuGet, apt, preview port binding)
+  and, for the ones it cannot perform, why and what would change that: container image builds require
+  a builder sidecar, and `winget` is reported as unsupported on Linux with the Windows
+  executor backend named as the remediation rather than being silently omitted.
+
+  Image builds are now actually available where they are wanted, and the builder is scoped to the run.
+  `k8s/optional/sandbox-buildkit-sidecar.yaml` adds an opt-in BuildKit sidecar to the sandbox pod,
+  reached over a pod-local unix socket through the `awx-docker` shim — so a run can `docker build`
+  without the sandbox container gaining a single capability (measured `CapEff: 0000000000000000`).
+  Because a sandbox pod is a Kata VM, the builder's cache, history and content store are scoped to
+  that one run: a second run sees an empty `debug histories` and an empty cache. That closes the
+  cross-run channel a shared broker would have opened, where any run holding a client certificate
+  could read another run's build logs and blobs through BuildKit's debug APIs.
+
+  The trade-off is stated rather than hidden: the sidecar must be rootful with `CAP_SYS_ADMIN`,
+  `CAP_NET_ADMIN` and `CAP_SYS_PTRACE`, because rootless BuildKit cannot work under Kata. Those
+  capabilities are confined
+  to the run's guest kernel — measured in-guest `NET_ADMIN` cannot defeat NetworkPolicy, IMDS stays
+  blocked, build steps stay runc-confined, and the daemon refuses the `security.insecure` entitlement
+  — but a `buildkitd` vulnerability would be a root-in-guest compromise, so the sidecar is off by
+  default and requires a namespace whose PodSecurity level admits those three capabilities.
+
+  Build steps run in their own empty network namespace (loopback only), so a Dockerfile line that
+  needs the network — `RUN apt-get install`, `RUN npm install` — does **not** work; install
+  dependencies in the sandbox shell, which keeps normal pod networking, and `COPY` the result in.
+  Base images still pull, because the daemon fetches them itself. The capability contract declares
+  this limit, so an agent discovers it before starting rather than halfway through a build.
+
+  `awx-docker` also validates `--output` by parsing it as CSV field by field, so `type=image,push=true`,
+  `type=registry`, a quoted `"push=true"` field and a second `type=` in the same value are all refused.
+  That refusal is ergonomics, not a boundary — `buildctl` is on `PATH` and `BUILDKIT_HOST` is
+  exported, so a caller can reach the daemon directly. What actually prevents publishing is that the
+  builder holds no registry credential, no ServiceAccount token and no workload identity.
+
+  Availability of the build capability is measured, not assumed: the executor connects to the socket
+  and speaks the HTTP/2 preface, reporting `image_build` as supported only when a real builder answers.
+  A crashed daemon that left its socket file behind, or a sidecar still starting up, is reported as
+  `RequiresExternalService` rather than advertised as a builder whose every build fails at connect time.
+
+## 0.18.0
+
+### Minor Changes
+
+- adbd83f: Make preview approval timeouts configurable per project with a 30-minute default, keep
+  pending approvals persistently visible, and allow owners to retry expired approvals
+  without restarting the run or executing the preview process twice.
+- d47df1c: Add a UI-harness pointer drag command with stable workflow-editor node and handle targets, safe element-relative coordinates, configurable movement steps, and failure evidence so canvas repositioning and drag-to-connect regressions can be reproduced.
+
+### Patch Changes
+
+- 615266f: Allow Entra project members to open and operate project runs according to their Agentweaver project role, even when the run records a linked GitHub login as its submitting identity.
+- a476cc9: Fix switching a project between linked GitHub accounts so the selected identity remains active for request and background operations instead of reverting to the default account.
+- 0d6aa2c: Confine Kata AgentHost shell and preview child processes to run-scoped mount namespaces, preventing absolute, obfuscated, traversal, and symlink paths from reaching sibling projects on the shared workspace volume.
+- a0bfd98: Allow one workflow to keep a recurring schedule and a GitHub event trigger at the same time, with
+  independent editing, API round-trips, and runtime dispatch for both. The event editor now also makes
+  GitHub Issues actions explicit, so label-driven workflows can select `labeled` instead of silently
+  remaining scoped to issue creation.
+- bbb6dac: Keep live-preview sandboxes available coherently by applying claim TTL renewal, reaper deferral, autoscaler eviction protection, active-use keepalive, and final cleanup through one idempotent run lifecycle.
+- 85f76da: Rotate persisted per-package dependency-cache generations during explicit invalidation.
+- 7db4f17: Make workflow schedules discoverable and editable inside the visual workflow editor without overwriting unsaved workflow changes.
+- cac2e20: Add safe npm download-cache reuse and timed layer/full validation profiles for concurrent worktrees, with physical local dependency trees and worktree-local .NET outputs.
+- 47f6405: Keep each UI harness scenario on one persistent browser page across separate CLI actions, with crash recovery, isolated concurrent sessions, and explicit cleanup on finish.
+- 857910e: Align workflow node authoring across the API and visual editor: add Open pull request and Publish actions to the picker, preserve them through YAML edits, and enforce the shared node-type contract in frontend and server tests.
+
+## 0.17.0
+
+### Minor Changes
+
+- c832c0e: Add `--image-source ghcr` to `azure:deploy-from-release`, so an already-published release can be redeployed by importing its existing GHCR images instead of rebuilding them from source. This skips a full container rebuild and never touches cluster, ACR, Postgres, identity, or monitoring infrastructure.
+
+### Patch Changes
+
+- 5962680: Recover assembly AgentHost credential rotation and reaped-pod races with one bounded, reason-specific retry, active linked-account token propagation, and structured diagnostics that stop on persistent authorization or lifecycle failures.
+- d6d5c7c: Let browser Assistant sessions use MCP tools with the current signed-in identity in Microsoft Entra deployments, while keeping the linked GitHub/Copilot credential separate and refreshing the platform token on each message.
+- 75a2acb: Make the project settings “Create webhook automatically” action provision or refresh the connected repository's signed GitHub webhook instead of returning a local placeholder error.
+- 0bf2e14: Keep Azure provisioning resilient when the AKS region does not support Log Analytics or Application Insights by selecting a nearby supported monitoring region, with an explicit override when needed.
+- 75d5b9c: Keep the signed-in account name and avatar readable by placing the sidebar version badge on its own footer row, while retaining the full build version in the badge tooltip.
+- 41975fa: Recover soft-deleted Key Vault preview-runner credential keys before retrying a launch. Recovery is bounded, safe under concurrent creators, preserves purge protection, and rotates to a fresh credential without logging secret values.
+- 04c8cfb: Allow `release:publish` to run from a normal built checkout containing standard dependency, build, test, and harness outputs, while continuing to reject untracked source and unexpected ignored files.
+- 6493f7b: Allow supervised preview processes to use canonical absolute working directories when they resolve to the run worktree or one of its subdirectories, while continuing to reject sandbox escapes.
+- 75314ba: Prevent agent-authored memory and decisions from becoming trusted cross-team prompt instructions until an authorized coordinator or project owner approves them.
+- 9ac9a97: Normalize aborted A2A turns to a single structured `agent_turn_internal_error` across general, Responsible AI, and Build & Test agents, while retaining bounded redacted diagnostics instead of exposing raw unsupported-event reasons.
+- 082b216: Make UI harness captures wait for the authenticated application shell or a caller-declared semantic target, preserve failed commands through finish, and report persistent sign-in loading states as expired authentication instead of producing false-green evidence.
+
 ## 0.16.2
 
 ### Patch Changes

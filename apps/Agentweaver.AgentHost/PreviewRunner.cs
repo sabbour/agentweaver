@@ -8,6 +8,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentTools;
+using Agentweaver.SandboxExec;
+using Agentweaver.SandboxExec.PodExec;
 using Agentweaver.SandboxFs;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
@@ -100,14 +102,14 @@ internal sealed class PreviewRunnerToolProvider(
         yield return AIFunctionFactory.Create(
             async (
                 [Description("Command that starts the preview app/server. Use the project script directly, e.g. npm run dev -- --host 0.0.0.0.")] string command,
-                [Description("Working directory for the command. Defaults to the current run worktree.")] string? cwd = null,
+                [Description("Working directory for the command. Defaults to the current run worktree. Accepts a sandbox-relative path or an absolute path contained by the run worktree.")] string? cwd = null,
                 [Description("Optional assembly work plan id for metadata correlation.")] string? work_plan_id = null,
                 [Description("Optional assembly tree hash for metadata correlation.")] string? tree_hash = null,
                 CancellationToken ct = default) =>
             {
                 var resolvedCwd = string.IsNullOrWhiteSpace(cwd)
                     ? context.WorkingDirectory
-                    : SandboxPathValidator.ValidateAndResolve(cwd, context.WorkingDirectory);
+                    : SandboxPathValidator.ValidateRelativeOrAbsoluteContained(cwd, context.WorkingDirectory);
                 var result = await runner.StartPreviewProcessAsync(
                     command,
                     resolvedCwd,
@@ -221,13 +223,20 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
     private readonly ILogger<PreviewRunner> _logger;
     private readonly TimeProvider _clock;
     private readonly AgentHostRuntimeState? _runtimeState;
+    private readonly ISandboxExecutor? _sandboxExecutor;
 
-    public PreviewRunner(IOptions<PreviewRunnerOptions> options, ILogger<PreviewRunner> logger, TimeProvider? clock = null, AgentHostRuntimeState? runtimeState = null)
+    public PreviewRunner(
+        IOptions<PreviewRunnerOptions> options,
+        ILogger<PreviewRunner> logger,
+        TimeProvider? clock = null,
+        AgentHostRuntimeState? runtimeState = null,
+        ISandboxExecutor? sandboxExecutor = null)
     {
         _options = options.Value;
         _logger = logger;
         _clock = clock ?? TimeProvider.System;
         _runtimeState = runtimeState;
+        _sandboxExecutor = sandboxExecutor;
     }
 
     public async Task<PreviewProcessStartResult> StartPreviewProcessAsync(
@@ -246,15 +255,37 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         var sandboxRoot = _runtimeState?.EffectiveWorkingDirectory;
         var fullCwd = string.IsNullOrWhiteSpace(sandboxRoot)
             ? Path.GetFullPath(cwd)
-            : Path.IsPathRooted(cwd)
-                ? SandboxPathValidator.ValidateAbsoluteContained(cwd, sandboxRoot)
-                : SandboxPathValidator.ValidateAndResolve(cwd, sandboxRoot);
+            : SandboxPathValidator.ValidateRelativeOrAbsoluteContained(
+                cwd,
+                SandboxPathValidator.ValidateSandboxRoot(sandboxRoot));
         if (!Directory.Exists(fullCwd))
             throw new DirectoryNotFoundException($"Preview working directory does not exist: {fullCwd}");
 
         var sessionId = Guid.NewGuid().ToString("n")[..12];
         var process = BuildProcess(command, fullCwd);
         ScrubChildEnvironment(process.StartInfo);
+        var processGroupId = 0;
+        var processStarted = false;
+        string? remoteHandle = null;
+        if (_sandboxExecutor is PodExecSandboxClient sidecarExecutor)
+        {
+            var sanitizedEnvironment = process.StartInfo.Environment
+                .Where(pair => pair.Value is not null)
+                .ToDictionary(pair => pair.Key, pair => pair.Value!, StringComparer.Ordinal);
+            process.Dispose();
+            // The preview server itself runs in the executor sidecar container's namespaces; the
+            // returned local process is the supervising relay that carries its output and exit code.
+            var supervised = await sidecarExecutor.StartSupervisedProcessAsync(
+                command,
+                fullCwd,
+                sanitizedEnvironment,
+                networkEnabled: true,
+                ct).ConfigureAwait(false);
+            process = supervised.Process;
+            remoteHandle = supervised.Handle;
+            processGroupId = process.Id;
+            processStarted = true;
+        }
         var state = new PreviewProcessState(
             sessionId,
             runId ?? string.Empty,
@@ -277,11 +308,24 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
         try
         {
-            if (!process.Start())
+            if (!processStarted && !process.Start())
                 throw new InvalidOperationException("Preview process did not start.");
-            state.AttachProcess(process, CaptureProcessIdentity(process.Id));
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+            processGroupId = processGroupId == 0 ? process.Id : processGroupId;
+            state.AttachProcess(
+                process,
+                CaptureProcessIdentity(processGroupId),
+                processGroupId,
+                remoteHandle);
+            if (processStarted)
+            {
+                _ = PumpOutputAsync(process.StandardOutput, state, "stdout");
+                _ = PumpOutputAsync(process.StandardError, state, "stderr");
+            }
+            else
+            {
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+            }
         }
         catch
         {
@@ -291,15 +335,20 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
         if (!_sessions.TryAdd(sessionId, state))
         {
-            await StopProcessTreeAsync(process, TimeSpan.FromSeconds(_options.StopGraceSeconds), ct).ConfigureAwait(false);
+            await StopProcessTreeAsync(
+                process,
+                processGroupId,
+                remoteHandle,
+                TimeSpan.FromSeconds(_options.StopGraceSeconds),
+                ct).ConfigureAwait(false);
             throw new InvalidOperationException($"Duplicate preview session id {sessionId}.");
         }
 
         _logger.LogInformation(
             "PreviewRunner: started session={SessionId} pid={Pid} run={RunId} cwd={Cwd}",
-            sessionId, process.Id, runId, fullCwd);
+            sessionId, processGroupId, runId, fullCwd);
 
-        return new PreviewProcessStartResult(sessionId, process.Id, state.StartedAt, fullCwd);
+        return new PreviewProcessStartResult(sessionId, processGroupId, state.StartedAt, fullCwd);
     }
 
     public async Task<PreviewPortObservation> ObserveBoundPortAsync(
@@ -332,7 +381,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                     0,
                     $"process_exited:exit={state.ExitCode}");
 
-            var sessionCandidates = await SnapshotProcessTreeListeningPortsAsync(state.RootIdentity, ct)
+            var sessionCandidates = await SnapshotSessionListeningPortsAsync(state, ct)
                 .ConfigureAwait(false);
 
             foreach (var (port, evidence) in CandidatePortsFromLogs(state.Buffer.SnapshotLines())
@@ -454,7 +503,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             throw new InvalidOperationException(
                 $"Port {port} is not attributed to preview session {sessionId}.");
 
-        var ownedPorts = await SnapshotProcessTreeListeningPortsAsync(state.RootIdentity, ct).ConfigureAwait(false);
+        var ownedPorts = await SnapshotSessionListeningPortsAsync(state, ct).ConfigureAwait(false);
         if (!ownedPorts.Contains(appPort))
             throw new InvalidOperationException(
                 $"Port {port} is no longer owned by preview session {sessionId}'s process tree.");
@@ -527,7 +576,12 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
         var process = state.Process;
         if (process is not null)
-            await StopProcessTreeAsync(process, TimeSpan.FromSeconds(_options.StopGraceSeconds), ct).ConfigureAwait(false);
+            await StopProcessTreeAsync(
+                process,
+                state.ProcessGroupId,
+                state.RemoteHandle,
+                TimeSpan.FromSeconds(_options.StopGraceSeconds),
+                ct).ConfigureAwait(false);
 
         state.Dispose();
         _logger.LogInformation("PreviewRunner: stopped session={SessionId} reason={Reason}", sessionId, reason);
@@ -661,7 +715,13 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         }
 
         // Remove by VALUE match against the live credentials (covers any aliased var name).
-        var secrets = new[] { _runtimeState?.TurnBearerToken, _runtimeState?.PreviewRunnerCredential }
+        var secrets = new[]
+            {
+                _runtimeState?.TurnBearerToken,
+                _runtimeState?.PreviewRunnerCredential,
+                _runtimeState?.GitHubAccessToken,
+                _runtimeState?.CallerBearerToken,
+            }
             .Where(s => !string.IsNullOrEmpty(s))
             .ToArray();
         if (secrets.Length > 0)
@@ -697,6 +757,22 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
                 }
             }
         }
+    }
+
+    private async Task<HashSet<int>> SnapshotSessionListeningPortsAsync(
+        PreviewProcessState state,
+        CancellationToken ct)
+    {
+        // Sidecar-hosted previews own their PIDs in the executor container's PID namespace, so the
+        // socket-inode attribution has to happen there; the pod's network namespace is shared, which
+        // keeps the resulting ports directly reachable from AgentHost.
+        if (state.RemoteHandle is { Length: > 0 } handle &&
+            _sandboxExecutor is PodExecSandboxClient sidecarExecutor)
+        {
+            return [.. await sidecarExecutor.GetListeningPortsAsync(handle, ct).ConfigureAwait(false)];
+        }
+
+        return await SnapshotProcessTreeListeningPortsAsync(state.RootIdentity, ct).ConfigureAwait(false);
     }
 
     private static async Task<HashSet<int>> SnapshotProcessTreeListeningPortsAsync(
@@ -1063,13 +1139,40 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             out inode);
     }
 
-    private async Task StopProcessTreeAsync(Process process, TimeSpan grace, CancellationToken ct)
+    private async Task StopProcessTreeAsync(
+        Process process,
+        int processGroupId,
+        string? remoteHandle,
+        TimeSpan grace,
+        CancellationToken ct)
     {
         if (process.HasExited)
             return;
 
-        if (!OperatingSystem.IsWindows())
-            await SendUnixProcessGroupSignalAsync(process.Id, "TERM", ct).ConfigureAwait(false);
+        var remote = remoteHandle is { Length: > 0 } && _sandboxExecutor is PodExecSandboxClient;
+        if (remote)
+        {
+            // The sandboxed process group lives in the executor sidecar's PID namespace, so the
+            // signal must be delivered there. The local process is only the supervising relay and
+            // its PID is deliberately never used as a process-group id.
+            try
+            {
+                await ((PodExecSandboxClient)_sandboxExecutor!)
+                    .StopAsync(remoteHandle!, grace, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "PreviewRunner: executor sidecar stop failed for handle={Handle}; falling back to relay teardown.",
+                    remoteHandle);
+            }
+        }
+        else if (!OperatingSystem.IsWindows())
+        {
+            await SendUnixProcessGroupSignalAsync(processGroupId, "TERM", ct).ConfigureAwait(false);
+        }
 
         try
         {
@@ -1084,9 +1187,11 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
 
         if (!process.HasExited)
         {
-            if (!OperatingSystem.IsWindows())
-                await SendUnixProcessGroupSignalAsync(process.Id, "KILL", CancellationToken.None).ConfigureAwait(false);
+            if (!remote && !OperatingSystem.IsWindows())
+                await SendUnixProcessGroupSignalAsync(processGroupId, "KILL", CancellationToken.None).ConfigureAwait(false);
 
+            // Killing the relay drops the supervising connection, which makes the sidecar terminate
+            // the remote process group even if the explicit stop request was lost.
             if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
         }
@@ -1106,6 +1211,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add("-" + signal);
+        psi.ArgumentList.Add("--");
         psi.ArgumentList.Add("-" + pid.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         try
@@ -1117,6 +1223,22 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         catch
         {
             // Fallback caller will use Process.Kill where possible.
+        }
+    }
+
+    private static async Task PumpOutputAsync(
+        StreamReader reader,
+        PreviewProcessState state,
+        string stream)
+    {
+        try
+        {
+            while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+                CaptureLine(state, stream, line);
+        }
+        catch
+        {
+            // Process teardown closes redirected streams while the pump is pending.
         }
     }
 
@@ -1166,15 +1288,29 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         public DateTimeOffset StartedAt { get; }
         public DateTimeOffset LastTouchedAt { get; private set; }
         public Process? Process { get; private set; }
+        public int ProcessGroupId { get; private set; }
+
+        /// <summary>
+        /// Executor-sidecar handle when the sandboxed process lives in the pod's executor container.
+        /// Port attribution and teardown are routed through the sidecar for these sessions, because
+        /// the sandboxed PIDs do not exist in the AgentHost's PID namespace.
+        /// </summary>
+        public string? RemoteHandle { get; private set; }
         public int? ExitCode { get; private set; }
         public int? ObservedPort { get; private set; }
         public ProcessIdentity RootIdentity { get; private set; }
         public bool HasExited => Volatile.Read(ref _exited) == 1;
 
-        public void AttachProcess(Process process, ProcessIdentity rootIdentity)
+        public void AttachProcess(
+            Process process,
+            ProcessIdentity rootIdentity,
+            int processGroupId,
+            string? remoteHandle = null)
         {
             Process = process;
             RootIdentity = rootIdentity;
+            ProcessGroupId = processGroupId;
+            RemoteHandle = remoteHandle;
         }
         public void Touch(DateTimeOffset now) => LastTouchedAt = now;
         public void MarkPort(int port)

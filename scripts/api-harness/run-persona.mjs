@@ -38,6 +38,10 @@ import { dirname, join } from 'node:path';
 import { readdir, writeFile } from 'node:fs/promises';
 
 import { AgentweaverClient } from './lib/client.mjs';
+import {
+  createRecorderSessionAuthProvider,
+  RECORDER_SESSION_AUTH_PROVIDER,
+} from './lib/auth-providers/recorder-session.mjs';
 import { runGenerationSeams } from './lib/seams.mjs';
 import { summarizeProjectMetrics } from './lib/metrics.mjs';
 import { writeFinding, printReport } from './lib/reporter.mjs';
@@ -80,6 +84,8 @@ function parseArgs(argv) {
     else if (a === '--allow-prod') out.allowProd = true;
     else if (a === '--i-understand-this-targets-production') out.confirmProduction = true;
     else if (a === '--token') out.token = argv[++i];
+    else if (a === '--auth-provider') out.authProvider = argv[++i];
+    else if (a === '--recorder-auth-root') out.recorderAuthRoot = argv[++i];
     else if (a === '--timeout') out.timeoutMs = Number(argv[++i]) * 1000;
     else if (a === '--list') out.list = true;
   }
@@ -119,6 +125,14 @@ function resolveToken(explicit) {
   }
 }
 
+function resolveAuthProvider(args) {
+  if (!args.authProvider) return null;
+  if (args.authProvider !== RECORDER_SESSION_AUTH_PROVIDER) {
+    throw new Error(`Unsupported auth provider "${args.authProvider}".`);
+  }
+  return createRecorderSessionAuthProvider({ authRoot: args.recorderAuthRoot });
+}
+
 async function listScenarios() {
   const files = (await readdir(join(HERE, 'scenarios'))).filter((f) => f.endsWith('.mjs'));
   console.log('Available scenarios:');
@@ -150,8 +164,15 @@ async function main() {
     return 2;
   }
 
-  const token = resolveToken(args.token);
-  if (!token) {
+  let authProvider;
+  try {
+    authProvider = resolveAuthProvider(args);
+  } catch (err) {
+    console.error(`error: ${err.message}`);
+    return 2;
+  }
+  const token = authProvider ? null : resolveToken(args.token);
+  if (!authProvider && !token) {
     console.error('error: no token (pass --token, set $AGENTWEAVER_TOKEN, or run `gh auth login`)');
     return 2;
   }
@@ -186,7 +207,7 @@ async function main() {
   console.log('  mode    : API-only (no browser), generated-artifact seam validation');
 
   const client = new AgentweaverClient({
-    baseUrl, token, insecure: args.insecure, allowProd: args.allowProd, confirmProduction: args.confirmProduction,
+    baseUrl, token, authProvider, insecure: args.insecure, allowProd: args.allowProd, confirmProduction: args.confirmProduction,
   });
 
   let result;

@@ -129,6 +129,10 @@ export interface WorkflowNodeData extends Record<string, unknown> {
    * LandingWorkflowDemo) keeps handles as invisible, non-interactive edge anchors.
    */
   connectable?: boolean;
+  /** Stable harness selector for the editable node face. */
+  interactionTestId?: string;
+  /** Prefix used to expose stable source/target handle selectors in the editable canvas. */
+  handleTestIdPrefix?: string;
   /** When true and the node is running, an orange tool-approval badge is shown. */
   hasPendingApproval?: boolean;
   /** Active preview URL associated with a build/test gate. */
@@ -887,6 +891,8 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     totalTokens,
     executionPodName: nodeExecutionPodName,
     connectable,
+    interactionTestId,
+    handleTestIdPrefix,
   } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent, message } = state;
@@ -947,6 +953,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   const roleText   = agentRoleTitle ?? def.roleDescription;
   const coordinatorClickable = key === 'coordinator' && !isPlanned && Boolean(openSession);
   const statusText = isPlanned ? 'Planned' : isHumanWaiting ? 'Awaiting' : statusLabel(effectiveStatus);
+  const handleTestId = (suffix: string) => handleTestIdPrefix ? `${handleTestIdPrefix}-${suffix}` : undefined;
 
   // Compact face: always the role ICON (never an avatar). The agent name lives in the hover popover.
   const avatar = <Icon fontSize={20} />;
@@ -1029,7 +1036,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         aria-label={`${label}: ${statusLabel(effectiveStatus)}`}
         aria-current={selected ? 'true' : undefined}
         data-node-type={nodeType ?? 'default'}
-        data-testid={coordinatorClickable ? 'coordinator-card' : undefined}
+        data-testid={interactionTestId ?? (coordinatorClickable ? 'coordinator-card' : undefined)}
         tabIndex={0}
         onClick={coordinatorClickable ? () => openSession?.() : undefined}
         onKeyDown={coordinatorClickable ? (e) => {
@@ -1041,19 +1048,19 @@ export function WorkflowNode({ data, selected }: NodeProps) {
       >
         {dir === 'GRID' ? (
           <>
-            <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} isConnectable={!!connectable} />
-            <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} isConnectable={!!connectable} />
-            <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} isConnectable={!!connectable} />
-            <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} isConnectable={!!connectable} />
-            <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} isConnectable={!!connectable} />
-            <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} isConnectable={!!connectable} />
-            <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} isConnectable={!!connectable} />
-            <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} isConnectable={!!connectable} />
+            <Handle id="target-left" type="target" position={Position.Left} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('target-left')} />
+            <Handle id="target-right" type="target" position={Position.Right} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('target-right')} />
+            <Handle id="target-top" type="target" position={Position.Top} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('target-top')} />
+            <Handle id="target-bottom" type="target" position={Position.Bottom} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('target-bottom')} />
+            <Handle id="source-left" type="source" position={Position.Left} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('source-left')} />
+            <Handle id="source-right" type="source" position={Position.Right} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('source-right')} />
+            <Handle id="source-top" type="source" position={Position.Top} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('source-top')} />
+            <Handle id="source-bottom" type="source" position={Position.Bottom} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('source-bottom')} />
           </>
         ) : (
           <>
-            <Handle type="target" position={targetPos} style={handleStyle} isConnectable={!!connectable} />
-            <Handle type="source" position={sourcePos} style={handleStyle} isConnectable={!!connectable} />
+            <Handle type="target" position={targetPos} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('target')} />
+            <Handle type="source" position={sourcePos} style={handleStyle} isConnectable={!!connectable} data-testid={handleTestId('source')} />
           </>
         )}
 

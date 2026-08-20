@@ -14,8 +14,15 @@ public sealed record BacklogTask
     /// </summary>
     public required string OrderKey { get; init; }
     /// <summary>The accountable human (signed-in user) who captured the task (Principle IX). Becomes
-    /// the coordinator run's SubmittingUser AND the confirmedBy on the unattended outcome-spec confirm.</summary>
+    /// the confirmedBy on the unattended outcome-spec confirm.</summary>
     public required string CapturedBy { get; init; }
+    /// <summary>
+    /// Durable authentication subject for the capturing user. Background pickup uses this value for
+    /// the coordinator run's SubmittingUser so project-scoped credentials can be resolved without
+    /// reverse-looking up the display-oriented <see cref="CapturedBy"/> GitHub login. Null preserves
+    /// legacy and automation behavior.
+    /// </summary>
+    public string? CapturedByUserId { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
     /// <summary>Set when the task is first moved Backlog -> Ready. Null while in Backlog. Also a
     /// pickup tie-breaker.</summary>

@@ -101,6 +101,50 @@ public sealed class WorkflowGeneratorTests
             to: done
         """;
 
+    private const string PeerReviewApprovalForwardWorkflowYaml = """
+        id: weekly-aks-issue-triage
+        name: Weekly AKS Issue Triage
+        description: Review issue triage findings and produce a report.
+        version: "1.0"
+        start: triage-issues
+        nodes:
+          - id: triage-issues
+            type: prompt
+            label: Triage issues
+            role: product-manager
+            prompt: "Classify open Azure/AKS issues and draft PRDs."
+          - id: review-prds
+            type: peer_review
+            label: Review PRDs
+            role: product-manager
+            prompt: "Review the proposed PRDs for completeness."
+          - id: triage-report
+            type: prompt
+            label: Triage report
+            role: product-manager
+            prompt: "Produce the approved weekly triage report."
+          - id: declined
+            type: terminal
+            label: Declined
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: triage-issues
+            to: review-prds
+          - from: review-prds
+            to: triage-report
+            when: approved
+          - from: review-prds
+            to: triage-issues
+            when: request-changes
+          - from: review-prds
+            to: declined
+            when: declined
+          - from: triage-report
+            to: done
+        """;
+
     private const string InvalidTriggerWorkflowYaml = """
         id: broken-trigger
         name: Broken Trigger
@@ -207,9 +251,11 @@ public sealed class WorkflowGeneratorTests
 
         await generator.GenerateAsync(new WorkflowGenerationRequest(
             "A simple manual workflow.",
+            ProjectId: "00000000-0000-0000-0000-000000000712",
             GenerationModel: "gpt-5-mini"));
 
         runner.LastModelId.Should().Be("gpt-5-mini");
+        runner.LastProjectId.Should().Be("00000000-0000-0000-0000-000000000712");
     }
 
 
@@ -240,6 +286,41 @@ public sealed class WorkflowGeneratorTests
         result.WasCorrected.Should().BeFalse();
         result.GeneratedYaml.Should().NotContain("```");
         result.Workflow.Id.Should().Be("generated-flow");
+    }
+
+    [Fact]
+    public async Task PeerReviewApprovalThenAgentTurn_GeneratesRunnableWorkflow()
+    {
+        var runner = new ScriptedAgentRunner(PeerReviewApprovalForwardWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Weekly AKS issue triage: classify open issues, group duplicate feature requests, identify gaps not already documented, write PRDs, name features, review PRDs, and produce a triage report without writing back to Azure/AKS unless explicitly approved.",
+            TargetRepository: "Azure/AKS"));
+
+        result.WasCorrected.Should().BeFalse();
+        result.Workflow.Id.Should().Be("weekly-aks-issue-triage");
+        RunWorkflowGraphBinder.GetBindabilityErrors(result.Workflow).Should().BeEmpty();
+        runner.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task PeerReviewStart_TriggersCorrectionPassBeforeWorkflowIsReturned()
+    {
+        var invalidStart = PeerReviewApprovalForwardWorkflowYaml.Replace(
+            "start: triage-issues", "start: review-prds", StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(invalidStart, PeerReviewApprovalForwardWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Generate an issue-triage workflow with a review and a final report.",
+            TargetRepository: "Azure/AKS"));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Id.Should().Be("weekly-aks-issue-triage");
+        runner.CallCount.Should().Be(2);
+        runner.LastTask.Should().Contain("Cannot bind start node 'review-prds'");
+        runner.LastTask.Should().Contain("Choose a prompt or publish node as start");
     }
 
     [Fact]
@@ -632,6 +713,7 @@ public sealed class WorkflowGeneratorTests
         public int CallCount { get; private set; }
         public string? LastTask { get; private set; }
         public string? LastModelId { get; private set; }
+        public string? LastProjectId { get; private set; }
 
         public ScriptedAgentRunner(params string[] responses) => _responses = new Queue<string>(responses);
 
@@ -645,6 +727,25 @@ public sealed class WorkflowGeneratorTests
             LastModelId = modelId;
             var next = _responses.Count > 0 ? _responses.Dequeue() : string.Empty;
             return Task.FromResult(next);
+        }
+
+        public Task<string> ExecuteForProjectAsync(
+            string task,
+            string workingDirectory,
+            string repositoryPath,
+            ModelSource modelSource,
+            string runId,
+            string? modelId,
+            ChannelWriter<RunEvent>? stream,
+            CancellationToken ct,
+            string? systemPromptContext = null,
+            string? userId = null,
+            string? projectId = null)
+        {
+            LastProjectId = projectId;
+            return ExecuteAsync(
+                task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct,
+                systemPromptContext, userId);
         }
     }
 

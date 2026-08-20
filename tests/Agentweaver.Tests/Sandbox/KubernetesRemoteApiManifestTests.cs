@@ -30,6 +30,58 @@ public sealed class KubernetesRemoteApiManifestTests
         template.Should().MatchRegex(@"(?m)^\s+agentweaver\.dev/sandbox: ""true""\s*$");
     }
 
+    /// <summary>
+    /// The executor sidecar is the process boundary for every model-controlled command, so its
+    /// hardening must be identical to AgentHost's — the fix must not buy Kata compatibility with
+    /// privileges. Asserted here because a manifest regression would be invisible to the .NET tests.
+    /// </summary>
+    [Fact]
+    public void AgentHostTemplate_DeclaresHardenedExecutorSidecar()
+    {
+        var template = ReadManifest("sandbox-template-agenthost.yaml");
+
+        template.Should().MatchRegex(@"(?m)^\s+- name: agentweaver-exec\s*$");
+        template.Should().MatchRegex(@"(?m)^\s+args: \[""--exec-agent""\]\s*$");
+
+        var sidecar = template[template.IndexOf("- name: agentweaver-exec", StringComparison.Ordinal)..];
+        sidecar = sidecar[..sidecar.IndexOf("      volumes:", StringComparison.Ordinal)];
+
+        sidecar.Should().Contain("runAsNonRoot: true");
+        sidecar.Should().Contain("allowPrivilegeEscalation: false");
+        sidecar.Should().MatchRegex(@"drop: \[""ALL""\]");
+        sidecar.Should().Contain("type: RuntimeDefault");
+        sidecar.Should().Contain("/var/run/agentweaver-exec");
+        // The container running model-controlled code must hold no cluster identity.
+        sidecar.Should().Contain("/var/run/secrets/kubernetes.io/serviceaccount");
+    }
+
+    /// <summary>
+    /// The sidecar's value is its own PID namespace. Every one of these settings would either merge
+    /// the namespaces again or hand the sandbox host-level reach, so their absence is the invariant.
+    /// </summary>
+    [Fact]
+    public void AgentHostTemplate_NeverWeakensIsolationToSatisfyKata()
+    {
+        // Comments intentionally NAME the prohibited settings when explaining why they are absent,
+        // so the invariant is asserted against the YAML body only.
+        var template = string.Join(
+            '\n',
+            ReadManifest("sandbox-template-agenthost.yaml")
+                .Split('\n')
+                .Where(line => !line.TrimStart().StartsWith('#')));
+
+        template.Should().NotContain("shareProcessNamespace");
+        template.Should().NotContain("hostPID");
+        template.Should().NotContain("hostIPC");
+        template.Should().NotContain("hostNetwork");
+        template.Should().NotContain("hostPath");
+        template.Should().NotContain("privileged: true");
+        template.Should().NotContain("procMount");
+        template.Should().NotContain("type: Unconfined");
+        template.Should().NotContain("add:");
+        template.Should().Contain("azure.workload.identity/skip-containers: \"agentweaver-exec\"");
+    }
+
     [Fact]
     public void ApiIngress_AllowsOnlyDoublyLabelledAgentHostPodsOnTcp8080()
     {
@@ -149,6 +201,26 @@ public sealed class KubernetesRemoteApiManifestTests
             .Select(m => m.Groups[1].Value);
 
         verbs.Should().Contain(new[] { "get", "list", "create", "delete", "patch", "update" });
+    }
+
+    [Fact]
+    public void ApiAndWorker_CannotMutateTemplatesPoolsOrWorkspacePvcs()
+    {
+        var rbac = ReadManifest("rbac-api.yaml");
+        var templatePoolRules = Regex.Matches(
+            rbac,
+            @"(?ms)^\s{4}resources:\r?\n\s{6}- sandboxtemplates\r?\n\s{6}- sandboxwarmpools\r?\n" +
+            @"\s{4}verbs:\r?\n(?<verbs>(?:\s{6}- \S+\r?\n)+)");
+
+        templatePoolRules.Should().NotBeEmpty();
+        foreach (Match rule in templatePoolRules)
+        {
+            var verbs = Regex.Matches(rule.Groups["verbs"].Value, @"- (\S+)")
+                .Select(match => match.Groups[1].Value);
+            verbs.Should().BeEquivalentTo(["get", "list"],
+                "issue #476 does not overlap #481 by creating per-run templates, pools, or volumes");
+        }
+        rbac.Should().NotContain("persistentvolumeclaims");
     }
 
     [Fact]

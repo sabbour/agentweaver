@@ -33,6 +33,8 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Trigger tasks for scheduled and event workflows](./workflows-automation/trigger-tasks-for-scheduled-and-event-workflows.md) — [#53](https://github.com/sabbour/agentweaver/issues/53)
 - [Edit workflows with the generation prompt](./workflows-automation/edit-workflows-with-generation-prompt.md) — [#59](https://github.com/sabbour/agentweaver/issues/59)
 - [Run, schedule, and visually author workflows](./workflows-automation/run-schedule-and-visually-author-workflows.md) — [#442](https://github.com/sabbour/agentweaver/issues/442)
+- [Support multiple workflow triggers](./workflows-automation/support-multiple-workflow-triggers.md) — [#713](https://github.com/sabbour/agentweaver/issues/713)
+- [Select workflow event actions](./workflows-automation/select-workflow-event-actions.md) — [#716](https://github.com/sabbour/agentweaver/issues/716)
 
 ## Orchestration & runs
 
@@ -51,7 +53,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Govern agent tool use and questions](./agent-execution-sandbox/govern-agent-tools-and-questions.md) — [#19](https://github.com/sabbour/agentweaver/issues/19)
 - [Isolate agent execution and workspaces](./agent-execution-sandbox/isolate-agent-workspaces.md) — [#20](https://github.com/sabbour/agentweaver/issues/20)
 - [Preview apps running inside a sandbox](./agent-execution-sandbox/preview-sandbox-apps.md) — [#21](https://github.com/sabbour/agentweaver/issues/21)
-- [Build Docker/OCI images from AgentHost via rootless BuildKit on Kubernetes (design only)](./agent-execution-sandbox/build-images-with-rootless-buildkit.md) — [#582](https://github.com/sabbour/agentweaver/issues/582)
+- [Build Docker/OCI images from AgentHost via rootless BuildKit on Kubernetes (implementation-ready design)](./agent-execution-sandbox/build-images-with-rootless-buildkit.md) — [#582](https://github.com/sabbour/agentweaver/issues/582)
 
 ## Agent configuration
 

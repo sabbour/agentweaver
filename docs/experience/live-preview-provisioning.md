@@ -18,7 +18,8 @@ It skips when Build & Test **declines**, because the gate is already terminal. I
 | State | Meaning | What to do |
 | --- | --- | --- |
 | **Open preview** | The assembled app is reachable at a Gateway preview URL. | Open it and inspect the running result before approving or requesting changes. |
-| **Preview pending approval** | The existing preview approval gate is waiting for your decision. | Approve or deny the normal tool-approval card. |
+| **Preview pending approval** | The existing preview approval gate is waiting for your decision and shows its expiry. | Approve or deny the persistent tool-approval card. |
+| **Preview approval expired** | The project approval window elapsed, but the healthy preview process is retained. | Choose **Retry approval** to create a fresh approval attempt without restarting the run. |
 | **Preview unavailable** | The app could not be started, no listening port was discovered, the app exited early, observe failed, approval failed, or registration failed. | Continue review; preview failure does not block you. |
 | No preview state | Preview was not applicable or was skipped by infrastructure. | Review the diff normally. |
 
@@ -31,6 +32,7 @@ The preview URL appears on the Build & Test row and in the human-review artifact
 3. Build & Test evaluates the assembled tree.
 4. If the verdict is approved or request-changes, Agentweaver starts the preview step.
 5. If approval is required, approve the preview request in the normal tool-approval card.
+   If it expires, retry it from the card or preview status; each retry has a fresh request id.
 6. Open the preview URL if it is available.
 7. Complete human review: approve, request changes, or decline based on the diff and the running app.
 
@@ -41,6 +43,9 @@ The preview URL appears on the Build & Test row and in the human-review artifact
 - **Gateway is the real path.** The API does not probe the sandbox pod directly; opening **Open preview** exercises the same Gateway hostname users rely on.
 - **Verdict independence.** A Build & Test request-changes verdict can still produce a preview so you can inspect what failed or what needs polish.
 - **Preview failure is non-blocking.** A failed preview is visible as **Preview unavailable** with legible reasons such as `no_listening_port_discovered`, `process_exited:exit={code}`, or `observe_error`, but it never forces a changes request and never prevents human review.
+- **Approval visibility and recovery.** Pending approval stays present in the notification badge,
+  persistent toast, and accessible timeline card. The project-configurable window defaults to
+  30 minutes; expiry preserves the running process so approval can be retried safely.
 - **Credential isolation.** The preview-runner credential is per-run, delivered in memory, scrubbed from child process environment, and deleted on terminal cleanup or orphan reaping.
 
 ## Related reading

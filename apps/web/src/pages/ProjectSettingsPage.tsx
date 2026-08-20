@@ -335,6 +335,10 @@ export function ProjectSettingsPage() {
   const [sandboxSaveError, setSandboxSaveError] = useState<string | null>(null);
   const [sandboxSaveSuccess, setSandboxSaveSuccess] = useState(false);
   const sandboxLoading = project !== null && !sandboxFetched;
+  const [previewApprovalTimeout, setPreviewApprovalTimeout] = useState(30);
+  const [savingPreviewApproval, setSavingPreviewApproval] = useState(false);
+  const [previewApprovalError, setPreviewApprovalError] = useState<string | null>(null);
+  const [previewApprovalSuccess, setPreviewApprovalSuccess] = useState(false);
 
   // A webhook secret is deliberately only retained in this component after its rotation response.
   const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
@@ -384,6 +388,7 @@ export function ProjectSettingsPage() {
             outcome_spec_generation_model: p.outcome_spec_generation_model ?? '',
           });
           setNewName(p.name);
+          setPreviewApprovalTimeout(p.preview_approval_timeout_minutes ?? 30);
         }
       })
       .catch((err) => {
@@ -552,6 +557,35 @@ export function ProjectSettingsPage() {
     }
   };
 
+  const handleSavePreviewApproval = async () => {
+    if (!projectId) return;
+    if (!Number.isInteger(previewApprovalTimeout)
+      || previewApprovalTimeout < 1
+      || previewApprovalTimeout > 1440) {
+      setPreviewApprovalError('Approval timeout must be a whole number between 1 and 1440 minutes.');
+      setPreviewApprovalSuccess(false);
+      return;
+    }
+
+    setSavingPreviewApproval(true);
+    setPreviewApprovalError(null);
+    setPreviewApprovalSuccess(false);
+    try {
+      const saved = await apiClient.updateProjectPreviewSettings(projectId, {
+        approval_timeout_minutes: previewApprovalTimeout,
+      });
+      setPreviewApprovalTimeout(saved.approval_timeout_minutes);
+      setProject((prev) => prev
+        ? { ...prev, preview_approval_timeout_minutes: saved.approval_timeout_minutes }
+        : prev);
+      setPreviewApprovalSuccess(true);
+    } catch (err) {
+      setPreviewApprovalError(formatError(err));
+    } finally {
+      setSavingPreviewApproval(false);
+    }
+  };
+
   const handleRename = async () => {
     if (!projectId || !newName.trim()) return;
     setSavingRename(true);
@@ -674,14 +708,15 @@ export function ProjectSettingsPage() {
     setWebhookError(null);
     setWebhookInfo(null);
     try {
-      await apiClient.autoCreateProjectWebhook(projectId);
-      setWebhookInfo({ intent: 'success', body: 'GitHub webhook created.' });
+      const result = await apiClient.autoCreateProjectWebhook(projectId);
+      setWebhookInfo({
+        intent: 'success',
+        body: result.created
+          ? `GitHub webhook created for ${result.repository}.`
+          : `GitHub webhook for ${result.repository} was already configured and has been updated.`,
+      });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 501) {
-        setWebhookInfo({ intent: 'warning', body: 'Automatic webhook creation is coming soon. Use the manual setup steps below for now.' });
-      } else {
-        setWebhookError(formatError(err));
-      }
+      setWebhookError(formatError(err));
     } finally {
       setCreatingWebhook(false);
     }
@@ -1179,6 +1214,44 @@ export function ProjectSettingsPage() {
 
             {activeSection === 'sandbox' && (
               <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>Preview approval</TitleText>
+                  <Body as="p" tone="muted">
+                    Agent-requested previews remain private until approved. An expired request can be
+                    retried from the run timeline without restarting the run.
+                  </Body>
+                  <Field
+                    label="Approval timeout (minutes)"
+                    hint="Whole number from 1 to 1440. Existing and new projects default to 30 minutes."
+                    validationState={previewApprovalError ? 'error' : 'none'}
+                    validationMessage={previewApprovalError ?? undefined}
+                  >
+                    <Input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      step={1}
+                      value={String(previewApprovalTimeout)}
+                      onChange={(_, data) => setPreviewApprovalTimeout(Number(data.value))}
+                      aria-label="Preview approval timeout in minutes"
+                    />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button
+                      appearance="primary"
+                      disabled={savingPreviewApproval}
+                      onClick={() => void handleSavePreviewApproval()}
+                    >
+                      {savingPreviewApproval ? 'Saving timeout' : 'Save preview approval'}
+                    </Button>
+                    {savingPreviewApproval && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
+                  {previewApprovalSuccess && (
+                    <MessageBar intent="success">
+                      <MessageBarBody>Preview approval timeout saved.</MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
                 {sandboxLoading && <Spinner size="extra-tiny" label="Loading policy" />}
                 {sandboxError && (
                   <MessageBar intent="error"><MessageBarBody>{sandboxError}</MessageBarBody></MessageBar>

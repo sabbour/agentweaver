@@ -172,6 +172,11 @@ public sealed class WorktreeMemoryMirrorTests : IDisposable
             Status = "active",
             Title = title,
             Content = content,
+            SourceKind = MemorySourceKinds.Human,
+            SourceIdentity = "test-owner",
+            TrustState = MemoryTrustStates.Approved,
+            ApprovedBy = "test-owner",
+            ApprovedAt = now,
             CreatedAt = now,
             UpdatedAt = now,
         });

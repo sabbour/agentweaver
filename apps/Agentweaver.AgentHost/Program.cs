@@ -4,6 +4,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
+using Agentweaver.SandboxExec.PodExec;
 using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
 using Microsoft.Agents.AI.Hosting;
@@ -14,6 +15,24 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+
+// ── Executor sidecar entrypoints ───────────────────────────────────────────────
+// The same image serves three roles so the sandbox toolchain is byte-identical on both sides of the
+// pod boundary and no second image has to be built, scanned, or version-matched:
+//   * default            — the AgentHost A2A server (this file, below);
+//   * --exec-agent       — the executor sidecar daemon that owns every model-controlled process;
+//   * --exec-relay       — a short-lived supervisor for one long-running sandboxed process.
+// Both auxiliary modes exit the process when done and never construct the web host.
+if (args.Contains(AgentHostExecutorEntrypoints.ExecAgentArgument, StringComparer.Ordinal))
+{
+    return await AgentHostExecutorEntrypoints.RunExecutorSidecarAsync(args).ConfigureAwait(false);
+}
+if (args.Contains(PodExecRelay.RelayArgument, StringComparer.Ordinal))
+{
+    return await PodExecRelay
+        .RunAsync(AgentHostExecutorEntrypoints.ResolveSocketArgument(args, PodExecRelay.RelayArgument))
+        .ConfigureAwait(false);
+}
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
 var builder = WebApplication.CreateBuilder(args);
@@ -119,22 +138,39 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PreviewRunner>());
 builder.Services.AddSingleton<IAgentRuntimeToolProvider, PreviewRunnerToolProvider>();
 builder.Services.AddAgentHostRuntime();
 
-// The production AgentHost runs inside a per-run Kata VM. Do not nest bubblewrap inside that
-// boundary: the hardened pod cannot mount bwrap's private /proc. This registration intentionally
-// comes after AddAgentRuntime so it overrides only this host's shared factory registration.
-var useKataPassthrough =
+// The production AgentHost runs inside a per-run Kata VM, but the shared /workspace PVC is outside
+// the VM image and is visible to every pod. Model-controlled commands therefore run in a dedicated
+// executor sidecar container of the same pod: the container boundary supplies the PID namespace and
+// the runtime-provided procfs (a nested procfs mount is refused by the kernel in any masked-procfs
+// container — the failure that broke the Kata warm pool), while bubblewrap inside that container
+// binds only the current run's roots. Startup fails closed when the sidecar is unreachable or not
+// actually isolated.
+var useKataSidecarExecutor =
     SandboxExecutorFactory.IsInCluster &&
     string.Equals(
         builder.Configuration["AgentHost:SandboxMode"],
         "kata",
         StringComparison.OrdinalIgnoreCase);
-if (useKataPassthrough)
+if (useKataSidecarExecutor)
 {
+    using var probeLoggerFactory = LoggerFactory.Create(logging => logging.AddSimpleConsole());
+    var executorClient = new PodExecSandboxClient(
+        builder.Configuration["AgentHost:ExecSocketPath"],
+        probeLoggerFactory.CreateLogger(nameof(PodExecSandboxClient)));
+    var probeTimeout = TimeSpan.FromSeconds(
+        builder.Configuration.GetValue("AgentHost:ExecSidecarProbeTimeoutSeconds", 120));
+    var (isolationReady, isolationDetail) = executorClient
+        .ProbeAsync(probeTimeout)
+        .GetAwaiter()
+        .GetResult();
+    if (!isolationReady)
+        throw new InvalidOperationException(
+            $"AgentHost Kata filesystem isolation is unavailable; refusing to start: {isolationDetail}");
+
     builder.Services.AddSingleton<ISandboxExecutor>(sp =>
-        new PassthroughExecutor(
-            "AgentHost executes inside a per-run Kata VM; nested bwrap is disabled.",
-            sp.GetRequiredService<ILoggerFactory>()
-                .CreateLogger(nameof(PassthroughExecutor))));
+        new PodExecSandboxClient(
+            builder.Configuration["AgentHost:ExecSocketPath"],
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(PodExecSandboxClient))));
 }
 
 // ── CopilotAIAgent (singleton per pod — one run per pod lifetime) ──────────────
@@ -287,6 +323,21 @@ app.MapPost("/configure", async (HttpContext ctx) =>
     catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
     {
         throw;
+    }
+    catch (GitHubCopilotUnauthorizedException ex)
+    {
+        var logger = ctx.RequestServices.GetRequiredService<ILogger<AgentHostRuntimeState>>();
+        logger.LogWarning(
+            ex,
+            "AgentHost /configure: GitHub Copilot rejected the run credential for run {RunId}; the API may refresh and recreate this pod once.",
+            configuration.RunId);
+        return Results.Json(
+            new
+            {
+                error = "agenthost_configure_copilot_unauthorized",
+                message = ex.Message,
+            },
+            statusCode: StatusCodes.Status401Unauthorized);
     }
     catch (Exception ex)
     {
@@ -514,6 +565,7 @@ var opts0 = app.Services.GetRequiredService<IOptions<AgentHostOptions>>().Value;
 app.MapA2AHttpJson(agentHostedBuilder, opts0.A2APath);
 
 await app.RunAsync().ConfigureAwait(false);
+return 0;
 
 /// <summary>Request body for the warm-pool <c>POST /configure</c> endpoint.</summary>
 internal sealed record ConfigureRequest
@@ -535,6 +587,13 @@ internal sealed record ConfigureRequest
     /// When present, the pod skips the Key Vault fetch entirely — no OIDC or KV egress needed.
     /// </summary>
     public string? GitHubAccessToken { get; init; }
+
+    /// <summary>
+    /// Authenticated platform caller token used by the operator assistant's MCP connection. Kept
+    /// separate from <see cref="GitHubAccessToken"/> because Entra deployments use different
+    /// credentials for Agentweaver API authorization and the linked GitHub/Copilot account.
+    /// </summary>
+    public string? CallerBearerToken { get; init; }
 
     /// <summary>
     /// The run's shared orchestration worktree path (e.g. <c>/workspace/{worktree}</c>). When present,
@@ -619,7 +678,8 @@ internal sealed record ConfigureRequest
         CommitAuthorName,
         CommitAuthorEmail,
         ProjectId,
-        AgentName);
+        AgentName,
+        CallerBearerToken);
 }
 
 internal sealed record PreviewProcessStartRequest

@@ -11,6 +11,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<Decision> Decisions => Set<Decision>();
     public DbSet<DecisionInboxEntry> DecisionInbox => Set<DecisionInboxEntry>();
     public DbSet<AgentMemory> AgentMemory => Set<AgentMemory>();
+    public DbSet<RunAuthorshipCapability> RunAuthorshipCapabilities => Set<RunAuthorshipCapability>();
     public DbSet<SessionContext> SessionContexts => Set<SessionContext>();
     public DbSet<RunEventRecord> RunEvents => Set<RunEventRecord>();
     public DbSet<OutcomeSpec> OutcomeSpecs => Set<OutcomeSpec>();
@@ -64,6 +65,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     {
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.Status });
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.AgentName });
+        model.Entity<Decision>().Property(d => d.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
+        model.Entity<Decision>().Property(d => d.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
         model.Entity<Decision>()
             .HasOne<Decision>()
             .WithMany()
@@ -71,6 +74,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .IsRequired(false);
         model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Status });
         model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Slug }).IsUnique();
+        model.Entity<DecisionInboxEntry>().Property(e => e.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<DecisionInboxEntry>()
             .HasOne<Decision>()
             .WithMany()
@@ -78,6 +82,20 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .IsRequired(false);
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.AgentName });
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.Type });
+        model.Entity<AgentMemory>().Property(m => m.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
+        model.Entity<AgentMemory>().Property(m => m.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
+        model.Entity<RunAuthorshipCapability>().ToTable("run_authorship_capabilities");
+        model.Entity<RunAuthorshipCapability>().HasKey(capability => capability.RunId);
+        model.Entity<RunAuthorshipCapability>().Property(capability => capability.RunId)
+            .HasColumnName("run_id")
+            .HasMaxLength(128);
+        model.Entity<RunAuthorshipCapability>().Property(capability => capability.TokenHash)
+            .HasColumnName("token_hash")
+            .IsRequired();
+        model.Entity<RunAuthorshipCapability>().Property(capability => capability.ExpiresAt)
+            .HasColumnName("expires_at")
+            .IsRequired();
+        model.Entity<RunAuthorshipCapability>().HasIndex(capability => capability.ExpiresAt);
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.EndedAt });
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
         model.Entity<RunEventRecord>().HasIndex(e => e.RunId);
@@ -296,6 +314,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.MaxReadyPerHeartbeat).HasColumnName("max_ready_per_heartbeat").HasDefaultValue(3);
             e.Property(p => p.PickupAutopilot).HasColumnName("pickup_autopilot").HasDefaultValue(true);
             e.Property(p => p.PickupAutoApproveTools).HasColumnName("pickup_auto_approve_tools").HasDefaultValue(true);
+            e.Property(p => p.PreviewApprovalTimeoutMinutes).HasColumnName("preview_approval_timeout_minutes").HasDefaultValue(30);
             e.Property(p => p.DefaultWorkflowId).HasColumnName("default_workflow_id");
             e.Property(p => p.ActiveReviewPolicyName).HasColumnName("active_review_policy_name");
             e.Property(p => p.SandboxProfile).HasColumnName("sandbox_profile");
@@ -378,6 +397,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.State).HasColumnName("state");
             e.Property(t => t.OrderKey).HasColumnName("order_key");
             e.Property(t => t.CapturedBy).HasColumnName("captured_by");
+            e.Property(t => t.CapturedByUserId).HasColumnName("captured_by_user_id");
             e.Property(t => t.CreatedAt).HasColumnName("created_at");
             e.Property(t => t.CommittedAt).HasColumnName("committed_at");
             e.Property(t => t.ClaimedAt).HasColumnName("claimed_at");

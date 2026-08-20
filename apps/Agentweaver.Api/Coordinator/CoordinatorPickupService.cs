@@ -64,7 +64,10 @@ public sealed class CoordinatorPickupService
             ModelSource = ModelSource.GitHubCopilot,
             ModelId = modelId,
             Task = goal,
-            SubmittingUser = task.CapturedBy,         // accountable human (Principle IX)
+            // Keep the human-facing GitHub login in CapturedBy while carrying the durable auth
+            // subject into background execution. Legacy and automation tasks retain their existing
+            // behavior through the fallback.
+            SubmittingUser = task.CapturedByUserId ?? task.CapturedBy,
             Status = RunStatus.InProgress,
             StartedAt = now,
             ProjectId = project.Id,

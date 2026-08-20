@@ -22,6 +22,12 @@ public enum WorkflowNodeType
     /// </summary>
     OpenPullRequest,
 
+    /// <summary>
+    /// An agent-backed publishing step that packages or delivers approved output without invoking code-merge
+    /// semantics. It uses the same agent/prompt/charter fields as <see cref="Prompt"/>.
+    /// </summary>
+    Publish,
+
     /// <summary>A gate/condition that routes on an upstream verdict/predicate — FR-016.</summary>
     Check,
 
@@ -213,12 +219,10 @@ public sealed record WorkflowTriggerCommentMatchesPredicate
 }
 
 /// <summary>
-/// An optional, first-class automation trigger for a workflow (issue #53). When present, a schedule
+/// A first-class automation trigger for a workflow (issue #53). When present, a schedule
 /// trigger is evaluated by <c>WorkflowScheduleTriggerService</c> and an event trigger is evaluated by
 /// <c>WorkflowEventTriggerService</c> — both start a run automatically (via a Ready backlog task bound
-/// to this workflow) instead of requiring a manual/on-demand start. A workflow with no
-/// <see cref="WorkflowDefinition.Trigger"/> (the default, null) is entirely unaffected and continues to
-/// start only via the existing manual/backlog-pickup paths — fully backward compatible.
+/// to this workflow) instead of requiring a manual/on-demand start.
 /// </summary>
 public sealed record WorkflowTrigger
 {
@@ -304,9 +308,12 @@ public sealed record WorkflowDefinition
     public IReadOnlyList<WorkflowStageDefinition> Stages { get; init; } = [];
 
     /// <summary>
-    /// Optional automation trigger (issue #53). Null (the default) means "no automation" — the
-    /// workflow only starts on-demand via the existing manual/backlog-pickup paths, exactly as before
-    /// this feature. Non-null means a schedule or event fires a run automatically.
+    /// Automation triggers. An empty list means "no automation" — the workflow only starts on-demand
+    /// via the existing manual/backlog-pickup paths. Legacy YAML with a singular <c>trigger:</c> block
+    /// is normalized into this list by the loader.
     /// </summary>
-    public WorkflowTrigger? Trigger { get; init; }
+    public IReadOnlyList<WorkflowTrigger> Triggers { get; init; } = [];
+
+    /// <summary>Compatibility view of the first declared trigger.</summary>
+    public WorkflowTrigger? Trigger => Triggers.FirstOrDefault();
 }

@@ -18,6 +18,10 @@ apps/web/docker-entrypoint.sh text eol=lf
 # Shell scripts: always LF (bash fails to parse CRLF line endings)
 *.sh text eol=lf
 
+# Extensionless sandbox helpers: they run under /bin/sh inside the Linux executor image, so a CRLF
+# checkout on Windows would bake unparseable scripts into the container image.
+apps/Agentweaver.AgentHost/sandbox/* text eol=lf
+
 # Generated docs/templates: always LF so `node scripts/gen-docs.mjs` output is
 # byte-stable across platforms and the API embedded copy matches the .github file.
 docs/reference/mcp-tools.md text eol=lf

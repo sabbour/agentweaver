@@ -177,7 +177,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 modelId: null,
                 systemPromptContext: charter,
                 streamWriter: subWriter,
-                projectId: null,
+                projectId: input.ProjectId,
                 agentName: null,
                 apiBaseUrl: null,
                 apiKey: null,

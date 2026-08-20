@@ -72,6 +72,37 @@ describe('AgentweaverApiClient keepalive', () => {
     vi.unstubAllGlobals();
   });
 
+  describe('AgentweaverApiClient GitHub webhook provisioning contract', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('posts to the project webhook provisioning endpoint', async () => {
+      const response = {
+        hook_id: 42,
+        created: true,
+        repository: 'octocat/demo',
+        payload_url: 'https://api.example.test/api/projects/project%2F1/webhooks/github',
+      };
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(response),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+      await expect(client.autoCreateProjectWebhook('project/1')).resolves.toEqual(response);
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://api.example.test/api/projects/project%2F1/webhooks/github/provision',
+        expect.objectContaining({
+          method: 'POST',
+          body: '{}',
+        }),
+      );
+    });
+  });
+
   it('resolves relative API keepalive URLs through the configured API base', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -117,6 +148,50 @@ describe('AgentweaverApiClient keepalive', () => {
     const error = new ApiError(422, JSON.stringify(payload));
 
     expect(error.payload).toEqual(payload);
+  });
+});
+
+describe('AgentweaverApiClient project GitHub identity', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the project GitHub identity endpoint when switching linked accounts', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await client.setProjectGitHubIdentityOverride('project/1', 'altcat');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.example.test/api/projects/project%2F1/github-identity');
+    expect(init.method).toBe('PUT');
+    expect(init.body).toBe('{"github_login":"altcat"}');
+  });
+
+  it('uses the project GitHub identity endpoint when refreshing the selected account', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        project_id: 'project/1',
+        project_override_login: 'altcat',
+        effective_login: 'altcat',
+        resolution_source: 'project_override',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    const identity = await client.getProjectGitHubIdentity('project/1');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.example.test/api/projects/project%2F1/github-identity');
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
+    expect(identity.effective_login).toBe('altcat');
   });
 });
 

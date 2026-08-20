@@ -261,6 +261,8 @@ builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlem
 builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
 builder.Services.AddScoped<ProjectGitHubIdentityService>();
 builder.Services.AddScoped<LinkedGitHubAccountService>();
+builder.Services.AddSingleton<Agentweaver.Api.Webhooks.IGitHubWebhookProvisioningService,
+    Agentweaver.Api.Webhooks.GitHubWebhookProvisioningService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,
     Agentweaver.Api.Blueprints.HttpContextAuthenticatedOwnerContext>();
@@ -474,6 +476,7 @@ builder.Services.AddSingleton<IExecutionPodNameStore, RunEventExecutionPodNameSt
 builder.Services.AddSingleton<IPodNameRegistry, PodNameRegistry>();
 builder.Services.AddSingleton<IAgentHostTurnTokenRegistry>(sp =>
     (PodNameRegistry)sp.GetRequiredService<IPodNameRegistry>());
+builder.Services.AddSingleton<IRunAuthorshipCapabilityStore, EfRunAuthorshipCapabilityStore>();
 // Resolves a run's submitting user (from IRunStore) so the pod-per-run executor can inject
 // AgentHost__UserId, scoping the in-pod GitHub Copilot auth to the user's Copilot-entitled token
 // instead of the installation token (which fails the first model turn).
@@ -733,7 +736,12 @@ builder.Services.AddSingleton<PortForwardService>();
             clock: null,
             previewRunnerClient: sp.GetService<Agentweaver.Api.Sandbox.Preview.IPreviewRunnerHttpClient>(),
             originResolver: sp.GetService<Agentweaver.Api.Sandbox.IAgentHostOriginResolver>(),
-            secretStore: sp.GetService<Agentweaver.Api.Auth.ISecretStore>());
+            secretStore: sp.GetService<Agentweaver.Api.Auth.ISecretStore>(),
+            kubernetesOptions: new KubernetesSandboxOptions
+            {
+                TimeoutSeconds = builder.Configuration.GetValue<int?>(
+                    "Sandbox:Kubernetes:TimeoutSeconds") ?? 600,
+            });
     });
 
     // Replica-safe annotation-driven reaper. No-ops when preview disabled.

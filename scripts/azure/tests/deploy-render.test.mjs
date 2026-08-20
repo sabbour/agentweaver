@@ -193,6 +193,20 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
     /azure\.workload\.identity\/client-id: 11111111-2222-3333-4444-555555555555/,
     "agent-host ServiceAccount must NOT use the KV-privileged API identity",
   );
+  const mcpDeployment = manifestForFilename(docs, "mcp-deployment.yaml");
+  assert.match(
+    mcpDeployment,
+    /name: Auth__Mode\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: AUTH_MODE\s*\n\s*name: agentweaver-runtime-config/,
+    "MCP must receive the deployment auth mode so Entra bearer validation is enabled only in Entra mode",
+  );
+  assert.match(
+    mcpDeployment,
+    /name: Auth__Entra__ClientId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_CLIENT_ID\s*\n\s*name: agentweaver-runtime-config/,
+  );
+  assert.match(
+    mcpDeployment,
+    /name: Auth__Entra__TenantId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_TENANT_ID\s*\n\s*name: agentweaver-runtime-config/,
+  );
   const apiSaManifest = manifestForFilename(docs, "serviceaccount-api.yaml");
   assert.match(
     apiSaManifest,

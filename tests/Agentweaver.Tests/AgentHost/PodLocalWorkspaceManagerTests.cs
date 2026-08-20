@@ -3,6 +3,8 @@ extern alias agenthost;
 using System.Diagnostics;
 using System.Text.Json;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
+using Agentweaver.SandboxFs;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -21,9 +23,9 @@ namespace Agentweaver.Tests.AgentHost;
 public sealed class PodLocalWorkspaceManagerTests : IDisposable
 {
     private readonly string _root = Path.Combine(
-        AppContext.BaseDirectory,
-        ".pod-local-workspace-tests",
-        Guid.NewGuid().ToString("n"));
+        Directory.GetCurrentDirectory(),
+        ".pod-local-tests",
+        Guid.NewGuid().ToString("n")[..8]);
 
     public PodLocalWorkspaceManagerTests() => Directory.CreateDirectory(_root);
 
@@ -120,7 +122,9 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
         var repository = CreateRepository();
         var commitSha = Git(repository, "rev-parse", "integration");
         var treeHash = Git(repository, "rev-parse", "integration^{tree}");
-        var manager = Manager();
+        var executor = new KataBwrapExecutor(
+            protectedRoots: [Path.Combine(_root, "shared-workspace")]);
+        var manager = Manager(executor);
         var sandboxHomeVariables = new[]
         {
             "HOME",
@@ -143,17 +147,31 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             Git(prepared.WorkspacePath, "branch", "--show-current").Should().BeEmpty(
                 "the local workspace must not use git worktree administration");
             File.Exists(Path.Combine(prepared.WorkspacePath, "package.json")).Should().BeTrue();
-            Environment.GetEnvironmentVariable("HOME").Should().Be(".agentweaver-home");
+            var runtimeHome = Path.GetFullPath(Path.Combine(
+                _root,
+                "scratch",
+                "runtime-home",
+                PodLocalExecutionWorkspace.GetRunHash("workspace-run")));
+            Environment.GetEnvironmentVariable("HOME").Should().Be(runtimeHome);
             Environment.GetEnvironmentVariable("XDG_CACHE_HOME")
-                .Should().Be(".agentweaver-home/.cache");
+                .Should().Be(Path.Combine(runtimeHome, ".cache"));
             Environment.GetEnvironmentVariable("XDG_DATA_HOME")
-                .Should().Be(".agentweaver-home/.local/share");
+                .Should().Be(Path.Combine(runtimeHome, ".local", "share"));
             Environment.GetEnvironmentVariable("XDG_CONFIG_HOME")
-                .Should().Be(".agentweaver-home/.config");
+                .Should().Be(Path.Combine(runtimeHome, ".config"));
             foreach (var variable in sandboxHomeVariables)
-                Directory.Exists(Path.Combine(
-                    prepared.WorkspacePath,
-                    Environment.GetEnvironmentVariable(variable)!)).Should().BeTrue();
+                Directory.Exists(Environment.GetEnvironmentVariable(variable)!).Should().BeTrue();
+
+            executor.RegisterTrustedWorkspace(prepared.WorkspacePath);
+            var command = new SandboxCommand(
+                "echo ok",
+                prepared.WorkspacePath,
+                null,
+                new SandboxFsPolicy([prepared.WorkspacePath], [], []),
+                5000);
+            executor.BuildMountPlan(command).Should().ContainSingle(mount =>
+                mount.Source == runtimeHome && !mount.ReadOnly);
+            executor.BuildChildEnvironment(command)["HOME"].Should().Be(runtimeHome);
         }
         finally
         {
@@ -299,14 +317,15 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
         visitedDirectoryCount.Should().BeLessThan(directoryCount);
     }
 
-    private PodLocalWorkspaceManager Manager() =>
+    private PodLocalWorkspaceManager Manager(ISandboxExecutor? sandboxExecutor = null) =>
         new(
             Options.Create(new AgentHostOptions
             {
                 ExecutionScratchRoot = Path.Combine(_root, "scratch"),
                 ExecutionScratchMinimumFreeBytes = 0,
             }),
-            NullLogger<PodLocalWorkspaceManager>.Instance);
+            NullLogger<PodLocalWorkspaceManager>.Instance,
+            sandboxExecutor);
 
     private PodLocalWorkspaceSpec Spec(
         string repository,

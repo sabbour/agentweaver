@@ -40,7 +40,14 @@ Depending on how Agentweaver is deployed, access may require either:
 - specific **Entra App Roles** plus project-level assignments (`Auth:Mode=Entra`), or
 - membership in a specific **GitHub organization/team** (`Auth:Mode=GitHubLegacy`).
 
-Organization access is not the same as access to every project. Project, run, team, backlog, and memory actions are scoped to resources you own. Agentweaver does not include a built-in superuser GitHub username; a user named `admin` has the same ownership rules as any other user.
+Organization access is not the same as access to every project. Project data and every run linked to
+a project follow that project's authorization boundary. In Entra mode, project-level `Owner`,
+`Contributor`, and `Viewer` assignments apply: viewers can inspect runs, while contributors and
+owners can operate them. A linked GitHub login supplies repository and Copilot capability but does
+not replace the Entra project identity for authorization. In GitHubLegacy mode, the persisted project
+owner remains the boundary. Older runs with no project retain submitting-user ownership. Agentweaver
+does not include a built-in superuser GitHub username; a user named `admin`
+has the same ownership rules as any other user.
 
 ## How sessions work
 

@@ -17,7 +17,7 @@ export function evidenceHash(value) {
 }
 
 export async function structuredDomSnapshot(page) {
-  return page.evaluate(() => [...document.querySelectorAll('[data-testid], [role], button, input, textarea, a')]
+  return page.evaluate(() => [...document.querySelectorAll('[data-testid], [role], main, nav, h1, button, input, textarea, a')]
     .slice(0, 300).map((element) => ({
       testId: element.getAttribute('data-testid'),
       role: element.getAttribute('role') || element.tagName.toLowerCase(),
@@ -39,7 +39,19 @@ export function attachPageCapture(page) {
   return { console, network };
 }
 
-export async function captureTurn({ page, capture, directory, id, intent, action, target, frustrationSignals = [] }) {
+export async function captureTurn({
+  page,
+  capture,
+  directory,
+  id,
+  intent,
+  action,
+  target,
+  outcome = 'succeeded',
+  error = null,
+  readiness = null,
+  frustrationSignals = [],
+}) {
   await mkdir(directory, { recursive: true });
   const screenshotPath = path.join(directory, `turn-${id}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -51,7 +63,7 @@ export async function captureTurn({ page, capture, directory, id, intent, action
     userFacing: visibleAlert && entry.status >= 400 && ['fetch', 'xhr'].includes(entry.resourceType),
   }));
   return redact({
-    id, at: new Date().toISOString(), intent, action, target, url: page.url(), domSnapshot, screenshotPath,
+    id, at: new Date().toISOString(), intent, action, target, outcome, error, readiness, url: page.url(), domSnapshot, screenshotPath,
     screenshotHash: evidenceHash(await readFile(screenshotPath)),
     console: capture.console.splice(0), network, frustrationSignals,
   });

@@ -118,6 +118,50 @@ public sealed class RunWorkflowGraphBinderTests
         result.Definition!.Nodes.Should().Contain(n => n.Id == "b");
     }
 
+    [Theory]
+    [InlineData(WorkflowNodeType.PeerReview)]
+    [InlineData(WorkflowNodeType.BuildTest)]
+    public void VerdictStyleNode_AsStart_IsRejectedBeforeRuntime(WorkflowNodeType verdictNodeType)
+    {
+        var definition = new WorkflowDefinition
+        {
+            Id = "invalid-verdict-start",
+            Name = "Invalid verdict start",
+            Start = "review",
+            Nodes =
+            [
+                Node("review", verdictNodeType),
+                Node("continue", WorkflowNodeType.Prompt),
+                Node("done", WorkflowNodeType.Terminal),
+            ],
+            Edges =
+            [
+                new WorkflowEdge { From = "review", To = "continue", When = "approved" },
+                new WorkflowEdge { From = "continue", To = "done" },
+            ],
+        };
+
+        var errors = RunWorkflowGraphBinder.GetBindabilityErrors(definition);
+
+        errors.Should().ContainSingle()
+            .Which.Should().ContainAll(
+                "Cannot bind start node 'review'",
+                "require an AgentTurnOutput from a preceding producer",
+                "Choose a prompt or publish node as start");
+
+        var bind = () => RunWorkflowGraphBinder.ValidateBindable(definition);
+        bind.Should().Throw<WorkflowBindException>()
+            .WithMessage("*Cannot bind start node 'review'*");
+
+        var bindings = FakeBindings.Create();
+        var wire = () => RunWorkflowGraphBinder.WireFull(
+            new GraphDescriptorBuilder(bindings.AgentInputStorer),
+            definition,
+            bindings);
+        wire.Should().Throw<WorkflowBindException>()
+            .Which.NodeId.Should().Be("review");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────────────────────────────
 
     private static void AssertCanonicalDefaultGraph(GraphDescriptor descriptor)

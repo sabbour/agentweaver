@@ -24,3 +24,27 @@ test('approval is deny-by-default and requires independent in-scope permission',
     /out-of-scope approve/,
   );
 });
+
+test('drag targets and failures remain visible in normalized transcript evidence', () => {
+  const adapted = adaptUiEvidence({
+    metadata: {},
+    steps: [{
+      id: 1,
+      action: 'drag',
+      outcome: 'failed',
+      error: { message: 'drag target did not resolve' },
+      target: {
+        from: { testId: 'workflow-node-a-handle-source' },
+        to: { testId: 'workflow-node-b-handle-target' },
+        steps: 12,
+      },
+    }],
+  });
+
+  assert.equal(adapted.turns[0].objectiveFacts.outcome, 'failed');
+  assert.equal(adapted.turns[0].objectiveFacts.target.from.testId, 'workflow-node-a-handle-source');
+  assert.match(
+    adapted.turns[0].evidence.find((item) => item.kind === 'action-error').evidence,
+    /did not resolve/,
+  );
+});

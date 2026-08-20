@@ -187,3 +187,7 @@ durable-rehydration feature works correctly in production.
 **Size gates:** `decisions.md` grew to include the new entry; still within the 30-day/20KB
 archival threshold reset on 2026-07-14 (nothing in the active file is older than 30 days, so no
 archival was triggered this pass).
+
+📌 Team update (2026-08-14T01:32:00+03:00): merged 6 inbox decisions, wrote Trinity/link-harness-auth/harness orchestration logs, and cleared the inbox — decided by Scribe.
+
+- 2026-08-14: PR #766, Edge Default + CDP staging auth, and the API harness seam PASS on v0.18.1 were captured; hygiene pass completed and temp-squad-noise stash was left untouched.

@@ -27,7 +27,7 @@ import {
   WarningRegular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AuthMode, AuthSessionResponse, LinkedGitHubAccount, ProjectAccessOverview } from '../api/types';
+import type { AuthMode, AuthSessionResponse, LinkedGitHubAccount, ProjectGitHubIdentity } from '../api/types';
 
 const useStyles = makeStyles({
   trigger: {
@@ -161,7 +161,7 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [linkedAccounts, setLinkedAccounts] = useState<LinkedGitHubAccount[]>([]);
-  const [projectAccess, setProjectAccess] = useState<ProjectAccessOverview | null>(null);
+  const [projectIdentity, setProjectIdentity] = useState<ProjectGitHubIdentity | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -171,27 +171,27 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
       setSession(authSession);
       if (!authSession.authenticated) {
         setLinkedAccounts([]);
-        setProjectAccess(null);
+        setProjectIdentity(null);
         return;
       }
 
       if (authSession.auth_mode === 'entra') {
-        const [accounts, access] = await Promise.all([
+        const [accounts, identity] = await Promise.all([
           apiClient.listLinkedGitHubAccounts().catch((err) => {
             if (err instanceof ApiError && err.status === 404) return [] as LinkedGitHubAccount[];
             throw err;
           }),
           projectId
-            ? apiClient.getProjectAccessOverview(projectId).catch((err) => {
+            ? apiClient.getProjectGitHubIdentity(projectId).catch((err) => {
               if (err instanceof ApiError && err.status === 404) return null;
               throw err;
             })
             : Promise.resolve(null),
         ]);
         setLinkedAccounts(accounts);
-        setProjectAccess(access);
+        setProjectIdentity(identity);
       } else {
-        setProjectAccess(null);
+        setProjectIdentity(null);
         setLinkedAccounts([]);
       }
     } catch (err) {
@@ -215,7 +215,7 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
 
   const currentAccount = useMemo(() => {
     if (authMode === 'entra') {
-      const login = projectAccess?.effective_github_login ?? linkedAccounts.find((account) => account.is_default)?.login ?? null;
+      const login = projectIdentity?.effective_login ?? linkedAccounts.find((account) => account.is_default)?.login ?? null;
       return login ? linkedAccounts.find((account) => account.login === login) ?? null : null;
     }
     return session?.login
@@ -228,7 +228,7 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
         copilot_entitled: null,
       }
       : null;
-  }, [authMode, linkedAccounts, projectAccess?.effective_github_login, session]);
+  }, [authMode, linkedAccounts, projectIdentity?.effective_login, session]);
 
   const otherAccounts = useMemo(
     () => linkedAccounts.filter((account) => account.login !== currentAccount?.login),
@@ -307,10 +307,6 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
     : (session?.login ?? 'GitHub');
 
   const triggerAvatar = currentAccount?.avatar_url;
-  const permissionLabel = projectAccess?.effective_github_permission
-    ? `${projectAccess.effective_github_permission} access`
-    : null;
-
   const tooltipContent = authMode === 'entra'
     ? 'Signed in with Microsoft Entra ID · Click to manage linked GitHub accounts'
     : 'Click to manage your GitHub sign-in';
@@ -389,7 +385,6 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
                   <Text weight="semibold" className={styles.truncate}>{currentAccount.name ?? currentAccount.login}</Text>
                   <Text size={200} className={mergeClasses(styles.accountSecondary, styles.truncate)}>
                     @{currentAccount.login}
-                    {permissionLabel ? ` · ${permissionLabel}` : ''}
                   </Text>
                 </div>
                 <ArrowSwapRegular />

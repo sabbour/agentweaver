@@ -6,7 +6,7 @@
   "description": "Persona-driven Playwright UI evidence harness for Agentweaver.",
   "engines": { "node": ">=18" },
   "scripts": {
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
     "login": "node agent-driver-ui/tools.mjs login",
     "run": "node agent-driver-ui/tools.mjs"
   },

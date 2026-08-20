@@ -18,14 +18,27 @@ Read and follow the detailed CLI contract in `scripts/ui-harness/SKILL.md`. Invo
 actual `node scripts/ui-harness/agent-driver-ui/tools.mjs` commands rather than
 recreating browser steps with another Playwright interface.
 
+Canvas interactions use the documented `drag` command with stable source/target test
+IDs. It drives a genuine pointer down/move/up sequence and records failed attempts.
+
 That contract now includes `list-scenarios` for the reviewed built-in UI catalog. Use
 the separate `harness-scenarios` skill for cross-surface cataloging and persona
 generation.
 
-The auth pattern is intentionally human-in-the-loop: run `login --base-url <url>` in a
-headful browser, let the user complete OAuth, then use the locally stored, git-ignored
-storage state for the headless `init`, action, and `finish` commands. Never automate the
-login flow or expose the storage-state file.
+The auth pattern requires the managed **Edge Default profile** to satisfy Conditional
+Access (plain Chromium is blocked by Entra policy). Close all Edge windows first, then:
+
+```powershell
+node scripts/ui-harness/login-edge-default.mjs --base-url <staging-url>
+```
+
+If Edge is already running with `--remote-debugging-port=9222`, append `--cdp`. The
+script writes git-ignored state to `scripts/ui-harness/.auth/` and a
+`session-token.txt` for the API harness — never print or commit these.
+
+Read `scripts/ui-harness/SKILL.md` Authentication section for full options (Option A /
+Option B) and the legacy tool notes. Never automate the login flow or expose the
+storage-state file.
 
 Before running, check `scripts/harness-shared/learnings.md` (surface: `ui` or `all`)
 for already-known bugs, environment facts, and scenario-design notes so they aren't

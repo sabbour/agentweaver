@@ -449,6 +449,9 @@ public sealed class SqliteToPostgresMigrator
         var webhookSecret = await HasColumnAsync(conn, "projects", "webhook_secret", ct)
             ? "webhook_secret"
             : "NULL AS webhook_secret";
+        var previewApprovalTimeout = await HasColumnAsync(conn, "projects", "preview_approval_timeout_minutes", ct)
+            ? "COALESCE(preview_approval_timeout_minutes,30)"
+            : "30 AS preview_approval_timeout_minutes";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
             $"""
@@ -458,6 +461,7 @@ public sealed class SqliteToPostgresMigrator
                    COALESCE(state,'active'), created_at, updated_at,
                    COALESCE(max_ready_per_heartbeat,3), COALESCE(pickup_autopilot,1),
                    COALESCE(pickup_auto_approve_tools,0),
+                   {previewApprovalTimeout},
                    default_workflow_id, active_review_policy_name, sandbox_profile,
                    source_blueprint_id, source_blueprint_type,
                    blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
@@ -485,17 +489,18 @@ public sealed class SqliteToPostgresMigrator
                 MaxReadyPerHeartbeat = reader.GetInt32(13),
                 PickupAutopilot = reader.GetInt32(14) != 0,
                 PickupAutoApproveTools = reader.GetInt32(15) != 0,
-                DefaultWorkflowId = reader.IsDBNull(16) ? null : reader.GetString(16),
-                ActiveReviewPolicyName = reader.IsDBNull(17) ? null : reader.GetString(17),
-                SandboxProfile = reader.IsDBNull(18) ? null : reader.GetString(18),
-                SourceBlueprintId = reader.IsDBNull(19) ? null : reader.GetString(19),
-                SourceBlueprintType = reader.IsDBNull(20) ? null : reader.GetString(20),
-                BlueprintGenerationModel = reader.IsDBNull(21) ? null : reader.GetString(21),
-                WorkflowGenerationModel = reader.IsDBNull(22) ? null : reader.GetString(22),
-                OutcomeSpecGenerationModel = reader.IsDBNull(23) ? null : reader.GetString(23),
-                AllowedWorkflowIds = reader.IsDBNull(24) ? null : reader.GetString(24),
-                WebhookSecret = reader.IsDBNull(25) ? null : reader.GetString(25),
-                TeamRevision = reader.GetInt64(26),
+                PreviewApprovalTimeoutMinutes = reader.GetInt32(16),
+                DefaultWorkflowId = reader.IsDBNull(17) ? null : reader.GetString(17),
+                ActiveReviewPolicyName = reader.IsDBNull(18) ? null : reader.GetString(18),
+                SandboxProfile = reader.IsDBNull(19) ? null : reader.GetString(19),
+                SourceBlueprintId = reader.IsDBNull(20) ? null : reader.GetString(20),
+                SourceBlueprintType = reader.IsDBNull(21) ? null : reader.GetString(21),
+                BlueprintGenerationModel = reader.IsDBNull(22) ? null : reader.GetString(22),
+                WorkflowGenerationModel = reader.IsDBNull(23) ? null : reader.GetString(23),
+                OutcomeSpecGenerationModel = reader.IsDBNull(24) ? null : reader.GetString(24),
+                AllowedWorkflowIds = reader.IsDBNull(25) ? null : reader.GetString(25),
+                WebhookSecret = reader.IsDBNull(26) ? null : reader.GetString(26),
+                TeamRevision = reader.GetInt64(27),
             });
         }
         return results;
@@ -610,7 +615,7 @@ public sealed class SqliteToPostgresMigrator
         cmd.CommandText =
             """
             SELECT task_id, project_id, title, description, state, order_key,
-                   captured_by, created_at, committed_at, claimed_at, run_id,
+                   captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                    workflow_override_id, archived_at, source_file_path,
                    parent_prd_run_id, promotion_key, promotion_reason
               FROM backlog_tasks;
@@ -627,16 +632,17 @@ public sealed class SqliteToPostgresMigrator
                 State = reader.GetString(4),
                 OrderKey = reader.GetString(5),
                 CapturedBy = reader.GetString(6),
-                CreatedAt = ParseTs(reader.GetString(7)),
-                CommittedAt = reader.IsDBNull(8) ? null : ParseTs(reader.GetString(8)),
-                ClaimedAt = reader.IsDBNull(9) ? null : ParseTs(reader.GetString(9)),
-                RunId = reader.IsDBNull(10) ? null : reader.GetString(10),
-                WorkflowOverrideId = reader.IsDBNull(11) ? null : reader.GetString(11),
-                ArchivedAt = reader.IsDBNull(12) ? null : ParseTs(reader.GetString(12)),
-                SourceFilePath = reader.IsDBNull(13) ? null : reader.GetString(13),
-                ParentPrdRunId = reader.IsDBNull(14) ? null : reader.GetString(14),
-                PromotionKey = reader.IsDBNull(15) ? null : reader.GetString(15),
-                PromotionReason = reader.IsDBNull(16) ? null : reader.GetString(16),
+                CapturedByUserId = reader.IsDBNull(7) ? null : reader.GetString(7),
+                CreatedAt = ParseTs(reader.GetString(8)),
+                CommittedAt = reader.IsDBNull(9) ? null : ParseTs(reader.GetString(9)),
+                ClaimedAt = reader.IsDBNull(10) ? null : ParseTs(reader.GetString(10)),
+                RunId = reader.IsDBNull(11) ? null : reader.GetString(11),
+                WorkflowOverrideId = reader.IsDBNull(12) ? null : reader.GetString(12),
+                ArchivedAt = reader.IsDBNull(13) ? null : ParseTs(reader.GetString(13)),
+                SourceFilePath = reader.IsDBNull(14) ? null : reader.GetString(14),
+                ParentPrdRunId = reader.IsDBNull(15) ? null : reader.GetString(15),
+                PromotionKey = reader.IsDBNull(16) ? null : reader.GetString(16),
+                PromotionReason = reader.IsDBNull(17) ? null : reader.GetString(17),
             });
         }
         return results;

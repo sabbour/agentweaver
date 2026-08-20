@@ -54,6 +54,11 @@ spec:
   envVarsInjectionPolicy: Allowed
   podTemplate:
     metadata:
+      annotations:
+        # Keep the AAD workload-identity token (env + projected volume) out of the container that
+        # runs model-controlled code. Combined with the exec-no-serviceaccount mount below, the
+        # executor sidecar holds no cluster or cloud identity at all.
+        azure.workload.identity/skip-containers: "agentweaver-exec"
       labels:
         app: agentweaver-agent-host
         agentweaver.dev/sandbox: "true"
@@ -138,10 +143,18 @@ spec:
               value: "/workspace"
             - name: AgentHost__RepositoryPath
               value: "/workspace"
-            # The pod's Kata VM is the command isolation boundary. Avoid a redundant nested bwrap
-            # layer, which cannot mount its private /proc under this hardened security context.
+            # Kata isolates pods from the node. Inside the pod, every model-controlled process runs
+            # in the agentweaver-exec sidecar below: that container is a real PID namespace with a
+            # runtime-provided procfs, and bubblewrap adds the per-run mount scoping that hides the
+            # shared /workspace PVC root and sibling runs (#476). AgentHost itself never executes
+            # model-controlled commands, and refuses to start if the sidecar is unavailable.
             - name: AgentHost__SandboxMode
               value: "kata"
+            # Pod-private executor IPC endpoint (Unix domain socket on the exec-ipc emptyDir). The
+            # socket dir is mounted ONLY into these two containers and is never bound into a
+            # sandboxed child's mount namespace.
+            - name: AGENTWEAVER_EXEC_SOCKET
+              value: "/var/run/agentweaver-exec/exec.sock"
             # In-cluster AgentweaverMCP /mcp URL, required unconditionally at pod startup
             # (Program.cs throws InvalidOperationException from DI if empty) -- the operator
             # assistant purpose (#346/#347) is wired eagerly, not lazily per-run, so every
@@ -180,14 +193,14 @@ spec:
           # terminal publication) is tracked separately as defense-in-depth under #242.
           resources:
             requests:
+              memory: "1Gi"
+              cpu: "400m"
+              # Reserve real build headroom (checkout + node_modules/.next + package caches).
+              ephemeral-storage: "1Gi"
+            limits:
               memory: "2Gi"
               cpu: "1000m"
-              # Reserve real build headroom (checkout + node_modules/.next + package caches).
-              ephemeral-storage: "2Gi"
-            limits:
-              memory: "4Gi"
-              cpu: "2000m"
-              ephemeral-storage: "8Gi"
+              ephemeral-storage: "4Gi"
           volumeMounts:
             - name: workspace
               mountPath: /workspace
@@ -200,6 +213,9 @@ spec:
             # Writable HOME (CopilotClient / git config + caches).
             - name: home
               mountPath: /home/appuser
+            # Pod-private executor IPC (UDS + token). Mounted in exactly two containers.
+            - name: exec-ipc
+              mountPath: /var/run/agentweaver-exec
             # Optional in PoC (RequireMtls=false): server TLS cert. Required in production.
             - name: a2a-tls
               mountPath: /mnt/a2a-tls
@@ -208,6 +224,96 @@ spec:
             - name: agenthost-config
               mountPath: /app/config
               readOnly: true
+
+        # ── Executor sidecar ──────────────────────────────────────────────────────────────
+        # Runs EVERY model-controlled process (shell tool calls, preview servers). Same image as
+        # AgentHost so the toolchain is byte-identical and only one image is built/scanned/tagged;
+        # `--exec-agent` starts the UDS daemon instead of the web host.
+        #
+        # WHY A SECOND CONTAINER (not just bubblewrap inside AgentHost): the Linux kernel refuses
+        # `mount -t proc` inside an unprivileged user namespace when the visible procfs has
+        # masked/covered submounts (`mount_too_revealing()`), and every Kubernetes runtime — Kata's
+        # guest agent included — masks /proc/kcore,/proc/keys,/proc/timer_list,/proc/interrupts and
+        # read-only-binds /proc/bus,fs,irq,sys,sysrq-trigger. So `bwrap --unshare-pid --proc /proc`
+        # can NEVER succeed in-cluster (observed: "bwrap: Can't mount proc on /newroot/proc:
+        # Operation not permitted"). The only ways to make it succeed are prohibited weakenings
+        # (procMount: Unmasked, CAP_SYS_ADMIN, privileged, or a synthetic /proc). A second container
+        # gets a real, runtime-created PID namespace with a matching runtime-provided procfs for
+        # free — no capability, no privilege, no host namespace — and keeps bubblewrap for the
+        # per-run mount scoping it CAN still do.
+        #
+        # Invariants an independent reviewer should check:
+        #   * pod does NOT set shareProcessNamespace (that would merge the two PID namespaces and
+        #     the sidecar's fail-closed probe rejects it at startup);
+        #   * non-root, allowPrivilegeEscalation: false, all capabilities dropped, RuntimeDefault
+        #     seccomp — identical to AgentHost, nothing added;
+        #   * no hostPath, no host namespaces, no privileged mode;
+        #   * the Kubernetes + workload-identity tokens are masked out of this container, so a
+        #     model-controlled process cannot present the pod identity to the API server or AAD.
+        - name: agentweaver-exec
+          image: agentweaverregistry.azurecr.io/agentweaver-agent-host:latest
+          imagePullPolicy: IfNotPresent
+          args: ["--exec-agent"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            # Same relaxation as AgentHost: sandboxed toolchains (npm, pip, git) write to $HOME and
+            # /tmp. Both are emptyDirs; /usr and the app root are bound read-only into every
+            # bubblewrap child regardless.
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: AGENTWEAVER_EXEC_SOCKET
+              value: "/var/run/agentweaver-exec/exec.sock"
+            - name: HOME
+              value: "/home/appuser"
+            # Image builds are served by an OPTIONAL BuildKit sidecar in this same pod, reached over
+            # a pod-local unix socket (k8s/optional/sandbox-buildkit-sidecar.yaml). The base
+            # template does NOT deploy that sidecar, so on a stock cluster the socket is absent, the
+            # executor reports image_build as unsupported, and `docker build` fails with the
+            # contract's explanation instead of a connection error. Availability is probed from the
+            # socket itself, never inferred from this variable.
+            - name: AGENTWEAVER_IMAGE_BUILD_SOCKET
+              value: "/run/buildkit/buildkitd.sock"
+          # The model-controlled build/test/preview working set lives here now. Pod-level totals are
+          # deliberately UNCHANGED versus the single-container layout (requests 1000m/2Gi, limits
+          # 2000m/4Gi) so katapool scheduling density and burst ceiling stay exactly as documented
+          # above; the budget is split rather than added.
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "600m"
+              ephemeral-storage: "1Gi"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+              ephemeral-storage: "4Gi"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: execution-scratch
+              mountPath: /local-workspace
+            - name: exec-ipc
+              mountPath: /var/run/agentweaver-exec
+            - name: exec-tmp
+              mountPath: /tmp
+            - name: exec-home
+              mountPath: /home/appuser
+            # Mask the projected ServiceAccount token in the container that runs model-controlled
+            # code. The ServiceAccount admission plugin skips injecting its own mount when the
+            # container already declares one at this path, so this empty overlay wins.
+            - name: exec-no-serviceaccount
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            # Build daemon socket, published by the optional in-pod BuildKit sidecar. Deliberately
+            # under /run and NOT under /mnt: the per-run writable system root mounts a tmpfs over
+            # /mnt, which would mask anything published there and break every sandboxed command.
+            - name: buildkit-socket
+              mountPath: /run/buildkit
       volumes:
         - name: workspace
           persistentVolumeClaim:
@@ -221,6 +327,27 @@ spec:
           emptyDir: {}
         - name: home
           emptyDir: {}
+        # Executor sidecar volumes. exec-ipc carries only the UDS + token (never bound into a
+        # sandboxed child's mount namespace); exec-tmp/exec-home are the sidecar's own writable
+        # scratch and HOME, deliberately NOT shared with AgentHost so model-controlled code cannot
+        # read or tamper with AgentHost's git credentials/caches.
+        - name: exec-ipc
+          emptyDir:
+            sizeLimit: "1Mi"
+        - name: exec-tmp
+          emptyDir:
+            sizeLimit: "2Gi"
+        - name: exec-home
+          emptyDir:
+            sizeLimit: "4Gi"
+        - name: exec-no-serviceaccount
+          emptyDir:
+            sizeLimit: "1Mi"
+        # Empty on a stock cluster: the socket only appears when the optional BuildKit sidecar is
+        # patched in. An empty directory here means "no builder", which is what the executor probes.
+        - name: buildkit-socket
+          emptyDir:
+            sizeLimit: "1Mi"
         - name: a2a-tls
           secret:
             secretName: agentweaver-a2a-server-tls

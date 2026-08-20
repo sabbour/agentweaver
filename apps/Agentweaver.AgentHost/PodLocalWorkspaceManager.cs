@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
 using Microsoft.Extensions.Options;
 
 namespace Agentweaver.AgentHost;
@@ -11,11 +12,8 @@ namespace Agentweaver.AgentHost;
 /// </summary>
 internal sealed class PodLocalWorkspaceManager
 {
-    private const string SandboxHomeDirectoryName = ".agentweaver-home";
-
     private static readonly HashSet<string> NestedRepositoryScanExcludedDirectories = new(
         [
-            SandboxHomeDirectoryName,
             ".git",
             ".next",
             "bin",
@@ -30,15 +28,19 @@ internal sealed class PodLocalWorkspaceManager
 
     private readonly AgentHostOptions _options;
     private readonly ILogger<PodLocalWorkspaceManager> _logger;
+    private readonly IRunWorkspaceRegistrar? _workspaceRegistrar;
     private PreparedWorkspace? _preparedWorkspace;
     private string? _agentScratchPath;
+    private string? _fallbackWorkspacePath;
 
     public PodLocalWorkspaceManager(
         IOptions<AgentHostOptions> options,
-        ILogger<PodLocalWorkspaceManager> logger)
+        ILogger<PodLocalWorkspaceManager> logger,
+        ISandboxExecutor? sandboxExecutor = null)
     {
         _options = options.Value;
         _logger = logger;
+        _workspaceRegistrar = sandboxExecutor as IRunWorkspaceRegistrar;
     }
 
     public async Task<PreparedWorkspace> PrepareAsync(
@@ -133,7 +135,7 @@ internal sealed class PodLocalWorkspaceManager
                     spec.BaseCommitSha)
                 .ConfigureAwait(false);
 
-            ConfigureSandboxHome(workspacePath);
+            ConfigureRuntimeHome(spec.RunId, workspacePath);
             var prepared = new PreparedWorkspace(
                 spec.RunId,
                 workspacePath,
@@ -188,6 +190,25 @@ internal sealed class PodLocalWorkspaceManager
 
         _agentScratchPath = scratchPath;
         return scratchPath;
+    }
+
+    public string PrepareFallbackWorkspaceDirectory(string runId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        if (_fallbackWorkspacePath is not null)
+        {
+            throw new AgentHostConfigurationException(
+                "fallback_workspace_already_prepared",
+                "A pod-private fallback workspace has already been prepared for this AgentHost.");
+        }
+
+        var path = Path.Combine(
+            Path.GetFullPath(_options.ExecutionScratchRoot),
+            "fallback-workspace",
+            PodLocalExecutionWorkspace.GetRunHash(runId));
+        Directory.CreateDirectory(path);
+        _fallbackWorkspacePath = path;
+        return path;
     }
 
     /// <summary>
@@ -379,6 +400,11 @@ internal sealed class PodLocalWorkspaceManager
         _agentScratchPath = null;
         if (!string.IsNullOrWhiteSpace(agentScratchPath))
             TryDeleteDirectory(agentScratchPath);
+
+        var fallbackWorkspacePath = _fallbackWorkspacePath;
+        _fallbackWorkspacePath = null;
+        if (!string.IsNullOrWhiteSpace(fallbackWorkspacePath))
+            TryDeleteDirectory(fallbackWorkspacePath);
         return Task.CompletedTask;
     }
 
@@ -491,30 +517,38 @@ internal sealed class PodLocalWorkspaceManager
         }
     }
 
-    private static void ConfigureSandboxHome(string workspacePath)
+    /// <summary>
+    /// Creates the deterministic run HOME and binds it immutably to the resolved workspace.
+    /// Shared and pod-local workspace modes use this same registration path.
+    /// </summary>
+    public string ConfigureRuntimeHome(string runId, string workingDirectory)
     {
-        var excludePath = Path.Combine(workspacePath, ".git", "info", "exclude");
-        Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
-        var excludeEntry = $"/{SandboxHomeDirectoryName}/";
-        var existingExcludes = File.Exists(excludePath) ? File.ReadAllText(excludePath) : string.Empty;
-        if (!existingExcludes
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Contains(excludeEntry, StringComparer.Ordinal))
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        var workspace = Path.GetFullPath(workingDirectory);
+        if (!Directory.Exists(workspace))
         {
-            File.AppendAllText(excludePath, excludeEntry + Environment.NewLine);
+            throw new AgentHostConfigurationException(
+                "workspace_path_missing",
+                "The effective AgentHost workspace does not exist.");
         }
 
-        var home = SandboxHomeDirectoryName;
-        var cache = $"{home}/.cache";
-        var data = $"{home}/.local/share";
-        var config = $"{home}/.config";
+        var home = Path.Combine(
+            Path.GetFullPath(_options.ExecutionScratchRoot),
+            "runtime-home",
+            PodLocalExecutionWorkspace.GetRunHash(runId));
+        var cache = Path.Combine(home, ".cache");
+        var data = Path.Combine(home, ".local", "share");
+        var config = Path.Combine(home, ".config");
         foreach (var path in new[] { home, cache, data, config })
-            Directory.CreateDirectory(Path.Combine(workspacePath, path));
+            Directory.CreateDirectory(path);
 
+        _workspaceRegistrar?.RegisterRuntimeHome(workspace, home);
         Environment.SetEnvironmentVariable("HOME", home);
         Environment.SetEnvironmentVariable("XDG_CACHE_HOME", cache);
         Environment.SetEnvironmentVariable("XDG_DATA_HOME", data);
         Environment.SetEnvironmentVariable("XDG_CONFIG_HOME", config);
+        return home;
     }
 
     private static async Task<string> RunGitAsync(
@@ -544,6 +578,10 @@ internal sealed class PodLocalWorkspaceManager
                 CreateNoWindow = true,
             },
         };
+        process.StartInfo.ArgumentList.Add("-c");
+        process.StartInfo.ArgumentList.Add("core.hooksPath=/dev/null");
+        process.StartInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        process.StartInfo.Environment["GIT_CONFIG_GLOBAL"] = "/dev/null";
         foreach (var argument in arguments)
             process.StartInfo.ArgumentList.Add(argument);
         if (environment is not null)

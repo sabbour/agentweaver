@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Agentweaver.SandboxExec;
+using Agentweaver.Tests.Sandbox;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -301,6 +303,78 @@ public sealed class PreviewRunnerObserveTests
                 started.SessionId, "test_cleanup", CancellationToken.None);
             Directory.Delete(fixtureDirectory, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// End-to-end proof that a preview server started through the executor sidecar is torn down by a
+    /// signal delivered to the REAL sandboxed process group inside the sidecar's PID namespace — the
+    /// relay's own PID is never used as a process-group id, because it is not one.
+    /// </summary>
+    [LinuxFact]
+    [Trait("Category", KataRuntimeGate.Category)]
+    public async Task KataPreviewStop_SignalsActualSandboxProcessGroupWithTerm()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var root = Path.Combine(
+            AppContext.BaseDirectory,
+            $"preview-kata-term-{Guid.NewGuid():N}");
+        var workspace = Path.Combine(root, "workspace");
+        var runtimeHome = Path.Combine(root, "runtime-home");
+        var marker = Path.Combine(workspace, "term-received.txt");
+        var ready = Path.Combine(workspace, "ready.txt");
+        Directory.CreateDirectory(workspace);
+        Directory.CreateDirectory(Path.Combine(runtimeHome, ".cache"));
+        Directory.CreateDirectory(Path.Combine(runtimeHome, ".local", "share"));
+        Directory.CreateDirectory(Path.Combine(runtimeHome, ".config"));
+
+        await using var sidecar = Sandbox.PodExecTestHarness.StartServer(root);
+        var executor = Sandbox.PodExecTestHarness.CreateClient(sidecar.SocketPath);
+        executor.RegisterTrustedWorkspace(workspace);
+        executor.RegisterRuntimeHome(workspace, runtimeHome);
+        var runner = new PreviewRunner(
+            Options.Create(new PreviewRunnerOptions
+            {
+                StopGraceSeconds = 5,
+                ObserveTimeoutSeconds = 1,
+            }),
+            NullLogger<PreviewRunner>.Instance,
+            sandboxExecutor: executor);
+        var command =
+            $"trap 'printf term > {QuoteForPosixShell(marker)}; exit 0' TERM; " +
+            $"printf ready > {QuoteForPosixShell(ready)}; while :; do sleep 1; done";
+        var started = await runner.StartPreviewProcessAsync(
+            command,
+            workspace,
+            "run-kata-term",
+            null,
+            null,
+            CancellationToken.None);
+
+        try
+        {
+            await WaitForFileAsync(ready, TimeSpan.FromSeconds(5));
+            await runner.StopPreviewProcessAsync(
+                started.SessionId,
+                "test_graceful_term",
+                CancellationToken.None);
+
+            File.ReadAllText(marker).Should().Be("term");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static async Task WaitForFileAsync(string path, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!File.Exists(path) && DateTime.UtcNow < deadline)
+            await Task.Delay(20);
+        File.Exists(path).Should().BeTrue($"the preview workload should create {path}");
     }
 
     private static async Task RequireNodeAsync()

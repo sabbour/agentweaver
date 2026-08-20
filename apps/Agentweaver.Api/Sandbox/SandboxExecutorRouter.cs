@@ -22,9 +22,11 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly ILoggerFactory _loggerFactory;
     private readonly IPodNameRegistry? _podRegistry;
     private readonly IAgentHostTurnTokenRegistry? _turnTokenRegistry;
+    private readonly Security.IRunAuthorshipCapabilityStore? _authorshipCapabilityStore;
     private readonly IHttpClientFactory? _httpClientFactory;
     private readonly IRunSubmittingUserResolver? _submittingUserResolver;
     private readonly IGitHubTokenStore? _tokenStore;
+    private readonly IGitHubTokenScopeProvider? _tokenScopeProvider;
     private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
     private readonly IRunEventStream? _runEventStream;
     private readonly IRunOptionsStore? _runOptions;
@@ -36,11 +38,13 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         IRunSubmittingUserResolver? submittingUserResolver = null,
         IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
         IGitHubTokenStore? tokenStore = null,
+        IGitHubTokenScopeProvider? tokenScopeProvider = null,
         Agentweaver.Api.Auth.ISecretStore? secretStore = null,
         IRunEventStream? runEventStream = null,
         IRunOptionsStore? runOptions = null,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
-        Preview.ISandboxPreviewService? previewService = null)
+        Preview.ISandboxPreviewService? previewService = null,
+        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
@@ -49,11 +53,13 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _httpClientFactory = httpClientFactory;
         _submittingUserResolver = submittingUserResolver;
         _tokenStore = tokenStore;
+        _tokenScopeProvider = tokenScopeProvider;
         _secretStore = secretStore;
         _runEventStream = runEventStream;
         _runOptions = runOptions;
         _accessTokenProvider = accessTokenProvider;
         _previewService = previewService;
+        _authorshipCapabilityStore = authorshipCapabilityStore;
     }
 
     public ISandboxExecutor Resolve()
@@ -139,7 +145,9 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             return new KubernetesSandboxExecutor(
                 k8sClient, sandboxOptions, k8sLogger, _podRegistry, _turnTokenRegistry, readinessProbe,
                 _submittingUserResolver, _httpClientFactory, _tokenStore, _secretStore, _runEventStream,
-                _runOptions, _accessTokenProvider, _previewService);
+                _runOptions, _accessTokenProvider, _previewService,
+                tokenScopeProvider: _tokenScopeProvider,
+                authorshipCapabilityStore: _authorshipCapabilityStore);
         }
         catch (Exception ex)
         {

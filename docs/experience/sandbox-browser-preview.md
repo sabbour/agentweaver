@@ -52,16 +52,21 @@ run timeline:
 - A **"the agent wants to expose a preview server on port N"** approval card appears (the same kind of card
   used for the agent's URL-fetch requests). **Approve** it and the agent gets back the live `preview_url`;
   the preview behaves exactly like one you started yourself (same URL, same auto-expiry, same Stop).
-- If you don't approve within the configured window (15 minutes by default) the request lapses and the
-  agent is told the preview was not granted.
+- The approval remains visible in the notification badge, a persistent toast, and the run timeline.
+  The timeline card shows when it expires.
+- If you don't approve within the project's configured window (30 minutes by default), the request
+  lapses. Choose **Retry approval** on the expired card or preview status to create a fresh approval
+  request. Agentweaver reuses the healthy server process instead of restarting the run or executing
+  the preview command again.
 - The agent can only ever request a preview for **its own run** — the run is bound server-side, so a
   `start_preview` call can't reach another run's pod.
 
 Operators running automated demos can set `SANDBOX_PREVIEW_AUTO_APPROVE=true` (or the per-run
-auto-approve-tools option) to grant these requests automatically. Teams that want a longer or shorter manual
-approval window can set `Sandbox:Preview:ApprovalTimeoutMinutes` or
-`SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`; missing or invalid values fall back to 15 minutes and non-positive
-values clamp to 1 minute. In normal use the approval stays in your hands.
+auto-approve-tools option) to grant these requests automatically. Project owners can set the manual
+approval window to 1–1440 minutes in **Project settings → Sandbox policy**. The deployment setting
+`Sandbox:Preview:ApprovalTimeoutMinutes` (or `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`) is retained
+as a 30-minute-default fallback for legacy runs that are not associated with a project. In normal use
+the approval stays in your hands.
 
 ## Build & Test preview
 

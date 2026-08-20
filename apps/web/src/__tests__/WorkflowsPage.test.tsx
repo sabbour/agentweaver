@@ -212,6 +212,91 @@ trigger:
     expect((screen.getByRole('textbox', { name: 'Exact command match' }) as HTMLInputElement).value).toBe('/agentweaver:triage');
   });
 
+  it('displays and edits schedule and event triggers without replacing either one', async () => {
+    const combined = {
+      ...sampleList.workflows[1],
+      valid: true,
+      error: null,
+      triggers: [
+        { type: 'schedule' as const, interval: 'weekly' as const, day_of_week: 'monday', time_of_day: '09:00' },
+        { type: 'event' as const, event_name: 'github.issues.labeled' },
+      ],
+    };
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({
+      default_workflow_id: 'default',
+      workflows: [sampleList.workflows[0], combined],
+    });
+    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue(`id: nightly
+name: Nightly Sweep
+start: done
+nodes: []
+edges: []
+triggers:
+  - type: schedule
+    interval: weekly
+    day_of_week: monday
+    time_of_day: "09:00"
+  - type: event
+    event_name: github.issues.labeled
+    if:
+      - has_label:
+          label: roadmap-review
+`);
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Nightly Sweep' } as never);
+
+    renderPage('proj-1');
+
+    expect(await screen.findByText('weekly · 09:00 UTC')).toBeDefined();
+    expect(screen.getByText('event · issues.labeled')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Edit schedule' })).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit event' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save event' }));
+
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
+    const savedYaml = vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2] ?? '';
+    expect(savedYaml).toContain('triggers:');
+    expect(savedYaml).toContain('type: schedule');
+    expect(savedYaml).toContain('type: event');
+  });
+
+  it('makes the Issues action explicit and can switch an opened trigger to labeled', async () => {
+    const eventDriven = {
+      ...sampleList.workflows[1],
+      valid: true,
+      error: null,
+      triggers: [{ type: 'event' as const, event_name: 'github.issues.opened' }],
+    };
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({
+      default_workflow_id: 'default',
+      workflows: [sampleList.workflows[0], eventDriven],
+    });
+    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue(`id: nightly
+name: Nightly Sweep
+start: done
+nodes: []
+edges: []
+trigger:
+  type: event
+  event_name: github.issues.opened
+  if:
+    - has_label:
+        label: agentweaver:triage
+`);
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Nightly Sweep' } as never);
+
+    renderPage('proj-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit event' }));
+    const actionSelect = await screen.findByRole('combobox', { name: 'Issue action' });
+    expect((actionSelect as HTMLSelectElement).value).toBe('opened');
+    fireEvent.change(actionSelect, { target: { value: 'labeled' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save event' }));
+
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
+    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2])
+      .toContain('event_name: github.issues.labeled');
+  });
+
   it('builds OR event conditions and saves them back to YAML', async () => {
     const projectWorkflow = { ...sampleList.workflows[1], valid: true, error: null };
     vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], projectWorkflow] });
@@ -292,5 +377,17 @@ trigger:
       'default-copy',
       expect.stringContaining('id: default-copy'),
     ));
+  });
+
+  it('keeps schedule configuration read-only for built-in workflows', async () => {
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({
+      default_workflow_id: 'default',
+      workflows: [sampleList.workflows[0]],
+    });
+
+    renderPage('proj-1');
+
+    expect(await screen.findByRole('button', { name: /duplicate to project/i })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /schedule/i })).toBeNull();
   });
 });

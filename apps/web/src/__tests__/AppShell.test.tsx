@@ -6,6 +6,8 @@ import { resolveActiveKey } from '../components/shell/navConfig';
 import * as useAppVersionModule from '../hooks/useAppVersion';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   afterEach,
   beforeEach,
@@ -35,6 +37,7 @@ function projectsPage(items: Project[]) {
 }
 
 const LAST_ACTIVE_KEY = 'agentweaver:last-active-project-id';
+const shellCss = readFileSync(resolve(process.cwd(), 'src/components/shell/shell.css'), 'utf8');
 
 function makeProject(id: string, name: string): Project {
   return {
@@ -258,11 +261,29 @@ describe('AppShell navigation', () => {
     expect(await screen.findByText('octocat')).toBeDefined();
     const badgeText = screen.getByText('v0.12.2-dev+a100e95');
     const badge = badgeText.closest('.aw-rail-footer__version') as HTMLElement | null;
+    const accountSwitcher = screen.getByRole('button', { name: 'GitHub account switcher' });
     expect(badge).toBeTruthy();
     expect(badge?.title).toContain('Full version: v0.12.2-dev+a100e95');
     expect(badge?.className).toContain('aw-rail-footer__version');
     expect(badgeText.className).toBe('aw-rail-footer__version-text');
+    expect(accountSwitcher.textContent).toContain('octocat');
+    expect(accountSwitcher.querySelector('img')).toBeTruthy();
     expect(screen.queryByText('Alpha v0.12.2-dev+a100e95')).toBeNull();
+  });
+
+  it('stacks footer identity and version metadata so the badge cannot consume username space', () => {
+    expect(shellCss).toMatch(
+      /\.aw-rail-footer\s*\{[^}]*flex-direction:\s*column;[^}]*align-items:\s*stretch;/s,
+    );
+    expect(shellCss).toMatch(
+      /\.aw-rail-footer\s*>\s*\.fui-Button,[^}]*\{[^}]*width:\s*100%;[^}]*flex:\s*0 0 auto;/s,
+    );
+    expect(shellCss).toMatch(
+      /\.aw-rail-footer__meta\s*\{[^}]*max-width:\s*100%;[^}]*align-self:\s*flex-end;/s,
+    );
+    expect(shellCss).toMatch(
+      /\.aw-rail-footer__version\s*\{[^}]*max-width:\s*200px;[^}]*overflow:\s*hidden;/s,
+    );
   });
 
   it('clears a deleted persisted project gracefully on a global route', async () => {

@@ -67,20 +67,28 @@ public static class ProjectAuthorization
         Project project,
         IConfiguration configuration,
         ProjectRole minimumRole,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowInternalService = true)
     {
         var caller = GitHubTokenAuthMiddleware.GetCaller(httpContext);
+        if (!allowInternalService && IsDedicatedInternalServiceCaller(httpContext, caller))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+
         if (AuthModeResolver.Resolve(configuration) == AuthMode.GitHubLegacy)
-            return CanAccess(caller, project.Owner, configuration)
+            return caller.Owns(project.Owner)
+                || (allowInternalService && IsInternalServiceCaller(caller, configuration))
                 ? null
                 : Results.StatusCode(StatusCodes.Status403Forbidden);
 
-        if (IsInternalServiceCaller(caller, configuration))
+        if (allowInternalService && IsInternalServiceCaller(caller, configuration))
             return null;
 
         var authorization = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
         if (await authorization.HasRoleAsync(caller, project.Id, minimumRole, ct).ConfigureAwait(false))
+        {
+            await SelectProjectGitHubIdentityAsync(httpContext, caller, project.Id, ct).ConfigureAwait(false);
             return null;
+        }
 
         var legacyBackfill = httpContext.RequestServices.GetRequiredService<ILegacyProjectRoleBackfillService>();
         return await legacyBackfill.GetClaimStateAsync(caller, project, ct).ConfigureAwait(false) switch
@@ -95,6 +103,10 @@ public static class ProjectAuthorization
             _ => Results.StatusCode(StatusCodes.Status403Forbidden),
         };
     }
+
+    private static bool IsDedicatedInternalServiceCaller(HttpContext httpContext, CallerContext caller) =>
+        string.Equals(caller.User, InternalServiceUser, StringComparison.Ordinal)
+        || httpContext.User.HasClaim("agentweaver_internal", "true");
 
     /// <summary>
     /// Parses the route project id, loads the project, and authorizes the caller in one step for
@@ -136,5 +148,32 @@ public static class ProjectAuthorization
         return CanAccess(caller, project.Owner, configuration)
             ? null
             : Results.StatusCode(StatusCodes.Status403Forbidden);
+    }
+
+    private static async Task SelectProjectGitHubIdentityAsync(
+        HttpContext httpContext,
+        CallerContext caller,
+        ProjectId projectId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(caller.EntraObjectId))
+            return;
+
+        var tokenStore = httpContext.RequestServices.GetRequiredService<IGitHubTokenStore>();
+        if (tokenStore is not IMultiIdentityGitHubTokenStore)
+            return;
+
+        var identityService = httpContext.RequestServices.GetRequiredService<ProjectGitHubIdentityService>();
+        var effective = await identityService
+            .GetEffectiveIdentityAsync(projectId, caller.EntraObjectId, ct)
+            .ConfigureAwait(false);
+        if (effective.EffectiveLink is not null)
+        {
+            CallerTokenScopeProvider.SelectProjectIdentity(
+                httpContext,
+                projectId,
+                caller.EntraObjectId,
+                effective.EffectiveLink.GitHubLogin);
+        }
     }
 }

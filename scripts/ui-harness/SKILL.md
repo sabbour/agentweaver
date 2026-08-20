@@ -18,7 +18,7 @@ verified solely from its output.
 From the repository root, install the harness dependencies and run its fixture tests:
 
 ```powershell
-npm --prefix scripts/ui-harness install
+node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness
 npm --prefix scripts/ui-harness test
 ```
 
@@ -28,19 +28,55 @@ command. Never add those flags without explicit authorization.
 
 ## Authentication
 
-Authenticate through a visible browser exactly once per valid session:
+Agentweaver staging uses Microsoft Entra Conditional Access, which blocks plain
+Chromium (and device-code flow). Authentication must use the managed **Edge Default
+profile** on Windows (enrolled device).
+
+### Option A — Edge is not currently running (preferred)
+
+Close all Edge windows first (save any open work — they will be lost), then:
 
 ```powershell
-node scripts/ui-harness/agent-driver-ui/tools.mjs login --base-url https://<host>.staging.<domain>
+node scripts/ui-harness/login-edge-default.mjs --base-url https://<host>.staging.<domain>
 ```
 
-`login` opens Chromium headfully. Complete the visible GitHub or Microsoft Entra sign-in
-yourself in that window, then
-resume Playwright. The command saves the local, git-ignored storage state at
-`scripts/ui-harness/.auth/staging.storageState.json`; it is reused by the remaining
-headless commands. Treat that file as a credential: never print, commit, log, or attach
-it to evidence. The harness never automates reauthentication. On `AUTH_EXPIRED`, run
-the headful `login` command again (or pass `--storage-state <local-path>` consistently).
+This launches the real Edge Default profile (`%LOCALAPPDATA%\Microsoft\Edge\User Data`).
+Entra SSO often completes automatically. If the sign-in page appears, complete it in the
+Edge window, then press Resume in the Playwright Inspector.
+
+### Option B — Edge is already running (CDP attach)
+
+Relaunch Edge with remote debugging (requires closing the current Edge first):
+
+```powershell
+Start-Process msedge.exe "--remote-debugging-port=9222 --user-data-dir=`"$env:LOCALAPPDATA\Microsoft\Edge\User Data`" --profile-directory=Default --no-first-run https://<host>.staging.<domain>"
+```
+
+Then connect and capture:
+
+```powershell
+node scripts/ui-harness/login-edge-default.mjs --base-url https://<host>.staging.<domain> --cdp
+```
+
+### What is saved
+
+Both options write to `scripts/ui-harness/.auth/` (git-ignored):
+
+- `staging.storageState.json` — Playwright cookies + localStorage
+- `staging.storageState.json.sessionStorage.json` — sessionStorage seed (Agentweaver token)
+- `session-token.txt` — plain-text token for `AGENTWEAVER_TOKEN` (API harness only)
+
+Treat these files as credentials: never print, commit, log, or attach them. The harness
+never automates reauthentication. On `AUTH_EXPIRED`, run the login script again
+(or pass `--storage-state <local-path>` consistently).
+
+`init` validates that the selected storage-state file exists and has a usable
+Playwright shape before it creates a scenario session. It starts that session's
+headless browser worker, but it does not launch or automate the login flow.
+
+> **Legacy note**: `login-capture-edge.mjs` and the `tools.mjs login` command use plain
+> Chromium (channel `msedge` without the Default profile user-data-dir). They may fail
+> Conditional Access. Prefer `login-edge-default.mjs` for Entra-protected staging.
 
 ## Run a persona flow
 
@@ -57,8 +93,34 @@ a JSON evidence step and requires `--session <sessionId>`:
 node scripts/ui-harness/agent-driver-ui/tools.mjs goto --session <sessionId> --path /
 node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --test-id <test-id>
 node scripts/ui-harness/agent-driver-ui/tools.mjs type-coordinator --session <sessionId> --text "<text>"
-node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId> --path /<path>
+node scripts/ui-harness/agent-driver-ui/tools.mjs drag --session <sessionId> --from-test-id <source-test-id> --to-test-id <target-test-id>
+node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId>
 ```
+
+All action commands for one session are serialized through the same browser context and
+page, even though each command is a separate CLI process. A `goto` followed by `click`,
+`drag`, and `capture` therefore keeps the current route, DOM state, cookies, local
+storage, and session storage. Pass `--path /<path>` to `capture` only when it should
+navigate first; without `--path`, it captures the page left by the preceding action.
+
+`drag` performs a genuine left-pointer move/down/move/up sequence. Use stable
+`data-testid` targets, not generated React Flow classes. It defaults to the center of
+each element and 12 intermediate move steps. Use `--steps <1-100>` to tune the path,
+and optional element-relative `--from-x`, `--from-y`, `--to-x`, and `--to-y` offsets
+for handles or node repositioning. Offsets must remain inside the selected elements.
+For the visual workflow editor, targets include `workflow-canvas`,
+`workflow-node-<node-id>`, and `workflow-node-<node-id>-handle-source|target`.
+Failed drags release the pointer and append a failed evidence turn before exiting `2`.
+
+`goto` and `capture` wait up to 30 seconds for the authenticated Agentweaver app shell
+after `domcontentloaded`; a transient authentication spinner is allowed to resolve
+during that window. A persistent authentication-loading shell or visible sign-in
+prompt exits `3` as `AUTH_EXPIRED`, while another page that never becomes usable exits
+`2` as `APP_NOT_READY`. For a route with a different legitimate semantic readiness
+anchor, declare either `--ready-test-id <test-id>` or both
+`--ready-role <aria-role> --ready-name <exact-accessible-name>`. Override the wait only
+when necessary with `--readiness-timeout <milliseconds>`. A declared readiness anchor
+is mandatory for that command: the generic app shell cannot satisfy it.
 
 To open an Agentweaver sandbox preview returned by the UI, use the dedicated
 preview action:
@@ -92,5 +154,13 @@ node scripts/ui-harness/agent-driver-ui/tools.mjs finish --session <sessionId> -
 ```
 
 The result contains `driver` P0 facts plus `normalizedEvidence`. It does not certify
-subjective UX quality. The harness exits `3` for `AUTH_EXPIRED` and `2` for other command
-errors; a successful command exits `0`.
+subjective UX quality. `driver.pass` is false when no successful evidence exists, a
+command failed, or captured evidence shows an authentication/loading shell instead of
+the app. The harness exits `3` for `AUTH_EXPIRED` and `2` for other command errors; a
+successful command exits `0`.
+
+Always call `finish`: it closes the session's browser worker, removes private recovery
+artifacts, and archives `result.json` beside the screenshots. If a worker crashes or
+times out while idle, the next action starts a replacement from the last completed
+action's URL and protected browser-storage snapshot. Separate session IDs use separate
+workers and recovery directories; no CDP or remote-debugging endpoint is exposed.

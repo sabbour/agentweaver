@@ -16,6 +16,17 @@ public sealed record PreviewSession(
     DateTimeOffset StartedAt);
 
 /// <summary>
+/// Durable run-level preview lifecycle derived from unexpired HTTPRoutes.
+/// <see cref="PreviewLifecycleState.PreviewActive"/> applies every sandbox-retention mechanism;
+/// <see cref="PreviewLifecycleState.Previewable"/> restores the sandbox's normal cleanup policy.
+/// </summary>
+public enum PreviewLifecycleState
+{
+    Previewable,
+    PreviewActive,
+}
+
+/// <summary>
 /// Creates and tears down the per-preview Kubernetes objects (pod-label patch, ClusterIP
 /// Service, and HTTPRoute) that wire the shared preview Gateway directly to a run's sandbox
 /// pod. Replaces the in-cluster kubectl port-forward leg (which is replica-unsafe).
@@ -53,69 +64,24 @@ public interface ISandboxPreviewService
     /// </summary>
     Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default);
 
-    /// <summary>
-    /// Replica-safe check (issue #542): does <paramref name="runId"/> have at least one preview whose
-    /// idle/max expiry has NOT yet elapsed? Unlike <see cref="ListForRunAsync"/> this deliberately does
-    /// NOT require the backing pod to still exist — it answers "should the run's sandbox pod be kept
-    /// alive to keep a preview reachable?", which is asked precisely at the moment the pod is about to
-    /// be torn down (turn-end release / orphan reap), when the pod still exists.
-    ///
-    /// <para>
-    /// This check is also used by the worker heartbeat reaper, so it must continue to inspect the
-    /// durable cluster preview state even if the current process is not configured to CREATE preview
-    /// routes itself. Returns <see langword="false"/> only when no un-expired route exists or the
-    /// cluster lookup fails; missing preview endpoint config alone must not make a live preview
-    /// invisible to the reaper.
-    /// </para>
-    /// </summary>
-    Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default);
-
     /// <summary>Bumps the preview's idle expiry to now + IdleTimeoutMinutes. Idempotent (404 ignored).</summary>
     Task KeepAliveAsync(string token, CancellationToken ct = default);
 
     /// <summary>
-    /// Renews the backing SandboxClaim's cluster-side lifecycle TTL for <paramref name="runId"/> so the
-    /// sandbox controller does not reap the run's pod out from under a still-active preview (issue #560).
-    ///
-    /// <para><b>Why this exists:</b> the claim is created with
-    /// <c>spec.lifecycle.ttlSecondsAfterFinished = Sandbox:TimeoutSeconds</c> (default 600s). When a
-    /// child execution subtask's pod workload finishes, the controller reaps the pod ~TTL seconds later —
-    /// independently of the API. Issue #542/#551 only deferred the <em>API-side</em> pod release/orphan
-    /// sweep, which cannot stop the cluster controller, so a preview backed by a terminal run still
-    /// NXDOMAINs ~TimeoutSeconds after the turn ends. This hook JSON-merge-patches the claim TTL up to
-    /// cover the preview's own hard-max lifetime (<see cref="SandboxPreviewOptions.MaxLifetimeHours"/>
-    /// plus a margin), so the controller keeps the pod alive exactly as long as a preview may live.</para>
-    ///
-    /// <para><b>Leak-safe:</b> callers only invoke this while a preview is demonstrably active
-    /// (turn-end/reaper deferral gated by <see cref="HasActivePreviewAsync"/>, or keepalive). Bounded
-    /// teardown is preserved: the API-side preview reaper + AgentHost reaper still delete the claim
-    /// promptly on idle/max expiry, which supersedes the TTL; the extended TTL is only a backstop for
-    /// the window a preview is genuinely live. Best-effort and idempotent: a no-op when preview is
-    /// disabled, ignores 404s (claim already gone / never created), and never throws.</para>
+    /// Reconciles the run's first-class preview lifecycle from durable HTTPRoute state and applies all
+    /// associated sandbox side effects in one idempotent transition:
+    /// <list type="bullet">
+    /// <item><see cref="PreviewLifecycleState.PreviewActive"/> extends the SandboxClaim TTL and sets
+    /// <c>safe-to-evict=false</c>.</item>
+    /// <item><see cref="PreviewLifecycleState.Previewable"/> restores the normal claim TTL and sets
+    /// <c>safe-to-evict=true</c>.</item>
+    /// </list>
+    /// The route lookup is replica-safe and deliberately does not require the pod to exist. A lookup
+    /// failure degrades to normal cleanup rather than pinning a pod forever; protection patches are
+    /// best-effort and idempotent.
     /// </summary>
-    Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default);
-
-    /// <summary>
-    /// Toggles the <c>cluster-autoscaler.kubernetes.io/safe-to-evict</c> annotation on the run's
-    /// backing sandbox pod (issue #574).
-    ///
-    /// <para><b>Why this exists:</b> the agent-sandbox controller materializes sandbox pods with
-    /// <c>safe-to-evict: "true"</c> by default, and the kata node pool runs the cluster-autoscaler
-    /// (min 1 / max 5). When load drops, the autoscaler drains a kata node to scale down and — because
-    /// the pod is marked safe-to-evict with no PodDisruptionBudget — kills a live preview pod out from
-    /// under its preview, entirely independently of <see cref="RenewBackingClaimTtlAsync"/> and the
-    /// SandboxClaim TTL (which is why the #560/#564/#570/#571 TTL-renewal chain never fixed it).
-    /// Setting the annotation to <c>false</c> while a preview is live tells the autoscaler it may not
-    /// drain that node, so the pod survives scale-down; resetting it to <c>true</c> on teardown lets
-    /// the node be reclaimed again.</para>
-    ///
-    /// <para><b>Best-effort:</b> a no-op when preview is disabled or the bound pod cannot be resolved,
-    /// and never throws — an annotation-patch failure must not fail the preview lifecycle path it hangs
-    /// off. Requires the <c>pods: patch</c> verb already granted to the API Role (rbac-api.yaml).</para>
-    /// </summary>
-    /// <param name="safeToEvict"><c>false</c> to pin the pod against autoscaler scale-down while a
-    /// preview is live; <c>true</c> to release it on teardown.</param>
-    Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default);
+    Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(
+        string runId, CancellationToken ct = default);
 
     /// <summary>
     /// Replica-safe ownership binding: returns <see langword="true"/> only when an HTTPRoute named
@@ -161,6 +127,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     private readonly IPreviewRunnerHttpClient? _previewRunnerClient;
     private readonly IAgentHostOriginResolver? _originResolver;
     private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
+    private readonly int _normalClaimTtlSeconds;
 
     public SandboxPreviewService(
         IKubernetes? client,
@@ -169,7 +136,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         TimeProvider? clock = null,
         IPreviewRunnerHttpClient? previewRunnerClient = null,
         IAgentHostOriginResolver? originResolver = null,
-        Agentweaver.Api.Auth.ISecretStore? secretStore = null)
+        Agentweaver.Api.Auth.ISecretStore? secretStore = null,
+        KubernetesSandboxOptions? kubernetesOptions = null)
     {
         _client = client;
         _options = options;
@@ -178,6 +146,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         _previewRunnerClient = previewRunnerClient;
         _originResolver = originResolver;
         _secretStore = secretStore;
+        _normalClaimTtlSeconds = Math.Max(1, kubernetesOptions?.TimeoutSeconds ?? 600);
     }
 
     public bool Enabled => _options.Enabled && _client is not null;
@@ -218,16 +187,13 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
 
         var client = _client!;
 
-        // a/c. Patch the per-run selector label onto the bound pod (JSON merge patch). #574: in the
-        // same patch, set cluster-autoscaler.kubernetes.io/safe-to-evict=false so the autoscaler will
-        // not drain the kata node (and kill this pod) during a scale-down while the preview is live —
-        // the annotation is reset to true on preview teardown (StopPreviewAsync).
+        // Patch the per-run selector label onto the bound pod. Preview retention is applied only after
+        // the durable HTTPRoute exists, by the single lifecycle transition below.
         var podPatchJson = System.Text.Json.JsonSerializer.Serialize(new
         {
             metadata = new
             {
                 labels = new Dictionary<string, string> { [PreviewReaper.PodPreviewRunLabel] = sanitizedRun },
-                annotations = new Dictionary<string, string> { [SafeToEvictAnnotation] = "false" },
             },
         });
         var podPatch = new V1Patch(podPatchJson, V1Patch.PatchType.MergePatch);
@@ -305,6 +271,11 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             "SandboxPreviewService: started preview {Fingerprint} for run {RunId} -> pod {Pod} port {Port}",
             Fingerprint(token), runId, podName, targetPort);
 
+        // The route is now the durable source of truth. Entering PreviewActive applies every current
+        // protection together (claim TTL + eviction pin), including starts after the run already ended.
+        await ApplyPreviewLifecycleStateAsync(
+            runId, PreviewLifecycleState.PreviewActive, CancellationToken.None).ConfigureAwait(false);
+
         return new PreviewSession(token, runId, podName, targetPort, previewUrl, now);
     }
 
@@ -349,26 +320,18 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         // calls /preview-runner/processes/{sessionId}/health-check. Best-effort: never fails keepalive.
         await TryTouchPreviewRunnerProcessAsync(serviceName, ct).ConfigureAwait(false);
 
-        // #560: renew the backing SandboxClaim's cluster-side lifecycle TTL so the sandbox controller
-        // does not reap the run's pod out from under this still-active preview. The route annotation
-        // bump above only keeps the API-side reaper from deleting the route/pod; it does NOT stop the
-        // controller's ttlSecondsAfterFinished reap once a child subtask's workload finishes. Reading
-        // the run id off the route makes this replica-safe and keyed to the preview being kept alive.
+        // Reassert the complete PreviewActive transition for active use. Reading the run id from the
+        // durable route keeps TTL renewal and eviction protection replica-safe.
         var routeRunId = await TryReadRouteRunIdAsync(serviceName, ct).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(routeRunId))
-        {
-            await RenewBackingClaimTtlAsync(routeRunId!, ct).ConfigureAwait(false);
-            // #574: re-assert safe-to-evict=false on the backing pod so the cluster-autoscaler will not
-            // drain the kata node out from under this still-active preview during a scale-down. Symmetric
-            // with the TTL renewal above (which only covers the controller's TTL reap, not node eviction).
-            await SetBackingPodSafeToEvictAsync(routeRunId!, false, ct).ConfigureAwait(false);
-        }
+            await ApplyPreviewLifecycleStateAsync(
+                routeRunId!, PreviewLifecycleState.PreviewActive, ct).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Best-effort read of the durable <c>preview-run-id</c> annotation off a preview HTTPRoute so
-    /// keepalive can renew the backing claim TTL for the right run (replica-safe). Returns
-    /// <see langword="null"/> on 404 or any read failure — the caller then skips claim renewal.
+    /// keepalive can reassert the right run's lifecycle (replica-safe). Returns <see langword="null"/>
+    /// on 404 or any read failure — the caller then skips lifecycle reconciliation.
     /// </summary>
     private async Task<string?> TryReadRouteRunIdAsync(string routeName, CancellationToken ct)
     {
@@ -390,24 +353,14 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         }
     }
 
-    public async Task RenewBackingClaimTtlAsync(string runId, CancellationToken ct = default)
+    private async Task SetBackingClaimTtlAsync(string runId, int ttlSeconds, CancellationToken ct)
     {
-        // Leak-safe: only meaningful while a preview is active; callers gate on HasActivePreviewAsync
-        // (turn-end/reaper deferral) or keepalive. This best-effort retention also hangs off the worker
-        // heartbeat reaper, so it must still run when the current process can see cluster preview state
-        // but does not itself provision preview routes. No-op only when there is no cluster client or
-        // run id. Never throws — a renewal failure must not fail the teardown-deferral or keepalive path
-        // it hangs off.
         if (_client is null || string.IsNullOrEmpty(runId))
             return;
 
-        // Cover the preview's own hard-max lifetime plus a margin so the controller keeps the pod for
-        // exactly as long as a preview may live. The API-side reaper still deletes the claim promptly
-        // on idle/max expiry (which supersedes this TTL), so the extended value is only a backstop.
-        var renewedTtlSeconds = checked(_options.MaxLifetimeHours * 3600 + 600);
         var patchJson = System.Text.Json.JsonSerializer.Serialize(new
         {
-            spec = new { lifecycle = new { ttlSecondsAfterFinished = renewedTtlSeconds } },
+            spec = new { lifecycle = new { ttlSecondsAfterFinished = ttlSeconds } },
         });
         var patch = new V1Patch(patchJson, V1Patch.PatchType.MergePatch);
 
@@ -427,8 +380,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                     _options.Namespace, SandboxClaimConventions.ClaimPlural, claimName,
                     cancellationToken: ct).ConfigureAwait(false);
                 _logger.LogDebug(
-                    "SandboxPreviewService: renewed backing claim {Claim} TTL to {Ttl}s for run {RunId} (#560)",
-                    claimName, renewedTtlSeconds, runId);
+                    "SandboxPreviewService: set backing claim {Claim} TTL to {Ttl}s for run {RunId}",
+                    claimName, ttlSeconds, runId);
             }
             catch (HttpOperationException ex) when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
@@ -438,8 +391,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex,
-                    "SandboxPreviewService: best-effort claim TTL renewal failed for {Claim} (run {RunId}); " +
-                    "preview may NXDOMAIN when the cluster TTL elapses (#560)",
+                    "SandboxPreviewService: best-effort claim TTL transition failed for {Claim} (run {RunId})",
                     claimName, runId);
             }
         }
@@ -449,14 +401,11 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     /// drained during scale-down (issue #574).</summary>
     internal const string SafeToEvictAnnotation = "cluster-autoscaler.kubernetes.io/safe-to-evict";
 
-    /// <inheritdoc />
-    public async Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct = default)
+    private async Task SetBackingPodSafeToEvictAsync(string runId, bool safeToEvict, CancellationToken ct)
     {
-        // Leak-safe: only meaningful while a preview is active (callers set false on start/keepalive/
-        // defer, true on teardown). The worker heartbeat reaper also relies on this best-effort pin,
-        // so it must work whenever the process has a cluster client, even if preview route creation is
-        // not enabled locally. No-op only when there is no cluster client or run id. Never throws — an
-        // annotation patch failure must not fail the lifecycle path it hangs off.
+        // Both directions are lifecycle-owned: false enters/reasserts PreviewActive; true returns to
+        // Previewable. The worker heartbeat reaper also relies on this best-effort transition, so it
+        // works whenever a cluster client exists even if route creation is disabled locally.
         if (_client is null || string.IsNullOrEmpty(runId))
             return;
 
@@ -636,21 +585,44 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         return sessions;
     }
 
-    public async Task<bool> HasActivePreviewAsync(string runId, CancellationToken ct = default)
+    public async Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(
+        string runId, CancellationToken ct = default)
     {
-        // Leak-safe: only defer a pod teardown on POSITIVE evidence of a live preview. This cluster
-        // read is also used by the worker heartbeat reaper, so it must keep working even if that
-        // process lacks the API pod's preview-endpoint wiring; a live route in cluster state is still
-        // authoritative. Without a client (or a run id), we cannot inspect that state.
+        var state = await ReadPreviewLifecycleStateAsync(runId, ct).ConfigureAwait(false);
+        await ApplyPreviewLifecycleStateAsync(runId, state, ct).ConfigureAwait(false);
+        return state;
+    }
+
+    private async Task ApplyPreviewLifecycleStateAsync(
+        string runId, PreviewLifecycleState state, CancellationToken ct)
+    {
+        var active = state == PreviewLifecycleState.PreviewActive;
+        var claimTtlSeconds = active
+            ? checked(_options.MaxLifetimeHours * 3600 + 600)
+            : _normalClaimTtlSeconds;
+
+        await SetBackingClaimTtlAsync(runId, claimTtlSeconds, ct).ConfigureAwait(false);
+        await SetBackingPodSafeToEvictAsync(runId, safeToEvict: !active, ct).ConfigureAwait(false);
+
+        _logger.LogDebug(
+            "SandboxPreviewService: reconciled run {RunId} to preview lifecycle {State}",
+            runId, state);
+    }
+
+    private async Task<PreviewLifecycleState> ReadPreviewLifecycleStateAsync(
+        string runId, CancellationToken ct)
+    {
+        // Leak-safe: only retain a pod on positive durable evidence. This cluster read is also used by
+        // worker-side reaping, so local preview-creation configuration is not part of the decision.
         if (_client is null || string.IsNullOrEmpty(runId))
-            return false;
+            return PreviewLifecycleState.Previewable;
 
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         var now = _clock.GetUtcNow();
 
         try
         {
-            var raw = await _client!.CustomObjects.ListNamespacedCustomObjectAsync(
+            var raw = await _client.CustomObjects.ListNamespacedCustomObjectAsync(
                 HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural,
                 labelSelector: $"{PreviewReaper.LabelPartOf}={PreviewReaper.LabelPartOfValue}",
                 cancellationToken: ct).ConfigureAwait(false);
@@ -658,28 +630,23 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             foreach (var route in ParsePreviewRoutes(raw).Where(r =>
                          string.Equals(r.SanitizedRun, sanitizedRun, StringComparison.Ordinal)))
             {
-                // podExists:true — we are deciding whether to KEEP the pod for this preview, so pod
-                // existence is not a signal here (the pod is present at the teardown boundary). Only the
-                // idle (keepalive) and hard-max expiries bound the deferral, matching the reaper's own
-                // ExpiredIdle / ExpiredMax axes so a preview and its pod expire together.
                 var decision = PreviewReaper.Decide(
                     now,
                     PreviewReaper.ParseTimestamp(route.ExpiresAt),
                     PreviewReaper.ParseTimestamp(route.MaxUntil),
                     podExists: true);
                 if (decision == PreviewReapReason.Alive)
-                    return true;
+                    return PreviewLifecycleState.PreviewActive;
             }
-
-            return false;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex,
-                "SandboxPreviewService: active-preview probe failed for run {RunId}; treating as no active preview",
+                "SandboxPreviewService: preview lifecycle lookup failed for run {RunId}; using Previewable",
                 runId);
-            return false;
         }
+
+        return PreviewLifecycleState.Previewable;
     }
 
     public async Task StopPreviewAsync(string token, CancellationToken ct = default)
@@ -687,19 +654,17 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         EnsureReady();
         var serviceName = PreviewReaper.ServiceName(token);
 
-        // #574: resolve the run BEFORE deleting the route so we can release the backing pod's
-        // safe-to-evict pin on teardown (the route carries the durable run-id annotation). This runs
-        // for both explicit stops and expiry reaps (ReapAsync calls StopPreviewAsync).
+        // Resolve the run before deleting the route; the durable run-id annotation is needed to
+        // reconcile the remaining run-level lifecycle after explicit stop or expiry reap.
         var runId = await TryReadRouteRunIdAsync(serviceName, ct).ConfigureAwait(false);
 
         await DeleteHttpRouteIdempotentAsync(serviceName, ct).ConfigureAwait(false);
         await DeleteServiceIdempotentAsync(serviceName, ct).ConfigureAwait(false);
 
-        // #574: the preview is gone, so let the cluster-autoscaler reclaim the kata node again by
-        // resetting safe-to-evict=true on the pod (it is deleted shortly after by the AgentHost reaper
-        // when the run is no longer active; resetting avoids pinning the node in the meantime).
+        // Reconcile after deletion: another route keeps the run PreviewActive; deleting the final route
+        // returns it to Previewable and reverses every retention side effect together.
         if (!string.IsNullOrEmpty(runId))
-            await SetBackingPodSafeToEvictAsync(runId!, true, ct).ConfigureAwait(false);
+            await ReconcilePreviewLifecycleAsync(runId!, ct).ConfigureAwait(false);
 
         _logger.LogInformation("SandboxPreviewService: stopped preview {Fingerprint}", Fingerprint(token));
     }

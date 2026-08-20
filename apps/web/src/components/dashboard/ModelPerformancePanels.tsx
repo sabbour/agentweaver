@@ -208,6 +208,17 @@ function BarList({
   );
 }
 
+function formatDuration(ms: number): string {
+  const roundedMilliseconds = Math.round(ms);
+  if (roundedMilliseconds < 1000) return `${roundedMilliseconds} ms`;
+
+  const tenthsOfSeconds = Math.round(roundedMilliseconds / 100);
+  if (tenthsOfSeconds < 600) return `${tenthsOfSeconds / 10}s`;
+
+  const wholeSeconds = Math.round(roundedMilliseconds / 1000);
+  return `${Math.floor(wholeSeconds / 60)}m ${wholeSeconds % 60}s`;
+}
+
 function PercentilesTable({ rows, emptyLabel }: { rows: MetricPercentilesDto[]; emptyLabel: string }) {
   const [sortKey, setSortKey] = useState<'label' | 'p50' | 'p95'>('label');
   const [sortAsc, setSortAsc] = useState(true);
@@ -267,8 +278,8 @@ function PercentilesTable({ rows, emptyLabel }: { rows: MetricPercentilesDto[]; 
         {sorted.map((row) => (
           <TableRow key={row.label}>
             <TableCell><Text>{row.label}</Text></TableCell>
-            <TableCell><Text>{row.p50Ms != null ? `${Math.round(row.p50Ms)} ms` : '—'}</Text></TableCell>
-            <TableCell><Text>{row.p95Ms != null ? `${Math.round(row.p95Ms)} ms` : '—'}</Text></TableCell>
+            <TableCell><Text>{row.p50Ms != null ? formatDuration(row.p50Ms) : '—'}</Text></TableCell>
+            <TableCell><Text>{row.p95Ms != null ? formatDuration(row.p95Ms) : '—'}</Text></TableCell>
           </TableRow>
         ))}
       </TableBody>

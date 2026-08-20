@@ -120,6 +120,21 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         await db.SaveChangesAsync();
     }
 
+    private async Task InsertToolApprovalResolvedEventAsync(string runId, string requestId, bool expired)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = 2,
+            EventType = EventTypes.ToolApprovalResolved,
+            PayloadJson = $$"""{"requestId":"{{requestId}}","approved":false,"expired":{{expired.ToString().ToLowerInvariant()}}}""",
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
     private async Task<int> InsertOutcomeSpecAsync(MemoryDbContext db, string projectId, string coordinatorRunId)
     {
         var now = DateTimeOffset.UtcNow;
@@ -445,6 +460,21 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "toolu_01resolved", "web_fetch");
         // The callId defaults to the requestId in this test's minimal payload shape.
         await InsertToolResultEventAsync(run.Id.ToString(), "toolu_01resolved");
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notifications = body.GetProperty("notifications").EnumerateArray().ToList();
+
+        notifications.Should().NotContain(n => n.GetProperty("run_id").GetString() == run.Id.ToString());
+    }
+
+    [Fact]
+    public async Task GetNotifications_ExcludesExpiredToolApprovalResolution()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project Expired");
+        var run = await InsertInProgressRunAsync(projectId, "Preview approval", "Coordinator");
+        await InsertToolApprovalRequiredEventAsync(run.Id.ToString(), "preview-expired", "start_preview");
+        await InsertToolApprovalResolvedEventAsync(run.Id.ToString(), "preview-expired", expired: true);
 
         var response = await _client.GetAsync("/api/notifications");
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();

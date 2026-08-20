@@ -279,14 +279,14 @@ test('capture script moves the cursor AFTER the zoom transform settles (recomput
   );
 });
 
-test('capture script treats scale <= 1.02 as no-zoom (resets transform, no pan)', () => {
+test('capture script disables zoom and resets any prior transform', () => {
   const src = renderCaptureScript({
     startUrl: 'https://x/y',
     videoPath: 'a.webm',
     steps: [{ type: 'click', selector: "page.getByRole('button', { name: 'Y' })", scale: 1 }],
   });
-  assert.ok(src.includes('const zoom = scale > 1.02'), 'expected a no-zoom threshold branch');
-  assert.ok(src.includes('__demoZoomReset'), 'expected the no-zoom path to reset any prior transform');
+  assert.ok(src.includes('const zoom = false'), 'expected the stable-frame no-zoom policy');
+  assert.ok(src.includes('__demoZoomReset'), 'expected the stable-frame path to reset any prior transform');
 });
 
 test('capture script re-installs the overlay bootstrap after every in-plan goto', () => {
@@ -295,6 +295,7 @@ test('capture script re-installs the overlay bootstrap after every in-plan goto'
     videoPath: 'a.webm',
     steps: [{ type: 'goto', url: 'https://x/z', after: 500 }],
   });
+
   // After a full-page navigation the addInitScript bootstrap runs at document-start with
   // a null document.body and bails, so the cursor/zoom/activity tracking must be
   // re-installed explicitly once the new document is ready.
@@ -304,6 +305,17 @@ test('capture script re-installs the overlay bootstrap after every in-plan goto'
   assert.ok(gotoIdx > 0, 'expected the goto navigation');
   assert.ok(reinstallIdx > gotoIdx, 'expected installSource to be re-evaluated after the goto');
   assert.ok(markIdx > reinstallIdx, 'expected the goto activity mark after re-install');
+});
+
+test('capture script gives slow initial navigation a bounded two-minute deadline', () => {
+  const source = renderCaptureScript({
+    startUrl: 'https://agentweaver.example/overview',
+    videoPath: 'recordings/beat.webm',
+    steps: [],
+  });
+
+  assert.match(source, /const navigationTimeoutMs = 120_000;/);
+  assert.match(source, /await page\.goto\(planStartUrl, \{ waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs \}\);/);
 });
 
 test('capture script continues same-page beats unless a fresh navigation is requested', async () => {
@@ -508,4 +520,12 @@ test('activity tracking + capture clears persist across navigations via sessionS
   // ...and the bootstrap persists the log in sessionStorage so it survives page.goto.
   assert.ok(src.includes('__demoActivityLog'), 'expected the activity log to be persisted in sessionStorage');
   assert.ok(src.includes('__demoCaptureEpoch'), 'expected a wall-clock capture epoch');
+});
+
+test('capture script resets the timing state before installing a same-page overlay', () => {
+  const src = renderCaptureScript({ startUrl: null, videoPath: 'a.webm', steps: [] });
+  const resetIdx = src.indexOf("sessionStorage.removeItem('__demoCaptureEpoch')");
+  const installIdx = src.indexOf('await page.evaluate(installSource);');
+  assert.ok(resetIdx >= 0, 'expected timing state reset');
+  assert.ok(resetIdx < installIdx, 'expected timing state reset before overlay initialization');
 });

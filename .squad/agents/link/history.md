@@ -34,3 +34,5 @@ Link contributed to the v0.7.11–v0.9.70 release waves, including preview/auth 
 - Durable lesson: when a docs task says "fix retired model ID X", always check the actual current code default/constant first — a doc that literally quotes a source-code constant's real value should not be "fixed" to a preferred ID without a corresponding code change, or the doc becomes newly inaccurate instead of newly accurate.
 
 - 2026-07-29: Tank finalized the Entra-first/two-tier RBAC direction your bootstrap command is targeting. Keep the Node-based `azure:setup-entra-app` path; expect one follow-up pass to align placeholder app-role labels and docs/config wiring with the final runtime implementation.
+
+- 2026-08-14: Edge Default + CDP is the staging auth path, PR #766 preserves `selectedAccount` after accessible-repos load, and the API harness seam passed on v0.18.1.

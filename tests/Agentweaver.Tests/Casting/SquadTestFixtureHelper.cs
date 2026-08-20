@@ -47,8 +47,7 @@ public static class SquadTestFixtureHelper
     }
 
     /// <summary>
-    /// Creates a .squad/ directory with a legacy root-level casting files layout
-    /// (registry.json and history.json at the .squad/ root rather than .squad/casting/).
+    /// Creates a .squad/ directory with the legacy flat casting files layout.
     /// </summary>
     public static void CreateLegacyLayout(string directory, string projectName = "test-project")
     {
@@ -57,11 +56,11 @@ public static class SquadTestFixtureHelper
 
         Directory.CreateDirectory(agentsDir);
 
-        File.WriteAllText(Path.Combine(squadDir, "team.md"),         BuildTeamMd(projectName));
-        File.WriteAllText(Path.Combine(squadDir, "policy.json"),     BuildPolicyJson());
-        File.WriteAllText(Path.Combine(squadDir, "registry.json"),   BuildRegistryJson());
-        File.WriteAllText(Path.Combine(squadDir, "history.json"),    BuildEmptyHistoryJson());
-        File.WriteAllText(Path.Combine(agentsDir, "charter.md"),     BuildCharterMd("Alpha", "Lead Architect", projectName));
+        File.WriteAllText(Path.Combine(squadDir, "team.md"),               BuildTeamMd(projectName));
+        File.WriteAllText(Path.Combine(squadDir, "casting-policy.json"),   BuildPolicyJson());
+        File.WriteAllText(Path.Combine(squadDir, "casting-registry.json"), BuildRegistryJson());
+        File.WriteAllText(Path.Combine(squadDir, "casting-history.json"),  BuildEmptyHistoryJson());
+        File.WriteAllText(Path.Combine(agentsDir, "charter.md"),           BuildCharterMd("Alpha", "Lead Architect", projectName));
     }
 
     /// <summary>
@@ -74,8 +73,9 @@ public static class SquadTestFixtureHelper
         CreateCanonicalLayout(directory, "conflict-project");
 
         var squadDir = Path.Combine(directory, ".squad");
-        File.WriteAllText(Path.Combine(squadDir, "registry.json"), BuildRegistryJson());
-        File.WriteAllText(Path.Combine(squadDir, "history.json"),  BuildEmptyHistoryJson());
+        File.WriteAllText(Path.Combine(squadDir, "casting-policy.json"),   BuildPolicyJson());
+        File.WriteAllText(Path.Combine(squadDir, "casting-registry.json"), """{"agents":{}}""");
+        File.WriteAllText(Path.Combine(squadDir, "casting-history.json"),  BuildEmptyHistoryJson());
     }
 
     /// <summary>

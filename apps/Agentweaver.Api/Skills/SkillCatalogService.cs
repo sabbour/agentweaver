@@ -371,7 +371,8 @@ public sealed class SkillCatalogService
             }
             else
             {
-                cloneDir = await CloneToTempAsync(source.CloneUrl!, ResolveGitHubPrincipal(caller, project), ct).ConfigureAwait(false);
+                cloneDir = await CloneToTempAsync(
+                    source.CloneUrl!, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
                 var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(checkoutRef))
                     await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
@@ -417,7 +418,8 @@ public sealed class SkillCatalogService
             }
             else
             {
-                cloneDir = await CloneToTempAsync(source.CloneUrl!, ResolveGitHubPrincipal(caller, project), ct).ConfigureAwait(false);
+                cloneDir = await CloneToTempAsync(
+                    source.CloneUrl!, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
                 var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(checkoutRef))
                     await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
@@ -589,8 +591,15 @@ public sealed class SkillCatalogService
             // Anonymous-first, full recursive tree (subpath ""), no placeholder scratch files: candidates
             // are derived in-memory from the tree by the indexer, so browse never touches the filesystem.
             var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath: string.Empty, token: null, cts.Token).ConfigureAwait(false);
-            var index = await _catalogIndexer.GetOrBuildAsync(
-                owner, repo, branch, blobs, submittingUser: ResolveGitHubPrincipal(caller, project), parseStrategy: parseStrategy, cts.Token).ConfigureAwait(false);
+            var index = await _catalogIndexer.GetOrBuildForProjectAsync(
+                owner,
+                repo,
+                branch,
+                blobs,
+                submittingUser: ResolveGitHubPrincipal(caller, project),
+                parseStrategy: parseStrategy,
+                cts.Token,
+                projectId: project.Id).ConfigureAwait(false);
 
             if (index.Entries.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
@@ -694,7 +703,14 @@ public sealed class SkillCatalogService
         cts.CancelAfter(MarketplaceFetchTimeout);
         try
         {
-            tempDir = await FetchSubtreeToTempAsync(owner, repo, branch, subpath, ResolveGitHubPrincipal(caller, project), cts.Token).ConfigureAwait(false);
+            tempDir = await FetchSubtreeToTempAsync(
+                owner,
+                repo,
+                branch,
+                subpath,
+                ResolveGitHubPrincipal(caller, project),
+                project.Id,
+                cts.Token).ConfigureAwait(false);
             var discovered = DiscoverSkills(tempDir, subpath);
             if (discovered.Count == 0)
                 return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = AcceptedSkillSourceMessage };
@@ -896,9 +912,15 @@ public sealed class SkillCatalogService
     /// skill discovery). Runs bounded by <paramref name="ct"/> and a total-byte ceiling.
     /// </summary>
     private async Task<string> FetchSubtreeToTempAsync(
-        string owner, string repo, string branch, string subpath, string projectOwner, CancellationToken ct)
+        string owner,
+        string repo,
+        string branch,
+        string subpath,
+        string projectOwner,
+        ProjectId projectId,
+        CancellationToken ct)
     {
-        var token = await ResolveTokenAsync(projectOwner, ct).ConfigureAwait(false);
+        var token = await ResolveTokenAsync(projectOwner, projectId, ct).ConfigureAwait(false);
         var blobs = await _treeClient!.ListSubtreeBlobsAsync(owner, repo, branch, subpath, token, ct).ConfigureAwait(false);
 
         var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
@@ -1219,18 +1241,24 @@ public sealed class SkillCatalogService
         return raws;
     }
 
-    private async Task<string> CloneToTempAsync(string repoUrl, string owner, CancellationToken ct)
+    private async Task<string> CloneToTempAsync(
+        string repoUrl,
+        string owner,
+        ProjectId projectId,
+        CancellationToken ct)
     {
         // Defense in depth: only wire the caller's GitHub token as a credential when the clone
         // target is exactly github.com. The Parse allowlist already guarantees this, but scoping
         // here ensures a token is never offered (and thus never leaked) to any other host.
         var token = SkillImportSource.IsAllowedCloneHost(repoUrl)
-            ? await ResolveTokenAsync(owner, ct).ConfigureAwait(false)
+            ? await ResolveTokenAsync(owner, projectId, ct).ConfigureAwait(false)
             : null;
         var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
         // Clone runs synchronously in LibGit2Sharp; offload so we don't block the request thread.
-        await Task.Run(() => _gitInit.Clone(dir, repoUrl, token ?? string.Empty), ct).ConfigureAwait(false);
+        await Task.Run(
+            () => _gitInit.Clone(dir, repoUrl, token ?? string.Empty, GitClonePurpose.SkillImport),
+            ct).ConfigureAwait(false);
         return dir;
     }
 
@@ -1406,11 +1434,14 @@ public sealed class SkillCatalogService
         }
     }
 
-    private async Task<string?> ResolveTokenAsync(string owner, CancellationToken ct)
+    private async Task<string?> ResolveTokenAsync(
+        string owner,
+        ProjectId projectId,
+        CancellationToken ct)
     {
         try
         {
-            var scope = _scopeProvider.Resolve(owner);
+            var scope = await _scopeProvider.ResolveAsync(owner, projectId.ToString(), ct).ConfigureAwait(false);
             if (_accessTokenProvider is not null)
                 return await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
             var entry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);

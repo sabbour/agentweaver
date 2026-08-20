@@ -26,15 +26,28 @@ Keys map to the user accountable for the runs they submit. You can configure mul
 }
 ```
 
-A request without a recognized key returns `401 Unauthorized`. A request for a run the caller does not own returns `403 Forbidden`. When no keys are configured, authenticated API requests are unauthorized.
+A request without recognized credentials returns `401 Unauthorized`. A request for a run the caller
+cannot access returns `403 Forbidden` (or `404 Not Found` on existence-hiding artifact routes).
+When no credentials are configured, authenticated API requests are unauthorized.
 
-Authorization is ownership-based after authentication. Project, team, run, backlog, workflow, workspace, and memory endpoints load the relevant resource and require the authenticated caller to own it (`caller.Owns(...)` in endpoint code) before returning or mutating it. Agentweaver has no built-in superuser role derived from a GitHub username: a login named `admin` is treated like any other caller and does not bypass ownership checks.
+A run with a persisted `project_id` inherits authorization from that project. In Entra mode,
+`Viewer` can use read, stream, history, graph, metrics, workspace, file, and preview-list endpoints;
+`Contributor` and `Owner` can also use run mutations such as review, approval, steering, retry,
+archive, cancellation, and sandbox preview control. In GitHubLegacy mode, the persisted project
+owner remains the boundary. The server resolves the project from the stored run record, never from
+caller input. Linked GitHub identities provide repository and Copilot access but do not grant
+project access. Runs with no `project_id` retain submitting-user ownership. The trusted internal
+service identity is denied on ordinary run read and mutation routes; only explicitly opted-in,
+run-bound callbacks such as agent-initiated preview creation accept it.
 
 ## Endpoints
 
 ### Runs
 
-Run endpoints are owner-scoped. The authenticated caller must own the run being read, streamed, reviewed, retried, archived, merged, steered, or used for sandbox preview; there is no username-based administrative override.
+Project-scoped run endpoints use the authorization boundary of the run's persisted project: in Entra
+mode, viewers may inspect a run and contributors or owners may operate it; in GitHubLegacy mode, the
+project owner retains access. Older runs without a project remain submitting-user scoped. There is no
+username-based administrative override.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -100,7 +113,11 @@ Run control state is durable. Shell approvals/denials, tool approval requests, r
 
 ### Memory
 
-Memory is scoped to projects. Decisions and memories feed the `MemoryContextCompiler`, which assembles a hierarchical context block injected into every agent run (boundaries → core context → learnings → session). Export writes to `.squad/decisions.md`, `.squad/agents/{name}/history.md`, `.agentweaver/context/boundaries.md`, and `.agentweaver/context/patterns.md`.
+Memory is scoped to projects. `MemoryContextCompiler` serializes selected decisions, memories, and session fields into a single JSON data envelope marked as untrusted; stored text is never emitted as prompt headings or executable instructions. Cross-team memory and active architectural/scope decisions compile only after approval by a project owner or a run-authenticated Coordinator. Export writes to `.squad/decisions.md`, `.squad/agents/{name}/history.md`, `.agentweaver/context/boundaries.md`, and `.agentweaver/context/patterns.md`.
+
+Memory and decision responses expose `sourceKind`, `sourceIdentity`, `sourceRunId`, and `trustState`; approved records also expose `approvedBy` and `approvedAt`. Existing rows migrate as `sourceKind: "legacy"` and `trustState: "legacy"` and therefore do not compile until explicitly approved. This fail-closed migration avoids treating historical rows with unknown provenance as trusted policy.
+
+Agent loopback writes authenticate with the normal internal API key plus a run-scoped capability. Only a SHA-256 digest of the short-lived capability is stored in the shared database, so validation works across API replicas without persisting the bearer token. The API resolves the project and agent from the verified run and rejects a client-supplied `agent_name` that does not match. Human API callers continue to use project authorization; only project owners and verified Coordinator runs may promote memory, merge/reject inbox entries, or create/update active decisions.
 
 #### Decision Inbox
 
@@ -119,6 +136,7 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | `POST` | `/api/projects/{id}/decisions` | Create a decision directly |
 | `GET` | `/api/projects/{id}/decisions` | List decisions (`?type=`, `?agent=`) |
 | `GET` | `/api/projects/{id}/decisions/{decisionId}` | Get a single decision |
+| `POST` | `/api/projects/{id}/decisions/{decisionId}/approve` | Approve a legacy or pending-trust decision for compilation |
 | `PUT` | `/api/projects/{id}/decisions/{decisionId}` | Update decision status/content |
 
 #### Agent Memory
@@ -128,6 +146,7 @@ Memory is scoped to projects. Decisions and memories feed the `MemoryContextComp
 | `POST` | `/api/projects/{id}/agents/{name}/memory` | Add a memory entry for an agent |
 | `GET` | `/api/projects/{id}/agents/{name}/memory` | List agent memories (`?type=`, `?importance=`) |
 | `GET` | `/api/projects/{id}/agents/{name}/memory/{memId}` | Get a single memory entry |
+| `POST` | `/api/projects/{id}/agents/{name}/memory/{memId}/promote` | Approve memory for cross-agent compilation |
 | `GET` | `/api/projects/{id}/memory` | Cross-agent memory search (`?type=`, `?tags=`) |
 
 #### Sessions
@@ -228,13 +247,14 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 | `GET` | `/api/projects/{projectId}/review-policies` | List review policies |
 | `POST` | `/api/projects/{projectId}/review-policies/sync` | Reload review policies from disk |
 | `GET` | `/api/projects/{projectId}/workflows` | List workflows, including structured trigger metadata |
-| `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get one workflow, including its trigger |
-| `GET` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Get the workflow's trigger config as structured JSON |
-| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Replace/create the workflow's trigger config |
-| `PATCH` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Partially update the workflow's trigger config |
-| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear the workflow's trigger config |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get one workflow, including all triggers |
+| `GET` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Get the workflow's trigger configs as structured JSON |
+| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Create/replace one trigger by type |
+| `PATCH` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Partially update one trigger by type |
+| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear all triggers, or one type with `?type=` |
 | `POST` | `/api/projects/{projectId}/workflow-events` | Fire a named workflow event manually |
 | `POST` | `/api/projects/{projectId}/webhooks/github` | Receive an HMAC-signed GitHub webhook delivery |
+| `POST` | `/api/projects/{projectId}/webhooks/github/provision` | Create or update the connected repository's webhook using the project's effective GitHub identity |
 
 Workflow trigger objects use the existing top-level trigger fields (`type`, `interval`,
 `day_of_week`, `day_of_month`, `time_of_day`, `event_name`) plus an optional `if` predicate array
@@ -271,8 +291,9 @@ Example trigger payload:
 | `POST` | `/api/projects/{projectId}/workflows/sync` | Reload workflow definitions from disk |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}` | Get a workflow definition |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Get a workflow's structured trigger config |
-| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Create or replace a workflow trigger |
-| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear a workflow trigger |
+| `PUT` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Create or replace one workflow trigger type |
+| `PATCH` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Partially update one workflow trigger type |
+| `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear all triggers or one trigger type |
 | `PUT` | `/api/projects/{projectId}/workflows/default` | Set the default workflow |
 | `PUT` | `/api/projects/{projectId}/backlog/tasks/{taskId}/workflow-override` | Set a task workflow override |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/graph` | Get a workflow graph |
@@ -282,19 +303,24 @@ Example trigger payload:
 
 ### Workflow trigger configuration
 
-Workflow list and detail responses already embed a workflow's `trigger` when one is present. The
-dedicated trigger CRUD endpoints expose the same shape without requiring callers to rewrite the whole
-workflow YAML.
+Workflow list and detail responses expose the complete `triggers` array. The legacy `trigger` field
+remains as an alias for the first trigger so existing clients continue to deserialize unchanged. The
+dedicated trigger CRUD endpoints expose the same shapes without requiring callers to rewrite the
+whole workflow YAML.
 
 ```http
 GET    /api/projects/{projectId}/workflows/{workflowId}/trigger
 PUT    /api/projects/{projectId}/workflows/{workflowId}/trigger
+PATCH  /api/projects/{projectId}/workflows/{workflowId}/trigger
 DELETE /api/projects/{projectId}/workflows/{workflowId}/trigger
 ```
 
-- `GET` returns `{ "trigger": <WorkflowTriggerDto|null> }`
-- `PUT` accepts a `WorkflowTriggerDto` as the request body and returns the same wrapper
-- `DELETE` preserves the rest of the workflow definition and returns `{ "trigger": null }`
+- Every response returns `{ "trigger": <WorkflowTriggerDto|null>, "triggers": [...] }`.
+- `PUT` accepts a `WorkflowTriggerDto` and upserts that trigger type without removing other types.
+- `PATCH` partially updates the trigger named by `type`. When the workflow has multiple triggers,
+  `type` is required; a single-trigger workflow retains the legacy type-optional behavior.
+- `DELETE ?type=schedule` or `?type=event` removes only that type.
+- `DELETE` without a `type` preserves its legacy behavior and clears all triggers.
 
 The JSON contract is intentionally close to workflow YAML:
 

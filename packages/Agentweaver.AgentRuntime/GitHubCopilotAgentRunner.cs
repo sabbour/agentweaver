@@ -84,7 +84,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _runOptions = runOptions;
     }
 
-    public async Task<string> ExecuteAsync(
+    public Task<string> ExecuteAsync(
         string task,
         string workingDirectory,
         string repositoryPath,
@@ -94,7 +94,23 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         ChannelWriter<RunEvent>? stream,
         CancellationToken ct,
         string? systemPromptContext = null,
-        string? userId = null)
+        string? userId = null) =>
+        ExecuteForProjectAsync(
+            task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct,
+            systemPromptContext, userId, projectId: null);
+
+    public async Task<string> ExecuteForProjectAsync(
+        string task,
+        string workingDirectory,
+        string repositoryPath,
+        ModelSource modelSource,
+        string runId,
+        string? modelId,
+        ChannelWriter<RunEvent>? stream,
+        CancellationToken ct,
+        string? systemPromptContext = null,
+        string? userId = null,
+        string? projectId = null)
     {
         if (string.IsNullOrWhiteSpace(userId))
             throw new AgentProviderException(
@@ -117,7 +133,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             : _executor;
         using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        var scope = _scopeProvider.Resolve(userId);
+        var scope = await _scopeProvider.ResolveAsync(userId, projectId, ct).ConfigureAwait(false);
         if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
             throw new AgentProviderException(
                 ModelSource.GitHubCopilot,

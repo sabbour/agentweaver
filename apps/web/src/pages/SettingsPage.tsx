@@ -564,7 +564,7 @@ export function SettingsPage() {
             label="MCP server URL"
             hint="Use this URL in your MCP client configuration."
           >
-            <Input value={MCP_URL} readOnly />
+            <Input value={MCP_URL} readOnly data-testid="mcp-server-url" />
           </Field>
         </div>
       </PageSection>

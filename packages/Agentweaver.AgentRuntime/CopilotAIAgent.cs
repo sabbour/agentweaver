@@ -86,6 +86,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     protected string? _agentName;
     protected string? _apiBaseUrl;
     protected string? _apiKey;
+    protected string? _apiCapabilityToken;
     protected string? _userId;
 
     /// <summary>The run-event channel writer for the current run (null when no stream attached).</summary>
@@ -315,7 +316,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? apiKey,
         CancellationToken ct,
         string? userId = null,
-        AgentHostPurpose purpose = AgentHostPurpose.Default)
+        AgentHostPurpose purpose = AgentHostPurpose.Default,
+        string? apiCapabilityToken = null)
     {
         _workingDirectory = workingDirectory;
         _repositoryPath = repositoryPath;
@@ -327,6 +329,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _agentName = agentName;
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
+        _apiCapabilityToken = apiCapabilityToken;
         _userId = string.IsNullOrWhiteSpace(userId) ? null : userId;
         _setupCt = ct;
 
@@ -362,10 +365,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var executor = sandboxPolicy.Direct
             ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)
             : _executor;
+        if (executor is IRunWorkspaceRegistrar workspaceRegistrar)
+            workspaceRegistrar.RegisterTrustedWorkspace(workingDirectory);
         _activeExecutor = executor;
         _governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        var scope = ResolveTokenScope(_userId);
+        var scope = await ResolveTokenScopeAsync(_userId, _projectId, ct).ConfigureAwait(false);
         _tokenScope = scope;
         _client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
         try
@@ -469,7 +474,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // run_command tool (ISandboxExecutor-backed), for every run purpose — not only
             // AssemblyBuildTest. Register it whenever the registry exposes it (real isolation +
             // policy shell enabled); native shell is denied below so this is the only shell path.
-            includeControlledRunCommand: true);
+            includeControlledRunCommand: true,
+            runCapabilityToken: _apiCapabilityToken);
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
         // list_decisions/get_memory/list_inbox/submit_decision are only registered when
         // Agentweaver API tools were built (projectId + agentName both supplied). Only tell the
@@ -700,7 +706,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     {
         if (_inner is null)
         {
-            var scope = ResolveTokenScope(_userId);
+            var scope = await ResolveTokenScopeAsync(_userId, _projectId, cancellationToken).ConfigureAwait(false);
             _tokenScope = scope;
             _client ??= await _factory.CreateClientAsync(scope, _modelId, cancellationToken).ConfigureAwait(false);
             try
@@ -726,7 +732,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         return await _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken).ConfigureAwait(false);
     }
 
-    private GitHubTokenScope ResolveTokenScope(string? userId)
+    private async Task<GitHubTokenScope> ResolveTokenScopeAsync(
+        string? userId,
+        string? projectId,
+        CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(userId))
             throw new AgentProviderException(
@@ -738,7 +747,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 "token is resolved. Using the installation token is not permitted.",
                 isRetryable: false);
 
-        var scope = _scopeProvider.Resolve(userId);
+        var scope = await _scopeProvider.ResolveAsync(userId, projectId, ct).ConfigureAwait(false);
         if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
             throw new AgentProviderException(
                 ModelSource.GitHubCopilot,
@@ -1989,7 +1998,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? apiBaseUrl = null,
         string? apiKey = null,
         IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
-        bool includeControlledRunCommand = false)
+        bool includeControlledRunCommand = false,
+        string? runCapabilityToken = null)
     {
         var all = SandboxToolRegistry.Build(context);
         var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
@@ -2024,7 +2034,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (!string.IsNullOrEmpty(projectId) && !string.IsNullOrEmpty(agentName))
         {
             var effectiveBaseUrl = apiBaseUrl ?? "http://localhost:5000";
-            tools.AddRange(AgentweaverApiTools.Build(projectId, agentName, effectiveBaseUrl, apiKey, runId: context.RunId));
+            tools.AddRange(AgentweaverApiTools.Build(
+                projectId,
+                agentName,
+                effectiveBaseUrl,
+                apiKey,
+                runId: context.RunId,
+                runCapabilityToken: runCapabilityToken));
         }
 
         if (toolProviders is not null)

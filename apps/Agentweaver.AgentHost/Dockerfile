@@ -65,10 +65,11 @@ ARG GIT_SHA=unknown
 # Downloads below are verified against independently-recorded sha256/sha1
 # checksums instead of trusting the mutable download URL alone (no
 # curl|bash execution of unpinned upstream scripts).
-ARG NODE_VERSION=24.18.0
-ARG NODE_SHA256=783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8
+ARG NODE_VERSION=24.19.0
+ARG NODE_SHA256=f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4
 ARG YQ_VERSION=4.53.3
 ARG YQ_SHA256=fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4
+ARG NPM_VERSION=12.0.2
 ARG NODEMON_VERSION=3.1.14
 ARG TYPESCRIPT_VERSION=7.0.2
 ARG TS_NODE_VERSION=10.9.2
@@ -117,10 +118,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     psmisc \
     htop \
     tmux \
-    # Sandboxed command execution (RunCommandTool / SandboxExecutorFactory
-    # requires bwrap on PATH; without it, execution silently falls back to
-    # PassthroughExecutor with no isolation, or fails outright — see #269)
+    # Sandboxed command execution. The executor sidecar (`--exec-agent`, same image) probes bwrap at
+    # startup and fails closed if the hardened security context cannot create its per-run mount
+    # namespace (#476). Note bubblewrap can only scope MOUNTS in-cluster: the PID/process boundary
+    # comes from the sidecar container itself, because the kernel refuses a nested procfs mount
+    # whenever the container runtime masks parts of /proc (which Kata and runc always do).
     bubblewrap \
+    # `unshare`/`nsenter` build and re-enter the per-run writable system root (see
+    # `sandbox/awx-run-root`), which is what lets a run apt-install packages without any of that
+    # reaching the image, the node, or another run.
+    util-linux \
     # Text editors
     vim \
     nano \
@@ -176,7 +183,13 @@ RUN curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/nod
     && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
     && rm -f /tmp/node.tar.gz \
-    && npm install -g npm@latest \
+    && npm install -g npm@${NPM_VERSION} \
+    && mkdir -p /tmp/npm-runtime-fixes \
+    && npm install --prefix /tmp/npm-runtime-fixes --ignore-scripts --no-save --no-package-lock \
+        brace-expansion@5.0.9 \
+        ip-address@10.3.1 \
+    && cp -a /tmp/npm-runtime-fixes/node_modules/. /usr/local/lib/node_modules/npm/node_modules/ \
+    && rm -rf /tmp/npm-runtime-fixes \
     && npm install -g \
         nodemon@${NODEMON_VERSION} \
         typescript@${TYPESCRIPT_VERSION} \
@@ -200,6 +213,60 @@ RUN echo "appuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/appuser \
     && chmod 0440 /etc/sudoers.d/appuser
 
 RUN mkdir -p /workspace /app/config /app/logs && chown -R 1000:1000 /workspace /app
+
+# ── Image builds via the in-pod BuildKit sidecar ──────────────────────────────
+# Only the *client* lives here. buildkitd itself cannot run in this container: it needs to create
+# cgroups and mounts per build step, which requires CAP_SYS_ADMIN and CAP_NET_ADMIN, and this
+# container holds no capabilities at all. So `docker build` inside a run is translated by
+# `awx-docker` into a buildctl call against the optional builder sidecar patched in from
+# k8s/optional/sandbox-buildkit-sidecar.yaml, over a pod-local unix socket that never leaves the
+# run's own Kata VM. `docker` is a
+# symlink because an agent reaches for `docker build`, and a missing binary is indistinguishable
+# from a broken image; the shim answers every other subcommand with the reason it cannot work here.
+# Keep BUILDCTL_VERSION current: buildctl is a Go binary, so its embedded stdlib is what the Trivy
+# gate scans, and an old release fails the build on Go CVEs even though the client itself is fine.
+ARG BUILDCTL_VERSION=0.32.2
+RUN curl -fsSL "https://github.com/moby/buildkit/releases/download/v${BUILDCTL_VERSION}/buildkit-v${BUILDCTL_VERSION}.linux-amd64.tar.gz" \
+        | tar -xz -C /usr/local bin/buildctl \
+    && chmod 0755 /usr/local/bin/buildctl \
+    && buildctl --version
+COPY apps/Agentweaver.AgentHost/sandbox/awx-docker /usr/local/bin/awx-docker
+RUN chmod 0755 /usr/local/bin/awx-docker \
+    && ln -sf /usr/local/bin/awx-docker /usr/local/bin/docker
+
+# ── Per-run writable system root ──────────────────────────────────────────────
+# The executor sidecar runs as uid 1000 with no added capabilities, so a run can only write to
+# /usr, /etc and /var by overlaying them inside its own user namespace (`awx-run-root`).
+#
+# That user namespace can map exactly one id (mapping a range needs an effective CAP_SETUID, which
+# a runAsNonRoot + allowPrivilegeEscalation=false container cannot hold), so every file and
+# directory owned by *root* is unmapped inside it. Unmapped ownership is not merely unwritable:
+# overlayfs must copy a directory up before anything can be created in it, and copying up a
+# root-owned directory fails with EOVERFLOW because root has no representation in the namespace.
+# Directories under /usr and /var therefore have to belong to uid 1000 in the image for
+# `apt-get install` to work at all.
+#
+# This grants no new access to model-controlled code: the sandbox never sees the image's /usr and
+# /var directly — bubblewrap binds them read-only, or binds the per-run overlay whose writes land
+# on a tmpfs that is discarded with the run. Only file *contents* ownership is left untouched, so
+# the image stays a few hundred MB smaller than a recursive chown would make it.
+COPY apps/Agentweaver.AgentHost/sandbox/awx-run-root /usr/local/bin/awx-run-root
+COPY apps/Agentweaver.AgentHost/sandbox/awx-apt-predirs /usr/local/bin/awx-apt-predirs
+RUN chmod 0755 /usr/local/bin/awx-run-root /usr/local/bin/awx-apt-predirs \
+    && mkdir -p /var/lib/apt /var/lib/dpkg /var/cache/apt /var/log/apt /etc/apt/apt.conf.d \
+    # apt drops its own privileges to the `_apt` user before fetching, which needs setgroups(2) —
+    # denied in a user namespace. Without this an agent's plain `apt-get install` fails with a
+    # confusing permission error instead of installing. Nothing is granted by it: inside the sandbox
+    # "root" is the run's own id, mapped only within its namespace.
+    #
+    # The pre-install hook works around an overlayfs limitation that the kernel will not let an
+    # unprivileged user namespace lift; see `sandbox/awx-apt-predirs` for the full explanation.
+    && printf 'APT::Sandbox::User "root";\nDPkg::Pre-Install-Pkgs { "/usr/local/bin/awx-apt-predirs"; };\n' \
+        > /etc/apt/apt.conf.d/99-agentweaver-sandbox \
+    && touch /var/log/dpkg.log /var/log/alternatives.log /var/log/apt/term.log /var/log/apt/history.log \
+    && chown -R 1000:1000 /var/lib/apt /var/lib/dpkg /var/cache/apt /var/log/apt /etc/apt \
+    && chown 1000:1000 /var/log/dpkg.log /var/log/alternatives.log \
+    && find /usr /var -xdev -type d -exec chown 1000:1000 {} +
 
 # ── Sandbox tool manifest ─────────────────────────────────────────────────────
 # Baked at build time so agents can discover available tools without probing.
@@ -270,4 +337,3 @@ EXPOSE 8088
 ENV ASPNETCORE_ENVIRONMENT=Production
 
 ENTRYPOINT ["dotnet", "Agentweaver.AgentHost.dll"]
-

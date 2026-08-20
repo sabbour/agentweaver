@@ -39,12 +39,22 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
             .ResolveBlueprintModel();
     }
 
-    public async Task<string> GenerateRawAsync(
+    public Task<string> GenerateRawAsync(
         string description,
         CancellationToken ct,
         string? userId = null,
         string? targetRepository = null,
-        string? modelId = null)
+        string? modelId = null) =>
+        GenerateRawForProjectAsync(
+            description, ct, userId, targetRepository, modelId, projectId: null);
+
+    public async Task<string> GenerateRawForProjectAsync(
+        string description,
+        CancellationToken ct,
+        string? userId = null,
+        string? targetRepository = null,
+        string? modelId = null,
+        string? projectId = null)
     {
         if (string.IsNullOrWhiteSpace(description))
             throw new ArgumentException("A description is required to generate a blueprint.", nameof(description));
@@ -194,7 +204,7 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
         try
         {
             var runId = Guid.NewGuid().ToString("N");
-            return await _agentRunner.ExecuteAsync(
+            return await _agentRunner.ExecuteForProjectAsync(
                 task: prompt,
                 workingDirectory: scratch,
                 repositoryPath: scratch,
@@ -203,7 +213,8 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
                 modelId: modelId ?? _defaultModel,
                 stream: null,
                 ct: ct,
-                userId: userId).ConfigureAwait(false);
+                userId: userId,
+                projectId: projectId).ConfigureAwait(false);
         }
         finally
         {
