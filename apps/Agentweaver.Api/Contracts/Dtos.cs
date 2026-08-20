@@ -782,7 +782,6 @@ public sealed record ProjectGitHubIdentityResponse
     [JsonPropertyName("resolution_source")] public required string ResolutionSource { get; init; }
 }
 
-
 // -----------------------------------------------------------------------
 // Casting
 // -----------------------------------------------------------------------

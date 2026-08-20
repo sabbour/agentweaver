@@ -29,19 +29,6 @@ The provider uses `scripts/demo-recording/.auth/` by default; use
 recording session first with `npm run demo:record -- status`. If its bearer is expired,
 the human-only recording sign-in flow must refresh it.
 
-### Token acquisition for staging (Entra Conditional Access)
-
-Agentweaver staging uses Entra Conditional Access. The token cannot be retrieved via
-device-code flow or plain browser. Use the Edge Default login script to capture a
-session token, then export it for the API harness:
-
-```powershell
-node scripts/ui-harness/login-edge-default.mjs --base-url https://<host>.staging.<domain>
-$env:AGENTWEAVER_TOKEN = Get-Content scripts\ui-harness\.auth\session-token.txt -Raw
-```
-
-`session-token.txt` is git-ignored. Never print its value in conversation or logs.
-
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
 
 There is no curated list of named scenario subcommands, no per-persona fixed

@@ -3,8 +3,39 @@
 // Routes the repository's local, infrastructure, and release deployment
 // commands to their respective modules.
 
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { userInfo } from "node:os";
 import * as logDefault from "./lib/log.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Auto-discovers a user-specific params file (`params.<username>.json` or
+ * `params.<username>.jsonc`) in the same directory as cli.mjs, and returns its
+ * path if found. Returns null if no matching file exists.
+ * This ensures that `deploy-from-local` and `verify` honour per-user config
+ * (e.g. AUTH_MODE=Entra) without requiring a shell env variable every time.
+ */
+function findUserParamsFile() {
+  const username = userInfo().username;
+  for (const ext of [".json", ".jsonc"]) {
+    const candidate = join(__dirname, `params.${username}${ext}`);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Merges a parsed params-file object into a base env, with `baseEnv` taking
+ * precedence (explicit env vars always win over the params file).
+ */
+function mergeParamsIntoEnv(baseEnv, paramsFile) {
+  if (!paramsFile || !Object.keys(paramsFile).length) return baseEnv;
+  // params-file values fill gaps; explicit env vars override them
+  return { ...paramsFile, ...baseEnv };
+}
 
 const SUBCOMMANDS = Object.freeze([
   "provision-infra",
@@ -115,7 +146,21 @@ export async function run(argv = [], opts = {}) {
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const cfg = await resolveVariables();
+    const { loadParamsFile } = modules.config ?? (await importFn("./lib/config.mjs"));
+    // Explicit --params-file flag takes precedence; otherwise auto-discover params.<username>.json
+    const paramsFileIdx = rest.findIndex((a) => a === "--params-file" || a.startsWith("--params-file="));
+    let paramsFilePath = null;
+    if (paramsFileIdx !== -1) {
+      paramsFilePath = rest[paramsFileIdx].includes("=")
+        ? rest[paramsFileIdx].split("=").slice(1).join("=")
+        : rest[paramsFileIdx + 1];
+    } else {
+      paramsFilePath = findUserParamsFile();
+      if (paramsFilePath) log.info(`[params] Auto-loading ${paramsFilePath}`);
+    }
+    const paramsFile = loadParamsFile(paramsFilePath);
+    const env = mergeParamsIntoEnv(process.env, paramsFile);
+    const cfg = await resolveVariables({ env });
     const allowDirty = rest.includes("--allow-dirty");
     return mod.run(cfg, { log, allowDirty });
   }
