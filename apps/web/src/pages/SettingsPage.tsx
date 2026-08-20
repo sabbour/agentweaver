@@ -7,7 +7,9 @@ import {
   Field,
   Input,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
+  MessageBarTitle,
   Spinner,
   Switch,
   Toast,
@@ -279,6 +281,18 @@ export function SettingsPage() {
     }
   };
 
+  const handleRelink = async (login: string) => {
+    setAccountActionKey(`relink:${login}`);
+    setAccountActionError(null);
+    try {
+      const { authorize_url: authorizeUrl } = await apiClient.beginLinkGitHubAccount();
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      setAccountActionError(formatError(err));
+      setAccountActionKey(null);
+    }
+  };
+
   const unlinkWarnings = unlinkCandidate
     ? [
       ...(unlinkCandidate.unlink_warnings ?? []),
@@ -451,13 +465,31 @@ export function SettingsPage() {
                             <div className={styles.badgeRow}>
                               {account.is_default && <Badge appearance="filled">Default</Badge>}
                               <Badge appearance="outline">{account.type === 'org' ? 'Organization' : 'User'}</Badge>
-                              <Badge appearance={account.copilot_entitled ? 'filled' : 'tint'}>
-                                {account.copilot_entitled === null
-                                  ? 'Copilot status pending'
-                                  : account.copilot_entitled
-                                    ? 'Copilot included'
-                                    : 'No Copilot entitlement'}
-                              </Badge>
+                              {account.token_valid === false ? (
+                                <MessageBar intent="warning">
+                                  <MessageBarBody>
+                                    <MessageBarTitle>Token expired</MessageBarTitle>
+                                    Re-link to restore Copilot access.
+                                  </MessageBarBody>
+                                  <MessageBarActions>
+                                    <Button
+                                      size="small"
+                                      disabled={accountActionKey !== null}
+                                      onClick={() => void handleRelink(account.login)}
+                                    >
+                                      {accountActionKey === `relink:${account.login}` ? <Spinner size="tiny" /> : 'Re-link'}
+                                    </Button>
+                                  </MessageBarActions>
+                                </MessageBar>
+                              ) : (
+                                <Badge appearance={account.copilot_entitled ? 'filled' : 'tint'}>
+                                  {account.copilot_entitled === null
+                                    ? 'Copilot status unknown'
+                                    : account.copilot_entitled
+                                      ? 'Copilot included'
+                                      : 'No Copilot entitlement'}
+                                </Badge>
+                              )}
                             </div>
                           </div>
                         </div>
