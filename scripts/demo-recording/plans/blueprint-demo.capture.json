@@ -2032,12 +2032,12 @@
           "deadlineMs": 30000,
           "source": {
             "kind": "selector",
-            "selector": "[data-testid='mcp-server-url']",
+            "selector": "[aria-label='MCP server URL'], input[id*='_r_i']",
             "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "[data-testid='mcp-server-url']"
+            "selector": "[aria-label='MCP server URL'], input[id*='_r_i']"
           }
         }
       ],
@@ -2050,7 +2050,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('mcp-server-url')",
+          "selector": "page.getByLabel('MCP server URL')",
           "timeout": 30000,
           "cue": {
             "name": "5.1.mcp-url",
@@ -2061,7 +2061,7 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByTestId('mcp-server-url')",
+          "selector": "page.getByLabel('MCP server URL')",
           "scale": 1.42,
           "hold": 2200
         }
@@ -2069,3 +2069,4 @@
     }
   ]
 }
+
