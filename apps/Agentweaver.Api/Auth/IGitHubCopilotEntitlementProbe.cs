@@ -19,6 +19,8 @@ public sealed class GitHubCopilotEntitlementProbe(
     /// allow-listed editor OAuth apps (403 even for a Copilot-entitled account), so probing it
     /// reported every account as un-entitled. <c>GET /models</c> is the same surface the agent
     /// runtime itself calls, so a 200 here means Copilot really is usable with this token.
+    /// Auth rejections from this probe are not authoritative for non-official OAuth apps, so they
+    /// must stay inconclusive instead of flipping the UI to "No Copilot entitlement".
     /// </summary>
     private const string CopilotModelsUrl = "https://api.githubcopilot.com/models";
 
@@ -33,16 +35,15 @@ public sealed class GitHubCopilotEntitlementProbe(
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             request.Headers.UserAgent.Add(new ProductInfoHeaderValue("Agentweaver", "1.0"));
-            request.Headers.TryAddWithoutValidation("Copilot-Integration-Id", "copilot-cli");
 
             using var http = httpClientFactory.CreateClient("github");
             using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
             {
                 logger.LogWarning(
-                    "GitHub Copilot entitlement probe returned {StatusCode} for token (probe may be restricted to official Copilot app tokens).",
+                    "GitHub Copilot entitlement probe returned {StatusCode} for token; treating as inconclusive because this probe may be restricted to official Copilot app tokens.",
                     response.StatusCode);
-                return false;
+                return null;
             }
 
             // Any other non-success (5xx, throttling, network edge) is INCONCLUSIVE — returning null
