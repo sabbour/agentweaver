@@ -590,7 +590,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
-          "timeout": 30000
+          "timeout": 300000
         },
         {
           "type": "click",
