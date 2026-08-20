@@ -183,7 +183,7 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   const traces = byId('2.7');
   const decisions = byId('2.8');
 
-  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })";
+  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Independent task promotion', exact: false })";
   const promotionWait = confirm.steps.findIndex((step) => step.type === 'waitFor'
     && step.selector === promotionCheckbox);
   assert.ok(promotionWait >= 0, 'expected the actual promotion checkbox to be ready before confirmation');

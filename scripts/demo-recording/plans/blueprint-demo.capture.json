@@ -594,12 +594,12 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: false })",
           "timeout": 300000
         },
         {
           "type": "click",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: false })",
           "after": 400
         },
         {
