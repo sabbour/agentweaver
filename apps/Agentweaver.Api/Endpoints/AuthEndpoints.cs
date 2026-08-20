@@ -494,6 +494,56 @@ app.MapGet("/api/auth/github", async (
     });
 });
 
+// POST /api/auth/github/adopt-session-token — GitHubLegacy only: promotes the caller's
+// bearer token (which IS their GitHub token in this auth mode) into the token store so
+// that GitHub-origin project operations (clone, webhook, etc.) can succeed without
+// requiring a separate device-flow sign-in.
+app.MapPost("/api/auth/github/adopt-session-token", async (
+    HttpContext httpContext,
+    IConfiguration configuration,
+    IGitHubTokenStore tokenStore,
+    IGitHubTokenScopeProvider scopeProvider,
+    IHttpClientFactory httpClientFactory,
+    ILogger<Program> logger,
+    CancellationToken ct) =>
+{
+    if (AuthModeResolver.Resolve(configuration) != AuthMode.GitHubLegacy)
+        return Results.Problem("This endpoint is only available in GitHubLegacy auth mode.", statusCode: 400);
+
+    var rawAuth = httpContext.Request.Headers.Authorization.ToString();
+    var bearerToken = rawAuth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+        ? rawAuth["Bearer ".Length..].Trim()
+        : null;
+    if (string.IsNullOrWhiteSpace(bearerToken))
+        return Results.Unauthorized();
+
+    using var http = httpClientFactory.CreateClient();
+    using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");
+    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearerToken);
+    req.Headers.UserAgent.ParseAdd("Agentweaver/1.0");
+    req.Headers.Accept.ParseAdd("application/vnd.github+json");
+
+    using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+    if (!resp.IsSuccessStatusCode)
+        return Results.Problem("Bearer token was rejected by GitHub API.", statusCode: 401);
+
+    var profile = await resp.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(ct).ConfigureAwait(false);
+    var login = profile.TryGetProperty("login", out var l) ? l.GetString() : null;
+    var avatarUrl = profile.TryGetProperty("avatar_url", out var a) ? a.GetString() : null;
+    if (string.IsNullOrWhiteSpace(login))
+        return Results.Problem("GitHub API returned no login.", statusCode: 500);
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var scope = scopeProvider.Resolve(caller.User);
+    var token = new GitHubToken(bearerToken, null, null, login!, avatarUrl, ["repo", "read:user", "copilot"]);
+    await tokenStore.SetAsync(scope, token, ct).ConfigureAwait(false);
+
+    logger.LogInformation("GitHubLegacy: adopted session bearer token as linked GitHub identity for {Login} (scope {Scope})", login, scope.Key);
+    return Results.Ok(new { login, avatar_url = avatarUrl, status = "signed_in" });
+})
+    .WithName("AdoptSessionTokenAsGitHubIdentity")
+    .WithTags("Auth");
+
 // GET /api/github/accounts — authenticated user and their orgs, user first
 app.MapGet("/api/github/accounts", async (
     HttpContext httpContext,
