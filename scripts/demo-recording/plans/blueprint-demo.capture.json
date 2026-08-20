@@ -1534,7 +1534,8 @@
           "kind": "app-url",
           "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
         }
-      ]
+      ],
+      "disableApprovalWatcher": true
     },
     {
       "id": "4.2",
@@ -1573,40 +1574,46 @@
       "steps": [
         {
           "type": "badge",
-          "label": "Beat 4.2",
-          "title": "Ask the assistant to triage",
-          "duration": 1800
+          "title": "Assistant tool approval gate",
+          "duration": 1800,
+          "label": "Beat 4.2"
         },
         {
           "type": "waitFor",
+          "cue": {
+            "rect": {
+              "mode": "matched-element"
+            },
+            "name": "4.2.approval-gate"
+          },
           "selector": "page.getByTestId('assistant-approval-gate')",
-          "timeout": 180000,
-          "cue": {
-            "name": "4.2.approval-gate",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
+          "timeout": 60000
         },
         {
-          "type": "waitFor",
-          "selector": "page.getByTestId('assistant-transcript')",
-          "timeout": 180000,
-          "cue": {
-            "name": "4.2.triage-response",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
+          "scale": 1.25,
           "type": "hover",
           "selector": "page.getByTestId('assistant-approval-gate')",
-          "scale": 1.25,
           "hold": 2400
+        },
+        {
+          "type": "click",
+          "force": true,
+          "selector": "page.getByTestId('assistant-approval-gate').locator('button').filter({hasText: 'Allow once'})"
+        },
+        {
+          "type": "waitFor",
+          "cue": {
+            "rect": {
+              "mode": "matched-element"
+            },
+            "name": "4.2.triage-response"
+          },
+          "selector": "page.getByTestId('assistant-transcript')",
+          "timeout": 180000
         }
       ],
-      "requiresPriorBeat": "4.1"
+      "disableApprovalWatcher": true,
+    "requiresPriorBeat": "4.1"
     },
     {
       "id": "4.3",
@@ -2064,3 +2071,5 @@
     }
   ]
 }
+
+
