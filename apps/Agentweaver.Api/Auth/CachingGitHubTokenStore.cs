@@ -12,7 +12,7 @@ namespace Agentweaver.Api.Auth;
 /// Eviction: on <see cref="SetAsync"/> or <see cref="SignOutAsync"/> for the affected scope.
 /// Thread-safe via <see cref="ConcurrentDictionary{TKey,TValue}"/>.
 /// </summary>
-public sealed class CachingGitHubTokenStore : IMultiIdentityGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore
+public sealed class CachingGitHubTokenStore : IMultiIdentityGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore, IGitHubTokenScopeEnumerable
 {
     private static readonly TimeSpan RefreshSkew = TimeSpan.FromSeconds(60);
 
@@ -102,6 +102,13 @@ public sealed class CachingGitHubTokenStore : IMultiIdentityGitHubTokenStore, ID
 
         return AcquireLocalRefreshLeaseAsync(scope, ct);
     }
+
+    // ── IGitHubTokenScopeEnumerable ──────────────────────────────────────────
+
+    public Task<IReadOnlyList<GitHubTokenScope>> ListScopesAsync(CancellationToken ct = default) =>
+        _inner is IGitHubTokenScopeEnumerable enumerable
+            ? enumerable.ListScopesAsync(ct)
+            : Task.FromResult<IReadOnlyList<GitHubTokenScope>>([]);
 
     public Task<IReadOnlyList<GitHubIdentityLink>> ListLinkedIdentitiesAsync(
         string entraUserId,

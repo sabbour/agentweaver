@@ -33,7 +33,7 @@ namespace Agentweaver.Api.Auth;
 /// </para>
 /// </summary>
 public sealed class LinkedIdentityGitHubTokenStore
-    : IMultiIdentityGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore, IEffectiveGitHubTokenScopeResolver
+    : IMultiIdentityGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore, IEffectiveGitHubTokenScopeResolver, IGitHubTokenScopeEnumerable
 {
     private const string UserScopePrefix = "user:";
 
@@ -86,6 +86,13 @@ public sealed class LinkedIdentityGitHubTokenStore
         var effective = await ResolveAsync(scope, ct).ConfigureAwait(false);
         return await leaseStore.TryAcquireRefreshLeaseAsync(effective, owner, ttl, ct).ConfigureAwait(false);
     }
+
+    // ── IGitHubTokenScopeEnumerable ──────────────────────────────────────────
+
+    public Task<IReadOnlyList<GitHubTokenScope>> ListScopesAsync(CancellationToken ct = default) =>
+        _inner is IGitHubTokenScopeEnumerable enumerable
+            ? enumerable.ListScopesAsync(ct)
+            : Task.FromResult<IReadOnlyList<GitHubTokenScope>>([]);
 
     // ── IMultiIdentityGitHubTokenStore ───────────────────────────────────────
 

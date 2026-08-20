@@ -27,7 +27,7 @@ namespace Agentweaver.Api.Auth;
 /// <paramref name="diskMirror"/> so pods that read the shared filesystem file remain
 /// functional in phase-1 (before they are updated to call the API).
 /// </summary>
-public sealed class KeyVaultGitHubTokenStore : IMultiIdentityGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore
+public sealed class KeyVaultGitHubTokenStore : IMultiIdentityGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore, IGitHubTokenScopeEnumerable
 {
     private readonly ISecretStore _secretStore;
     private readonly FileSystemGitHubTokenStore? _diskFallback; // lazy migration source
@@ -270,6 +270,33 @@ public sealed class KeyVaultGitHubTokenStore : IMultiIdentityGitHubTokenStore, I
 
         var lease = await leaseStore.TryAcquireLeaseAsync(scope.Key, owner, ttl, ct).ConfigureAwait(false);
         return lease is null ? null : new SecretStoreRefreshLease(lease);
+    }
+
+    // ── IGitHubTokenScopeEnumerable ──────────────────────────────────────────
+
+    public async Task<IReadOnlyList<GitHubTokenScope>> ListScopesAsync(CancellationToken ct = default)
+    {
+        if (_secretStore is not ISecretListStore listStore)
+            return [];
+
+        var keys = await listStore.ListTokenScopeKeysAsync(ct).ConfigureAwait(false);
+        var scopes = new List<GitHubTokenScope>(keys.Count);
+        foreach (var key in keys)
+        {
+            if (key.StartsWith("user-link:", StringComparison.Ordinal))
+            {
+                var rest = key["user-link:".Length..];
+                var sep = rest.IndexOf(':');
+                if (sep > 0)
+                    scopes.Add(GitHubTokenScope.ForLinkedIdentity(rest[..sep], rest[(sep + 1)..]));
+            }
+            else if (key.StartsWith("user:", StringComparison.Ordinal))
+            {
+                scopes.Add(GitHubTokenScope.ForUser(key["user:".Length..]));
+            }
+            // installation and other scopes are not user tokens — skip
+        }
+        return scopes;
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

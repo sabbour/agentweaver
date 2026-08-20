@@ -123,23 +123,35 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
         }
 
         var refreshed = await RequestRefreshAsync(token, ct).ConfigureAwait(false);
-        if (refreshed is null)
+        if (refreshed.Token is null)
         {
-            var latest = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
-            if (latest is not null && (!SameRefreshMaterial(latest, token) || !NeedsRefresh(latest)))
-                return latest.AccessToken;
+            // For transient failures (network, 5xx, etc.), do NOT sign out — retry on next cycle.
+            if (refreshed.FailureKind == RefreshFailureKind.Transient)
+            {
+                // Re-read: another replica may have already succeeded.
+                var latest = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
+                if (latest is not null && (!SameRefreshMaterial(latest, token) || !NeedsRefresh(latest)))
+                    return latest.AccessToken;
 
+                _logger.LogWarning(
+                    "GitHub token refresh encountered a transient failure for scope {Scope}; will retry next cycle.",
+                    scope.Key);
+                return null; // keep signed-in state, no sign-out
+            }
+
+            // Permanent failure: the refresh token is definitively invalid. Sign out so the user sees
+            // a clear "re-link required" state instead of silently failing.
             _logger.LogWarning(
-                "GitHub token refresh failed for scope {Scope}; token marked as signed-out. " +
+                "GitHub token refresh failed permanently for scope {Scope}; token marked as signed-out. " +
                 "User must re-link their GitHub account to restore Copilot access.",
                 scope.Key);
             await _tokenStore.SignOutAsync(scope, ct).ConfigureAwait(false);
             return null;
         }
 
-        await _tokenStore.SetAsync(scope, refreshed, ct).ConfigureAwait(false);
+        await _tokenStore.SetAsync(scope, refreshed.Token, ct).ConfigureAwait(false);
         _logger.LogInformation("Refreshed GitHub access token for scope {Scope}.", scope.Key);
-        return refreshed.AccessToken;
+        return refreshed.Token.AccessToken;
     }
 
     private static bool SameRefreshMaterial(GitHubToken left, GitHubToken right) =>
@@ -164,16 +176,30 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
         return DateTimeOffset.UtcNow >= token.ExpiresAt.Value - ExpirySkew;
     }
 
-    /// <summary>
-    /// Calls GitHub's refresh endpoint and returns the rotated token, or null on any failure.
-    /// Identity (login/avatar/scopes) is carried over from the current token.
-    /// </summary>
-    private async Task<GitHubToken?> RequestRefreshAsync(GitHubToken current, CancellationToken ct)
+    private enum RefreshFailureKind { Transient, Permanent }
+    private sealed record RefreshResult(GitHubToken? Token, RefreshFailureKind? FailureKind)
+    {
+        public static RefreshResult Success(GitHubToken token) => new(token, null);
+        public static RefreshResult Transient() => new(null, RefreshFailureKind.Transient);
+        public static RefreshResult Permanent() => new(null, RefreshFailureKind.Permanent);
+    }
+
+    // Permanent GitHub error codes that mean the refresh token is definitively revoked/invalid.
+    private static readonly HashSet<string> PermanentErrorCodes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bad_verification_code",
+        "expired_token",
+        "token_not_yet_valid",
+        "incorrect_client_credentials",
+        "bad_oauth_token",
+    };
+
+    private async Task<RefreshResult> RequestRefreshAsync(GitHubToken current, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_clientId) || string.IsNullOrWhiteSpace(_clientSecret))
         {
             _logger.LogWarning("GitHub token refresh skipped: ClientId/ClientSecret not configured.");
-            return null;
+            return RefreshResult.Transient();
         }
 
         try
@@ -192,19 +218,42 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
 
             using var http = _httpClientFactory.CreateClient();
             var response = await http.SendAsync(request, ct).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
-                return null;
 
-            var body = await response.Content.ReadFromJsonAsync<RefreshTokenResponse>(ct).ConfigureAwait(false);
-            if (body is null
-                || !string.IsNullOrWhiteSpace(body.Error)
-                || string.IsNullOrWhiteSpace(body.AccessToken))
+            // 401/403 from GitHub means the app credentials or token are definitively rejected.
+            if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
             {
-                if (!string.IsNullOrWhiteSpace(body?.Error))
-                    _logger.LogWarning(
-                        "GitHub refresh token rejected (error={Error}); scope will be signed out.",
-                        body.Error);
-                return null;
+                _logger.LogWarning(
+                    "GitHub refresh endpoint returned {StatusCode}; treating as permanent failure for scope.",
+                    response.StatusCode);
+                return RefreshResult.Permanent();
+            }
+
+            // 5xx and other non-success codes are transient — GitHub may be down.
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "GitHub refresh endpoint returned {StatusCode}; treating as transient failure.",
+                    response.StatusCode);
+                return RefreshResult.Transient();
+            }
+
+            RefreshTokenResponse? body;
+            try { body = await response.Content.ReadFromJsonAsync<RefreshTokenResponse>(ct).ConfigureAwait(false); }
+            catch (Exception) { body = null; }
+
+            if (body is null || string.IsNullOrWhiteSpace(body.AccessToken))
+            {
+                _logger.LogWarning("GitHub refresh response body was empty or missing access_token; treating as transient.");
+                return RefreshResult.Transient();
+            }
+
+            if (!string.IsNullOrWhiteSpace(body.Error))
+            {
+                var isPermanent = PermanentErrorCodes.Contains(body.Error);
+                _logger.LogWarning(
+                    "GitHub refresh token rejected (error={Error}); treating as {Kind} failure.",
+                    body.Error, isPermanent ? "permanent" : "transient");
+                return isPermanent ? RefreshResult.Permanent() : RefreshResult.Transient();
             }
 
             var expiresAt = body.ExpiresIn is > 0
@@ -216,18 +265,20 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
                 ? current.RefreshToken
                 : body.RefreshToken;
 
-            return new GitHubToken(
+            return RefreshResult.Success(new GitHubToken(
                 body.AccessToken!,
                 refreshToken,
                 expiresAt,
                 current.Login,
                 current.AvatarUrl,
-                current.Scopes);
+                current.Scopes));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "GitHub token refresh request threw an exception.");
-            return null;
+            _logger.LogWarning(ex, "GitHub token refresh request threw an exception (transient).");
+            return RefreshResult.Transient();
+        }
+    }
         }
     }
 
