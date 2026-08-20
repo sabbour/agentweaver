@@ -192,6 +192,7 @@ public sealed class GitHubTokenRefreshService : IGitHubAccessTokenProvider
         "token_not_yet_valid",
         "incorrect_client_credentials",
         "bad_oauth_token",
+        "bad_refresh_token",
     };
 
     private async Task<RefreshResult> RequestRefreshAsync(GitHubToken current, CancellationToken ct)
