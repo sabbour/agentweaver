@@ -1,5 +1,5 @@
 ---
-"@agentweaver/api": patch
+"agentweaver": patch
 ---
 
 feat(auth): add adopt-session-token endpoint for GitHubLegacy mode
