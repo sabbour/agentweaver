@@ -353,7 +353,7 @@
         },
         {
           "type": "click",
-          "selector": "page.locator('[aria-label=\\'Agents\\']')",
+          "selector": "page.getByRole('link', { name: 'Agents', exact: true })",
           "scale": 1.42,
           "after": 900
         },
@@ -390,7 +390,7 @@
         },
         {
           "type": "click",
-          "selector": "page.locator('[aria-label=\\'Skills\\']')",
+          "selector": "page.getByRole('link', { name: 'Skills', exact: true })",
           "scale": 1.42,
           "after": 900
         },
@@ -738,7 +738,7 @@
     },
     {
       "id": "2.4",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/2da285ea-7160-444b-9ce4-1b54a3081937/board",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.4-review-board.webm",
       "viewport": {
@@ -776,6 +776,11 @@
           "label": "Beat 2.4",
           "title": "Review the board",
           "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.locator('[aria-label=\\'Board\\']')",
+          "after": 800
         },
         {
           "type": "waitFor",
@@ -843,6 +848,11 @@
           "label": "Beat 2.5",
           "title": "Ship it",
           "duration": 1800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first()",
+          "timeout": 600000
         },
         {
           "type": "click",
@@ -957,7 +967,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('coordinator-review-changes')",
-          "timeout": 600000
+          "timeout": 1800000
         },
         {
           "type": "click",
@@ -1072,7 +1082,7 @@
         },
         {
           "type": "click",
-          "selector": "page.locator('[aria-label=\\'Observability\\']')",
+          "selector": "page.getByRole('link', { name: 'Observability', exact: true })",
           "scale": 1.42,
           "after": 800
         },
@@ -1178,7 +1188,7 @@
         },
         {
           "type": "click",
-          "selector": "page.locator('[aria-label=\\'Memories\\']')",
+          "selector": "page.getByRole('link', { name: 'Memories', exact: true })",
           "scale": 1.42,
           "after": 800
         },
@@ -1190,7 +1200,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('accepted-decision').first()",
-          "timeout": 600000,
+          "timeout": 1800000,
           "cue": {
             "name": "2.8.accepted-decision",
             "rect": {
@@ -1260,7 +1270,7 @@
         },
         {
           "type": "click",
-          "selector": "page.locator('[aria-label=\\'Workflows\\']')",
+          "selector": "page.getByRole('link', { name: 'Workflows', exact: true })",
           "scale": 1.42,
           "after": 800
         },
@@ -1277,7 +1287,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'dependency-sweep' }).getByRole('button', { name: 'Add schedule', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Software Delivery' }).getByRole('button', { name: 'Add schedule', exact: true })",
           "scale": 1.48,
           "after": 700
         },
@@ -1372,7 +1382,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByText(/bug.*triage/i).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Bug Fix' }).first()",
           "scale": 1.48,
           "after": 700
         },
@@ -1433,7 +1443,7 @@
         },
         {
           "type": "click",
-          "selector": "page.locator('[aria-label=\\'Settings\\']')",
+          "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
           "scale": 1.42,
           "after": 800
         },
@@ -1616,6 +1626,11 @@
           "duration": 1800
         },
         {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
+        },
+        {
           "type": "waitFor",
           "selector": "page.getByTestId('assistant-run-page')",
           "timeout": 30000
@@ -1693,6 +1708,11 @@
           "duration": 1800
         },
         {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
+        },
+        {
           "type": "waitFor",
           "selector": "page.getByTestId('assistant-approval-gate')",
           "timeout": 180000,
@@ -1766,6 +1786,11 @@
           "duration": 1800
         },
         {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
+        },
+        {
           "type": "waitFor",
           "selector": "page.getByTestId('topology-graph-canvas')",
           "timeout": 240000,
@@ -1831,6 +1856,11 @@
           "label": "Beat 4.5",
           "title": "Preview the repaired behavior",
           "duration": 1800
+        },
+        {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
         },
         {
           "type": "waitFor",
@@ -1908,6 +1938,11 @@
           "label": "Beat 4.6",
           "title": "Approve the bug fix",
           "duration": 1800
+        },
+        {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
         },
         {
           "type": "resolveBugFixPullRequest",
@@ -1998,6 +2033,11 @@
           "label": "Beat 4.7",
           "title": "Close the loop on the issue",
           "duration": 1800
+        },
+        {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
         },
         {
           "type": "waitFor",
@@ -2110,7 +2150,7 @@
         },
         {
           "type": "click",
-          "selector": "page.locator('[aria-label=\\'Settings\\']')",
+          "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
           "scale": 1.42,
           "after": 800
         },

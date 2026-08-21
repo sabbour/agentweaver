@@ -1,4 +1,4 @@
-import { getSessionToken } from './auth.mjs';
+import { getSessionToken, loadSessionSeed } from './auth.mjs';
 
 function pageItems(response, expectedPage, resource) {
   if (!response || typeof response !== 'object' || Array.isArray(response)
@@ -109,5 +109,6 @@ export function createAgentweaverApi({ baseUrl, token, fetchImpl = fetch }) {
 
 export async function createApiFromSession({ baseUrl, sessionStoragePath }) {
   const token = await getSessionToken(sessionStoragePath);
-  return createAgentweaverApi({ baseUrl, token });
+  const resolvedBaseUrl = baseUrl ?? (await loadSessionSeed(sessionStoragePath)).origin;
+  return createAgentweaverApi({ baseUrl: resolvedBaseUrl, token });
 }
