@@ -541,25 +541,22 @@
           }
         },
         {
-          "type": "select",
+          "type": "hover",
           "selector": "page.getByRole('combobox', { name: 'Workflow' }).first()",
-          "option": {
-            "label": "Software Delivery"
-          },
           "scale": 1.48,
-          "after": 500
+          "hold": 1200
         },
         {
           "type": "type",
           "selector": "page.getByRole('textbox', { name: 'Goal' })",
-          "text": "Build the Trailhead Travel Studio landing page. The page needs a hero section, three feature highlights, and a CTA button labeled 'Plan my first trip'. Create one work item titled 'Create Trailhead landing page'.",
+          "text": "Build the Trailhead Travel Studio landing page. The page needs a hero section, three feature highlights, and a CTA button labeled 'Plan my first trip'.",
           "scale": 1.72,
           "delay": 6,
           "after": 900
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Direct' })",
+          "selector": "page.getByRole('button', { name: 'Define Outcome' })",
           "scale": 1.62,
           "after": 1000
         },
@@ -875,9 +872,9 @@
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: /^(Allow once|Approve)$/ }).first()",
+          "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: 'Allow once' }).first()",
           "scale": 1.6,
-          "after": 1200,
+          "after": 2000,
           "force": true
         },
         {
@@ -1094,10 +1091,18 @@
           "after": 800
         },
         {
+          "type": "pause",
+          "ms": 1500
+        },
+        {
           "type": "click",
           "selector": "page.getByRole('tab', { name: 'Traces', exact: true })",
           "scale": 1.42,
           "after": 800
+        },
+        {
+          "type": "pause",
+          "ms": 1200
         },
         {
           "type": "waitText",
@@ -1134,7 +1139,7 @@
         },
         {
           "type": "eval",
-          "code": "window.scrollBy(0, 300);",
+          "code": "window.scrollBy(0, 400);",
           "after": 700
         },
         {
@@ -1143,12 +1148,21 @@
         },
         {
           "type": "eval",
-          "code": "window.scrollBy(0, 300);",
+          "code": "window.scrollBy(0, 400);",
           "after": 700
         },
         {
           "type": "pause",
-          "ms": 1200
+          "ms": 1500
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 400);",
+          "after": 700
+        },
+        {
+          "type": "pause",
+          "ms": 1500
         }
       ]
     },
@@ -1308,7 +1322,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Copy of Software Delivery' }).getByRole('button', { name: 'Add schedule', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Software Delivery' }).getByRole('button', { name: 'Add schedule', exact: true })",
           "scale": 1.48,
           "after": 700
         },
@@ -1419,7 +1433,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Copy of Bug Fix' }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Bug Fix' }).first()",
           "scale": 1.48,
           "after": 700
         },
@@ -1623,7 +1637,7 @@
     },
     {
       "id": "4.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.2-assistant-triage.webm",
       "viewport": {
@@ -1668,11 +1682,6 @@
           "label": "Beat 4.2",
           "title": "Ask the assistant to triage",
           "duration": 1800
-        },
-        {
-          "type": "goto",
-          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
-          "after": 800
         },
         {
           "type": "waitFor",
