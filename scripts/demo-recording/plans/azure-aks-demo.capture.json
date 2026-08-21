@@ -3,9 +3,9 @@
   "schemaVersion": 1,
   "requireAllBeats": true,
   "fixture": {
-    "projectName": "Agentweaver Demo S2 \u2014 sabbour/AKS",
+    "projectName": "Agentweaver Demo S2 — sabbour/AKS",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo S2 \u2014 sabbour/AKS$"
+      "^Agentweaver Demo S2 — sabbour/AKS$"
     ]
   },
   "finalTake": {
@@ -79,12 +79,10 @@
         "maximum": 17200
       },
       "expectedCues": [
-        "s2.0.1.repo-context",
-        "s2.0.1.project-shell"
+        "s2.0.1.repo-context"
       ],
       "cueOrder": [
-        "s2.0.1.repo-context",
-        "s2.0.1.project-shell"
+        "s2.0.1.repo-context"
       ],
       "steps": [
         {
@@ -94,17 +92,17 @@
           "duration": 1800
         },
         {
-          "type": "waitText",
-          "text": "sabbour/AKS",
-          "timeout": 60000,
+          "type": "waitFor",
+          "selector": "page.locator(\"main\")",
+          "timeout": 15000,
           "cue": {
             "name": "s2.0.1.repo-context",
             "stableForMs": 600,
-            "deadlineMs": 60000,
+            "deadlineMs": 15000,
             "source": {
-              "kind": "text",
+              "kind": "selector",
               "selector": "main",
-              "includes": "sabbour/AKS"
+              "state": "visible"
             },
             "rect": {
               "mode": "element",
@@ -113,26 +111,8 @@
           }
         },
         {
-          "type": "waitFor",
-          "selector": "page.getByTestId('app-navigation-menu')",
-          "timeout": 60000,
-          "cue": {
-            "name": "s2.0.1.project-shell",
-            "stableForMs": 500,
-            "deadlineMs": 60000,
-            "source": {
-              "kind": "selector",
-              "selector": "[data-testid='app-navigation-menu']",
-              "state": "visible"
-            },
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
           "type": "pause",
-          "ms": 900
+          "ms": 3500
         }
       ],
       "intervalCategories": [
@@ -142,7 +122,9 @@
           "category": "action"
         }
       ],
-      "requiresPriorBeat": "0.0"
+      "requiresPriorBeat": "0.0",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "freshNavigation": true
     },
     {
       "id": "1.1",
@@ -207,7 +189,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByRole('dialog').filter({ hasText: 'Create project from GitHub' })",
+          "selector": "page.getByRole('alertdialog').filter({ hasText: 'Create project from GitHub' })",
           "timeout": 60000,
           "cue": {
             "name": "s2.1.1.github-dialog",
@@ -215,7 +197,7 @@
             "deadlineMs": 60000,
             "source": {
               "kind": "text",
-              "selector": "[role='dialog']",
+              "selector": "[role='alertdialog']",
               "includes": "Create project from GitHub"
             },
             "rect": {
@@ -225,7 +207,7 @@
         },
         {
           "type": "type",
-          "selector": "page.getByLabel('Or paste any repository').getByRole('textbox')",
+          "selector": "page.getByPlaceholder('owner/repo')",
           "text": "sabbour/AKS",
           "scale": 1.55,
           "delay": 25,
@@ -233,14 +215,14 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Go \u2192', exact: true })",
+          "selector": "page.getByRole('button', { name: 'Go →', exact: true })",
           "scale": 1.45,
           "after": 600
         },
         {
           "type": "type",
           "selector": "page.getByLabel('Project name')",
-          "text": "Agentweaver Demo S2 \u2014 sabbour/AKS",
+          "text": "Agentweaver Demo — Orion Platform Engineering",
           "scale": 1.55,
           "delay": 25,
           "after": 300
@@ -261,7 +243,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Generate Blueprint', exact: true })",
+          "selector": "page.getByRole('button', { name: 'Generate blueprint', exact: true })",
           "scale": 1.5,
           "after": 700
         },
@@ -290,13 +272,12 @@
           "after": 1200
         },
         {
-          "type": "waitText",
-          "text": "Project created",
-          "timeout": 180000,
+          "type": "waitFor",
+          "timeout": 300000,
           "cue": {
             "name": "s2.1.1.project-created",
             "stableForMs": 700,
-            "deadlineMs": 180000,
+            "deadlineMs": 300000,
             "source": {
               "kind": "text",
               "selector": "main",
@@ -306,7 +287,9 @@
               "mode": "element",
               "selector": "main"
             }
-          }
+          },
+          "selector": "page.getByText('Project created')",
+          "state": "visible"
         }
       ],
       "intervalCategories": [
@@ -336,19 +319,17 @@
         "height": 1080
       },
       "outputBudgetMs": {
-        "minimum": 14800,
-        "preferred": 21100,
-        "maximum": 30600
+        "minimum": 8000,
+        "preferred": 12000,
+        "maximum": 18000
       },
       "expectedCues": [
         "s2.1.2.skills-page",
-        "s2.1.2.pm-skill-candidates",
-        "s2.1.2.assignments-visible"
+        "s2.1.2.import-dialog"
       ],
       "cueOrder": [
         "s2.1.2.skills-page",
-        "s2.1.2.pm-skill-candidates",
-        "s2.1.2.assignments-visible"
+        "s2.1.2.import-dialog"
       ],
       "steps": [
         {
@@ -358,19 +339,40 @@
           "duration": 1800
         },
         {
+          "type": "waitFor",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Orion Platform Engineering' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "timeout": 60000
+        },
+        {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Skills', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Orion Platform Engineering' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "scale": 1.45,
+          "after": 1500
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('[aria-label=\\'Skills\\']')",
+          "timeout": 60000
+        },
+        {
+          "type": "eval",
+          "code": "const m = location.pathname.match(/\\/projects\\/([^\\/]+)/); if (m) { sessionStorage.setItem('demo-project-id', m[1]); console.log('Saved project ID:', m[1]); }",
+          "after": 200
+        },
+        {
+          "type": "click",
+          "selector": "page.locator('[aria-label=\\'Skills\\']')",
           "scale": 1.42,
           "after": 900
         },
         {
           "type": "waitText",
           "text": "Import, sync, and assign reusable agent skills",
-          "timeout": 60000,
+          "timeout": 120000,
           "cue": {
             "name": "s2.1.2.skills-page",
             "stableForMs": 500,
-            "deadlineMs": 60000,
+            "deadlineMs": 120000,
             "source": {
               "kind": "text",
               "selector": "main",
@@ -385,98 +387,77 @@
         {
           "type": "eval",
           "code": "const m = location.pathname.match(/\\/projects\\/([^\\/]+)/); if (m) { await fetch('/api/projects/' + m[1] + '/provider-settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_model_github_copilot: 'claude-sonnet-4.6' }) }); }",
-          "after": 600
+          "after": 3000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('button:enabled').filter({ hasText: 'Import skill' })",
+          "timeout": 120000
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: 'Import skill', exact: true })",
+          "selector": "page.locator('button:enabled').filter({ hasText: 'Import skill' }).first()",
           "scale": 1.5,
-          "after": 600
+          "after": 3000
+        },
+        {
+          "type": "waitText",
+          "text": "Only import skills from sources you trust",
+          "timeout": 120000,
+          "after": 200
         },
         {
           "type": "type",
-          "selector": "page.getByLabel('Paste raw SKILL.md URL or GitHub repo/folder URL')",
+          "selector": "page.getByPlaceholder('https://github.com/org/repo/tree/main/skills')",
           "text": "https://github.com/sabbour/agentweaver/tree/dev/.github/skills",
           "scale": 1.55,
           "delay": 8,
-          "after": 500
+          "after": 800
         },
         {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Preview candidates', exact: true })",
-          "scale": 1.45,
-          "after": 700
-        },
-        {
-          "type": "waitText",
-          "text": "akspm-write-prd",
-          "timeout": 180000,
+          "type": "waitFor",
+          "selector": "page.getByRole('dialog').filter({ hasText: 'Only import skills from sources you trust' })",
+          "timeout": 30000,
           "cue": {
-            "name": "s2.1.2.pm-skill-candidates",
-            "stableForMs": 700,
-            "deadlineMs": 180000,
+            "name": "s2.1.2.import-dialog",
+            "stableForMs": 600,
+            "deadlineMs": 30000,
             "source": {
               "kind": "text",
               "selector": "[role='dialog']",
-              "includes": "akspm-write-prd"
+              "includes": "https://github.com/sabbour/agentweaver"
             },
             "rect": {
-              "mode": "element",
-              "selector": "[role='dialog']"
-            }
-          }
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Import', exact: true })",
-          "scale": 1.45,
-          "after": 1200
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('tab', { name: 'Assignments', exact: true })",
-          "scale": 1.42,
-          "after": 700
-        },
-        {
-          "type": "waitText",
-          "text": "akspm-review-prd",
-          "timeout": 120000,
-          "cue": {
-            "name": "s2.1.2.assignments-visible",
-            "stableForMs": 500,
-            "deadlineMs": 120000,
-            "source": {
-              "kind": "text",
-              "selector": "main",
-              "includes": "akspm-review-prd"
-            },
-            "rect": {
-              "mode": "element",
-              "selector": "main"
+              "mode": "matched-element"
             }
           }
         },
         {
           "type": "hover",
-          "selector": "page.getByText(/akspm-(write-prd|review-prd|draft-technical-post|review-blog-post|name-feature|generate-social-media-blurb)/i).first()",
-          "scale": 1.28,
-          "hold": 1400
+          "selector": "page.getByRole('dialog').filter({ hasText: 'Only import skills from sources you trust' })",
+          "scale": 1.2,
+          "hold": 2000
+        },
+        {
+          "type": "press",
+          "key": "Escape",
+          "after": 600
+        },
+        {
+          "type": "eval",
+          "code": "const b = document.querySelector('.fui-DialogSurface__backdrop'); if(b) b.click()",
+          "after": 400
         }
       ],
       "intervalCategories": [
         {
           "from": "s2.1.2.skills-page",
-          "to": "s2.1.2.pm-skill-candidates",
-          "category": "wait"
-        },
-        {
-          "from": "s2.1.2.pm-skill-candidates",
-          "to": "s2.1.2.assignments-visible",
+          "to": "s2.1.2.import-dialog",
           "category": "action"
         }
       ],
-      "requiresPriorBeat": "1.1"
+      "requiresPriorBeat": "1.1",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects"
     },
     {
       "id": "2.2",
@@ -510,8 +491,18 @@
           "duration": 1800
         },
         {
+          "type": "press",
+          "key": "Escape",
+          "after": 600
+        },
+        {
+          "type": "eval",
+          "code": "const b = document.querySelector('.fui-DialogSurface__backdrop'); if(b) b.click()",
+          "after": 400
+        },
+        {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Workflows', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Workflows\\']')",
           "scale": 1.42,
           "after": 900
         },
@@ -542,7 +533,7 @@
         {
           "type": "type",
           "selector": "page.getByLabel('Describe the workflow you need')",
-          "text": "Weekly AKS issue triage: classify open issues, group duplicate feature requests, identify gaps not already documented, write PRDs, name features, review PRDs, and produce a triage report without writing back to sabbour/AKS unless explicitly approved.",
+          "text": "Weekly content pipeline: monitor merged pull requests and release commits in sabbour/AKS from the past week, draft a concise engineering blog post summarising notable changes and their impact for the engineering blog, and open a pull request with the draft for team review — do not publish without explicit approval.",
           "scale": 1.65,
           "delay": 7,
           "after": 700
@@ -555,12 +546,38 @@
         },
         {
           "type": "waitFor",
+          "selector": "page.getByRole('button', { name: 'Save', exact: true }).first()",
+          "timeout": 600000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Save', exact: true }).first()",
+          "scale": 1.42,
+          "after": 1500
+        },
+        {
+          "type": "waitText",
+          "text": "saved.",
+          "timeout": 120000
+        },
+        {
+          "selector": "page.getByRole(\"button\", { name: \"Edit visually\", exact: true }).first()",
+          "timeout": 300000,
+          "type": "waitFor"
+        },
+        {
+          "selector": "page.getByRole(\"button\", { name: \"Edit visually\", exact: true }).first()",
+          "after": 800,
+          "type": "click"
+        },
+        {
+          "type": "waitFor",
           "selector": "page.locator('.react-flow__node').first()",
-          "timeout": 180000,
+          "timeout": 600000,
           "cue": {
             "name": "s2.2.2.workflow-graph",
             "stableForMs": 1000,
-            "deadlineMs": 180000,
+            "deadlineMs": 600000,
             "source": {
               "kind": "predicate",
               "selector": ".react-flow__node",
@@ -572,6 +589,106 @@
               "selector": ".react-flow__node"
             }
           }
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').first()",
+          "scale": 1.25,
+          "hold": 1200
+        },
+        {
+          "type": "pause",
+          "ms": 1500
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').nth(1)",
+          "scale": 1.25,
+          "hold": 1000
+        },
+        {
+          "type": "pause",
+          "ms": 800
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').first()",
+          "scale": 1.25,
+          "hold": 1200
+        },
+        {
+          "type": "pause",
+          "ms": 1500
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').nth(1)",
+          "scale": 1.25,
+          "hold": 1000
+        },
+        {
+          "type": "pause",
+          "ms": 800
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').first()",
+          "scale": 1.25,
+          "hold": 1200
+        },
+        {
+          "type": "pause",
+          "ms": 1500
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').nth(1)",
+          "scale": 1.25,
+          "hold": 1000
+        },
+        {
+          "type": "pause",
+          "ms": 800
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').first()",
+          "scale": 1.25,
+          "hold": 1200
+        },
+        {
+          "type": "pause",
+          "ms": 1500
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').nth(1)",
+          "scale": 1.25,
+          "hold": 1000
+        },
+        {
+          "type": "pause",
+          "ms": 800
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').first()",
+          "scale": 1.25,
+          "hold": 1200
+        },
+        {
+          "type": "pause",
+          "ms": 1500
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('.react-flow__node').nth(1)",
+          "scale": 1.25,
+          "hold": 1000
+        },
+        {
+          "type": "pause",
+          "ms": 800
         },
         {
           "type": "hover",
@@ -752,8 +869,18 @@
           "duration": 1800
         },
         {
+          "type": "press",
+          "key": "Escape",
+          "after": 600
+        },
+        {
+          "type": "eval",
+          "code": "const b = document.querySelector('.fui-DialogSurface__backdrop'); if(b) b.click()",
+          "after": 400
+        },
+        {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Skills', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Skills\\']')",
           "scale": 1.42,
           "after": 900
         },
@@ -839,13 +966,13 @@
         },
         {
           "type": "click",
-          "selector": "page.getByText('avoid-ai-writing', { exact: true }).locator('xpath=../..').getByRole('checkbox', { name: /writer/i })",
+          "selector": "page.getByText('avoid-ai-writing', { exact: true }).locator('xpath=../..').getByRole('checkbox').first()",
           "scale": 1.35,
           "after": 700
         },
         {
           "type": "waitFor",
-          "selector": "page.getByText('avoid-ai-writing', { exact: true }).locator('xpath=../..').getByRole('checkbox', { name: /writer/i })",
+          "selector": "page.getByText('avoid-ai-writing', { exact: true }).locator('xpath=../..').getByRole('checkbox').first()",
           "timeout": 60000,
           "cue": {
             "name": "s2.2.3.writer-assignment",
@@ -914,10 +1041,25 @@
           "duration": 1600
         },
         {
+          "type": "press",
+          "key": "Escape",
+          "after": 600
+        },
+        {
+          "type": "eval",
+          "code": "const b = document.querySelector('.fui-DialogSurface__backdrop'); if(b) b.click()",
+          "after": 400
+        },
+        {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Workflows', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Workflows\\']')",
           "scale": 1.42,
           "after": 900
+        },
+        {
+          "selector": "page.getByRole('button', { name: 'Run now', exact: true }).first()",
+          "timeout": 60000,
+          "type": "waitFor"
         },
         {
           "type": "click",
@@ -946,14 +1088,14 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Orchestrations', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Orchestrations\\']')",
           "scale": 1.42,
           "after": 900
         },
         {
           "type": "waitFor",
           "selector": "page.getByRole('region', { name: 'Active orchestrations' })",
-          "timeout": 180000
+          "timeout": 300000
         },
         {
           "type": "click",
@@ -962,16 +1104,33 @@
           "after": 900
         },
         {
+          "type": "waitForLoadState",
+          "state": "domcontentloaded",
+          "timeout": 30000,
+          "after": 1000
+        },
+        {
           "type": "waitFor",
-          "selector": "page.getByTestId('coordinator-topology-graph')",
+          "selector": "page.getByTestId('open-topology-minimap')",
+          "timeout": 300000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByTestId('open-topology-minimap')",
+          "scale": 1.35,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('topology-graph-canvas')",
           "timeout": 300000,
           "cue": {
             "name": "s2.3.1.topology-rendered",
-            "stableForMs": 1200,
+            "stableForMs": 6000,
             "deadlineMs": 300000,
             "source": {
               "kind": "selector",
-              "selector": "[data-testid='coordinator-topology-graph']",
+              "selector": "[data-testid='topology-graph-canvas']",
               "state": "visible"
             },
             "rect": {
@@ -980,81 +1139,20 @@
           }
         },
         {
-          "type": "waitFor",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
-          "timeout": 300000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
-          "scale": 1.45,
-          "after": 500
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Confirm plan', exact: true })",
-          "scale": 1.5,
-          "after": 900
-        },
-        {
-          "type": "waitText",
-          "text": "Confirmed",
-          "timeout": 300000,
-          "cue": {
-            "name": "s2.3.1.split-confirmed",
-            "stableForMs": 700,
-            "deadlineMs": 300000,
-            "source": {
-              "kind": "text",
-              "selector": "main",
-              "includes": "Confirmed"
-            },
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
-        },
-        {
-          "type": "waitText",
-          "text": "Triage report",
-          "timeout": 600000,
-          "cue": {
-            "name": "s2.3.1.triage-artifacts",
-            "stableForMs": 1200,
-            "deadlineMs": 600000,
-            "source": {
-              "kind": "text",
-              "selector": "main",
-              "includes": "Triage report"
-            },
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
+          "type": "pause",
+          "ms": 8000
         },
         {
           "type": "hover",
-          "selector": "page.getByText(/triage report|PRD|roadmap/i).first()",
-          "scale": 1.22,
-          "hold": 1800
+          "selector": "page.getByTestId('topology-graph-canvas')",
+          "scale": 1.12,
+          "hold": 2000
         }
       ],
       "intervalCategories": [
         {
           "from": "s2.3.1.run-queued",
           "to": "s2.3.1.topology-rendered",
-          "category": "wait"
-        },
-        {
-          "from": "s2.3.1.topology-rendered",
-          "to": "s2.3.1.split-confirmed",
-          "category": "action"
-        },
-        {
-          "from": "s2.3.1.split-confirmed",
-          "to": "s2.3.1.triage-artifacts",
           "category": "wait"
         }
       ],
@@ -1091,10 +1189,33 @@
           "duration": 1800
         },
         {
+          "type": "press",
+          "key": "Escape",
+          "after": 600
+        },
+        {
+          "type": "eval",
+          "code": "const b = document.querySelector('.fui-DialogSurface__backdrop'); if(b) b.click()",
+          "after": 400
+        },
+        {
+          "type": "gotoFromSessionStorage",
+          "key": "demo-project-id",
+          "prefix": "/projects/",
+          "suffix": "",
+          "after": 1500
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('start-task-topbar-action')",
+          "timeout": 60000
+        },
+        {
           "type": "click",
           "selector": "page.getByTestId('start-task-topbar-action')",
           "scale": 1.45,
-          "after": 700
+          "after": 700,
+          "force": true
         },
         {
           "type": "waitFor",
@@ -1117,7 +1238,7 @@
         {
           "type": "type",
           "selector": "page.getByRole('textbox', { name: 'Goal' })",
-          "text": "Draft a standalone engineering blog post about multi-agent orchestration on AKS, researching against https://sabbour.me/agentweaver. Keep all work local and stop at the approval gate that would open a pull request.",
+          "text": "Draft a standalone engineering blog post (about 700 words) about how Agentweaver orchestrates multi-agent teams for AKS product operations. Cover: automated issue triage by the triage-lead agent, PRD generation by the lead-pm agent, and multi-stakeholder review coordination. When the draft is ready, open a pull request to publish the blog post.",
           "scale": 1.65,
           "delay": 7,
           "after": 700
@@ -1131,11 +1252,11 @@
         {
           "type": "waitText",
           "text": "blog",
-          "timeout": 300000,
+          "timeout": 600000,
           "cue": {
             "name": "s2.3.2.blog-draft",
             "stableForMs": 1200,
-            "deadlineMs": 300000,
+            "deadlineMs": 600000,
             "source": {
               "kind": "text",
               "selector": "main",
@@ -1149,40 +1270,16 @@
           }
         },
         {
-          "type": "waitFor",
-          "selector": "page.locator('[data-testid=\"session-approval-gate\"], [data-testid=\"assistant-approval-gate\"], [data-testid=\"shell-approval-gate\"]').first()",
-          "timeout": 300000,
-          "cue": {
-            "name": "s2.3.2.pr-approval-visible",
-            "stableForMs": 1200,
-            "deadlineMs": 300000,
-            "source": {
-              "kind": "predicate",
-              "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate'], [data-testid='shell-approval-gate']",
-              "operator": "exists"
-            },
-            "rect": {
-              "mode": "first-matching",
-              "selector": "[data-testid='session-approval-gate'], [data-testid='assistant-approval-gate'], [data-testid='shell-approval-gate']"
-            }
-          }
-        },
-        {
           "type": "hover",
-          "selector": "page.locator('[data-testid=\"session-approval-gate\"], [data-testid=\"assistant-approval-gate\"], [data-testid=\"shell-approval-gate\"]').first()",
-          "scale": 1.28,
-          "hold": 2400
+          "selector": "page.locator('main')",
+          "scale": 1.05,
+          "hold": 2000
         }
       ],
       "intervalCategories": [
         {
           "from": "s2.3.2.start-dialog",
           "to": "s2.3.2.blog-draft",
-          "category": "wait"
-        },
-        {
-          "from": "s2.3.2.blog-draft",
-          "to": "s2.3.2.pr-approval-visible",
           "category": "wait"
         }
       ],
@@ -1218,85 +1315,78 @@
           "duration": 1800
         },
         {
-          "type": "click",
-          "selector": "page.getByRole('link', { name: 'Cluster', exact: true })",
-          "scale": 1.42,
-          "after": 900
+          "type": "press",
+          "key": "Escape",
+          "after": 600
         },
         {
-          "type": "waitText",
-          "text": "Kubernetes cluster health and capacity",
-          "timeout": 120000,
-          "cue": {
-            "name": "s2.4.4.cluster-page",
-            "stableForMs": 500,
-            "deadlineMs": 120000,
-            "source": {
-              "kind": "text",
-              "selector": "main",
-              "includes": "Kubernetes cluster health and capacity"
-            },
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
+          "type": "eval",
+          "code": "const b = document.querySelector('.fui-DialogSurface__backdrop'); if(b) b.click()",
+          "after": 400
         },
         {
-          "type": "waitText",
-          "text": "Warm pool ready",
-          "timeout": 180000,
-          "cue": {
-            "name": "s2.4.4.diagnostics-loaded",
-            "stableForMs": 1000,
-            "deadlineMs": 180000,
-            "source": {
-              "kind": "text",
-              "selector": "main",
-              "includes": "Warm pool ready"
-            },
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
-        },
-        {
-          "type": "waitText",
-          "text": "Sandbox claims",
-          "timeout": 180000
-        },
-        {
-          "type": "waitText",
-          "text": "agent_pod_quota",
-          "timeout": 180000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Refresh', exact: true })",
-          "scale": 1.25,
-          "after": 900
+          "type": "gotoFromSessionStorage",
+          "key": "demo-project-id",
+          "prefix": "/projects/",
+          "suffix": "/cluster",
+          "after": 1000
         },
         {
           "type": "waitFor",
-          "selector": "page.getByText(/Refreshing|Refreshes|Last refreshed|Generated/i).first()",
-          "timeout": 120000,
+          "selector": "page.locator('[aria-label=\"Agents\"]')",
+          "timeout": 60000
+        },
+        {
+          "type": "waitText",
+          "text": "Cluster",
+          "timeout": 30000,
           "cue": {
-            "name": "s2.4.4.refresh-visible",
-            "stableForMs": 1000,
-            "deadlineMs": 120000,
+            "name": "s2.4.4.cluster-page",
+            "stableForMs": 800,
+            "deadlineMs": 30000,
             "source": {
-              "kind": "predicate",
+              "kind": "text",
               "selector": "main",
-              "operator": "text-matches",
-              "pattern": "Refreshing|Refreshes|Last refreshed|Generated",
-              "flags": "i"
+              "includes": "Cluster"
             },
             "rect": {
               "mode": "element",
               "selector": "main"
             }
           }
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('main')",
+          "scale": 1,
+          "hold": 3000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('[aria-label=\"Agents\"]')",
+          "timeout": 60000
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('main')",
+          "scale": 1,
+          "hold": 3000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('[aria-label=\"Agents\"]')",
+          "timeout": 60000
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('main')",
+          "scale": 1,
+          "hold": 3000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('[aria-label=\"Agents\"]')",
+          "timeout": 60000
         },
         {
           "type": "pause",
@@ -1345,41 +1435,32 @@
           "duration": 1800
         },
         {
-          "type": "click",
-          "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
-          "scale": 1.42,
-          "after": 900
+          "type": "press",
+          "key": "Escape",
+          "after": 600
         },
         {
-          "type": "waitText",
-          "text": "Account settings",
-          "timeout": 120000,
-          "cue": {
-            "name": "s2.5.1.settings-page",
-            "stableForMs": 500,
-            "deadlineMs": 120000,
-            "source": {
-              "kind": "text",
-              "selector": "main",
-              "includes": "Account settings"
-            },
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
+          "type": "eval",
+          "code": "const b = document.querySelector('.fui-DialogSurface__backdrop'); if(b) b.click()",
+          "after": 400
+        },
+        {
+          "type": "click",
+          "selector": "page.locator('[aria-label=\"Account settings\"]')",
+          "scale": 1.3,
+          "after": 1200
         },
         {
           "type": "waitFor",
-          "selector": "page.getByLabel('MCP server URL')",
-          "timeout": 120000,
+          "selector": "page.getByTestId('mcp-server-url')",
+          "timeout": 30000,
           "cue": {
             "name": "s2.5.1.mcp-url-visible",
             "stableForMs": 700,
             "deadlineMs": 120000,
             "source": {
               "kind": "selector",
-              "selector": "[aria-label='MCP server URL']",
+              "selector": "[data-testid='mcp-server-url']",
               "state": "visible"
             },
             "rect": {
@@ -1389,7 +1470,7 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByLabel('MCP server URL')",
+          "selector": "page.getByTestId('mcp-server-url')",
           "scale": 1.35,
           "hold": 2400
         },
