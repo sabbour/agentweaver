@@ -337,7 +337,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
@@ -507,7 +507,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
@@ -2177,7 +2177,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
