@@ -184,18 +184,17 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   const traces = byId('2.7');
   const decisions = byId('2.8');
 
-  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })";
-  const promotionWait = confirm.steps.findIndex((step) => step.type === 'waitFor'
-    && step.selector === promotionCheckbox);
-  assert.ok(promotionWait >= 0, 'expected the actual promotion checkbox to be ready before confirmation');
-  assert.deepEqual(
-    confirm.steps.slice(promotionWait, promotionWait + 3).map(({ type, selector }) => ({ type, selector })),
-    [
-      { type: 'waitFor', selector: promotionCheckbox },
-      { type: 'click', selector: promotionCheckbox },
-      { type: 'click', selector: "page.getByRole('button', { name: 'Confirm plan' }).first()" },
-    ],
-    'the promotion checkbox must be waited for, selected, then immediately confirmed',
+  // Beat 2.2 uses Direct dispatch mode — autopilot and auto-approve are the key interactions.
+  // The "Independent task promotion" checkbox and "Confirm plan" button do not appear in Direct mode.
+  const autopilotSwitch = "page.getByRole('switch', { name: 'Autopilot', exact: true })";
+  const autoApproveSwitch = "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })";
+  assert.ok(
+    confirm.steps.some((s) => s.type === 'click' && s.selector === autopilotSwitch),
+    'beat 2.2 must click the Autopilot toggle',
+  );
+  assert.ok(
+    confirm.steps.some((s) => s.type === 'click' && s.selector === autoApproveSwitch),
+    'beat 2.2 must click the Auto-approve safe tools toggle',
   );
   assert.ok(board.steps.some((step) => step.cue?.name === '2.4.promoted-task'));
   assert.equal(board.steps.some((step) => step.selector?.includes('New task title')), false);

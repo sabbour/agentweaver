@@ -194,7 +194,6 @@
     },
     {
       "id": "1.2",
-      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/1.2-choose-blueprint.webm",
       "viewport": {
@@ -559,7 +558,6 @@
     },
     {
       "id": "2.2",
-      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.2-confirm-plan.webm",
       "viewport": {
@@ -644,21 +642,6 @@
           }
         },
         {
-          "type": "waitFor",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
-          "timeout": 30000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
-          "after": 400
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
-          "after": 600
-        },
-        {
           "type": "eval",
           "code": "window.scrollTo(0, 0); document.documentElement.scrollLeft = 0;",
           "after": 400
@@ -667,7 +650,6 @@
     },
     {
       "id": "2.3",
-      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.3-watch-work-plan.webm",
       "viewport": {
@@ -753,7 +735,6 @@
     },
     {
       "id": "2.4",
-      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.4-review-board.webm",
       "viewport": {
@@ -866,12 +847,12 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first().or(page.locator('[aria-label=\"Work board\"]').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first())",
+          "selector": "page.getByTestId(/^run-card-/).filter({ hasText: 'Trailhead Travel Studio' }).first()",
           "timeout": 1200000
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first().or(page.locator('[aria-label=\"Work board\"]').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first())",
+          "selector": "page.getByTestId(/^run-card-/).filter({ hasText: 'Trailhead Travel Studio' }).first()",
           "scale": 1.5,
           "after": 700
         },
