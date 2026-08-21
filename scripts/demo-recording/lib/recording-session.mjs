@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, openSync as fsOpenSync, closeSync as fsCloseSync, statSync as fsStatSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -526,7 +526,19 @@ export async function refreshDisposableEdgeProfile(paths, edgeProfile, repositor
     await fs.cp(edgeProfile.profilePath, refreshDefault, {
       recursive: true,
       force: true,
-      filter: (sourcePath) => shouldCopyEdgeProfileEntry(sourcePath, edgeProfile.profilePath),
+      filter: (sourcePath) => {
+        if (!shouldCopyEdgeProfileEntry(sourcePath, edgeProfile.profilePath)) return false;
+        // Skip files locked by other processes (e.g. WebView2) — they aren't needed for SSO replay
+        try {
+          if (!fsStatSync(sourcePath).isDirectory()) {
+            const fd = fsOpenSync(sourcePath, 'r');
+            fsCloseSync(fd);
+          }
+          return true;
+        } catch {
+          return false;
+        }
+      },
     });
     await fs.rm(paths.automationUserDataDir, { recursive: true, force: true });
     await fs.rename(refreshRoot, paths.automationUserDataDir);

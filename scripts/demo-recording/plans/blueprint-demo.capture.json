@@ -6,9 +6,9 @@
     "repository": "sabbour/agentweaver-demo-dryrun"
   },
   "fixture": {
-    "projectName": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+    "projectName": "Agentweaver Demo — Trailhead Travel Studio",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo \u2014 Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
+      "^Agentweaver Demo — Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
     ]
   },
   "finalTake": {
@@ -22,8 +22,8 @@
         "3.2"
       ],
       "workflowIds": [
-        "dependency-sweep",
-        "bug-triage"
+        "Software Delivery",
+        "Bug Fix"
       ]
     },
     "externalArtifacts": [
@@ -42,6 +42,19 @@
         "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_RUN_URL",
         "origin": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
         "instruction": "Set this to the resulting same-project github.issues.labeled run URL after a repository administrator has verified delivery."
+      },
+      {
+        "beats": [
+          "2.5",
+          "2.6",
+          "2.7",
+          "2.8",
+          "3.1",
+          "3.2"
+        ],
+        "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+        "origin": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
+        "instruction": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
       }
     ]
   },
@@ -177,7 +190,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('My project')",
-          "text": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "scale": 1.6,
           "delay": 36,
           "after": 900
@@ -194,7 +207,6 @@
     },
     {
       "id": "1.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/1.2-choose-blueprint.webm",
       "viewport": {
@@ -237,7 +249,7 @@
         {
           "type": "waitFor",
           "selector": "page.locator('[role=radiogroup][aria-label=\"Blueprint templates\"]')",
-          "timeout": 90000
+          "timeout": 150000
         },
         {
           "type": "click",
@@ -264,7 +276,7 @@
         },
         {
           "type": "waitText",
-          "text": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "timeout": 60000,
           "cue": {
             "name": "1.2.project-created",
@@ -337,13 +349,13 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u2014 Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
         {
           "type": "waitFor",
-          "selector": "page.getByRole('link', { name: 'Agents', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Agents\\']')",
           "timeout": 20000
         },
         {
@@ -365,8 +377,8 @@
         {
           "type": "click",
           "selector": "page.getByLabel('Project agents').getByRole('button').first()",
-          "scale": 1.35,
-          "after": 1400
+          "scale": 1.55,
+          "after": 2500
         },
         {
           "type": "waitFor",
@@ -378,6 +390,10 @@
               "mode": "matched-element"
             }
           }
+        },
+        {
+          "type": "pause",
+          "ms": 2800
         },
         {
           "type": "press",
@@ -408,6 +424,10 @@
           }
         },
         {
+          "type": "pause",
+          "ms": 2500
+        },
+        {
           "type": "press",
           "key": "Escape",
           "after": 800
@@ -433,6 +453,10 @@
               "mode": "matched-element"
             }
           }
+        },
+        {
+          "type": "pause",
+          "ms": 2000
         },
         {
           "type": "press",
@@ -495,7 +519,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u2014 Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
@@ -520,7 +544,7 @@
           "type": "select",
           "selector": "page.getByRole('combobox', { name: 'Workflow' }).first()",
           "option": {
-            "label": "Product Management Discovery"
+            "label": "Software Delivery"
           },
           "scale": 1.48,
           "after": 500
@@ -547,7 +571,6 @@
     },
     {
       "id": "2.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.2-confirm-plan.webm",
       "viewport": {
@@ -561,24 +584,23 @@
       },
       "expectedCues": [
         "2.2.plan-confirmed",
-        "2.2.autopilot-enabled",
-        "2.2.auto-approve-enabled"
+        "2.2.autopilot-enabled"
       ],
       "cueWatchers": [],
       "steps": [
         {
           "type": "badge",
           "label": "Beat 2.2",
-          "title": "Work plan ready",
+          "title": "Session running",
           "duration": 1800
         },
         {
           "type": "reload"
         },
         {
-          "type": "waitText",
-          "text": "Work plan",
-          "timeout": 300000,
+          "type": "waitFor",
+          "selector": "page.locator('[data-testid=\"composer-automation-toggles\"]')",
+          "timeout": 120000,
           "cue": {
             "name": "2.2.plan-confirmed",
             "rect": {
@@ -610,47 +632,14 @@
           }
         },
         {
-          "type": "waitFor",
-          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
-          "timeout": 30000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
-          "scale": 1.35,
-          "after": 600
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
-          "timeout": 30000,
-          "cue": {
-            "name": "2.2.auto-approve-enabled",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
-          "timeout": 30000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "type": "eval",
+          "code": "window.scrollTo(0, 0); document.documentElement.scrollLeft = 0;",
           "after": 400
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
-          "after": 600
         }
       ]
     },
     {
       "id": "2.3",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.3-watch-work-plan.webm",
       "viewport": {
@@ -664,8 +653,7 @@
       },
       "expectedCues": [
         "2.3.topology-open",
-        "2.3.topology-ready",
-        "2.3.parent-review-cleared"
+        "2.3.topology-ready"
       ],
       "cueWatchers": [
         {
@@ -689,6 +677,16 @@
           "label": "Beat 2.3",
           "title": "Watch the work plan run",
           "duration": 1800
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollTo(0, 0); document.documentElement.scrollLeft = 0;",
+          "after": 300
+        },
+        {
+          "type": "eval",
+          "code": "const btn = document.querySelector('[data-testid=\"toggle-run-tree\"]'); if (btn && btn.closest('aside[aria-label=\"Run tree (collapsed)\"]')) { btn.click(); }",
+          "after": 800
         },
         {
           "type": "waitFor",
@@ -722,46 +720,11 @@
           "type": "press",
           "key": "Escape",
           "after": 800
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('coordinator-review-changes')",
-          "timeout": 600000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByTestId('coordinator-review-changes')",
-          "scale": 1.3,
-          "after": 800
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
-          "timeout": 600000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
-          "scale": 1.35,
-          "after": 1000
-        },
-        {
-          "type": "waitText",
-          "text": "Completed",
-          "timeout": 180000,
-          "cue": {
-            "name": "2.3.parent-review-cleared",
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
         }
       ]
     },
     {
       "id": "2.4",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.4-review-board.webm",
       "viewport": {
@@ -775,8 +738,7 @@
       },
       "expectedCues": [
         "2.4.task-entry",
-        "2.4.promoted-task",
-        "2.4.pickup-run"
+        "2.4.promoted-task"
       ],
       "cueWatchers": [
         {
@@ -803,14 +765,13 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Board', exact: true })",
-          "scale": 1.42,
+          "selector": "page.locator('[aria-label=\\'Board\\']')",
           "after": 800
         },
         {
-          "type": "waitText",
-          "text": "Agent task board",
-          "timeout": 30000,
+          "type": "waitFor",
+          "selector": "page.getByTestId('column-backlog')",
+          "timeout": 60000,
           "cue": {
             "name": "2.4.task-entry",
             "rect": {
@@ -821,28 +782,10 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
+          "selector": "page.locator('[aria-label=\"Work board\"]').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' }).or(page.locator('[aria-label=\"Work board\"]').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }))",
           "timeout": 240000,
           "cue": {
             "name": "2.4.promoted-task",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
-          "type": "drag",
-          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
-          "target": "page.getByTestId('column-ready')",
-          "scale": 1.4,
-          "after": 1100
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' })",
-          "timeout": 180000,
-          "cue": {
-            "name": "2.4.pickup-run",
             "rect": {
               "mode": "matched-element"
             }
@@ -852,8 +795,15 @@
     },
     {
       "id": "2.5",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
       "freshNavigation": false,
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 2.3 or 2.4 cue logs."
+        }
+      ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.5-ship-it.webm",
       "viewport": {
         "width": 1920,
@@ -893,8 +843,13 @@
           "duration": 1800
         },
         {
+          "type": "waitFor",
+          "selector": "page.getByTestId(/^run-card-/).filter({ hasText: 'Trailhead Travel Studio' }).first()",
+          "timeout": 1200000
+        },
+        {
           "type": "click",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first()",
+          "selector": "page.getByTestId(/^run-card-/).filter({ hasText: 'Trailhead Travel Studio' }).first()",
           "scale": 1.5,
           "after": 700
         },
@@ -928,27 +883,49 @@
         {
           "type": "waitText",
           "text": "Preview",
-          "timeout": 300000,
-          "cue": {
-            "name": "2.5.preview-open",
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
+          "timeout": 300000
         },
         {
           "type": "click",
           "selector": "page.getByRole('button', { name: /Open preview|Preview sandbox/i }).first()",
           "scale": 1.52,
           "after": 1800
+        },
+        {
+          "type": "followNewPage",
+          "timeout": 15000,
+          "after": 2000
+        },
+        {
+          "type": "pause",
+          "ms": 3000,
+          "cue": {
+            "name": "2.5.preview-open",
+            "stableForMs": 1000,
+            "deadlineMs": 10000,
+            "source": {
+              "kind": "selector",
+              "selector": "body",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "viewport"
+            }
+          }
         }
       ]
     },
     {
       "id": "2.6",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
       "freshNavigation": false,
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
+        }
+      ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.6-review-merge.webm",
       "viewport": {
         "width": 1920,
@@ -990,7 +967,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('coordinator-review-changes')",
-          "timeout": 600000
+          "timeout": 1800000
         },
         {
           "type": "click",
@@ -1001,7 +978,7 @@
         {
           "type": "waitText",
           "text": "Files changed",
-          "timeout": 60000,
+          "timeout": 120000,
           "cue": {
             "name": "2.6.diff-visible",
             "rect": {
@@ -1011,10 +988,36 @@
           }
         },
         {
+          "type": "waitFor",
+          "selector": "page.getByTestId('human-review-preview-status')",
+          "timeout": 120000
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('human-review-preview-status')",
+          "scale": 1.32,
+          "hold": 1800
+        },
+        {
           "type": "hover",
           "selector": "page.getByText('Files changed', { exact: true })",
           "scale": 1.25,
           "hold": 1600
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 400);",
+          "after": 800
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 400);",
+          "after": 800
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollTo(0, 0);",
+          "after": 600
         },
         {
           "type": "click",
@@ -1038,8 +1041,15 @@
     },
     {
       "id": "2.7",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
       "freshNavigation": false,
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
+        }
+      ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.7-review-trace.webm",
       "viewport": {
         "width": 1920,
@@ -1121,13 +1131,38 @@
           "selector": "page.getByTestId('transaction-trace-panel')",
           "scale": 1.18,
           "hold": 2400
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 300);",
+          "after": 700
+        },
+        {
+          "type": "pause",
+          "ms": 1500
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 300);",
+          "after": 700
+        },
+        {
+          "type": "pause",
+          "ms": 1200
         }
       ]
     },
     {
       "id": "2.8",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
       "freshNavigation": false,
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
+        }
+      ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.8-review-memory.webm",
       "viewport": {
         "width": 1920,
@@ -1179,7 +1214,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('accepted-decision').first()",
-          "timeout": 300000,
+          "timeout": 1800000,
           "cue": {
             "name": "2.8.accepted-decision",
             "rect": {
@@ -1192,13 +1227,30 @@
           "selector": "page.getByTestId('accepted-decision').first()",
           "scale": 1.28,
           "hold": 2200
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 250);",
+          "after": 600
+        },
+        {
+          "type": "pause",
+          "ms": 1500
         }
-      ]
+      ],
+      "requiresPriorBeat": "2.6"
     },
     {
       "id": "3.1",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
       "freshNavigation": false,
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
+        }
+      ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/3.1-schedule-sweep.webm",
       "viewport": {
         "width": 1920,
@@ -1256,7 +1308,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'dependency-sweep' }).getByRole('button', { name: 'Add schedule', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Copy of Software Delivery' }).getByRole('button', { name: 'Add schedule', exact: true })",
           "scale": 1.48,
           "after": 700
         },
@@ -1292,14 +1344,23 @@
               "selector": "main"
             }
           }
+        },
+        {
+          "type": "pause",
+          "ms": 2000
         }
       ]
     },
     {
       "id": "3.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
       "freshNavigation": false,
       "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
+        },
         {
           "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL",
           "kind": "github-issue-url",
@@ -1347,13 +1408,24 @@
         },
         {
           "type": "click",
-          "selector": "page.getByText(/bug.*triage/i).first()",
+          "selector": "page.getByRole('link', { name: 'Workflows', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByLabel('Available workflows').or(page.getByLabel('Active workflow'))",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Copy of Bug Fix' }).first()",
           "scale": 1.48,
           "after": 700
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: /Event trigger|Trigger/i }).first()",
+          "selector": "page.getByRole('button', { name: /Add event|Edit event/i }).first()",
           "scale": 1.48,
           "after": 600
         },
@@ -1518,7 +1590,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('Message the assistant...')",
-          "text": "Triage issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}}.",
+          "text": "Triage GitHub issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}} from the Trailhead Travel Studio repository.",
           "scale": 1.55,
           "after": 500
         },
@@ -1563,6 +1635,13 @@
         "preferred": 12500,
         "maximum": 20000
       },
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
+      ],
       "expectedCues": [
         "4.2.triage-response",
         "4.2.approval-gate"
@@ -1591,9 +1670,19 @@
           "duration": 1800
         },
         {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('assistant-run-page')",
+          "timeout": 30000
+        },
+        {
           "type": "waitFor",
           "selector": "page.getByTestId('assistant-approval-gate')",
-          "timeout": 180000,
+          "timeout": 240000,
           "cue": {
             "name": "4.2.approval-gate",
             "rect": {
@@ -1635,6 +1724,13 @@
         "preferred": 10000,
         "maximum": 16000
       },
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
+      ],
       "expectedCues": [
         "4.3.run-timeline",
         "4.3.scope-visible"
@@ -1661,6 +1757,11 @@
           "label": "Beat 4.3",
           "title": "Read and scope the bug",
           "duration": 1800
+        },
+        {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
         },
         {
           "type": "waitFor",
@@ -1708,6 +1809,13 @@
         "preferred": 13000,
         "maximum": 20000
       },
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
+      ],
       "expectedCues": [
         "4.4.work-plan",
         "4.4.validation-visible"
@@ -1734,6 +1842,11 @@
           "label": "Beat 4.4",
           "title": "Implement and test the repair",
           "duration": 1800
+        },
+        {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
         },
         {
           "type": "waitFor",
@@ -1775,6 +1888,13 @@
         "preferred": 14000,
         "maximum": 22000
       },
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
+      ],
       "expectedCues": [
         "4.5.preview-approval",
         "4.5.repaired-preview"
@@ -1801,6 +1921,11 @@
           "label": "Beat 4.5",
           "title": "Preview the repaired behavior",
           "duration": 1800
+        },
+        {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
         },
         {
           "type": "waitFor",
@@ -1880,6 +2005,11 @@
           "duration": 1800
         },
         {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
+        },
+        {
           "type": "resolveBugFixPullRequest",
           "runUrl": "{{AGENTWEAVER_DEMO_BUGFIX_RUN_URL}}",
           "projectUrl": "{{AGENTWEAVER_DEMO_BUGFIX_PROJECT_URL}}",
@@ -1911,6 +2041,11 @@
       ],
       "requiresPriorBeat": "4.5",
       "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        },
         {
           "environment": "AGENTWEAVER_DEMO_BUGFIX_RUN_URL",
           "kind": "app-url",
@@ -1970,6 +2105,11 @@
           "duration": 1800
         },
         {
+          "type": "goto",
+          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
+          "after": 800
+        },
+        {
           "type": "waitFor",
           "selector": "page.getByTestId('topology-graph-canvas')",
           "timeout": 180000
@@ -1999,6 +2139,11 @@
       "requiresPriorBeat": "4.6",
       "prerequisites": [
         {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        },
+        {
           "environment": "AGENTWEAVER_DEMO_BUGFIX_RUN_URL",
           "kind": "app-url",
           "message": "Set it to the current Bug Fix run route that produced this pull request."
@@ -2017,7 +2162,7 @@
     },
     {
       "id": "5.1",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/settings",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": true,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/5.1-drive-from-tools.webm",
       "viewport": {
@@ -2037,7 +2182,7 @@
         {
           "name": "5.1.settings-visible",
           "stableForMs": 350,
-          "deadlineMs": 30000,
+          "deadlineMs": 60000,
           "source": {
             "kind": "selector",
             "selector": "[data-testid='mcp-server-url']",
@@ -2055,6 +2200,34 @@
           "label": "Beat 5.1",
           "title": "Drive it from your own tools",
           "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Projects', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('heading', { name: 'Projects', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "scale": 1.45,
+          "after": 900
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('link', { name: 'Account settings', exact: true })",
+          "timeout": 20000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Account settings', exact: true })",
+          "scale": 1.42,
+          "after": 800
         },
         {
           "type": "waitFor",

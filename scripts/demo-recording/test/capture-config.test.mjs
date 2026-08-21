@@ -179,26 +179,37 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   const byId = (id) => plan.beats.find((beat) => beat.id === id);
   const confirm = byId('2.2');
   const board = byId('2.4');
+  const ship = byId('2.5');
   const review = byId('2.6');
   const traces = byId('2.7');
   const decisions = byId('2.8');
 
-  const promotionCheckbox = "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })";
-  const promotionWait = confirm.steps.findIndex((step) => step.type === 'waitFor'
-    && step.selector === promotionCheckbox);
-  assert.ok(promotionWait >= 0, 'expected the actual promotion checkbox to be ready before confirmation');
-  assert.deepEqual(
-    confirm.steps.slice(promotionWait, promotionWait + 3).map(({ type, selector }) => ({ type, selector })),
-    [
-      { type: 'waitFor', selector: promotionCheckbox },
-      { type: 'click', selector: promotionCheckbox },
-      { type: 'click', selector: "page.getByRole('button', { name: 'Confirm plan' }).first()" },
-    ],
-    'the promotion checkbox must be waited for, selected, then immediately confirmed',
+  // Beat 2.2 uses Direct dispatch mode — autopilot is the key interaction.
+  // Auto-approve is intentionally NOT enabled so the session-approval-gate fires in beat 2.5.
+  // The "Independent task promotion" checkbox and "Confirm plan" button do not appear in Direct mode.
+  const autopilotSwitch = "page.getByRole('switch', { name: 'Autopilot', exact: true })";
+  assert.ok(
+    confirm.steps.some((s) => s.type === 'click' && s.selector === autopilotSwitch),
+    'beat 2.2 must click the Autopilot toggle',
+  );
+  assert.ok(
+    !confirm.steps.some((s) => s.selector?.includes('Auto-approve safe tools')),
+    'beat 2.2 must NOT click Auto-approve safe tools (gate must remain active for beat 2.5)',
   );
   assert.ok(board.steps.some((step) => step.cue?.name === '2.4.promoted-task'));
   assert.equal(board.steps.some((step) => step.selector?.includes('New task title')), false);
+  assert.deepEqual(
+    ship.steps.slice(-2).map(({ type, timeout, after, ms, cue }) => ({ type, timeout, after, ms, cue: cue?.name ?? null })),
+    [
+      { type: 'followNewPage', timeout: 15000, after: 2000, ms: undefined, cue: null },
+      { type: 'pause', timeout: undefined, after: undefined, ms: 3000, cue: '2.5.preview-open' },
+    ],
+    'preview capture should follow the newly opened preview tab before cueing the viewport',
+  );
   assert.ok(review.cueWatchers.some((cue) => cue.source?.selector === "[data-testid='coordinator-review-changes']"));
+  const reviewPreviewIndex = review.steps.findIndex((step) => step.selector === "page.getByTestId('human-review-preview-status')");
+  const approveMergeIndex = review.steps.findIndex((step) => step.selector === "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })");
+  assert.ok(reviewPreviewIndex >= 0 && reviewPreviewIndex < approveMergeIndex, 'expected human review to visibly show preview availability before merge approval');
   assert.equal(review.freshNavigation, false);
   assert.equal(traces.freshNavigation, false);
   assert.ok(traces.steps.some((step) => step.selector?.includes('Preview trace')));
@@ -216,7 +227,7 @@ test('final demo plans isolate their takes and use polished plan-scoped fixtures
   ));
   const [blueprint, aks] = await Promise.all([
     loadPlan('blueprint-demo.capture.json'),
-    loadPlan('azure-aks-demo.capture.json'),
+    loadPlan('sabbour-aks-demo.capture.json'),
   ]);
 
   for (const plan of [blueprint, aks]) {
@@ -228,7 +239,7 @@ test('final demo plans isolate their takes and use polished plan-scoped fixtures
       .every((beat) => beat.videoPath.startsWith(`${plan.finalTake.outputDirectory}/`)));
   }
   assert.equal(blueprint.fixture.projectName, 'Agentweaver Demo — Trailhead Travel Studio');
-  assert.equal(aks.fixture.projectName, 'Agentweaver Demo S2 — sabbour/AKS');
+  assert.equal(aks.fixture.projectName, 'Agentweaver Demo — sabbour/AKS');
   assert.ok(aks.beats.some((beat) => JSON.stringify(beat).includes('sabbour/AKS')));
 });
 
@@ -267,23 +278,32 @@ test('Blueprint triage beats declare a serial, fixture-safe route through previe
     'https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview',
   );
   assert.equal(byId.get('1.1').prerequisites, undefined);
-  assert.deepEqual(byId.get('3.2').prerequisites, [{
-    environment: 'AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL',
-    kind: 'github-issue-url',
-    message: 'Set it to the canonical dry-capture source issue: https://github.com/sabbour/agentweaver-demo-dryrun/issues/4.',
-  }]);
+  assert.deepEqual(byId.get('3.2').prerequisites, [
+    {
+      environment: 'AGENTWEAVER_DEMO_PROJECT_URL',
+      kind: 'app-url',
+      message: 'Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs.',
+    },
+    {
+      environment: 'AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL',
+      kind: 'github-issue-url',
+      message: 'Set it to the canonical dry-capture source issue: https://github.com/sabbour/agentweaver-demo-dryrun/issues/4.',
+    },
+  ]);
   for (const [id, predecessor] of new Map([['4.1', '3.2'], ['4.2', '4.1'], ['4.3', '4.2'], ['4.4', '4.3'], ['4.5', '4.4'], ['4.6', '4.5'], ['4.7', '4.6']])) {
     assert.equal(byId.get(id)?.requiresPriorBeat, predecessor);
   }
   assert.equal(byId.get('4.1').prerequisites.find((item) => item.kind === 'github-issue-url')?.matchesEnvironment, 'AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER');
-  assert.equal(byId.get('4.5').steps[1].selector, "page.getByTestId('session-approval-gate')");
-  assert.equal(byId.get('4.6').steps[1].type, 'resolveBugFixPullRequest');
+  assert.ok(byId.get('4.5').steps.some((step) => step.selector === "page.getByTestId('session-approval-gate')"), 'expected beat 4.5 to include session-approval-gate step');
+  assert.ok(byId.get('4.6').steps.some((step) => step.type === 'resolveBugFixPullRequest'), 'expected beat 4.6 to include resolveBugFixPullRequest step');
   assert.equal(
     byId.get('4.6').steps.find((step) => step.type === 'waitFor').selector,
     "page.getByRole('button', { name: 'Approve & merge', exact: true })",
   );
   assert.equal(byId.get('4.7').steps.at(-2).type, 'gotoResolvedBugFixPullRequest');
-  assert.equal(byId.get('5.1').steps[1].selector, "page.getByTestId('mcp-server-url')");
+  assert.equal(byId.get('5.1').steps[1].selector, "page.getByRole('link', { name: 'Projects', exact: true })");
+  assert.ok(byId.get('5.1').steps.some((step) => step.selector === "page.getByRole('link', { name: 'Account settings', exact: true })"));
+  assert.equal(byId.get('5.1').steps.find((step) => step.selector === "page.getByTestId('mcp-server-url')")?.type, 'waitFor');
 });
 
 test('Bug Fix PR resolution binds an exact run artifact to its project repository', () => {

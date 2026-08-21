@@ -18,31 +18,37 @@ function locatorExpression(selector) {
 export function renderCaptureScript(plan) {
   const installSource = JSON.stringify(buildInstallSource());
   const lines = [
-    'async page => {',
+    'async (_page, context) => {',
+    '  let page = _page;',
     '  const pause = ms => page.waitForTimeout(ms);',
     '  const cueLog = [];',
     `  const beatId = ${JSON.stringify(plan.beatId ?? null)};`,
     `  const passiveCueWatchers = ${JSON.stringify(plan.cueWatchers ?? [])};`,
+    '  let captureStartedAtEpochMs = 0;',
     '  page.__demoCueSink = cueLog;',
-    '  if (!page.__demoCueBindingInstalled && typeof page.exposeBinding === \'function\') {',
-    "    await page.exposeBinding('__demoReportCue', (_source, cue) => {",
-    '      const sink = page.__demoCueSink;',
-    '      if (!Array.isArray(sink)) return;',
-    '      if (sink.some((existing) => existing.name === cue.name)) return;',
-    '      const captureStartedAtEpochMs = page.__demoCaptureStartedAtEpochMs ?? Date.now();',
-    '      sink.push({',
-    '        ...cue,',
-    '        beatId: cue.beatId ?? page.__demoCaptureBeatId ?? null,',
-    '        sequence: sink.length,',
-    '        tMs: Math.max(0, Date.now() - captureStartedAtEpochMs),',
-    '        receivedAtEpochMs: Date.now(),',
+    '  const ensureCueBinding = async () => {',
+    '    if (!page.__demoCueBindingInstalled && typeof page.exposeBinding === \'function\') {',
+    "      await page.exposeBinding('__demoReportCue', (_source, cue) => {",
+    '        const sink = page.__demoCueSink;',
+    '        if (!Array.isArray(sink)) return;',
+    '        if (sink.some((existing) => existing.name === cue.name)) return;',
+    '        const captureStartedAtEpochMs = page.__demoCaptureStartedAtEpochMs ?? Date.now();',
+    '        sink.push({',
+    '          ...cue,',
+    '          beatId: cue.beatId ?? page.__demoCaptureBeatId ?? null,',
+    '          sequence: sink.length,',
+    '          tMs: Math.max(0, Date.now() - captureStartedAtEpochMs),',
+    '          receivedAtEpochMs: Date.now(),',
+    '        });',
     '      });',
-    '    });',
-    '    page.__demoCueBindingInstalled = true;',
-    '  }',
+    '      page.__demoCueBindingInstalled = true;',
+    '    }',
+    '  };',
+    '  await ensureCueBinding();',
     `  const installSource = ${installSource};`,
     '  await page.addInitScript(installSource);',
     `  await page.setViewportSize({ width: ${plan.viewport?.width ?? 1920}, height: ${plan.viewport?.height ?? 1080} });`,
+    '  page.setDefaultTimeout(900000); // ceiling — all explicit step timeouts are lower; helpers use their own',
   ];
 
   if (plan.auth?.entries) {
@@ -72,8 +78,10 @@ export function renderCaptureScript(plan) {
     '  await page.evaluate(installSource);',
     "  await page.evaluate(() => { try { window.__demoZoomReset?.(); } catch (e) {} });",
     '  page.__demoCaptureBeatId = beatId;',
-    `  await page.screencast.start({ path: ${JSON.stringify(plan.videoPath)}, size: { width: ${plan.viewport?.width ?? 1920}, height: ${plan.viewport?.height ?? 1080} } });`,
-    '  page.__demoCaptureStartedAtEpochMs = Date.now();',
+    '  await page.screencast.stop().catch(() => {});',
+  `  await page.screencast.start({ path: ${JSON.stringify(plan.videoPath)}, size: { width: ${plan.viewport?.width ?? 1920}, height: ${plan.viewport?.height ?? 1080} } });`,
+    '  captureStartedAtEpochMs = Date.now();',
+    '  page.__demoCaptureStartedAtEpochMs = captureStartedAtEpochMs;',
     '  await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);',
     '  const centerOf = (box) => ({',
     '    x: box.x + Math.max(8, Math.min(box.width / 2, box.width - 8)),',
@@ -92,8 +100,8 @@ export function renderCaptureScript(plan) {
     '  // A scale <= 1.02 means "no zoom": reset any prior transform and just point, so we',
     '  // stop panning the whole page for beats where nothing needs magnifying.',
     '  const focus = async (locator, scale = 1.45, steps = 18, hold = 260) => {',
-    '    await locator.scrollIntoViewIfNeeded().catch(() => {});',
-    '    const box = await locator.boundingBox();',
+    '    await locator.scrollIntoViewIfNeeded({ timeout: 60000 }).catch(() => {});',
+    '    const box = await locator.boundingBox({ timeout: 60000 });',
     "    if (!box) throw new Error('No bounding box');",
     '    const pre = centerOf(box);',
     '    const zoom = false;',
@@ -104,20 +112,20 @@ export function renderCaptureScript(plan) {
     "      await page.evaluate(() => { window.__demoActivityMark?.('focus'); window.__demoZoomReset?.(); });",
     '      await pause(300);',
     '    }',
-    '    const zbox = (await locator.boundingBox()) ?? box;',
+    '    const zbox = (await locator.boundingBox({ timeout: 60000 })) ?? box;',
     '    const post = centerOf(zbox);',
     '    await pointAt(post.x, post.y, steps);',
     '    await pause(hold);',
     '  };',
     '  const click = async (locator, scale = 1.45, after = 620, force = false) => {',
     '    await focus(locator, scale);',
-    '    await locator.click(force ? { force: true } : {});',
+    '    await locator.click(force ? { force: true, timeout: 60000 } : { timeout: 60000 });',
     "    await page.evaluate(() => { window.__demoActivityMark?.('click'); window.__demoCursorClick?.(); });",
     '    await pause(after);',
     '  };',
     '  const typeInto = async (locator, text, scale = 1.6, delay = 12, after = 700) => {',
     '    await click(locator, scale, 280);',
-    "    await locator.fill('');",
+    "    await locator.fill('', { timeout: 60000 });",
     '    await locator.pressSequentially(text, { delay });',
     '    await pause(after);',
     '  };',
@@ -253,6 +261,28 @@ export function renderCaptureScript(plan) {
       lines.push('    await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);');
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('goto'));`);
       if (step.after) lines.push(`    await pause(${step.after});`);
+    } else if (step.type === 'followNewPage') {
+      const timeout = step.timeout ?? 10000;
+      lines.push('    {');
+      lines.push('      // Wait for the new tab opened by the preceding step');
+      lines.push(`      const newTab = await page.context().waitForEvent('page', { timeout: ${timeout} }).catch(() => null);`);
+      lines.push('      if (newTab) {');
+      lines.push(`        await newTab.waitForLoadState('domcontentloaded', { timeout: ${timeout} }).catch(() => {});`);
+      lines.push('        page = newTab;');
+      lines.push('        page.__demoCueSink = cueLog;');
+      lines.push('        page.__demoCaptureBeatId = beatId;');
+      lines.push('        page.__demoCaptureStartedAtEpochMs = captureStartedAtEpochMs;');
+      lines.push('        await ensureCueBinding();');
+      lines.push('        await page.evaluate(installSource);');
+      lines.push('        await page.evaluate(() => { try { window.__demoZoomReset?.(); } catch(e){} });');
+      lines.push('        await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);');
+      lines.push(`        await page.evaluate(() => window.__demoActivityMark?.('followNewPage'));`);
+      lines.push(`        console.log('followNewPage: switched to new tab', page.url());`);
+      lines.push('      } else {');
+      lines.push(`        console.warn('followNewPage: no new tab detected within ${timeout}ms — continuing on current page');`);
+      lines.push('      }');
+      lines.push('    }');
+      if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'waitFor') {
       // Wait for a real element (e.g. a rendered dashboard chart / topology node) to be
       // visible before narrating over it — replaces fixed short timeouts that let beats
@@ -275,7 +305,7 @@ export function renderCaptureScript(plan) {
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('select'));`);
       if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'waitText') {
-      lines.push(`    await page.waitForFunction(() => document.body.innerText.includes(${JSON.stringify(step.text)}), { timeout: ${step.timeout ?? 180000} });`);
+      lines.push(`    await page.waitForFunction(() => document.body.innerText.includes(${JSON.stringify(step.text)}), undefined, { timeout: ${step.timeout ?? 180000} });`);
       if (step.cue) {
         const cue = {
           ...step.cue,
@@ -284,6 +314,12 @@ export function renderCaptureScript(plan) {
         lines.push(`    await page.evaluate((cue) => window.__demoEmitDomCue?.(cue, document.body), ${JSON.stringify(cue)});`);
       }
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('waitText', { text: ${JSON.stringify(step.text)} }));`);
+    } else if (step.type === 'waitForLoadState') {
+      const state = step.state ?? 'domcontentloaded';
+      const timeout = step.timeout ?? 30000;
+      lines.push(`    await page.waitForLoadState(${JSON.stringify(state)}, { timeout: ${timeout} }).catch(() => {});`);
+      lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('waitForLoadState'));`);
+      if (step.after) lines.push(`    await pause(${step.after});`);
     } else if (step.type === 'reload') {
       // Reload the current page — used to re-hydrate SSE/UI state after long waits
       // (e.g. beat 2.2: coordinator finishes drafting but SSE stream has expired).
@@ -293,6 +329,20 @@ export function renderCaptureScript(plan) {
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('reload'));`);
     } else if (step.type === 'goto') {
       lines.push(`    await page.goto(${JSON.stringify(step.url)}, { waitUntil: 'domcontentloaded' });`);
+      lines.push('    await page.evaluate(installSource);');
+      lines.push('    await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);');
+      lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('goto'));`);
+      if (step.after) lines.push(`    await pause(${step.after});`);
+    } else if (step.type === 'gotoFromSessionStorage') {
+      // Navigate to a URL assembled from a sessionStorage key value + optional prefix/suffix.
+      // Example: { type: 'gotoFromSessionStorage', key: 'demo-project-id', prefix: '/projects/', suffix: '/observability' }
+      lines.push(`    { const __ssId = await page.evaluate(() => sessionStorage.getItem(${JSON.stringify(step.key)}));`);
+      lines.push(`      if (!__ssId) throw new Error('gotoFromSessionStorage: sessionStorage key ${step.key} not set — did beat 1.2 save the project ID?');`);
+      lines.push(`      const __pageUrl = page.url();`);
+      lines.push(`      const __originMatch = __pageUrl.match(/^https?:\\/\\/[^/]+/);`);
+      lines.push(`      const __origin = __originMatch ? __originMatch[0] : '';`);
+      lines.push(`      const __targetUrl = __origin + ${JSON.stringify(step.prefix ?? '')} + __ssId + ${JSON.stringify(step.suffix ?? '')}`);
+      lines.push(`      await page.goto(__targetUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs }); }`);
       lines.push('    await page.evaluate(installSource);');
       lines.push('    await page.evaluate((watchers) => window.__demoConfigureDomCueWatchers?.(watchers), passiveCueWatchers);');
       lines.push(`    await page.evaluate(() => window.__demoActivityMark?.('goto'));`);

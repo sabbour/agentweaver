@@ -2,6 +2,40 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+/**
+ * Removes timestamps that form a regular-interval pattern (e.g. a progress spinner
+ * cycling every ~5 seconds). Events are considered a "spinner run" when at least
+ * `minRunLength` consecutive timestamps are spaced `intervalMs ± toleranceMs` apart.
+ */
+export function filterRegularIntervalEvents(
+  timestamps,
+  { intervalMs = 5000, toleranceMs = 350, minRunLength = 3 } = {},
+) {
+  if (timestamps.length < minRunLength) return timestamps;
+
+  const remove = new Set();
+  let i = 0;
+  while (i < timestamps.length) {
+    let runEnd = i;
+    for (let j = i + 1; j < timestamps.length; j++) {
+      const gap = timestamps[j] - timestamps[j - 1];
+      if (Math.abs(gap - intervalMs) <= toleranceMs) {
+        runEnd = j;
+      } else {
+        break;
+      }
+    }
+    const runLength = runEnd - i + 1;
+    if (runLength >= minRunLength) {
+      for (let k = i; k <= runEnd; k++) remove.add(k);
+      i = runEnd + 1;
+    } else {
+      i++;
+    }
+  }
+  return timestamps.filter((_, idx) => !remove.has(idx));
+}
+
 export function normalizeActivityEvents(events = [], durationMs) {
   const max = Math.max(0, Number(durationMs) || 0);
   const times = events

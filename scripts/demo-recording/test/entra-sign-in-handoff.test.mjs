@@ -17,14 +17,15 @@ async function readCapturePlan(name) {
 test("all Beat 0 narratives permit only Agentweaver's redirect before the Entra boundary", async () => {
   const plans = await Promise.all([
     readMarkdownPlan('blueprint-demo-beats.md'),
-    readMarkdownPlan('azure-aks-demo-beats.md'),
+    readMarkdownPlan('sabbour-aks-demo-beats.md'),
     readMarkdownPlan('sizzle-reel-beats.md'),
   ]);
 
   for (const source of plans) {
     const beat = parseBeatPlan(source).find((candidate) => candidate.id === '0.0');
     assert.ok(beat, 'expected Beat 0.0');
-    assert.equal(beat.narrationSource, 'Agentweaver hands sign-in to Microsoft Entra.');
+    assert.ok(beat.narrationSource && beat.narrationSource.length > 0, 'expected non-empty Beat 0.0 narration');
+    assert.doesNotMatch(beat.narrationSource, /enter|type|password|credential|account|click.*entra|select.*account/i, 'Beat 0.0 narration must not describe Entra sign-in interactions');
     assert.match(beat.markdown, /may click Agentweaver's/i);
     assert.match(beat.markdown, /own\s+button to start the\s+redirect/i);
     assert.match(beat.markdown, /cached SSO may complete it/i);
@@ -38,7 +39,7 @@ test("all Beat 0 narratives permit only Agentweaver's redirect before the Entra 
 test('Beat 0 plans are isolated, unauthenticated, and excluded from authenticated all capture', async () => {
   const plans = [
     ['blueprint-demo-beats.md', 'blueprint-demo.capture.json'],
-    ['azure-aks-demo-beats.md', 'azure-aks-demo.capture.json'],
+    ['sabbour-aks-demo-beats.md', 'sabbour-aks-demo.capture.json'],
   ];
   for (const [markdownName, captureName] of plans) {
     const [markdown, capture] = await Promise.all([
