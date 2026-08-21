@@ -1,7 +1,22 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// .env.local overrides system env vars (local override semantics); .env fills gaps only.
+for (const [envFile, override] of [['.env.local', true], ['.env', false]]) {
+  try {
+    const envPath = new URL(envFile, import.meta.url);
+    const lines = readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const [k, ...v] = line.split('=');
+      if (k && v.length && (override || !process.env[k.trim()])) process.env[k.trim()] = v.join('=').trim();
+    }
+  } catch {}
+}
 import { createApiFromSession } from './lib/api.mjs';
 import { writeSeedScript } from './lib/auth.mjs';
 import { loadBeatPlan, formatNarrationFile } from './lib/beats.mjs';
@@ -160,10 +175,17 @@ function beatFileId(beatId) {
 // caused "video too fast compared to audio".
 async function synthesizeBeats(options) {
   const beats = await loadBeatPlan(options.plan);
+  const selectedBeatId = options.beat ?? options.beatId ?? options['beat-id'];
+  const filteredBeats = selectedBeatId
+    ? beats.filter((beat) => beat.id === selectedBeatId)
+    : beats;
+  if (selectedBeatId && !filteredBeats.length) {
+    throw new Error(`Beat not found in plan: ${selectedBeatId}`);
+  }
   const settings = AISettings.fromEnv();
   await fs.mkdir(options.outDir, { recursive: true });
   const results = [];
-  for (const beat of beats) {
+  for (const beat of filteredBeats) {
     const text = (options.useGenerated === 'true')
       ? await generateNarrationText(settings, { beat, contextSummary: options.context || '' })
       : beat.narrationSource;
