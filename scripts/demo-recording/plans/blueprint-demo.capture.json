@@ -544,7 +544,7 @@
           "type": "select",
           "selector": "page.getByRole('combobox', { name: 'Workflow' }).first()",
           "option": {
-            "label": "Product Management Discovery"
+            "label": "Software Delivery"
           },
           "scale": 1.48,
           "after": 500
