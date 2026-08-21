@@ -241,6 +241,11 @@ public class ProjectGitInitializer
             || string.IsNullOrWhiteSpace(parts[3]))
             return null;
 
+        // The next segment must clearly be a hidden skills root (.github/.copilot/etc.). Otherwise
+        // a slash-containing ref such as feature/demo is ambiguous and must stay on the full-clone path.
+        if (!parts[4].StartsWith(".", StringComparison.Ordinal))
+            return null;
+
         return parts[3];
     }
 
