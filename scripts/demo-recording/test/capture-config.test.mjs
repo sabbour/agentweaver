@@ -302,7 +302,7 @@ test('Blueprint triage beats declare a serial, fixture-safe route through previe
   );
   assert.equal(byId.get('4.7').steps.at(-2).type, 'gotoResolvedBugFixPullRequest');
   assert.equal(byId.get('5.1').steps[1].selector, "page.getByRole('link', { name: 'Projects', exact: true })");
-  assert.ok(byId.get('5.1').steps.some((step) => step.selector === "page.locator('[aria-label=\\'Settings\\']')"));
+  assert.ok(byId.get('5.1').steps.some((step) => step.selector === "page.getByRole('link', { name: 'Account settings', exact: true })"));
   assert.equal(byId.get('5.1').steps.find((step) => step.selector === "page.getByTestId('mcp-server-url')")?.type, 'waitFor');
 });
 
