@@ -65,13 +65,17 @@ Examples:
 `;
 }
 
+function toCamelCase(key) {
+  return key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+}
+
 function parseArgs(argv) {
   const [command, ...rest] = argv;
   const options = {};
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i];
     if (!token.startsWith('--')) continue;
-    const key = token.slice(2);
+    const key = toCamelCase(token.slice(2));
     const value = rest[i + 1] && !rest[i + 1].startsWith('--') ? rest[++i] : 'true';
     options[key] = value;
   }
