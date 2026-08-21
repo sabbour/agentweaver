@@ -1451,26 +1451,8 @@
           "after": 500
         },
         {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: /Add condition/i })",
-          "scale": 1.4,
-          "after": 450
-        },
-        {
-          "type": "select",
-          "selector": "page.getByRole('combobox', { name: 'Condition type' }).first()",
-          "option": {
-            "label": "Label"
-          },
-          "scale": 1.38,
-          "after": 350
-        },
-        {
-          "type": "type",
-          "selector": "page.getByRole('textbox', { name: /Label/i }).first()",
-          "text": "agentweaver:triage",
-          "scale": 1.45,
-          "after": 450
+          "type": "pause",
+          "ms": 800
         },
         {
           "type": "click",
@@ -1483,6 +1465,12 @@
           "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
           "scale": 1.42,
           "after": 800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Webhooks', exact: true }).or(page.getByRole('link', { name: 'Webhooks', exact: true }))",
+          "scale": 1.42,
+          "after": 600
         },
         {
           "type": "waitFor",
