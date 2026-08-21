@@ -71,7 +71,7 @@ On screen: In the repo-to-project flow, point Agentweaver at `sabbour/AKS`, choo
 
 ## Beat 1.2 — Meet the cast and import PM skills
 
-Narration: "Here's the team, and the skills they're starting with. Agentweaver ships a marketplace of ready-made skills — and you can import custom ones straight from any GitHub repo. This same cast sticks around for every run, so the team builds real memory over time instead of starting cold each week."
+Narration: "Here's the team, and the skills they're starting with. You can pull in custom skills straight from any GitHub repo — any prompt engineering work your team has already done slots right in. This same cast sticks around for every run, so the team builds real memory over time instead of starting cold each week."
 
 On screen: From the project you just created, open **Skills**, show the team and open the import dialog to demonstrate the capability. Hover over the dialog briefly, then close it without importing. The skill import itself runs off-camera.
 
@@ -102,7 +102,7 @@ On screen: Trigger **Run now** on the issue-triage workflow, stay on the coordin
 
 ## Beat 3.2 — Draft the blog post locally
 
-Narration: "This one's not tied to the specs we just generated — it's a standalone post on multi-agent orchestration on AKS. I'll give it a read, and if it's ready, approving right here opens a pull request directly against the repo."
+Narration: "I'll use the content workflow we generated to write a blog post on multi-agent orchestration on AKS. I'll give it a read, and if it's ready, approving right here opens a pull request directly against the repo."
 
 On screen: Start the content-authoring task from the same project context, let the draft complete, and show the real approve-to-open-PR notification or banner without clicking through.
 
