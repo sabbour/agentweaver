@@ -278,11 +278,18 @@ test('Blueprint triage beats declare a serial, fixture-safe route through previe
     'https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview',
   );
   assert.equal(byId.get('1.1').prerequisites, undefined);
-  assert.deepEqual(byId.get('3.2').prerequisites, [{
-    environment: 'AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL',
-    kind: 'github-issue-url',
-    message: 'Set it to the canonical dry-capture source issue: https://github.com/sabbour/agentweaver-demo-dryrun/issues/4.',
-  }]);
+  assert.deepEqual(byId.get('3.2').prerequisites, [
+    {
+      environment: 'AGENTWEAVER_DEMO_PROJECT_URL',
+      kind: 'app-url',
+      message: 'Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs.',
+    },
+    {
+      environment: 'AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL',
+      kind: 'github-issue-url',
+      message: 'Set it to the canonical dry-capture source issue: https://github.com/sabbour/agentweaver-demo-dryrun/issues/4.',
+    },
+  ]);
   for (const [id, predecessor] of new Map([['4.1', '3.2'], ['4.2', '4.1'], ['4.3', '4.2'], ['4.4', '4.3'], ['4.5', '4.4'], ['4.6', '4.5'], ['4.7', '4.6']])) {
     assert.equal(byId.get(id)?.requiresPriorBeat, predecessor);
   }
