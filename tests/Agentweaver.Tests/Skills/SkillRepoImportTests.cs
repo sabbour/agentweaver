@@ -64,6 +64,58 @@ public sealed class SkillRepoImportTests : IDisposable
         gitInit.LastPurpose.Should().Be(GitClonePurpose.SkillImport);
     }
 
+    [Fact]
+    public async Task PreviewThenImport_ReusesCachedClone()
+    {
+        var sourceRepository = CreateRepositoryWithHistoricalTag();
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projectStore = new SqliteProjectStore(testDb.Db);
+        var project = new Project
+        {
+            Id = ProjectId.New(),
+            Name = "skill-preview-cache-test",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = NewTempDir(),
+            DefaultBranch = "main",
+            Owner = "owner-1",
+            ProviderSettings = new ProjectProviderSettings { DefaultProvider = ModelSource.GitHubCopilot },
+            State = ProjectState.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        await projectStore.InsertAsync(project);
+
+        var gitInit = new LocalRepositoryCloneInitializer(sourceRepository);
+        var service = new SkillCatalogService(
+            new SqliteSkillStore(testDb.Db),
+            projectStore,
+            gitInit,
+            new SkillParser(),
+            new FixedInstallationScopeStub(),
+            new NullGitHubTokenStore(),
+            NullLogger<SkillCatalogService>.Instance,
+            projectRoles: new AllowAllProjectRoles(),
+            configuration: new ConfigurationBuilder().AddInMemoryCollection().Build());
+
+        const string repoUrl = "https://github.com/owner/repo/tree/main/SKILL.md";
+        var preview = await service.PreviewRepoCandidatesAsync(
+            project.Id,
+            repoUrl,
+            caller: new CallerContext { User = "owner-1" },
+            ct: CancellationToken.None);
+        var import = await service.ImportFromRepoAsync(
+            project.Id,
+            repoUrl,
+            locations: null,
+            caller: new CallerContext { User = "owner-1" },
+            ct: CancellationToken.None);
+
+        preview.Outcome.Should().Be(SkillOutcome.Ok);
+        import.Outcome.Should().Be(SkillOutcome.Ok);
+        gitInit.CloneCount.Should().Be(1,
+            "the import should reuse the preview clone when the same repo URL is imported shortly after preview");
+    }
+
     private string CreateRepositoryWithHistoricalTag()
     {
         var path = NewTempDir();
@@ -76,6 +128,8 @@ public sealed class SkillRepoImportTests : IDisposable
             "---\nname: version-one\ndescription: Historical skill.\n---\nUse version one.\n");
         Commands.Stage(repository, "SKILL.md");
         repository.Commit("Add first skill", signature, signature);
+        if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+            repository.Refs.Rename(repository.Head.CanonicalName, "refs/heads/main");
         repository.ApplyTag("v1.0.0");
 
         File.WriteAllText(
@@ -107,6 +161,7 @@ public sealed class SkillRepoImportTests : IDisposable
         NullLogger<ProjectGitInitializer>.Instance)
     {
         public GitClonePurpose? LastPurpose { get; private set; }
+        public int CloneCount { get; private set; }
 
         public override string Clone(
             string workingDirectory,
@@ -114,6 +169,7 @@ public sealed class SkillRepoImportTests : IDisposable
             string accessToken,
             GitClonePurpose purpose)
         {
+            CloneCount++;
             LastPurpose = purpose;
             var repositoryPath = Repository.Clone(localSourceRepository, workingDirectory);
             using var repository = new Repository(repositoryPath);

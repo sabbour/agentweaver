@@ -228,6 +228,7 @@ public class ProjectGitInitializer
     // so a depth-1 clone is enough to preview/import the files. We still retry with full history if
     // the ref turns out to be a tag/commit rather than a branch, and slash-containing refs never
     // match this helper because their boundary is ambiguous until the repo is cloned.
+    // Extracts a single-segment branch name from a GitHub tree URL, or null if ambiguous.
     internal static string? TryGetSingleSegmentTreeBranchName(string sourceRepository)
     {
         if (!Uri.TryCreate(sourceRepository, UriKind.Absolute, out var uri)
@@ -239,6 +240,11 @@ public class ProjectGitInitializer
         if (parts.Length < 5
             || !string.Equals(parts[2], "tree", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(parts[3]))
+            return null;
+
+        // The next segment must clearly be a hidden skills root (.github/.copilot/etc.). Otherwise
+        // a slash-containing ref such as feature/demo is ambiguous and must stay on the full-clone path.
+        if (!parts[4].StartsWith(".", StringComparison.Ordinal))
             return null;
 
         return parts[3];
