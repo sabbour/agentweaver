@@ -42,6 +42,14 @@
         "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_RUN_URL",
         "origin": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
         "instruction": "Set this to the resulting same-project github.issues.labeled run URL after a repository administrator has verified delivery."
+      },
+      {
+        "beats": [
+          "2.5"
+        ],
+        "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+        "origin": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
+        "instruction": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 2.3 or 2.4 cue logs."
       }
     ]
   },
@@ -571,8 +579,7 @@
       },
       "expectedCues": [
         "2.2.plan-confirmed",
-        "2.2.autopilot-enabled",
-        "2.2.auto-approve-enabled"
+        "2.2.autopilot-enabled"
       ],
       "cueWatchers": [],
       "steps": [
@@ -614,28 +621,6 @@
           "timeout": 30000,
           "cue": {
             "name": "2.2.autopilot-enabled",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
-          "timeout": 30000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
-          "scale": 1.35,
-          "after": 600
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('switch', { name: 'Auto-approve safe tools', exact: true })",
-          "timeout": 30000,
-          "cue": {
-            "name": "2.2.auto-approve-enabled",
             "rect": {
               "mode": "matched-element"
             }
@@ -805,8 +790,15 @@
     },
     {
       "id": "2.5",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
       "freshNavigation": false,
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 2.3 or 2.4 cue logs."
+        }
+      ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.5-ship-it.webm",
       "viewport": {
         "width": 1920,
