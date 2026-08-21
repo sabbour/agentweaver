@@ -266,6 +266,10 @@ function workflowTrigger(workflow: WorkflowSummaryDto, type: 'schedule' | 'event
   return workflowTriggers(workflow).find((trigger) => trigger.type === type);
 }
 
+function stripBuiltInHeader(yaml: string): string {
+  return yaml.replace(/^is_built_in:\s*.*(?:\r?\n|$)/m, '');
+}
+
 function triggerBadgeCopy(trigger: WorkflowTriggerDto): string {
   if (trigger.type === 'schedule') {
     return `${trigger.interval ?? 'scheduled'}${trigger.time_of_day ? ` · ${trigger.time_of_day} UTC` : ''}`;
@@ -503,6 +507,49 @@ export function WorkflowsPage() {
     }
   }, [projectId, data]);
 
+  const handleCopyOnWrite = useCallback(async (
+    wf: WorkflowSummaryDto,
+    action: 'edit' | 'visual' | 'schedule' | 'event',
+  ) => {
+    if (!projectId || !wf.id) return;
+
+    setDuplicatingWorkflowId(wf.id);
+    setError(null);
+    try {
+      const copyId = `${wf.id}-copy`;
+      let copiedWorkflow = (data?.workflows ?? []).find((workflow) => (
+        !workflow.is_built_in && workflow.id === copyId
+      ));
+
+      if (!copiedWorkflow) {
+        const yaml = await apiClient.getWorkflowYaml(projectId, wf.id);
+        const copiedYaml = setHeaderField(
+          setHeaderField(stripBuiltInHeader(yaml), 'id', copyId),
+          'name',
+          wf.name ?? wf.id,
+        );
+        await apiClient.saveWorkflowYaml(projectId, copyId, copiedYaml);
+        const refreshed = await apiClient.listWorkflows(projectId);
+        setData(refreshed);
+        copiedWorkflow = refreshed.workflows.find((workflow) => workflow.id === copyId) ?? {
+          ...wf,
+          id: copyId,
+          name: wf.name ?? wf.id,
+          is_built_in: false,
+        };
+      }
+
+      if (action === 'edit') await handleEdit(copiedWorkflow);
+      if (action === 'visual') await handleEdit(copiedWorkflow, true);
+      if (action === 'schedule') handleOpenSchedule(copiedWorkflow);
+      if (action === 'event') await handleOpenEvent(copiedWorkflow);
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setDuplicatingWorkflowId(null);
+    }
+  }, [data, handleEdit, handleOpenEvent, handleOpenSchedule, projectId]);
+
   const handleOpenGenerate = useCallback(() => {
     setGenerateDescription('');
     setGenerateError(null);
@@ -629,7 +676,15 @@ export function WorkflowsPage() {
 
   if (!projectId) return null;
 
-  const workflows = data?.workflows ?? [];
+  const allWorkflows = data?.workflows ?? [];
+  const projectWorkflowIds = new Set(
+    allWorkflows
+      .filter((wf) => !wf.is_built_in && wf.id)
+      .map((wf) => wf.id),
+  );
+  const workflows = allWorkflows.filter((wf) => (
+    !wf.is_built_in || !wf.id || !projectWorkflowIds.has(`${wf.id}-copy`)
+  ));
   const selectableWorkflows = workflows.filter(isSelectableWorkflow);
   const projectWorkflows = selectableWorkflows.filter((wf) => !wf.is_built_in);
   const builtInWorkflows = selectableWorkflows.filter((wf) => wf.is_built_in);
@@ -722,39 +777,56 @@ export function WorkflowsPage() {
                   Duplicate to project
                 </Button>
               )}
-              {wf.id && !wf.is_built_in && (
+              {wf.id && (
                 <Button
                   appearance="subtle"
                   size="small"
-                  icon={editLoading ? <Spinner size="extra-tiny" aria-hidden="true" /> : <EditRegular />}
-                  disabled={editLoading}
-                  onClick={() => { void handleEdit(wf); }}
+                  icon={editLoading || duplicatingWorkflowId === wf.id ? <Spinner size="extra-tiny" aria-hidden="true" /> : <EditRegular />}
+                  disabled={editLoading || duplicatingWorkflowId !== null}
+                  onClick={() => {
+                    if (wf.is_built_in) void handleCopyOnWrite(wf, 'edit');
+                    else void handleEdit(wf);
+                  }}
                 >
                   Edit
                 </Button>
               )}
-              {wf.id && !wf.is_built_in && (
+              {wf.id && (
                 <Button
                   appearance="primary"
                   size="small"
-                  icon={editLoading ? <Spinner size="extra-tiny" aria-hidden="true" /> : <FlowRegular />}
-                  disabled={editLoading}
-                  onClick={() => { void handleEdit(wf, true); }}
+                  icon={editLoading || duplicatingWorkflowId === wf.id ? <Spinner size="extra-tiny" aria-hidden="true" /> : <FlowRegular />}
+                  disabled={editLoading || duplicatingWorkflowId !== null}
+                  onClick={() => {
+                    if (wf.is_built_in) void handleCopyOnWrite(wf, 'visual');
+                    else void handleEdit(wf, true);
+                  }}
                 >
                   Edit visually
                 </Button>
               )}
-              {wf.id && !wf.is_built_in && (
-                <Button appearance="subtle" size="small" onClick={() => handleOpenSchedule(wf)}>
-                  {workflowTrigger(wf, 'schedule') ? 'Edit schedule' : 'Add schedule'}
-                </Button>
-              )}
-              {wf.id && !wf.is_built_in && (
+              {wf.id && (
                 <Button
                   appearance="subtle"
                   size="small"
-                  disabled={loadingEventTrigger}
-                  onClick={() => { void handleOpenEvent(wf); }}
+                  disabled={duplicatingWorkflowId !== null}
+                  onClick={() => {
+                    if (wf.is_built_in) void handleCopyOnWrite(wf, 'schedule');
+                    else handleOpenSchedule(wf);
+                  }}
+                >
+                  {workflowTrigger(wf, 'schedule') ? 'Edit schedule' : 'Add schedule'}
+                </Button>
+              )}
+              {wf.id && (
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  disabled={loadingEventTrigger || duplicatingWorkflowId !== null}
+                  onClick={() => {
+                    if (wf.is_built_in) void handleCopyOnWrite(wf, 'event');
+                    else void handleOpenEvent(wf);
+                  }}
                 >
                   {workflowTrigger(wf, 'event') ? 'Edit event' : 'Add event'}
                 </Button>
