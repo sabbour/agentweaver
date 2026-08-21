@@ -881,6 +881,16 @@
         },
         {
           "type": "waitFor",
+          "selector": "page.getByRole('treeitem').filter({ hasText: /\\d+ approval/ }).first()",
+          "timeout": 600000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('treeitem').filter({ hasText: /\\d+ approval/ }).first()",
+          "after": 400
+        },
+        {
+          "type": "waitFor",
           "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate'))",
           "timeout": 600000
         },
