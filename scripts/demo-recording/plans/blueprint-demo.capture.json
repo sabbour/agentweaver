@@ -22,8 +22,8 @@
         "3.2"
       ],
       "workflowIds": [
-        "dependency-sweep",
-        "bug-triage"
+        "Software Delivery",
+        "Bug Fix"
       ]
     },
     "externalArtifacts": [
@@ -851,12 +851,12 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first()",
-          "timeout": 600000
+          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first().or(page.locator('[aria-label=\"Work board\"]').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first())",
+          "timeout": 1200000
         },
         {
           "type": "click",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first()",
+          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first().or(page.locator('[aria-label=\"Work board\"]').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }).first())",
           "scale": 1.5,
           "after": 700
         },
@@ -1598,6 +1598,13 @@
         "preferred": 12500,
         "maximum": 20000
       },
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
+      ],
       "expectedCues": [
         "4.2.triage-response",
         "4.2.approval-gate"
@@ -1680,6 +1687,13 @@
         "preferred": 10000,
         "maximum": 16000
       },
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
+      ],
       "expectedCues": [
         "4.3.run-timeline",
         "4.3.scope-visible"
@@ -1758,6 +1772,13 @@
         "preferred": 13000,
         "maximum": 20000
       },
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
+      ],
       "expectedCues": [
         "4.4.work-plan",
         "4.4.validation-visible"
@@ -1830,6 +1851,13 @@
         "preferred": 14000,
         "maximum": 22000
       },
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        }
+      ],
       "expectedCues": [
         "4.5.preview-approval",
         "4.5.repaired-preview"
@@ -1977,6 +2005,11 @@
       "requiresPriorBeat": "4.5",
       "prerequisites": [
         {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        },
+        {
           "environment": "AGENTWEAVER_DEMO_BUGFIX_RUN_URL",
           "kind": "app-url",
           "message": "Set it to the current Bug Fix run route that produced this pull request."
@@ -2068,6 +2101,11 @@
       ],
       "requiresPriorBeat": "4.6",
       "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ASSISTANT_URL",
+          "kind": "app-url",
+          "message": "Set it to the authenticated assistant route on the configured Agentweaver staging origin."
+        },
         {
           "environment": "AGENTWEAVER_DEMO_BUGFIX_RUN_URL",
           "kind": "app-url",

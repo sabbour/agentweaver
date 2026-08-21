@@ -114,6 +114,8 @@ class FakeCapturePage {
     return this._fakeContext ?? new FakeCaptureContext();
   }
 
+  setDefaultTimeout() {}
+
   async waitForTimeout(ms) {
     let remaining = ms;
     while (remaining > 0) {
@@ -288,7 +290,7 @@ test('capture script moves the cursor AFTER the zoom transform settles (recomput
   // The zoom transform is applied first...
   const zoomIdx = src.indexOf('__demoZoomFocus');
   // ...then the element box is recomputed post-transform...
-  const recomputeIdx = src.indexOf('const zbox = (await locator.boundingBox())');
+  const recomputeIdx = src.indexOf('const zbox = (await locator.boundingBox({ timeout: 60000 }))');
   // ...and only then is the cursor pointed at the post-transform center.
   const pointIdx = src.indexOf('const pointAt');
   assert.ok(zoomIdx > 0, 'expected a zoom-focus call');
@@ -404,7 +406,7 @@ test('capture script runs and stops the approval watcher around the step loop', 
   const tryIdx = src.indexOf('  try {', watcherStartIdx);
   const clickIdx = src.indexOf("await click(approvalButton, 1.02, 700, true);");
   const watcherStopIdx = src.indexOf('await approvalWatcher.catch(() => {});');
-  const screencastStopIdx = src.indexOf('await page.screencast.stop().catch(() => {});');
+  const screencastStopIdx = src.lastIndexOf('await page.screencast.stop().catch(() => {});');
   assert.ok(screencastIdx > 0, 'expected screencast startup');
   assert.ok(watcherStartIdx > screencastIdx, 'expected approval watcher after screencast startup');
   assert.ok(tryIdx > watcherStartIdx, 'expected approval watcher before the step loop try block');
@@ -530,7 +532,7 @@ test('capture script supports eval, drag, waitFor, forced clicks and selector-sc
   // waitFor waits on a real element becoming visible (replaces fixed short timeouts)
   assert.ok(src.includes(".waitFor({ state: 'visible', timeout: 45000 })"), 'expected a visible waitFor with the given timeout');
   // forced clicks pass { force: true } through to locator.click
-  assert.ok(src.includes('force ? { force: true } : {}'), 'expected the click helper to honor force');
+  assert.ok(src.includes('force ? { force: true, timeout: 60000 } : { timeout: 60000 }'), 'expected the click helper to honor force');
   assert.ok(/await click\(.*'Approve'.*, true\);/s.test(src), 'expected the Approve click to be forced');
   // press can be scoped to a selector instead of the global keyboard
   assert.ok(src.includes(".press(\"Enter\")"), 'expected a selector-scoped press');
