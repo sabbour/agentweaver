@@ -103,7 +103,7 @@ export async function cleanStaging(options, dependencies = {}) {
 async function main() {
   const result = await cleanStaging(parseCleanupOptions(process.argv.slice(2)));
   process.stdout.write(
-    `Removed ${result.discoveredProjectCount} declared demo fixture project(s); verified none remain.\n`,
+    `Removed ${result.discoveredProjectCount} declared demo fixture project(s) and ${result.discoveredSessionCount} session(s); verified none remain.\n`,
   );
 }
 

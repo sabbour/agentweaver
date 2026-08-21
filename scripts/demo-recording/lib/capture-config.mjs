@@ -11,7 +11,7 @@ const predicateOperators = new Set([
   'text-includes',
   'text-matches',
 ]);
-const rectModes = new Set(['matched-element', 'element', 'first-matching', 'union', 'none']);
+const rectModes = new Set(['matched-element', 'element', 'first-matching', 'union', 'viewport', 'none']);
 const intervalCategories = new Set(['action', 'wait', 'dead-time']);
 const prerequisiteKinds = new Set(['app-url', 'github-issue-number', 'github-issue-url', 'github-pr-url']);
 

@@ -1,7 +1,22 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// .env.local overrides system env vars (local override semantics); .env fills gaps only.
+for (const [envFile, override] of [['.env.local', true], ['.env', false]]) {
+  try {
+    const envPath = new URL(envFile, import.meta.url);
+    const lines = readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const [k, ...v] = line.split('=');
+      if (k && v.length && (override || !process.env[k.trim()])) process.env[k.trim()] = v.join('=').trim();
+    }
+  } catch {}
+}
 import { createApiFromSession } from './lib/api.mjs';
 import { writeSeedScript } from './lib/auth.mjs';
 import { loadBeatPlan, formatNarrationFile } from './lib/beats.mjs';
@@ -13,6 +28,7 @@ import {
   trimVideoByActivity,
   syncSegmentToAudio,
 } from './lib/ffmpeg.mjs';
+import { filterRegularIntervalEvents } from './lib/pacing.mjs';
 import { analyzeTake } from './lib/take-analyzer.mjs';
 import { assembleScenarioVideo, renderApprovedDirection } from './lib/compositor.mjs';
 import {
@@ -65,13 +81,17 @@ Examples:
 `;
 }
 
+function toCamelCase(key) {
+  return key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+}
+
 function parseArgs(argv) {
   const [command, ...rest] = argv;
   const options = {};
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i];
     if (!token.startsWith('--')) continue;
-    const key = token.slice(2);
+    const key = toCamelCase(token.slice(2));
     const value = rest[i + 1] && !rest[i + 1].startsWith('--') ? rest[++i] : 'true';
     options[key] = value;
   }
@@ -156,10 +176,17 @@ function beatFileId(beatId) {
 // caused "video too fast compared to audio".
 async function synthesizeBeats(options) {
   const beats = await loadBeatPlan(options.plan);
+  const selectedBeatId = options.beat ?? options.beatId ?? options['beat-id'];
+  const filteredBeats = selectedBeatId
+    ? beats.filter((beat) => beat.id === selectedBeatId)
+    : beats;
+  if (selectedBeatId && !filteredBeats.length) {
+    throw new Error(`Beat not found in plan: ${selectedBeatId}`);
+  }
   const settings = AISettings.fromEnv();
   await fs.mkdir(options.outDir, { recursive: true });
   const results = [];
-  for (const beat of beats) {
+  for (const beat of filteredBeats) {
     const text = (options.useGenerated === 'true')
       ? await generateNarrationText(settings, { beat, contextSummary: options.context || '' })
       : beat.narrationSource;
@@ -180,8 +207,24 @@ async function synthesizeBeats(options) {
 async function syncBeat(options) {
   let workingVideo = options.video;
   let trimSummary = null;
+  let activityLog;
   if (options.activityLog) {
-    const activityLog = JSON.parse(await fs.readFile(options.activityLog, 'utf8'));
+    activityLog = JSON.parse(await fs.readFile(options.activityLog, 'utf8'));
+  } else if (options['auto-trim'] || options.autoTrim) {
+    process.stderr.write('auto-trim: detecting visual activity...\n');
+    const rawTimestamps = await detectVisualActivity(options.video, {
+      sceneThreshold: Number(options['scene-threshold'] || options.sceneThreshold || 0.0035),
+    });
+    // Strip regular-interval spinner events (typically ~5 s cycles) before trimming.
+    activityLog = filterRegularIntervalEvents(rawTimestamps);
+    const removed = rawTimestamps.length - activityLog.length;
+    process.stderr.write(
+      `auto-trim: found ${rawTimestamps.length} activity timestamps` +
+        (removed > 0 ? `, filtered ${removed} spinner events → ${activityLog.length} kept` : '') +
+        '\n',
+    );
+  }
+  if (activityLog !== undefined) {
     const trimmedPath = `${options.out}.trimmed${path.extname(options.video)}`;
     trimSummary = await trimVideoByActivity(options.video, trimmedPath, activityLog, {
       maxStaticMs: Number(options.maxStaticMs || 2500),

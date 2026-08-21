@@ -8,8 +8,8 @@ const beatIds = ['0.0', '0.1', '1.1', '1.2', '2.2', '2.3', '3.1', '3.2', '4.4', 
 
 test('sabbour/AKS capture plan has a complete, gated capture-all sequence', async () => {
   const [markdown, captureText] = await Promise.all([
-    fs.readFile(new URL('../plans/azure-aks-demo-beats.md', import.meta.url), 'utf8'),
-    fs.readFile(new URL('../plans/azure-aks-demo.capture.json', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../plans/sabbour-aks-demo-beats.md', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../plans/sabbour-aks-demo.capture.json', import.meta.url), 'utf8'),
   ]);
   const plan = JSON.parse(captureText);
   const beats = parseBeatPlan(markdown);
@@ -17,8 +17,8 @@ test('sabbour/AKS capture plan has a complete, gated capture-all sequence', asyn
   assert.equal(plan.requireAllBeats, true);
   assert.deepEqual(plan.authentication, { mode: 'entra', repository: 'sabbour/AKS' });
   assert.deepEqual(plan.fixture, {
-    projectName: 'Agentweaver Demo S2 — sabbour/AKS',
-    safeProjectNamePatterns: ['^Agentweaver Demo S2 — sabbour/AKS$'],
+    projectName: 'Agentweaver Demo — sabbour/AKS',
+    safeProjectNamePatterns: ['^Agentweaver Demo — sabbour/AKS$'],
   });
   assert.deepEqual(beats.map((beat) => beat.id), beatIds);
   assert.deepEqual(plan.beats.map((beat) => beat.id), beatIds);

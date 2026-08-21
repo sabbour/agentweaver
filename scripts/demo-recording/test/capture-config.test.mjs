@@ -179,6 +179,7 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   const byId = (id) => plan.beats.find((beat) => beat.id === id);
   const confirm = byId('2.2');
   const board = byId('2.4');
+  const ship = byId('2.5');
   const review = byId('2.6');
   const traces = byId('2.7');
   const decisions = byId('2.8');
@@ -198,7 +199,18 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   );
   assert.ok(board.steps.some((step) => step.cue?.name === '2.4.promoted-task'));
   assert.equal(board.steps.some((step) => step.selector?.includes('New task title')), false);
+  assert.deepEqual(
+    ship.steps.slice(-2).map(({ type, timeout, after, ms, cue }) => ({ type, timeout, after, ms, cue: cue?.name ?? null })),
+    [
+      { type: 'followNewPage', timeout: 15000, after: 2000, ms: undefined, cue: null },
+      { type: 'pause', timeout: undefined, after: undefined, ms: 3000, cue: '2.5.preview-open' },
+    ],
+    'preview capture should follow the newly opened preview tab before cueing the viewport',
+  );
   assert.ok(review.cueWatchers.some((cue) => cue.source?.selector === "[data-testid='coordinator-review-changes']"));
+  const reviewPreviewIndex = review.steps.findIndex((step) => step.selector === "page.getByTestId('human-review-preview-status')");
+  const approveMergeIndex = review.steps.findIndex((step) => step.selector === "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })");
+  assert.ok(reviewPreviewIndex >= 0 && reviewPreviewIndex < approveMergeIndex, 'expected human review to visibly show preview availability before merge approval');
   assert.equal(review.freshNavigation, false);
   assert.equal(traces.freshNavigation, false);
   assert.ok(traces.steps.some((step) => step.selector?.includes('Preview trace')));
@@ -216,7 +228,7 @@ test('final demo plans isolate their takes and use polished plan-scoped fixtures
   ));
   const [blueprint, aks] = await Promise.all([
     loadPlan('blueprint-demo.capture.json'),
-    loadPlan('azure-aks-demo.capture.json'),
+    loadPlan('sabbour-aks-demo.capture.json'),
   ]);
 
   for (const plan of [blueprint, aks]) {
@@ -228,7 +240,7 @@ test('final demo plans isolate their takes and use polished plan-scoped fixtures
       .every((beat) => beat.videoPath.startsWith(`${plan.finalTake.outputDirectory}/`)));
   }
   assert.equal(blueprint.fixture.projectName, 'Agentweaver Demo — Trailhead Travel Studio');
-  assert.equal(aks.fixture.projectName, 'Agentweaver Demo S2 — sabbour/AKS');
+  assert.equal(aks.fixture.projectName, 'Agentweaver Demo — sabbour/AKS');
   assert.ok(aks.beats.some((beat) => JSON.stringify(beat).includes('sabbour/AKS')));
 });
 
@@ -276,14 +288,16 @@ test('Blueprint triage beats declare a serial, fixture-safe route through previe
     assert.equal(byId.get(id)?.requiresPriorBeat, predecessor);
   }
   assert.equal(byId.get('4.1').prerequisites.find((item) => item.kind === 'github-issue-url')?.matchesEnvironment, 'AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER');
-  assert.equal(byId.get('4.5').steps[1].selector, "page.getByTestId('session-approval-gate')");
-  assert.equal(byId.get('4.6').steps[1].type, 'resolveBugFixPullRequest');
+  assert.ok(byId.get('4.5').steps.some((step) => step.selector === "page.getByTestId('session-approval-gate')"), 'expected beat 4.5 to include session-approval-gate step');
+  assert.ok(byId.get('4.6').steps.some((step) => step.type === 'resolveBugFixPullRequest'), 'expected beat 4.6 to include resolveBugFixPullRequest step');
   assert.equal(
     byId.get('4.6').steps.find((step) => step.type === 'waitFor').selector,
     "page.getByRole('button', { name: 'Approve & merge', exact: true })",
   );
   assert.equal(byId.get('4.7').steps.at(-2).type, 'gotoResolvedBugFixPullRequest');
-  assert.equal(byId.get('5.1').steps[1].selector, "page.getByTestId('mcp-server-url')");
+  assert.equal(byId.get('5.1').steps[1].selector, "page.getByRole('link', { name: 'Projects', exact: true })");
+  assert.ok(byId.get('5.1').steps.some((step) => step.selector === "page.locator('[aria-label=\\'Settings\\']')"));
+  assert.equal(byId.get('5.1').steps.find((step) => step.selector === "page.getByTestId('mcp-server-url')")?.type, 'waitFor');
 });
 
 test('Bug Fix PR resolution binds an exact run artifact to its project repository', () => {
