@@ -1308,7 +1308,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Software Delivery' }).getByRole('button', { name: 'Add schedule', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Copy of Software Delivery' }).getByRole('button', { name: 'Add schedule', exact: true })",
           "scale": 1.48,
           "after": 700
         },
@@ -1408,13 +1408,24 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Bug Fix' }).first()",
+          "selector": "page.getByRole('link', { name: 'Workflows', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByLabel('Available workflows').or(page.getByLabel('Active workflow'))",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Copy of Bug Fix' }).first()",
           "scale": 1.48,
           "after": 700
         },
         {
           "type": "click",
-          "selector": "page.getByRole('button', { name: /Event trigger|Trigger/i }).first()",
+          "selector": "page.getByRole('button', { name: /Add event|Edit event/i }).first()",
           "scale": 1.48,
           "after": 600
         },
