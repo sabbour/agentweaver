@@ -581,7 +581,8 @@
       },
       "expectedCues": [
         "2.2.plan-confirmed",
-        "2.2.autopilot-enabled"
+        "2.2.autopilot-enabled",
+        "2.2.plan-dispatching"
       ],
       "cueWatchers": [],
       "steps": [
@@ -623,6 +624,23 @@
           "timeout": 30000,
           "cue": {
             "name": "2.2.autopilot-enabled",
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('button', { name: 'Confirm plan' })",
+          "timeout": 15000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('button', { name: 'Confirm plan' })",
+          "scale": 1.4,
+          "after": 1500,
+          "cue": {
+            "name": "2.2.plan-dispatching",
             "rect": {
               "mode": "matched-element"
             }
