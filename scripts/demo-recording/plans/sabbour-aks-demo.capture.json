@@ -159,7 +159,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Projects', exact: true })",
+          "selector": "page.getByTestId('app-navigation-scroll').getByRole('link', { name: 'Projects', exact: true })",
           "scale": 1.35,
           "after": 700
         },
@@ -351,7 +351,7 @@
         },
         {
           "type": "waitFor",
-                  "selector": "page.locator('[aria-label=\"Agents\"]')",
+          "selector": "page.locator('[aria-label=\"Agents\"]')",
           "timeout": 60000
         },
         {
@@ -361,57 +361,57 @@
         },
         {
           "type": "click",
-                  "selector": "page.locator('[aria-label=\"Agents\"]')",
+          "selector": "page.locator('[aria-label=\"Agents\"]')",
           "scale": 1.42,
-                  "after": 900,
-                  "cue": {
-                    "name": "s2.1.2.agents-tab",
-                    "stableForMs": 800,
-                    "deadlineMs": 10000,
-                    "source": {
-                      "kind": "selector",
-                      "selector": "[aria-label='Agents']",
-                      "state": "visible"
-                    },
-                    "rect": {
-                      "mode": "matched-element"
-                    }
-                  }
-                },
-                {
-                  "type": "waitFor",
-                  "selector": "page.locator('main')",
-                  "timeout": 30000
-                },
-                {
-                  "type": "pause",
-                  "ms": 3000,
-                  "cue": {
-                    "name": "s2.1.2.agents-visible",
-                    "stableForMs": 1500,
-                    "deadlineMs": 15000,
-                    "source": {
-                      "kind": "selector",
-                      "selector": "main",
-                      "state": "visible"
-                    },
-                    "rect": {
-                      "mode": "element",
-                      "selector": "main"
-                    }
-                  }
-                },
-                {
-                  "type": "waitFor",
-                  "selector": "page.locator('[aria-label=\"Skills\"]')",
-                  "timeout": 60000
-                },
-                {
-                  "type": "click",
-                  "selector": "page.locator('[aria-label=\"Skills\"]')",
-                  "scale": 1.42,
-                  "after": 900
-                },
+          "after": 900,
+          "cue": {
+            "name": "s2.1.2.agents-tab",
+            "stableForMs": 800,
+            "deadlineMs": 10000,
+            "source": {
+              "kind": "selector",
+              "selector": "[aria-label='Agents']",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('main')",
+          "timeout": 30000
+        },
+        {
+          "type": "pause",
+          "ms": 3000,
+          "cue": {
+            "name": "s2.1.2.agents-visible",
+            "stableForMs": 1500,
+            "deadlineMs": 15000,
+            "source": {
+              "kind": "selector",
+              "selector": "main",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "main"
+            }
+          }
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('[aria-label=\"Skills\"]')",
+          "timeout": 60000
+        },
+        {
+          "type": "click",
+          "selector": "page.locator('[aria-label=\"Skills\"]')",
+          "scale": 1.42,
+          "after": 900
+        },
         {
           "type": "waitText",
           "text": "Import, sync, and assign reusable agent skills",
