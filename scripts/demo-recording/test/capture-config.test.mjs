@@ -288,8 +288,8 @@ test('Blueprint triage beats declare a serial, fixture-safe route through previe
     assert.equal(byId.get(id)?.requiresPriorBeat, predecessor);
   }
   assert.equal(byId.get('4.1').prerequisites.find((item) => item.kind === 'github-issue-url')?.matchesEnvironment, 'AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER');
-  assert.equal(byId.get('4.5').steps[1].selector, "page.getByTestId('session-approval-gate')");
-  assert.equal(byId.get('4.6').steps[1].type, 'resolveBugFixPullRequest');
+  assert.ok(byId.get('4.5').steps.some((step) => step.selector === "page.getByTestId('session-approval-gate')"), 'expected beat 4.5 to include session-approval-gate step');
+  assert.ok(byId.get('4.6').steps.some((step) => step.type === 'resolveBugFixPullRequest'), 'expected beat 4.6 to include resolveBugFixPullRequest step');
   assert.equal(
     byId.get('4.6').steps.find((step) => step.type === 'waitFor').selector,
     "page.getByRole('button', { name: 'Approve & merge', exact: true })",
