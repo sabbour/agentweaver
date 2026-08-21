@@ -305,7 +305,8 @@ trigger:
 
     renderPage('proj-1');
 
-    fireEvent.click(await screen.findByRole('button', { name: /add event/i }));
+    const addEventBtns = await screen.findAllByRole('button', { name: /add event/i });
+    fireEvent.click(addEventBtns[addEventBtns.length - 1]);
     expect(await screen.findByText('Event trigger')).toBeDefined();
 
     fireEvent.change(screen.getByRole('combobox', { name: 'GitHub event' }), { target: { value: 'issue_comment' } });
@@ -334,7 +335,8 @@ trigger:
 
     renderPage('proj-1');
 
-    fireEvent.click(await screen.findByRole('button', { name: /add event/i }));
+    const addEventBtns = await screen.findAllByRole('button', { name: /add event/i });
+    fireEvent.click(addEventBtns[addEventBtns.length - 1]);
     expect(await screen.findByText('Event trigger')).toBeDefined();
     fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'issue_comment' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add condition' }));
@@ -379,7 +381,7 @@ trigger:
     ));
   });
 
-  it('keeps schedule configuration read-only for built-in workflows', async () => {
+  it('shows schedule button for built-in workflows (triggers copy-on-write)', async () => {
     vi.mocked(apiClient.listWorkflows).mockResolvedValue({
       default_workflow_id: 'default',
       workflows: [sampleList.workflows[0]],
@@ -388,6 +390,6 @@ trigger:
     renderPage('proj-1');
 
     expect(await screen.findByRole('button', { name: /duplicate to project/i })).toBeDefined();
-    expect(screen.queryByRole('button', { name: /schedule/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /add schedule/i })).toBeDefined();
   });
 });
