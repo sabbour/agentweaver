@@ -6,9 +6,9 @@
     "repository": "sabbour/agentweaver-demo-dryrun"
   },
   "fixture": {
-    "projectName": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+    "projectName": "Agentweaver Demo — Trailhead Travel Studio",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo \u2014 Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
+      "^Agentweaver Demo — Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
     ]
   },
   "finalTake": {
@@ -177,7 +177,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('My project')",
-          "text": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "scale": 1.6,
           "delay": 36,
           "after": 900
@@ -194,7 +194,7 @@
     },
     {
       "id": "1.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/1.2-choose-blueprint.webm",
       "viewport": {
@@ -237,7 +237,7 @@
         {
           "type": "waitFor",
           "selector": "page.locator('[role=radiogroup][aria-label=\"Blueprint templates\"]')",
-          "timeout": 90000
+          "timeout": 150000
         },
         {
           "type": "click",
@@ -264,7 +264,7 @@
         },
         {
           "type": "waitText",
-          "text": "Agentweaver Demo \u2014 Trailhead Travel Studio",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "timeout": 60000,
           "cue": {
             "name": "1.2.project-created",
@@ -337,13 +337,13 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u2014 Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
           "scale": 1.45,
           "after": 900
         },
         {
           "type": "waitFor",
-          "selector": "page.getByRole('link', { name: 'Agents', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Agents\\']')",
           "timeout": 20000
         },
         {
@@ -353,7 +353,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Agents', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Agents\\']')",
           "scale": 1.42,
           "after": 900
         },
@@ -365,8 +365,8 @@
         {
           "type": "click",
           "selector": "page.getByLabel('Project agents').getByRole('button').first()",
-          "scale": 1.35,
-          "after": 1400
+          "scale": 1.55,
+          "after": 2500
         },
         {
           "type": "waitFor",
@@ -380,13 +380,17 @@
           }
         },
         {
+          "type": "pause",
+          "ms": 2800
+        },
+        {
           "type": "press",
           "key": "Escape",
           "after": 700
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Skills', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Skills\\']')",
           "scale": 1.42,
           "after": 900
         },
@@ -406,6 +410,10 @@
               "mode": "matched-element"
             }
           }
+        },
+        {
+          "type": "pause",
+          "ms": 2500
         },
         {
           "type": "press",
@@ -433,6 +441,10 @@
               "mode": "matched-element"
             }
           }
+        },
+        {
+          "type": "pause",
+          "ms": 2000
         },
         {
           "type": "press",
@@ -495,7 +507,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u2014 Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
           "scale": 1.45,
           "after": 900
         },
@@ -547,7 +559,7 @@
     },
     {
       "id": "2.2",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.2-confirm-plan.webm",
       "viewport": {
@@ -569,16 +581,16 @@
         {
           "type": "badge",
           "label": "Beat 2.2",
-          "title": "Work plan ready",
+          "title": "Session running",
           "duration": 1800
         },
         {
           "type": "reload"
         },
         {
-          "type": "waitText",
-          "text": "Work plan",
-          "timeout": 300000,
+          "type": "waitFor",
+          "selector": "page.locator('[data-testid=\"composer-automation-toggles\"]')",
+          "timeout": 120000,
           "cue": {
             "name": "2.2.plan-confirmed",
             "rect": {
@@ -632,25 +644,15 @@
           }
         },
         {
-          "type": "waitFor",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
-          "timeout": 30000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('checkbox', { name: 'Independent task promotion', exact: true })",
+          "type": "eval",
+          "code": "window.scrollTo(0, 0); document.documentElement.scrollLeft = 0;",
           "after": 400
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Confirm plan' }).first()",
-          "after": 600
         }
       ]
     },
     {
       "id": "2.3",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": null,
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.3-watch-work-plan.webm",
       "viewport": {
@@ -689,6 +691,11 @@
           "label": "Beat 2.3",
           "title": "Watch the work plan run",
           "duration": 1800
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollTo(0, 0); document.documentElement.scrollLeft = 0;",
+          "after": 300
         },
         {
           "type": "waitFor",
@@ -803,7 +810,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Board', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Board\\']')",
           "scale": 1.42,
           "after": 800
         },
@@ -928,20 +935,35 @@
         {
           "type": "waitText",
           "text": "Preview",
-          "timeout": 300000,
-          "cue": {
-            "name": "2.5.preview-open",
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
+          "timeout": 300000
         },
         {
           "type": "click",
           "selector": "page.getByRole('button', { name: /Open preview|Preview sandbox/i }).first()",
           "scale": 1.52,
           "after": 1800
+        },
+        {
+          "type": "followNewPage",
+          "timeout": 15000,
+          "after": 2000
+        },
+        {
+          "type": "pause",
+          "ms": 3000,
+          "cue": {
+            "name": "2.5.preview-open",
+            "stableForMs": 1000,
+            "deadlineMs": 10000,
+            "source": {
+              "kind": "selector",
+              "selector": "body",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "viewport"
+            }
+          }
         }
       ]
     },
@@ -1001,7 +1023,7 @@
         {
           "type": "waitText",
           "text": "Files changed",
-          "timeout": 60000,
+          "timeout": 120000,
           "cue": {
             "name": "2.6.diff-visible",
             "rect": {
@@ -1011,10 +1033,36 @@
           }
         },
         {
+          "type": "waitFor",
+          "selector": "page.getByTestId('human-review-preview-status')",
+          "timeout": 120000
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('human-review-preview-status')",
+          "scale": 1.32,
+          "hold": 1800
+        },
+        {
           "type": "hover",
           "selector": "page.getByText('Files changed', { exact: true })",
           "scale": 1.25,
           "hold": 1600
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 400);",
+          "after": 800
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 400);",
+          "after": 800
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollTo(0, 0);",
+          "after": 600
         },
         {
           "type": "click",
@@ -1079,7 +1127,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Observability', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Observability\\']')",
           "scale": 1.42,
           "after": 800
         },
@@ -1121,6 +1169,24 @@
           "selector": "page.getByTestId('transaction-trace-panel')",
           "scale": 1.18,
           "hold": 2400
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 300);",
+          "after": 700
+        },
+        {
+          "type": "pause",
+          "ms": 1500
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 300);",
+          "after": 700
+        },
+        {
+          "type": "pause",
+          "ms": 1200
         }
       ]
     },
@@ -1167,7 +1233,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Memories', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Memories\\']')",
           "scale": 1.42,
           "after": 800
         },
@@ -1179,7 +1245,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('accepted-decision').first()",
-          "timeout": 300000,
+          "timeout": 600000,
           "cue": {
             "name": "2.8.accepted-decision",
             "rect": {
@@ -1192,8 +1258,18 @@
           "selector": "page.getByTestId('accepted-decision').first()",
           "scale": 1.28,
           "hold": 2200
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 250);",
+          "after": 600
+        },
+        {
+          "type": "pause",
+          "ms": 1500
         }
-      ]
+      ],
+      "requiresPriorBeat": "2.6"
     },
     {
       "id": "3.1",
@@ -1239,7 +1315,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Workflows', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Workflows\\']')",
           "scale": 1.42,
           "after": 800
         },
@@ -1292,6 +1368,10 @@
               "selector": "main"
             }
           }
+        },
+        {
+          "type": "pause",
+          "ms": 2000
         }
       ]
     },
@@ -1408,7 +1488,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
+          "selector": "page.locator('[aria-label=\\'Settings\\']')",
           "scale": 1.42,
           "after": 800
         },
@@ -1518,7 +1598,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('Message the assistant...')",
-          "text": "Triage issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}}.",
+          "text": "Triage GitHub issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}} from the Trailhead Travel Studio repository.",
           "scale": 1.55,
           "after": 500
         },
@@ -1592,8 +1672,13 @@
         },
         {
           "type": "waitFor",
+          "selector": "page.getByTestId('assistant-run-page')",
+          "timeout": 30000
+        },
+        {
+          "type": "waitFor",
           "selector": "page.getByTestId('assistant-approval-gate')",
-          "timeout": 180000,
+          "timeout": 240000,
           "cue": {
             "name": "4.2.approval-gate",
             "rect": {
@@ -2017,7 +2102,7 @@
     },
     {
       "id": "5.1",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/settings",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": true,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/5.1-drive-from-tools.webm",
       "viewport": {
@@ -2037,7 +2122,7 @@
         {
           "name": "5.1.settings-visible",
           "stableForMs": 350,
-          "deadlineMs": 30000,
+          "deadlineMs": 60000,
           "source": {
             "kind": "selector",
             "selector": "[data-testid='mcp-server-url']",
@@ -2055,6 +2140,34 @@
           "label": "Beat 5.1",
           "title": "Drive it from your own tools",
           "duration": 1800
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('link', { name: 'Projects', exact: true })",
+          "scale": 1.42,
+          "after": 800
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByRole('heading', { name: 'Projects', exact: true })",
+          "timeout": 30000
+        },
+        {
+          "type": "click",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true })",
+          "scale": 1.45,
+          "after": 900
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('[aria-label=\\'Settings\\']')",
+          "timeout": 20000
+        },
+        {
+          "type": "click",
+          "selector": "page.locator('[aria-label=\\'Settings\\']')",
+          "scale": 1.42,
+          "after": 800
         },
         {
           "type": "waitFor",
