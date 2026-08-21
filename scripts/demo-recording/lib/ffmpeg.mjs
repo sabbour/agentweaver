@@ -92,7 +92,11 @@ export async function concatWavFiles(inputs, outputPath) {
 export async function concatVideos(inputs, outputPath) {
   const exe = resolveBinary('ffmpeg');
   const listPath = `${outputPath}.concat.txt`;
-  const listBody = inputs.map((file) => `file '${file.replace(/'/g, "'\\''")}'`).join('\n');
+  // Use absolute paths so ffmpeg resolves correctly regardless of concat file location.
+  const listBody = inputs.map((file) => {
+    const abs = path.resolve(file).replace(/\\/g, '/');
+    return `file '${abs.replace(/'/g, "'\\''")}'`;
+  }).join('\n');
   await fs.writeFile(listPath, listBody, 'utf8');
   await runBinary(exe, ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', outputPath]);
   await fs.rm(listPath, { force: true });
