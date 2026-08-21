@@ -28,6 +28,7 @@ import {
   trimVideoByActivity,
   syncSegmentToAudio,
 } from './lib/ffmpeg.mjs';
+import { filterRegularIntervalEvents } from './lib/pacing.mjs';
 import { analyzeTake } from './lib/take-analyzer.mjs';
 import { assembleScenarioVideo, renderApprovedDirection } from './lib/compositor.mjs';
 import {
@@ -211,10 +212,17 @@ async function syncBeat(options) {
     activityLog = JSON.parse(await fs.readFile(options.activityLog, 'utf8'));
   } else if (options['auto-trim'] || options.autoTrim) {
     process.stderr.write('auto-trim: detecting visual activity...\n');
-    activityLog = await detectVisualActivity(options.video, {
+    const rawTimestamps = await detectVisualActivity(options.video, {
       sceneThreshold: Number(options['scene-threshold'] || options.sceneThreshold || 0.0035),
     });
-    process.stderr.write(`auto-trim: found ${activityLog.length} activity timestamps\n`);
+    // Strip regular-interval spinner events (typically ~5 s cycles) before trimming.
+    activityLog = filterRegularIntervalEvents(rawTimestamps);
+    const removed = rawTimestamps.length - activityLog.length;
+    process.stderr.write(
+      `auto-trim: found ${rawTimestamps.length} activity timestamps` +
+        (removed > 0 ? `, filtered ${removed} spinner events → ${activityLog.length} kept` : '') +
+        '\n',
+    );
   }
   if (activityLog !== undefined) {
     const trimmedPath = `${options.out}.trimmed${path.extname(options.video)}`;
