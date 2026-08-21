@@ -24,7 +24,6 @@ public class ProjectGitInitializer
     /// worktrees from that tip rather than inspecting or rewriting repository history.
     /// </summary>
     internal const int ProjectCreationCloneDepth = 1;
-
     private readonly ILogger<ProjectGitInitializer> _logger;
 
     /// <summary>
@@ -157,7 +156,8 @@ public class ProjectGitInitializer
     /// Clones <paramref name="sourceRepository"/> into <paramref name="workingDirectory"/> using
     /// the provided <paramref name="accessToken"/> as an ephemeral credential. The explicit
     /// <paramref name="purpose"/> selects the required history depth: project creation fetches
-    /// only the default branch tip, while skill imports retain refs such as historical tags.
+    /// only the default branch tip, while skill imports shallow-clone branch-scoped GitHub tree URLs
+    /// when possible and otherwise retain the full ref set needed for tag/ref resolution.
     /// The token is NEVER logged or stored. Returns the default branch name.
     /// </summary>
     public virtual string Clone(
@@ -166,32 +166,97 @@ public class ProjectGitInitializer
         string accessToken,
         GitClonePurpose purpose)
     {
-        // Normalize "owner/repo" -> full HTTPS URL
-        var url = sourceRepository.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-            ? sourceRepository
-            : $"https://github.com/{sourceRepository}";
-
-        var cloneOptions = CreateCloneOptions(accessToken, purpose);
+        var url = NormalizeCloneTarget(sourceRepository);
+        var branchName = purpose == GitClonePurpose.SkillImport
+            ? TryGetSingleSegmentTreeBranchName(sourceRepository)
+            : null;
 
         _logger.LogInformation(
             "Cloning repository {Repository} into {Path}",
             sourceRepository, workingDirectory);
 
-        var repoPath = Repository.Clone(url, workingDirectory, cloneOptions);
+        string repoPath;
+        try
+        {
+            repoPath = Repository.Clone(url, workingDirectory, CreateCloneOptions(accessToken, purpose, branchName));
+        }
+        catch (LibGit2SharpException ex) when (purpose == GitClonePurpose.SkillImport && !string.IsNullOrWhiteSpace(branchName))
+        {
+            // A simple /tree/{ref}/... URL is often a branch path. Try the depth-1 branch clone first
+            // because preview/import only needs the files at that tip, then fall back to a full clone
+            // if the ref is actually a tag/commit or otherwise not fetchable as a branch.
+            _logger.LogInformation(
+                ex,
+                "Shallow skill-import clone for {Repository} ref {Ref} failed; retrying with full history",
+                sourceRepository,
+                branchName);
+            ResetFailedCloneDirectory(workingDirectory);
+            repoPath = Repository.Clone(url, workingDirectory, CreateCloneOptions(accessToken, purpose));
+        }
         using var repo = new Repository(repoPath);
 
-        // Derive default branch from HEAD symbolic ref
-        var defaultBranch = repo.Head.FriendlyName;
+        // Derive default branch from HEAD symbolic ref.
+        var defaultBranch = repo.Head?.FriendlyName ?? repo.Head?.CanonicalName ?? "main";
         _logger.LogInformation(
             "Clone complete; default branch is {Branch}", defaultBranch);
         return defaultBranch;
     }
 
-    internal static CloneOptions CreateCloneOptions(string accessToken, GitClonePurpose purpose)
+    private static string NormalizeCloneTarget(string sourceRepository)
     {
-        var options = new CloneOptions();
+        // Normalize owner/repo and GitHub tree/blob URLs to a cloneable repository URL.
+        if (Uri.TryCreate(sourceRepository, UriKind.Absolute, out var uri)
+            && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            var parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2)
+            {
+                var repoName = parts[1].EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+                    ? parts[1][..^4]
+                    : parts[1];
+                return $"https://github.com/{parts[0]}/{repoName}.git";
+            }
+        }
+
+        return sourceRepository.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? sourceRepository
+            : $"https://github.com/{sourceRepository}";
+    }
+
+    // A branch-based GitHub tree URL already identifies the branch tip that contains the skill path,
+    // so a depth-1 clone is enough to preview/import the files. We still retry with full history if
+    // the ref turns out to be a tag/commit rather than a branch, and slash-containing refs never
+    // match this helper because their boundary is ambiguous until the repo is cloned.
+    internal static string? TryGetSingleSegmentTreeBranchName(string sourceRepository)
+    {
+        if (!Uri.TryCreate(sourceRepository, UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 5
+            || !string.Equals(parts[2], "tree", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(parts[3]))
+            return null;
+
+        return parts[3];
+    }
+
+    internal static CloneOptions CreateCloneOptions(string accessToken, GitClonePurpose purpose, string? branchName = null)
+    {
+        var options = new CloneOptions
+        {
+            IsBare = false,
+        };
         if (purpose == GitClonePurpose.ProjectCreation)
             options.FetchOptions.Depth = ProjectCreationCloneDepth;
+        else if (purpose == GitClonePurpose.SkillImport && !string.IsNullOrWhiteSpace(branchName))
+        {
+            options.FetchOptions.Depth = ProjectCreationCloneDepth;
+            options.BranchName = branchName;
+        }
 
         options.FetchOptions.CredentialsProvider = (_, _, _) => new UsernamePasswordCredentials
         {
@@ -199,6 +264,29 @@ public class ProjectGitInitializer
             Password = accessToken // ephemeral; never stored or logged
         };
         return options;
+    }
+
+    private static void ResetFailedCloneDirectory(string workingDirectory)
+    {
+        if (!Directory.Exists(workingDirectory))
+            return;
+
+        foreach (var file in Directory.EnumerateFiles(workingDirectory, "*", SearchOption.AllDirectories))
+        {
+            try { File.SetAttributes(file, FileAttributes.Normal); } catch { /* best effort */ }
+        }
+
+        foreach (var entry in Directory.EnumerateFileSystemEntries(workingDirectory))
+        {
+            var attrs = File.GetAttributes(entry);
+            if (attrs.HasFlag(FileAttributes.Directory))
+                Directory.Delete(entry, recursive: true);
+            else
+            {
+                File.SetAttributes(entry, FileAttributes.Normal);
+                File.Delete(entry);
+            }
+        }
     }
 
     /// <summary>

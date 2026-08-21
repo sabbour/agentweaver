@@ -372,7 +372,7 @@ public sealed class SkillCatalogService
             else
             {
                 cloneDir = await CloneToTempAsync(
-                    source.CloneUrl!, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
+                    source.CloneUrl!, repoUrl, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
                 var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(checkoutRef))
                     await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
@@ -419,7 +419,7 @@ public sealed class SkillCatalogService
             else
             {
                 cloneDir = await CloneToTempAsync(
-                    source.CloneUrl!, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
+                    source.CloneUrl!, repoUrl, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
                 var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(checkoutRef))
                     await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
@@ -1242,7 +1242,8 @@ public sealed class SkillCatalogService
     }
 
     private async Task<string> CloneToTempAsync(
-        string repoUrl,
+        string cloneUrl,
+        string sourceRepository,
         string owner,
         ProjectId projectId,
         CancellationToken ct)
@@ -1250,14 +1251,14 @@ public sealed class SkillCatalogService
         // Defense in depth: only wire the caller's GitHub token as a credential when the clone
         // target is exactly github.com. The Parse allowlist already guarantees this, but scoping
         // here ensures a token is never offered (and thus never leaked) to any other host.
-        var token = SkillImportSource.IsAllowedCloneHost(repoUrl)
+        var token = SkillImportSource.IsAllowedCloneHost(cloneUrl)
             ? await ResolveTokenAsync(owner, projectId, ct).ConfigureAwait(false)
             : null;
         var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
         // Clone runs synchronously in LibGit2Sharp; offload so we don't block the request thread.
         await Task.Run(
-            () => _gitInit.Clone(dir, repoUrl, token ?? string.Empty, GitClonePurpose.SkillImport),
+            () => _gitInit.Clone(dir, sourceRepository, token ?? string.Empty, GitClonePurpose.SkillImport),
             ct).ConfigureAwait(false);
         return dir;
     }
