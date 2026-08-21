@@ -19,7 +19,7 @@
       "freshNavigation": true,
       "captureMode": "unauthenticated",
       "disableApprovalWatcher": true,
-      "videoPath": "recordings/sabbour-aks/beat-0-0-entra-sign-in-handoff.webm",
+      "videoPath": "recordings/final-takes/aks-product-operations/beat-0-0.webm",
       "viewport": {
         "width": 1920,
         "height": 1080
@@ -351,7 +351,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.locator('[aria-label=\\'Skills\\']')",
+                  "selector": "page.locator('[aria-label=\"Agents\"]')",
           "timeout": 60000
         },
         {
@@ -361,10 +361,57 @@
         },
         {
           "type": "click",
-          "selector": "page.locator('[aria-label=\\'Skills\\']')",
+                  "selector": "page.locator('[aria-label=\"Agents\"]')",
           "scale": 1.42,
-          "after": 900
-        },
+                  "after": 900,
+                  "cue": {
+                    "name": "s2.1.2.agents-tab",
+                    "stableForMs": 800,
+                    "deadlineMs": 10000,
+                    "source": {
+                      "kind": "selector",
+                      "selector": "[aria-label='Agents']",
+                      "state": "visible"
+                    },
+                    "rect": {
+                      "mode": "matched-element"
+                    }
+                  }
+                },
+                {
+                  "type": "waitFor",
+                  "selector": "page.locator('main')",
+                  "timeout": 30000
+                },
+                {
+                  "type": "pause",
+                  "ms": 3000,
+                  "cue": {
+                    "name": "s2.1.2.agents-visible",
+                    "stableForMs": 1500,
+                    "deadlineMs": 15000,
+                    "source": {
+                      "kind": "selector",
+                      "selector": "main",
+                      "state": "visible"
+                    },
+                    "rect": {
+                      "mode": "element",
+                      "selector": "main"
+                    }
+                  }
+                },
+                {
+                  "type": "waitFor",
+                  "selector": "page.locator('[aria-label=\"Skills\"]')",
+                  "timeout": 60000
+                },
+                {
+                  "type": "click",
+                  "selector": "page.locator('[aria-label=\"Skills\"]')",
+                  "scale": 1.42,
+                  "after": 900
+                },
         {
           "type": "waitText",
           "text": "Import, sync, and assign reusable agent skills",
@@ -1049,6 +1096,25 @@
           "type": "waitFor"
         },
         {
+          "type": "hover",
+          "selector": "page.getByRole('button', { name: 'Run now', exact: true }).first().locator('xpath=ancestor::*[contains(@class,\"workflow\") or contains(@class,\"card\") or contains(@class,\"item\")][1]')",
+          "scale": 1.25,
+          "hold": 1500,
+          "cue": {
+            "name": "s2.3.1.workflow-highlighted",
+            "stableForMs": 400,
+            "deadlineMs": 5000,
+            "source": {
+              "kind": "selector",
+              "selector": "button[name='Run now']",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
           "type": "click",
           "selector": "page.getByRole('button', { name: 'Run now', exact: true }).first()",
           "scale": 1.5,
@@ -1098,6 +1164,11 @@
         },
         {
           "type": "waitFor",
+          "selector": "page.locator('[role=\"treeitem\"]').nth(3)",
+          "timeout": 300000
+        },
+        {
+          "type": "waitFor",
           "selector": "page.getByTestId('open-topology-minimap')",
           "timeout": 300000
         },
@@ -1134,6 +1205,51 @@
           "selector": "page.getByTestId('topology-graph-canvas')",
           "scale": 1.12,
           "hold": 2000
+        },
+        {
+          "type": "press",
+          "key": "Escape",
+          "after": 600
+        },
+        {
+          "type": "gotoFromSessionStorage",
+          "key": "demo-project-id",
+          "urlTemplate": "/projects/{{value}}",
+          "after": 1200
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('section[aria-label=\"Work board\"]')",
+          "timeout": 30000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('column-backlog')",
+          "timeout": 60000
+        },
+        {
+          "type": "pause",
+          "ms": 3000,
+          "cue": {
+            "name": "s2.3.1.board-with-tasks",
+            "stableForMs": 1500,
+            "deadlineMs": 30000,
+            "source": {
+              "kind": "selector",
+              "selector": "[data-testid='column-backlog']",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "section[aria-label='Work board']"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('section[aria-label=\"Work board\"]')",
+          "scale": 1.08,
+          "hold": 2500
         }
       ],
       "intervalCategories": [
@@ -1223,6 +1339,36 @@
           }
         },
         {
+          "type": "waitFor",
+          "selector": "page.getByLabel('Workflow')",
+          "timeout": 8000,
+          "cue": {
+            "name": "s2.3.2.workflow-selector",
+            "stableForMs": 300,
+            "deadlineMs": 8000,
+            "source": {
+              "kind": "selector",
+              "selector": "select[aria-label='Workflow'], [aria-label='Workflow']",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "matched-element"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByLabel('Workflow')",
+          "scale": 1.4,
+          "hold": 1200
+        },
+        {
+          "type": "select",
+          "selector": "page.getByLabel('Workflow')",
+          "value": "",
+          "after": 500
+        },
+        {
           "type": "type",
           "selector": "page.getByRole('textbox', { name: 'Goal' })",
           "text": "Draft a standalone engineering blog post (about 700 words) about how Agentweaver orchestrates multi-agent teams for AKS product operations. Cover: automated issue triage by the triage-lead agent, PRD generation by the lead-pm agent, and multi-stakeholder review coordination. When the draft is ready, open a pull request to publish the blog post.",
@@ -1235,6 +1381,11 @@
           "selector": "page.getByRole('button', { name: 'Direct', exact: true })",
           "scale": 1.5,
           "after": 1100
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('run-header')",
+          "timeout": 30000
         },
         {
           "type": "waitText",
@@ -1257,10 +1408,54 @@
           }
         },
         {
+          "type": "pause",
+          "ms": 4000
+        },
+        {
           "type": "hover",
           "selector": "page.locator('main')",
-          "scale": 1.05,
+          "scale": 1.15,
           "hold": 2000
+        },
+        {
+          "type": "gotoFromSessionStorage",
+          "key": "demo-project-id",
+          "urlTemplate": "/projects/{{value}}",
+          "after": 1500
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.locator('section[aria-label=\"Work board\"]')",
+          "timeout": 30000
+        },
+        {
+          "type": "waitFor",
+          "selector": "page.getByTestId('column-active')",
+          "timeout": 60000
+        },
+        {
+          "type": "pause",
+          "ms": 3000,
+          "cue": {
+            "name": "s2.3.2.board-active-task",
+            "stableForMs": 1500,
+            "deadlineMs": 30000,
+            "source": {
+              "kind": "selector",
+              "selector": "[data-testid='column-active']",
+              "state": "visible"
+            },
+            "rect": {
+              "mode": "element",
+              "selector": "section[aria-label='Work board']"
+            }
+          }
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('section[aria-label=\"Work board\"]')",
+          "scale": 1.08,
+          "hold": 2500
         }
       ],
       "intervalCategories": [
