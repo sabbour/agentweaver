@@ -1,5 +1,5 @@
 ---
-"@agentweaver/web": minor
+"agentweaver": minor
 ---
 
 feat: built-in workflows support edit, schedule, and event triggers via copy-on-write
