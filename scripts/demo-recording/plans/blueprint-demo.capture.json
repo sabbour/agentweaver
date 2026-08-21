@@ -2209,12 +2209,12 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.locator('[aria-label=\\'Settings\\']')",
+          "selector": "page.getByRole('link', { name: 'Account settings', exact: true })",
           "timeout": 20000
         },
         {
           "type": "click",
-          "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
+          "selector": "page.getByRole('link', { name: 'Account settings', exact: true })",
           "scale": 1.42,
           "after": 800
         },
