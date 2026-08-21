@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const planPath = path.join(__dirname, 'plans', 'azure-aks-demo.capture.json');
+const planPath = path.join(__dirname, 'plans', 'sabbour-aks-demo.capture.json');
 const plan = JSON.parse(fs.readFileSync(planPath, 'utf-8'));
 
 // --- Beat 0.1: work on clean staging (overview page, no pre-existing project) ---

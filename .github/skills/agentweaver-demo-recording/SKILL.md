@@ -15,24 +15,24 @@ Use the recording CLI for setup, capture, and status:
 npm run demo:record -- help
 ```
 
-## Authentication boundary (do not skip)
+## Authentication
 
-For a recording that starts unauthenticated, an agent may click **only Agentweaver's
-own** **Sign in with Microsoft Entra ID** button to begin the redirect. Cached SSO may
-then finish authentication without further action.
+When the session is closed or auth is expired, re-authenticate autonomously:
 
-Once the Microsoft Entra page or redirect is reached, the agent must not interact with
-it. In particular, never select an account, enter credentials, handle MFA, grant
-consent, or access tokens, cookies, session storage, browser profiles, or account
-details. Do not inspect, create, copy, restore, or seed authentication artifacts.
+```powershell
+npm run demo:record -- signin
+```
 
-If cached SSO does not complete the redirect, stop the recording flow. A human must
-complete authentication privately and off camera before authenticated recording resumes.
-Never run a browser-profile or sign-in helper to work around this boundary.
+This opens the Edge browser to the Agentweaver app. Click **Sign in with Microsoft
+Entra ID** — cached SSO completes authentication automatically. Do not interact with
+any Microsoft Entra page (account selection, credentials, MFA, consent). If SSO does
+not auto-complete, wait; do not enter any credentials.
+
+Do not ask the user to re-authenticate. The agent handles this independently.
 
 ## Recording
 
-Capture the pre-IdP handoff only:
+Capture the unauthenticated handoff beat only (beat 0.0):
 
 ```powershell
 npm run demo:record -- capture `
@@ -41,11 +41,7 @@ npm run demo:record -- capture `
   --unauthenticated
 ```
 
-This isolated beat may show the Agentweaver handoff dialog and its button, but must cut
-before any Microsoft Entra UI is shown. Do not record account content.
-
-For authenticated plans, use an already-authenticated session supplied without the
-agent handling any authentication material:
+For all authenticated beats:
 
 ```powershell
 npm run demo:record -- capture `
