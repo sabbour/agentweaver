@@ -3,9 +3,9 @@
   "schemaVersion": 1,
   "requireAllBeats": true,
   "fixture": {
-    "projectName": "Agentweaver Demo S2 — sabbour/AKS",
+    "projectName": "Agentweaver Demo — sabbour/AKS",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo S2 — sabbour/AKS$"
+      "^Agentweaver Demo — sabbour/AKS$"
     ]
   },
   "finalTake": {
@@ -19,7 +19,7 @@
       "freshNavigation": true,
       "captureMode": "unauthenticated",
       "disableApprovalWatcher": true,
-      "videoPath": "recordings/azure-aks/beat-0-0-entra-sign-in-handoff.webm",
+      "videoPath": "recordings/sabbour-aks/beat-0-0-entra-sign-in-handoff.webm",
       "viewport": {
         "width": 1920,
         "height": 1080
@@ -401,20 +401,6 @@
           "after": 3000
         },
         {
-          "type": "waitText",
-          "text": "Only import skills from sources you trust",
-          "timeout": 120000,
-          "after": 200
-        },
-        {
-          "type": "type",
-          "selector": "page.getByPlaceholder('https://github.com/org/repo/tree/main/skills')",
-          "text": "https://github.com/sabbour/agentweaver/tree/dev/.github/skills",
-          "scale": 1.55,
-          "delay": 8,
-          "after": 800
-        },
-        {
           "type": "waitFor",
           "selector": "page.getByRole('dialog').filter({ hasText: 'Only import skills from sources you trust' })",
           "timeout": 30000,
@@ -425,12 +411,13 @@
             "source": {
               "kind": "text",
               "selector": "[role='dialog']",
-              "includes": "https://github.com/sabbour/agentweaver"
+              "includes": "Only import skills from sources you trust"
             },
             "rect": {
               "mode": "matched-element"
             }
-          }
+          },
+          "after": 200
         },
         {
           "type": "hover",

@@ -110,6 +110,10 @@ class FakeCapturePage {
     return new FakeApprovalSourceLocator(this.locatorCards[selector] ?? [], this);
   }
 
+  context() {
+    return this._fakeContext ?? new FakeCaptureContext();
+  }
+
   async waitForTimeout(ms) {
     let remaining = ms;
     while (remaining > 0) {
@@ -129,6 +133,8 @@ class FakeCapturePage {
     this.currentUrl = url;
   }
 
+  async waitForLoadState() {}
+
   async evaluate(arg, data) {
     if (typeof arg !== 'function') return undefined;
     return arg(data);
@@ -143,7 +149,20 @@ class FakeCapturePage {
   }
 }
 
-async function runCaptureScriptOnPage(plan, page) {
+class FakeCaptureContext {
+  constructor(nextPage = null) {
+    this.nextPage = nextPage;
+  }
+
+  async waitForEvent(eventName) {
+    assert.equal(eventName, 'page');
+    if (!this.nextPage) throw new Error('No page event queued');
+    return this.nextPage;
+  }
+}
+
+async function executeCaptureScript(plan, page, context = new FakeCaptureContext()) {
+  page._fakeContext = context;
   const src = renderCaptureScript(plan);
   const capture = eval(`(${src})`);
   const previousNow = Date.now;
@@ -165,8 +184,7 @@ async function runCaptureScriptOnPage(plan, page) {
   globalThis.__demoApprovalWatcherNextId = 0;
   Date.now = () => page.nowMs;
   try {
-    await capture(page);
-    return page;
+    return await capture(page, context);
   } finally {
     Date.now = previousNow;
     if (previousWindow === undefined) {
@@ -186,6 +204,11 @@ async function runCaptureScriptOnPage(plan, page) {
     }
     delete globalThis.__demoApprovalWatcherNextId;
   }
+}
+
+async function runCaptureScriptOnPage(plan, page, context = new FakeCaptureContext()) {
+  await executeCaptureScript(plan, page, context);
+  return page;
 }
 
 async function runCaptureScriptWithCards({ plan, locatorCards }) {
@@ -352,6 +375,22 @@ test('capture script still navigates when a later beat targets a different start
     steps: [],
   }, page);
   assert.deepEqual(page.gotoCalls, ['https://x/y', 'https://x/z']);
+});
+
+test('capture script follows a newly opened tab and continues on the new page', async () => {
+  const originalPage = new FakeCapturePage();
+  const previewPage = new FakeCapturePage();
+  previewPage.currentUrl = 'https://x/preview';
+  const result = await executeCaptureScript({
+    beatId: '4.2',
+    startUrl: 'https://x/workflow',
+    videoPath: 'beat-4-2.webm',
+    steps: [{ type: 'followNewPage', timeout: 1500 }],
+  }, originalPage, new FakeCaptureContext(previewPage));
+
+  assert.equal(result.url, 'https://x/preview');
+  assert.equal(previewPage.__demoCueSink, null, 'expected the new page cleanup path to run');
+  assert.equal(previewPage.__demoCaptureBeatId, '4.2');
 });
 
 test('capture script runs and stops the approval watcher around the step loop', () => {

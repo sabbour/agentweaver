@@ -2,7 +2,7 @@
 
 This is the **single committed source of truth** for the third Agentweaver demo — the
 short **sizzle reel** cut together from the already-locked footage plan in
-`blueprint-demo-beats.md` (**Scenario 1**) and `azure-aks-demo-beats.md`
+`blueprint-demo-beats.md` (**Scenario 1**) and `sabbour-aks-demo-beats.md`
 (**Scenario 2**). It is parsed by `lib/beats.mjs`'s `loadBeatPlan`.
 
 Each `## Beat X.Y — Title` heading starts a beat. `Narration: "..."` is the voiceover

@@ -206,8 +206,17 @@ async function synthesizeBeats(options) {
 async function syncBeat(options) {
   let workingVideo = options.video;
   let trimSummary = null;
+  let activityLog;
   if (options.activityLog) {
-    const activityLog = JSON.parse(await fs.readFile(options.activityLog, 'utf8'));
+    activityLog = JSON.parse(await fs.readFile(options.activityLog, 'utf8'));
+  } else if (options['auto-trim'] || options.autoTrim) {
+    process.stderr.write('auto-trim: detecting visual activity...\n');
+    activityLog = await detectVisualActivity(options.video, {
+      sceneThreshold: Number(options['scene-threshold'] || options.sceneThreshold || 0.0035),
+    });
+    process.stderr.write(`auto-trim: found ${activityLog.length} activity timestamps\n`);
+  }
+  if (activityLog !== undefined) {
     const trimmedPath = `${options.out}.trimmed${path.extname(options.video)}`;
     trimSummary = await trimVideoByActivity(options.video, trimmedPath, activityLog, {
       maxStaticMs: Number(options.maxStaticMs || 2500),

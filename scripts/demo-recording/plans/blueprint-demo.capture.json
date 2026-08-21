@@ -666,8 +666,7 @@
       },
       "expectedCues": [
         "2.3.topology-open",
-        "2.3.topology-ready",
-        "2.3.parent-review-cleared"
+        "2.3.topology-ready"
       ],
       "cueWatchers": [
         {
@@ -696,6 +695,11 @@
           "type": "eval",
           "code": "window.scrollTo(0, 0); document.documentElement.scrollLeft = 0;",
           "after": 300
+        },
+        {
+          "type": "eval",
+          "code": "const btn = document.querySelector('[data-testid=\"toggle-run-tree\"]'); if (btn && btn.closest('aside[aria-label=\"Run tree (collapsed)\"]')) { btn.click(); }",
+          "after": 800
         },
         {
           "type": "waitFor",
@@ -729,46 +733,12 @@
           "type": "press",
           "key": "Escape",
           "after": 800
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('coordinator-review-changes')",
-          "timeout": 600000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByTestId('coordinator-review-changes')",
-          "scale": 1.3,
-          "after": 800
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
-          "timeout": 600000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: 'Approve human review and continue to merge', exact: true })",
-          "scale": 1.35,
-          "after": 1000
-        },
-        {
-          "type": "waitText",
-          "text": "Completed",
-          "timeout": 180000,
-          "cue": {
-            "name": "2.3.parent-review-cleared",
-            "rect": {
-              "mode": "element",
-              "selector": "main"
-            }
-          }
         }
       ]
     },
     {
       "id": "2.4",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/2da285ea-7160-444b-9ce4-1b54a3081937/board",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.4-review-board.webm",
       "viewport": {
@@ -782,8 +752,7 @@
       },
       "expectedCues": [
         "2.4.task-entry",
-        "2.4.promoted-task",
-        "2.4.pickup-run"
+        "2.4.promoted-task"
       ],
       "cueWatchers": [
         {
@@ -809,15 +778,9 @@
           "duration": 1800
         },
         {
-          "type": "click",
-          "selector": "page.locator('[aria-label=\\'Board\\']')",
-          "scale": 1.42,
-          "after": 800
-        },
-        {
-          "type": "waitText",
-          "text": "Agent task board",
-          "timeout": 30000,
+          "type": "waitFor",
+          "selector": "page.getByTestId('column-backlog')",
+          "timeout": 60000,
           "cue": {
             "name": "2.4.task-entry",
             "rect": {
@@ -828,28 +791,10 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
+          "selector": "page.locator('[aria-label=\"Work board\"]').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' }).or(page.locator('[aria-label=\"Work board\"]').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }))",
           "timeout": 240000,
           "cue": {
             "name": "2.4.promoted-task",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
-          "type": "drag",
-          "selector": "page.getByTestId('column-backlog').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' })",
-          "target": "page.getByTestId('column-ready')",
-          "scale": 1.4,
-          "after": 1100
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('column-active').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' })",
-          "timeout": 180000,
-          "cue": {
-            "name": "2.4.pickup-run",
             "rect": {
               "mode": "matched-element"
             }

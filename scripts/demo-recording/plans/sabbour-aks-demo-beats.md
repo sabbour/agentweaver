@@ -21,7 +21,7 @@ Staging is running project-clone fix commit `12dcf52a29d0499035c70fe54da4903c61d
 (deployment tag `12dcf52`); health checks and image provenance passed.
 
 **Exact sabbour/AKS retry:** in the already-open GitHub project dialog, select `sabbour/AKS`,
-keep the fixture name `Agentweaver Demo S2 — sabbour/AKS`, select the generated blueprint,
+keep the fixture name `Agentweaver Demo — sabbour/AKS`, select the generated blueprint,
 then choose **Create project once** and wait for the project page to load before doing
 anything else. Do not click Create again while it is pending and do not delete a shared
 staging project. If that fixture already exists, open it rather than creating another.
@@ -44,7 +44,7 @@ What makes this scenario different from the blueprint demo:
 
 ## Beat 0.0 — Hand off to secure sign-in
 
-Narration: "Agentweaver hands sign-in to Microsoft Entra."
+Narration: "Agentweaver is an AI agent platform for engineering teams. It takes the recurring work — issue triage, blog posts, release notes, roadmap analysis — and runs it automatically, in the context of your actual repo and your team. Sign-in goes through your company's Microsoft Entra identity."
 
 Fresh navigation: true
 
@@ -63,7 +63,7 @@ On screen: Start on the live `sabbour/AKS` repository context inside Agentweaver
 
 ## Beat 1.1 — Generate the right blueprint
 
-Narration: "I'll point this at the AKS repo. Instead of picking a pre-built blueprint, I'll generate one for what we actually need — managing issues and roadmap work, plus running the blog."
+Narration: "I'll point this at the AKS repo. Instead of picking a pre-built blueprint, I'll generate one for what we actually need — managing issues and roadmap work, plus running the blog. Agentweaver reads the repo's issues, PRs, and content history to build the right team and workflows from scratch."
 
 Fresh navigation: true
 
@@ -71,18 +71,18 @@ On screen: In the repo-to-project flow, point Agentweaver at `sabbour/AKS`, choo
 
 ## Beat 1.2 — Meet the cast and import PM skills
 
-Narration: "Here's the team, and the skills they're starting with. I'll pull in a set of PM skills built for this exact job — drafting posts, reviewing drafts, writing PRDs, reviewing PRDs, naming features, writing social copy. This same cast sticks around for every run, so the team builds real memory over time instead of starting cold each week."
+Narration: "Here's the team, and the skills they're starting with. Agentweaver ships a marketplace of ready-made skills — and you can import custom ones straight from any GitHub repo. This same cast sticks around for every run, so the team builds real memory over time instead of starting cold each week."
 
-On screen: From the project you just created, open **Skills** and use the live **Import skill** dialog to bring in the six `akspm-*` skills, then assign them to matching roles. If direct GitHub import is blocked for the signed-in user, preload the local folder off camera, but keep the on-camera flow on this same open Skills page rather than restarting elsewhere.
+On screen: From the project you just created, open **Skills**, show the team and open the import dialog to demonstrate the capability. Hover over the dialog briefly, then close it without importing. The skill import itself runs off-camera.
 
 <!-- Coordinator-final numbering preserved: beat 2.1 was folded away during final consolidation. -->
-## Beat 2.2 — Generate the issue-triage workflow
+## Beat 2.2 — Generate the content pipeline workflow
 
-Narration: "This workflow does the real work: classify open issues, group the duplicate feature requests together, and for anything not already documented, write a PRD, name it, and review it. I'll generate it from a description and check the graph it built. I'll set it to run weekly — but I can also fire it off a GitHub event instead. Let's add a second trigger: whenever an issue gets labeled `roadmap-review`, run the same workflow."
+Narration: "This workflow does the real work on the content side: watch merged PRs and releases week over week, draft a blog post on what changed, and queue it for team review before anything touches the repo. I'll generate it from a description, check the graph it built, then set it on a weekly cadence."
 
 Fresh navigation: true
 
-On screen: Generate the workflow from a description, inspect the visual editor graph it produces, then stay in the same workflow and add both triggers: a weekly schedule and an event trigger for **Issues** with label `roadmap-review`. Save both from this same workflow editing context.
+On screen: Generate the workflow from a natural-language description of a weekly content pipeline (blog post from merged PRs/releases), inspect the visual editor graph it produces, then save with a weekly schedule trigger.
 
 ## Beat 2.3 — Add the writing skill
 
@@ -102,15 +102,15 @@ On screen: Trigger **Run now** on the issue-triage workflow, stay on the coordin
 
 ## Beat 3.2 — Draft the blog post locally
 
-Narration: "This one's not tied to the specs we just generated — it's a standalone post on multi-agent orchestration on AKS, researched against sabbour.me/agentweaver. I'll keep this local. If I approved it here, it would open straight up as a pull request against the repo — but I'm leaving that step alone for now."
+Narration: "This one's not tied to the specs we just generated — it's a standalone post on multi-agent orchestration on AKS. I'll give it a read, and if it's ready, approving right here opens a pull request directly against the repo."
 
 On screen: Start the content-authoring task from the same project context, let the draft complete, and show the real approve-to-open-PR notification or banner without clicking through.
 
-## Beat 4.4 — Check observability
+## Beat 4.4 — Check cluster health
 
-Narration: "Before we wrap, here's the observability behind all of this — live cluster health, quota headroom, warm pool readiness, sandbox claims, refreshing in real time."
+Narration: "Before we wrap, here's the infrastructure behind all of this — live cluster health, quota headroom, warm pool readiness, sandbox claims, refreshing in real time. Every agent run draws from this shared pool, so the team always has capacity when work comes in — and you can see exactly how much headroom is available before it's needed."
 
-On screen: Navigate to **Cluster** (`/projects/:projectId/cluster`), wait for real rendered diagnostics such as `agent_pod_quota`, `Warm pool ready`, and the sandbox-claims table, then hold long enough for the auto-refresh countdown or refreshed timestamp to visibly change.
+On screen: Navigate to **Cluster** (`/projects/:projectId/cluster`), wait for cluster diagnostics to render, and hold on the health overview.
 
 ## Beat 5.1 — Outro
 
