@@ -6,9 +6,9 @@
     "repository": "sabbour/agentweaver-demo-dryrun"
   },
   "fixture": {
-    "projectName": "Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio",
+    "projectName": "Agentweaver Demo â€” Trailhead Travel Studio",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
+      "^Agentweaver Demo â€” Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
     ]
   },
   "finalTake": {
@@ -190,7 +190,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('My project')",
-          "text": "Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio",
+          "text": "Agentweaver Demo â€” Trailhead Travel Studio",
           "scale": 1.6,
           "delay": 36,
           "after": 900
@@ -276,7 +276,7 @@
         },
         {
           "type": "waitText",
-          "text": "Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio",
+          "text": "Agentweaver Demo â€” Trailhead Travel Studio",
           "timeout": 60000,
           "cue": {
             "name": "1.2.project-created",
@@ -349,7 +349,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo â€” Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
@@ -519,7 +519,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo â€” Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
@@ -1545,7 +1545,7 @@
     },
     {
       "id": "4.1",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/assistant",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.1-chat-triage.webm",
       "viewport": {
@@ -1568,12 +1568,12 @@
           "deadlineMs": 60000,
           "source": {
             "kind": "selector",
-            "selector": "#issue-title",
+            "selector": "h1",
             "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "#issue-title"
+            "selector": "h1"
           }
         }
       ],
@@ -1581,47 +1581,28 @@
         {
           "type": "badge",
           "label": "Beat 4.1",
-          "title": "Triage the next issue from chat",
+          "title": "Chat triage — read and dispatch the bug",
           "duration": 1800
         },
         {
-          "type": "goto",
-          "url": "{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL}}",
-          "after": 800
+          "type": "eval",
+          "code": "window.open('https://github.com/sabbour/agentweaver-demo-dryrun/issues/5', '_blank')",
+          "after": 2500
         },
         {
           "type": "waitFor",
-          "selector": "page.locator('#issue-title')",
-          "timeout": 60000
-        },
-        {
-          "type": "goto",
-          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
-          "after": 800
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('assistant-run-page')",
-          "timeout": 30000,
-          "cue": {
-            "name": "4.1.assistant-ready",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
+          "selector": "page.getByPlaceholder('Message the assistant...')",
+          "timeout": 30000
         },
         {
           "type": "type",
           "selector": "page.getByPlaceholder('Message the assistant...')",
-          "text": "Triage GitHub issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}} from the Trailhead Travel Studio repository.",
-          "scale": 1.55,
-          "after": 500
+          "text": "Triage GitHub issue #5 from the Trailhead Travel Studio repository."
         },
         {
           "type": "press",
           "selector": "page.getByPlaceholder('Message the assistant...')",
-          "key": "Enter",
-          "after": 1000
+          "key": "Enter"
         }
       ],
       "requiresPriorBeat": "3.2",
@@ -1695,7 +1676,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('assistant-run-page')",
-          "timeout": 30000
+          "timeout": 90000
         },
         {
           "type": "waitFor",
@@ -2232,7 +2213,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo â€” Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
