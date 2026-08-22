@@ -6,9 +6,9 @@
     "repository": "sabbour/agentweaver-demo-dryrun"
   },
   "fixture": {
-    "projectName": "Agentweaver Demo — Trailhead Travel Studio",
+    "projectName": "Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo — Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
+      "^Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
     ]
   },
   "finalTake": {
@@ -190,7 +190,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('My project')",
-          "text": "Agentweaver Demo — Trailhead Travel Studio",
+          "text": "Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio",
           "scale": 1.6,
           "delay": 36,
           "after": 900
@@ -276,7 +276,7 @@
         },
         {
           "type": "waitText",
-          "text": "Agentweaver Demo — Trailhead Travel Studio",
+          "text": "Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio",
           "timeout": 60000,
           "cue": {
             "name": "1.2.project-created",
@@ -349,7 +349,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
@@ -519,7 +519,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
@@ -736,7 +736,8 @@
           "key": "Escape",
           "after": 800
         }
-      ]
+      ],
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c"
     },
     {
       "id": "2.4",
@@ -806,7 +807,8 @@
             }
           }
         }
-      ]
+      ],
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/board"
     },
     {
       "id": "2.5",
@@ -2230,7 +2232,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo \u00e2\u20ac\u201d Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
