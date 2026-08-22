@@ -73,7 +73,8 @@ public sealed class StartPreviewToolTests
 
         schema.Should().Contain("port", because: "the model supplies the port to expose");
         schema.Should().NotContain("target_port", because: "the wire DTO name must not leak into the tool schema");
-        schema.Should().Contain("session_id", because: "the observed process session is required to prove liveness before publication");`r`n        schema.Should().NotContain("runId", because: "runId is server-bound in the closure, never a model argument");
+        schema.Should().Contain("session_id", because: "the observed process session is required to prove liveness before publication");
+        schema.Should().NotContain("runId", because: "runId is server-bound in the closure, never a model argument");
     }
 
     [Fact]
