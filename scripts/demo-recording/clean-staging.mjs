@@ -58,10 +58,15 @@ export function parseCleanupOptions(argv) {
 export function assertPlanTargetsBaseUrl(captureConfig, baseUrl) {
   // Continuation beats (cross-beat URL continuity) legitimately omit startUrl.
   // Only beats that declare a startUrl are checked; at least one must exist.
-  const startUrls = captureConfig.beats
+  // Template placeholders (e.g. "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board") are runtime-resolved
+  // and cannot be validated statically — skip them, but require at least one absolute URL.
+  const allStartUrls = captureConfig.beats
     .map((beat) => beat.startUrl)
     .filter((startUrl) => startUrl != null);
-  if (startUrls.length === 0 || startUrls.some((startUrl) => typeof startUrl !== 'string' || !URL.canParse(startUrl))) {
+  const startUrls = allStartUrls.filter(
+    (startUrl) => typeof startUrl === 'string' && !startUrl.startsWith('{{'),
+  );
+  if (startUrls.length === 0 || startUrls.some((startUrl) => !URL.canParse(startUrl))) {
     throw new Error('Cleanup refused: at least one beat must declare an absolute staging startUrl, and all declared startUrls must be valid.');
   }
   const origins = new Set(
