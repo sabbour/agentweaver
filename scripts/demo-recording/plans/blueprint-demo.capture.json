@@ -1627,7 +1627,6 @@
     },
     {
       "id": "4.2",
-      "startUrl": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.2-assistant-triage.webm",
       "viewport": {
@@ -1674,7 +1673,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-transcript')",
+          "selector": "page.getByTestId('assistant-transcript').getByText(\"There's a bug reported\", { exact: false })",
           "timeout": 300000,
           "cue": {
             "name": "4.2.triage-response",
@@ -1694,7 +1693,6 @@
     },
     {
       "id": "4.3",
-      "startUrl": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.3-scope-bug.webm",
       "viewport": {
