@@ -737,7 +737,19 @@
           "after": 800
         }
       ],
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378"
+      "startUrl": "{{AGENTWEAVER_DEMO_ORCHESTRATION_URL}}",
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ORCHESTRATION_URL",
+          "kind": "app-url",
+          "message": "Set to the full orchestration run URL from beat 2.2, e.g. https://agentweaver.../projects/{id}/orchestrations/{runId}. Find the run ID in beat 2.2 cue logs or the URL bar after the coordinator starts."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set to the full project URL from beat 1.1, e.g. https://agentweaver.../projects/{id}."
+        }
+      ]
     },
     {
       "id": "2.4",
@@ -810,7 +822,7 @@
         {
           "type": "hover",
           "selector": "page.locator('[aria-label=\"Work board\"]')",
-          "scale": 1.0,
+          "scale": 1,
           "hold": 3500
         },
         {
@@ -824,17 +836,34 @@
           "ms": 2000
         }
       ],
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/board"
+      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
+      "prerequisites": [
+        {
+          "environment": "AGENTWEAVER_DEMO_ORCHESTRATION_URL",
+          "kind": "app-url",
+          "message": "Set to the full orchestration run URL from beat 2.2, e.g. https://agentweaver.../projects/{id}/orchestrations/{runId}. Find the run ID in beat 2.2 cue logs or the URL bar after the coordinator starts."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
+          "kind": "app-url",
+          "message": "Set to the full project URL from beat 1.1, e.g. https://agentweaver.../projects/{id}."
+        }
+      ]
     },
     {
       "id": "2.5",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
+      "startUrl": "{{AGENTWEAVER_DEMO_ORCHESTRATION_URL}}",
       "freshNavigation": false,
       "prerequisites": [
         {
           "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
           "kind": "app-url",
           "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 2.3 or 2.4 cue logs."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_ORCHESTRATION_URL",
+          "kind": "app-url",
+          "message": "Set to the full orchestration run URL from beat 2.2, e.g. https://agentweaver.../projects/{id}/orchestrations/{runId}. Find the run ID in beat 2.2 cue logs or the URL bar after the coordinator starts."
         }
       ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.5-ship-it.webm",
@@ -939,13 +968,18 @@
     },
     {
       "id": "2.6",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
+      "startUrl": "{{AGENTWEAVER_DEMO_ORCHESTRATION_URL}}",
       "freshNavigation": false,
       "prerequisites": [
         {
           "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
           "kind": "app-url",
           "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_ORCHESTRATION_URL",
+          "kind": "app-url",
+          "message": "Set to the full orchestration run URL from beat 2.2, e.g. https://agentweaver.../projects/{id}/orchestrations/{runId}. Find the run ID in beat 2.2 cue logs or the URL bar after the coordinator starts."
         }
       ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.6-review-merge.webm",
@@ -1063,13 +1097,18 @@
     },
     {
       "id": "2.7",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
+      "startUrl": "{{AGENTWEAVER_DEMO_ORCHESTRATION_URL}}",
       "freshNavigation": false,
       "prerequisites": [
         {
           "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
           "kind": "app-url",
           "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_ORCHESTRATION_URL",
+          "kind": "app-url",
+          "message": "Set to the full orchestration run URL from beat 2.2, e.g. https://agentweaver.../projects/{id}/orchestrations/{runId}. Find the run ID in beat 2.2 cue logs or the URL bar after the coordinator starts."
         }
       ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.7-review-trace.webm",
@@ -1193,13 +1232,18 @@
     },
     {
       "id": "2.8",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
+      "startUrl": "{{AGENTWEAVER_DEMO_ORCHESTRATION_URL}}",
       "freshNavigation": false,
       "prerequisites": [
         {
           "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
           "kind": "app-url",
           "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
+        },
+        {
+          "environment": "AGENTWEAVER_DEMO_ORCHESTRATION_URL",
+          "kind": "app-url",
+          "message": "Set to the full orchestration run URL from beat 2.2, e.g. https://agentweaver.../projects/{id}/orchestrations/{runId}. Find the run ID in beat 2.2 cue logs or the URL bar after the coordinator starts."
         }
       ],
       "videoPath": "recordings/final-takes/trailhead-travel-studio/2.8-review-memory.webm",
