@@ -481,7 +481,7 @@ function previewUrlFromSession(session: PortForwardSessionDto | undefined): stri
 
 type RunPreviewState =
   | { status: 'none' }
-  | { status: 'ready'; previewUrl: string; targetPort?: string }
+  | { status: 'ready'; previewUrl: string; targetPort?: string; eventSequence: number }
   | { status: 'pending'; targetPort?: string }
   | {
     status: 'failed';
@@ -502,6 +502,7 @@ function latestPreviewStateFromEvents(events: RunStreamEvent[]): RunPreviewState
           status: 'ready',
           previewUrl: String(preview),
           targetPort: targetPort == null ? undefined : String(targetPort),
+          eventSequence: evt.sequence,
         };
       }
     }
@@ -530,14 +531,14 @@ function previewFailureCopy(state: Extract<RunPreviewState, { status: 'failed' }
 
 type PreviewDnsStatus = 'idle' | 'warming' | 'ready' | 'timed_out';
 
-function usePreviewDnsStatus(previewUrl: string | null): PreviewDnsStatus {
-  const [probeState, setProbeState] = useState<{ url: string | null; status: PreviewDnsStatus }>({
-    url: null,
+function usePreviewDnsStatus(previewUrl: string | null, probeKey: string | null): PreviewDnsStatus {
+  const [probeState, setProbeState] = useState<{ key: string | null; status: PreviewDnsStatus }>({
+    key: null,
     status: 'idle',
   });
 
   useEffect(() => {
-    if (!previewUrl) {
+    if (!previewUrl || !probeKey) {
       return;
     }
 
@@ -548,13 +549,13 @@ function usePreviewDnsStatus(previewUrl: string | null): PreviewDnsStatus {
     const probe = async () => {
       try {
         await fetch(previewUrl, { method: 'HEAD', mode: 'no-cors', signal: abortController.signal });
-        if (!cancelled) setProbeState({ url: previewUrl, status: 'ready' });
+        if (!cancelled) setProbeState({ key: probeKey, status: 'ready' });
       } catch {
         attempts += 1;
         if (attempts < 60 && !cancelled) {
           retryTimer = setTimeout(() => void probe(), 5_000);
         } else if (!cancelled) {
-          setProbeState({ url: previewUrl, status: 'timed_out' });
+          setProbeState({ key: probeKey, status: 'timed_out' });
         }
       }
     };
@@ -565,10 +566,10 @@ function usePreviewDnsStatus(previewUrl: string | null): PreviewDnsStatus {
       if (retryTimer !== undefined) clearTimeout(retryTimer);
       abortController.abort();
     };
-  }, [previewUrl]);
+  }, [previewUrl, probeKey]);
 
-  if (!previewUrl) return 'idle';
-  return probeState.url === previewUrl ? probeState.status : 'warming';
+  if (!previewUrl || !probeKey) return 'idle';
+  return probeState.key === probeKey ? probeState.status : 'warming';
 }
 
 // Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
@@ -2677,7 +2678,10 @@ export function CoordinatorRunPage() {
   const runPreviewState = useMemo(() => latestPreviewStateFromEvents(events), [events]);
   const activePreviewSession = previewSession ?? previewSessions.find((session) => previewUrlFromSession(session)) ?? previewSessions[0];
   const activePreviewUrl = runPreviewState.status === 'ready' ? runPreviewState.previewUrl : null;
-  const previewDnsStatus = usePreviewDnsStatus(activePreviewUrl);
+  const previewDnsProbeKey = runPreviewState.status === 'ready'
+    ? `${runPreviewState.eventSequence}:${runPreviewState.previewUrl}`
+    : null;
+  const previewDnsStatus = usePreviewDnsStatus(activePreviewUrl, previewDnsProbeKey);
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase)

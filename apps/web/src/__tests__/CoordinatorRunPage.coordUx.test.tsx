@@ -142,9 +142,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
 
   it('surfaces a durable ready preview on Build & Test and human review', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
-    const originalFetch = globalThis.fetch;
-    const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
-    globalThis.fetch = fetchSpy as typeof fetch;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
     vi.mocked(apiClient.getRunGraph).mockResolvedValue(graphWithBuildTest);
     vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'awaiting_review', coordinator_status: 'in_review' } as never);
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
@@ -178,7 +176,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
       expect(reviewPreview.textContent).toContain('Preview from Build & Test is active');
       expect(reviewPreview.textContent).toContain('Preview DNS is ready.');
     } finally {
-      globalThis.fetch = originalFetch;
+      fetchSpy.mockRestore();
       openSpy.mockRestore();
     }
   });
