@@ -1,5 +1,5 @@
 ---
-"agentweaver-demo-recording": patch
+"agentweaver": patch
 ---
 
 fix(demo): beat capture fixes, narration scripts, and clean-staging improvements
