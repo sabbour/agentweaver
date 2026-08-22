@@ -128,6 +128,7 @@
     },
     {
       "id": "1.1",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "videoPath": "recordings/final-takes/aks-product-operations/beat-1-1.webm",
       "viewport": {
         "width": 1920,
@@ -871,7 +872,8 @@
           "category": "action"
         }
       ],
-      "requiresPriorBeat": "1.2"
+      "requiresPriorBeat": "1.2",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/f78344e3-5fce-4453-b72f-b53b4afccd6d"
     },
     {
       "id": "2.3",
@@ -1041,7 +1043,8 @@
           "category": "action"
         }
       ],
-      "requiresPriorBeat": "2.2"
+      "requiresPriorBeat": "2.2",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/f78344e3-5fce-4453-b72f-b53b4afccd6d"
     },
     {
       "id": "3.1",
@@ -1259,7 +1262,8 @@
           "category": "wait"
         }
       ],
-      "requiresPriorBeat": "2.3"
+      "requiresPriorBeat": "2.3",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview"
     },
     {
       "id": "3.2",
@@ -1340,7 +1344,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByLabel('Workflow')",
+          "selector": "page.getByRole('dialog').getByLabel('Workflow', { exact: true })",
           "timeout": 8000,
           "cue": {
             "name": "s2.3.2.workflow-selector",
@@ -1358,14 +1362,14 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByLabel('Workflow')",
+          "selector": "page.getByRole('dialog').getByLabel('Workflow', { exact: true })",
           "scale": 1.4,
           "hold": 1200
         },
         {
           "type": "select",
-          "selector": "page.getByLabel('Workflow')",
-          "value": "",
+          "selector": "page.getByRole('dialog').getByLabel('Workflow', { exact: true })",
+          "option": "aks-product-operations",
           "after": 500
         },
         {
@@ -1418,44 +1422,18 @@
           "hold": 2000
         },
         {
-          "type": "gotoFromSessionStorage",
-          "key": "demo-project-id",
-          "urlTemplate": "/projects/{{value}}",
-          "after": 1500
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.locator('section[aria-label=\"Work board\"]')",
-          "timeout": 30000
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('column-active')",
-          "timeout": 60000
-        },
-        {
           "type": "pause",
-          "ms": 3000,
-          "cue": {
-            "name": "s2.3.2.board-active-task",
-            "stableForMs": 1500,
-            "deadlineMs": 30000,
-            "source": {
-              "kind": "selector",
-              "selector": "[data-testid='column-active']",
-              "state": "visible"
-            },
-            "rect": {
-              "mode": "element",
-              "selector": "section[aria-label='Work board']"
-            }
-          }
+          "ms": 3000
         },
         {
           "type": "hover",
-          "selector": "page.locator('section[aria-label=\"Work board\"]')",
-          "scale": 1.08,
-          "hold": 2500
+          "selector": "page.locator('main')",
+          "scale": 1.1,
+          "hold": 3000
+        },
+        {
+          "type": "pause",
+          "ms": 2000
         }
       ],
       "intervalCategories": [
@@ -1465,7 +1443,8 @@
           "category": "wait"
         }
       ],
-      "requiresPriorBeat": "3.1"
+      "requiresPriorBeat": "3.1",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview"
     },
     {
       "id": "4.4",
@@ -1587,7 +1566,8 @@
           "category": "action"
         }
       ],
-      "requiresPriorBeat": "3.2"
+      "requiresPriorBeat": "3.2",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview"
     },
     {
       "id": "5.1",
@@ -1668,7 +1648,8 @@
           "category": "action"
         }
       ],
-      "requiresPriorBeat": "4.4"
+      "requiresPriorBeat": "4.4",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview"
     }
   ],
   "authentication": {
