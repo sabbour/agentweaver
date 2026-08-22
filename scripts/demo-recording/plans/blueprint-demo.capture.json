@@ -1553,9 +1553,9 @@
         "height": 1080
       },
       "outputBudgetMs": {
-        "minimum": 8000,
-        "preferred": 12000,
-        "maximum": 19000
+        "maximum": 60000,
+        "preferred": 45000,
+        "minimum": 30000
       },
       "expectedCues": [
         "4.1.issue-open",
@@ -1739,7 +1739,7 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-transcript').getByText('Bug Fix', { exact: false })",
+          "selector": "page.getByTestId('assistant-transcript').getByText('workflow', { exact: false })",
           "timeout": 300000,
           "cue": {
             "name": "4.3.scope-visible",
