@@ -737,7 +737,7 @@
           "after": 800
         }
       ],
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c"
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378"
     },
     {
       "id": "2.4",
@@ -812,7 +812,7 @@
     },
     {
       "id": "2.5",
-      "startUrl": "",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -923,7 +923,7 @@
     },
     {
       "id": "2.6",
-      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -1047,7 +1047,7 @@
     },
     {
       "id": "2.7",
-      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -1177,7 +1177,7 @@
     },
     {
       "id": "2.8",
-      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
       "freshNavigation": false,
       "prerequisites": [
         {
