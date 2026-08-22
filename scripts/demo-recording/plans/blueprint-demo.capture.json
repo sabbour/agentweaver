@@ -810,7 +810,7 @@
     },
     {
       "id": "2.5",
-      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
+      "startUrl": "",
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -859,35 +859,14 @@
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId(/^run-card-/).filter({ hasText: 'Trailhead Travel Studio' }).first()",
-          "timeout": 1200000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByTestId(/^run-card-/).filter({ hasText: 'Trailhead Travel Studio' }).first()",
-          "scale": 1.5,
-          "after": 700
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('open-topology-minimap')",
-          "timeout": 30000,
           "cue": {
             "name": "2.5.run-open",
             "rect": {
-              "mode": "matched-element"
+              "mode": "viewport"
             }
-          }
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('treeitem').filter({ hasText: /\\d+ approval/ }).first()",
-          "timeout": 600000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('treeitem').filter({ hasText: /\\d+ approval/ }).first()",
-          "after": 400
+          },
+          "selector": "page.getByRole('complementary', { name: 'Run tree' })",
+          "timeout": 30000
         },
         {
           "type": "waitFor",
@@ -895,14 +874,14 @@
           "timeout": 600000
         },
         {
-          "type": "pause",
-          "ms": 2200
+          "ms": 2200,
+          "type": "pause"
         },
         {
           "type": "click",
+          "after": 2000,
           "selector": "page.getByTestId('session-approval-gate').or(page.getByTestId('assistant-approval-gate')).getByRole('button', { name: 'Allow once' }).first()",
           "scale": 1.6,
-          "after": 2000,
           "force": true
         },
         {
@@ -912,31 +891,31 @@
         },
         {
           "type": "click",
+          "after": 1800,
           "selector": "page.getByRole('button', { name: /Open preview|Preview sandbox/i }).first()",
-          "scale": 1.52,
-          "after": 1800
+          "scale": 1.52
         },
         {
           "type": "followNewPage",
-          "timeout": 15000,
-          "after": 2000
+          "after": 2000,
+          "timeout": 15000
         },
         {
           "type": "pause",
-          "ms": 3000,
           "cue": {
-            "name": "2.5.preview-open",
-            "stableForMs": 1000,
-            "deadlineMs": 10000,
-            "source": {
-              "kind": "selector",
-              "selector": "body",
-              "state": "visible"
-            },
             "rect": {
               "mode": "viewport"
-            }
-          }
+            },
+            "deadlineMs": 10000,
+            "name": "2.5.preview-open",
+            "source": {
+              "selector": "body",
+              "kind": "selector",
+              "state": "visible"
+            },
+            "stableForMs": 1000
+          },
+          "ms": 3000
         }
       ]
     },

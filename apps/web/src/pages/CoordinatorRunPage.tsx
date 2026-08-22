@@ -3384,6 +3384,8 @@ export function CoordinatorRunPage() {
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
   const [composerFocusSignal, setComposerFocusSignal] = useState(0);
   const lastSelectedOutcomePlanSeqRef = useRef<number | null>(null);
+  // Tracks previous pendingApprovalCounts.size so we can detect NEW arrivals only.
+  const prevApprovalSizeRef = useRef(0);
 
   const openPanelForNode = useCallback((nodeId: string, opts?: { closeTopology?: boolean }) => {
     setPanelNodeId(nodeId);
@@ -3416,6 +3418,25 @@ export function CoordinatorRunPage() {
       setSessionPanelOpen(true);
     });
   }, [isChildRun, latestOutcomePlanEvent]);
+
+  // When a real-time tool/shell approval event arrives and the current panel is still on the
+  // outcome-plan view, automatically switch to the agent session that needs approval so the
+  // session-approval-gate is immediately visible without a manual tree click.
+  useEffect(() => {
+    const size = pendingApprovalCounts.size;
+    const prevSize = prevApprovalSizeRef.current;
+    prevApprovalSizeRef.current = size;
+    if (size <= prevSize || size === 0) return;
+    if (panelNodeId !== 'outcome-plan') return;
+    const firstPendingRunId = [...pendingApprovalCounts.keys()][0];
+    if (firstPendingRunId === runId) {
+      openPanelForNode('coordinator');
+    } else {
+      const node = flatSessionTree.find((item) => item.childRunId === firstPendingRunId);
+      if (node) openPanelForNode(node.nodeId);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingApprovalCounts]);
 
   const activePanelNodeId = panelNodeId && sessionNodeIds.has(panelNodeId) ? panelNodeId : defaultSessionNodeId;
   const selectedSessionItem = flatSessionTree.find((node) => node.nodeId === activePanelNodeId) ?? flatSessionTree[0] ?? null;
