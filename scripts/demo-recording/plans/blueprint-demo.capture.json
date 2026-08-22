@@ -806,6 +806,22 @@
               "mode": "matched-element"
             }
           }
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('[aria-label=\"Work board\"]')",
+          "scale": 1.0,
+          "hold": 3500
+        },
+        {
+          "type": "hover",
+          "selector": "page.locator('[aria-label=\"Work board\"]').getByTestId(/^task-card-/).filter({ hasText: 'Create Trailhead landing page' }).or(page.locator('[aria-label=\"Work board\"]').getByTestId(/^run-card-/).filter({ hasText: 'Create Trailhead landing page' }))",
+          "scale": 1.3,
+          "hold": 4500
+        },
+        {
+          "type": "pause",
+          "ms": 2000
         }
       ],
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/board"
@@ -1696,7 +1712,23 @@
           "type": "hover",
           "selector": "page.getByTestId('assistant-transcript')",
           "scale": 1.25,
-          "hold": 2800
+          "hold": 5000
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 200);",
+          "after": 600
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('assistant-transcript')",
+          "scale": 1.15,
+          "hold": 3500
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollTo(0, 0);",
+          "after": 500
         }
       ],
       "requiresPriorBeat": "4.1"
@@ -1762,7 +1794,23 @@
           "type": "hover",
           "selector": "page.getByTestId('assistant-transcript').getByText(/bug fix|workflow|triage/i).first()",
           "scale": 1.28,
-          "hold": 2200
+          "hold": 4500
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollBy(0, 250);",
+          "after": 600
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('assistant-transcript')",
+          "scale": 1.15,
+          "hold": 3500
+        },
+        {
+          "type": "eval",
+          "code": "window.scrollTo(0, 0);",
+          "after": 500
         }
       ],
       "requiresPriorBeat": "4.2"
