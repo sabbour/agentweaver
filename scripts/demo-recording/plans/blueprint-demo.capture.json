@@ -6,9 +6,9 @@
     "repository": "sabbour/agentweaver-demo-dryrun"
   },
   "fixture": {
-    "projectName": "Agentweaver Demo â€” Trailhead Travel Studio",
+    "projectName": "Agentweaver Demo — Trailhead Travel Studio",
     "safeProjectNamePatterns": [
-      "^Agentweaver Demo â€” Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
+      "^Agentweaver Demo — Trailhead Travel Studio(?: - [0-9]{8}T[0-9]{6}Z)?$"
     ]
   },
   "finalTake": {
@@ -190,7 +190,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('My project')",
-          "text": "Agentweaver Demo â€” Trailhead Travel Studio",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "scale": 1.6,
           "delay": 36,
           "after": 900
@@ -276,7 +276,7 @@
         },
         {
           "type": "waitText",
-          "text": "Agentweaver Demo â€” Trailhead Travel Studio",
+          "text": "Agentweaver Demo — Trailhead Travel Studio",
           "timeout": 60000,
           "cue": {
             "name": "1.2.project-created",
@@ -349,7 +349,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo â€” Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
@@ -519,7 +519,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo â€” Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
@@ -2186,7 +2186,7 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo â€” Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Agentweaver Demo — Trailhead Travel Studio' }).getByRole('button', { name: 'Open', exact: true }).first()",
           "scale": 1.45,
           "after": 900
         },
