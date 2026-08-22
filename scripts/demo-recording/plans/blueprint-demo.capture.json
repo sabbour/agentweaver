@@ -1546,7 +1546,7 @@
     {
       "id": "4.1",
       "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/assistant",
-      "freshNavigation": false,
+      "freshNavigation": true,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.1-chat-triage.webm",
       "viewport": {
         "width": 1920,
@@ -1597,7 +1597,7 @@
         {
           "type": "type",
           "selector": "page.getByPlaceholder('Message the assistant...')",
-          "text": "Triage GitHub issue #5 from the Trailhead Travel Studio repository."
+          "text": "There's a bug reported in issue #5 in the Trailhead Travel Studio repository. Please triage it and kick off a Bug Fix workflow run to address it."
         },
         {
           "type": "press",
@@ -1681,7 +1681,7 @@
         {
           "type": "waitFor",
           "selector": "page.getByTestId('assistant-approval-gate')",
-          "timeout": 240000,
+          "timeout": 480000,
           "cue": {
             "name": "4.2.approval-gate",
             "rect": {
