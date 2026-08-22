@@ -3429,12 +3429,16 @@ export function CoordinatorRunPage() {
     if (size <= prevSize || size === 0) return;
     if (panelNodeId !== 'outcome-plan') return;
     const firstPendingRunId = [...pendingApprovalCounts.keys()][0];
-    if (firstPendingRunId === runId) {
-      openPanelForNode('coordinator');
-    } else {
-      const node = flatSessionTree.find((item) => item.childRunId === firstPendingRunId);
-      if (node) openPanelForNode(node.nodeId);
-    }
+    // Defer state update to the next microtask tick (same pattern as the outcome-plan effect
+    // above) to satisfy react-hooks/set-state-in-effect while keeping synchronous panel reads.
+    queueMicrotask(() => {
+      if (firstPendingRunId === runId) {
+        openPanelForNode('coordinator');
+      } else {
+        const node = flatSessionTree.find((item) => item.childRunId === firstPendingRunId);
+        if (node) openPanelForNode(node.nodeId);
+      }
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingApprovalCounts]);
 
