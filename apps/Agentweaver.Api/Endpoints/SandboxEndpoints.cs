@@ -114,8 +114,20 @@ public static class SandboxEndpoints
                     statusCode: StatusCodes.Status403Forbidden);
             }
 
+            // Approval can outlive the agent's preview process. Re-read the run immediately before
+            // publishing its Gateway resources so a terminal run cannot produce a dead URL.
+            var currentRun = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (currentRun is null) return Results.NotFound();
+            if (EndpointHelpers.IsTerminal(currentRun.Status))
+            {
+                return Results.Conflict(new
+                {
+                    error = "Preview session has exited; a preview URL cannot be published for a terminal run.",
+                });
+            }
+
             return await StartPreviewForRunAsync(
-                runId, request.TargetPort, run, previewService, portForwardService, streamStore, logger, ct);
+                runId, request.TargetPort, currentRun, previewService, portForwardService, streamStore, logger, ct);
         });
 
         // POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry

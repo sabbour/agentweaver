@@ -144,6 +144,37 @@ export async function readAppRoutingState(cfg, { exec = execDefault } = {}) {
   });
 }
 
+export async function configureDefaultDomainExternalDnsInterval({ exec = execDefault, log = logDefault } = {}) {
+  const result = await exec.capture(
+    "kubectl",
+    ["get", "deployment", "default-domain-dns-external-dns", "--namespace", "app-routing-system", "--output", "json"],
+    { json: true, allowFailure: true },
+  );
+  if (result.code !== 0 || !result.json) {
+    log.skip("Managed default-domain ExternalDNS deployment is not available yet; skipping interval configuration.");
+    return false;
+  }
+
+  const containers = result.json?.spec?.template?.spec?.containers;
+  const externalDns = Array.isArray(containers) && containers.find((container) => container?.name === "external-dns");
+  const args = Array.isArray(externalDns?.args) ? [...externalDns.args] : null;
+  const intervalIndex = args?.findIndex((arg) => typeof arg === "string" && arg.startsWith("--interval=")) ?? -1;
+  if (!args || intervalIndex < 0) {
+    log.skip("Managed default-domain ExternalDNS deployment has no configurable --interval argument.");
+    return false;
+  }
+  if (args[intervalIndex] === "--interval=30s") return true;
+
+  args[intervalIndex] = "--interval=30s";
+  await exec.run("kubectl", [
+    "patch", "deployment", "default-domain-dns-external-dns", "--namespace", "app-routing-system",
+    "--type=strategic", "--patch", JSON.stringify({
+      spec: { template: { spec: { containers: [{ name: "external-dns", args }] } } },
+    }),
+  ]);
+  log.info("Configured managed default-domain ExternalDNS sync interval to 30s.");
+  return true;
+}
 export async function reconcileExistingClusterAppRouting(cfg, { exec = execDefault, log = logDefault } = {}) {
   const state = await readAppRoutingState(cfg, { exec });
   const needsGateway = !state.gatewayApiEnabled;
@@ -333,6 +364,8 @@ export async function run(cfg, opts = {}) {
     cfg.CLUSTER_NAME,
     "--overwrite-existing",
   ]);
+
+  await configureDefaultDomainExternalDnsInterval({ exec, log });
 
   // -- App node pool --
   if (await nodePoolExists(cfg, cfg.APP_POOL_NAME, { exec })) {

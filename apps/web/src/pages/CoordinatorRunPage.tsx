@@ -528,6 +528,39 @@ function previewFailureCopy(state: Extract<RunPreviewState, { status: 'failed' }
   return state.message ? `${reason}: ${state.message}` : reason;
 }
 
+function usePreviewDnsWarming(previewUrl: string | null): boolean {
+  const [warming, setWarming] = useState(false);
+
+  useEffect(() => {
+    if (!previewUrl) {
+      setWarming(false);
+      return;
+    }
+
+    let cancelled = false;
+    let attempts = 0;
+    const probe = async () => {
+      try {
+        await fetch(previewUrl, { method: 'HEAD', mode: 'no-cors' });
+        if (!cancelled) setWarming(false);
+      } catch {
+        attempts += 1;
+        if (attempts < 60 && !cancelled) {
+          setTimeout(() => void probe(), 5_000);
+        } else if (!cancelled) {
+          setWarming(false);
+        }
+      }
+    };
+
+    setWarming(true);
+    void probe();
+    return () => { cancelled = true; };
+  }, [previewUrl]);
+
+  return warming;
+}
+
 // Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
 function deriveOrchState(
   events: RunStreamEvent[],
@@ -2634,6 +2667,7 @@ export function CoordinatorRunPage() {
   const runPreviewState = useMemo(() => latestPreviewStateFromEvents(events), [events]);
   const activePreviewSession = previewSession ?? previewSessions.find((session) => previewUrlFromSession(session)) ?? previewSessions[0];
   const activePreviewUrl = runPreviewState.status === 'ready' ? runPreviewState.previewUrl : null;
+  const previewDnsWarming = usePreviewDnsWarming(activePreviewUrl);
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase)
@@ -4194,6 +4228,11 @@ export function CoordinatorRunPage() {
           <>
             <div className={styles.previewStatusStack}>
               <Text weight="semibold">{compact ? 'Build & Test preview is active.' : 'Preview from Build & Test is active.'}</Text>
+              {previewDnsWarming && (
+                <Text className={styles.previewStatusReason} role="status">
+                  Warming up — DNS is propagating. Retrying for up to 5 minutes.
+                </Text>
+              )}
               {runPreviewState.targetPort && <Text className={styles.previewStatusReason}>Port {runPreviewState.targetPort}</Text>}
             </div>
             <Button appearance="primary" size="small" icon={<OpenRegular />} onClick={openPreview}>
