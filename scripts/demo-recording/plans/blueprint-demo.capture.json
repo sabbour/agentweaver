@@ -1647,14 +1647,13 @@
         }
       ],
       "expectedCues": [
-        "4.2.triage-response",
-        "4.2.approval-gate"
+        "4.2.triage-response"
       ],
       "cueWatchers": [
         {
           "name": "4.2.transcript-ready",
           "stableForMs": 500,
-          "deadlineMs": 180000,
+          "deadlineMs": 300000,
           "source": {
             "kind": "selector",
             "selector": "[data-testid='assistant-transcript']",
@@ -1670,29 +1669,13 @@
         {
           "type": "badge",
           "label": "Beat 4.2",
-          "title": "Ask the assistant to triage",
+          "title": "Coordinator triages the bug",
           "duration": 1800
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-run-page')",
-          "timeout": 90000
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('assistant-approval-gate')",
-          "timeout": 480000,
-          "cue": {
-            "name": "4.2.approval-gate",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
-          "type": "waitFor",
           "selector": "page.getByTestId('assistant-transcript')",
-          "timeout": 180000,
+          "timeout": 300000,
           "cue": {
             "name": "4.2.triage-response",
             "rect": {
@@ -1702,16 +1685,16 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByTestId('assistant-approval-gate')",
+          "selector": "page.getByTestId('assistant-transcript')",
           "scale": 1.25,
-          "hold": 2400
+          "hold": 2800
         }
       ],
       "requiresPriorBeat": "4.1"
     },
     {
       "id": "4.3",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
+      "startUrl": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.3-scope-bug.webm",
       "viewport": {
@@ -1720,8 +1703,8 @@
       },
       "outputBudgetMs": {
         "minimum": 7000,
-        "preferred": 10000,
-        "maximum": 16000
+        "preferred": 12000,
+        "maximum": 20000
       },
       "prerequisites": [
         {
@@ -1731,14 +1714,13 @@
         }
       ],
       "expectedCues": [
-        "4.3.run-timeline",
         "4.3.scope-visible"
       ],
       "cueWatchers": [
         {
           "name": "4.3.run-timeline",
           "stableForMs": 350,
-          "deadlineMs": 180000,
+          "deadlineMs": 300000,
           "source": {
             "kind": "selector",
             "selector": "[data-testid='assistant-transcript']",
@@ -1758,14 +1740,9 @@
           "duration": 1800
         },
         {
-          "type": "goto",
-          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
-          "after": 800
-        },
-        {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-approval-gate')",
-          "timeout": 180000,
+          "selector": "page.getByTestId('assistant-transcript').getByText('Bug Fix', { exact: false })",
+          "timeout": 300000,
           "cue": {
             "name": "4.3.scope-visible",
             "rect": {
@@ -1774,22 +1751,10 @@
           }
         },
         {
-          "type": "click",
-          "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
-          "scale": 1.55,
-          "after": 1100,
-          "force": true
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('assistant-transcript').getByText('Bug Fix', { exact: false })",
-          "timeout": 180000
-        },
-        {
           "type": "hover",
-          "selector": "page.getByTestId('assistant-transcript').getByText(/current behavior|smallest safe fix/i).first()",
+          "selector": "page.getByTestId('assistant-transcript').getByText(/bug fix|workflow|triage/i).first()",
           "scale": 1.28,
-          "hold": 1800
+          "hold": 2200
         }
       ],
       "requiresPriorBeat": "4.2"
