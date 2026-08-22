@@ -87,9 +87,6 @@ public static class SandboxEndpoints
                     ct,
                     allowInternalService: true) is { } denied)
                 return denied;
-            if (string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId))
-                return Results.BadRequest(new { error = "preview_runner_session_id is required." });
-
             var previewContext = LatestPreviewContext(streamStore, runId);
             var outcome = await previewGate.RequestApprovalAsync(
                 runId,
@@ -129,45 +126,48 @@ public static class SandboxEndpoints
                 return Results.Conflict(new { error = message });
             }
 
-            PreviewRunnerHealthResult health;
-            try
+            if (!string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId))
             {
-                health = await previewRunnerClient.HealthCheckAsync(
-                    runId,
-                    BearerToken(httpContext),
-                    request.PreviewRunnerSessionId,
-                    request.TargetPort,
-                    "/",
-                    ct).ConfigureAwait(false);
-            }
-            catch (PreviewRunnerHttpException)
-            {
-                const string message = "Preview session has exited or is unreachable; a preview URL cannot be published.";
+                PreviewRunnerHealthResult health;
                 try
                 {
-                    await previewRunnerClient.StopProcessAsync(
-                        runId, BearerToken(httpContext), request.PreviewRunnerSessionId, "preview_session_exited", ct)
-                        .ConfigureAwait(false);
+                    health = await previewRunnerClient.HealthCheckAsync(
+                        runId,
+                        BearerToken(httpContext),
+                        request.PreviewRunnerSessionId,
+                        request.TargetPort,
+                        "/",
+                        ct).ConfigureAwait(false);
                 }
-                catch (PreviewRunnerHttpException) { }
-                EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
-                    previewRunnerSessionId: request.PreviewRunnerSessionId);
-                return Results.Conflict(new { error = message });
-            }
+                catch (PreviewRunnerHttpException)
+                {
+                    const string message = "Preview session has exited or is unreachable; a preview URL cannot be published.";
+                    try
+                    {
+                        await previewRunnerClient.StopProcessAsync(
+                            runId, BearerToken(httpContext), request.PreviewRunnerSessionId, "preview_session_exited", ct)
+                            .ConfigureAwait(false);
+                    }
+                    catch (PreviewRunnerHttpException) { }
+                    EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
+                        previewRunnerSessionId: request.PreviewRunnerSessionId);
+                    return Results.Conflict(new { error = message });
+                }
 
-            if (!health.Healthy)
-            {
-                const string message = "Preview session is no longer healthy; a preview URL cannot be published.";
-                try
+                if (!health.Healthy)
                 {
-                    await previewRunnerClient.StopProcessAsync(
-                        runId, BearerToken(httpContext), request.PreviewRunnerSessionId, "preview_session_exited", ct)
-                        .ConfigureAwait(false);
+                    const string message = "Preview session is no longer healthy; a preview URL cannot be published.";
+                    try
+                    {
+                        await previewRunnerClient.StopProcessAsync(
+                            runId, BearerToken(httpContext), request.PreviewRunnerSessionId, "preview_session_exited", ct)
+                            .ConfigureAwait(false);
+                    }
+                    catch (PreviewRunnerHttpException) { }
+                    EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
+                        previewRunnerSessionId: request.PreviewRunnerSessionId);
+                    return Results.Conflict(new { error = message });
                 }
-                catch (PreviewRunnerHttpException) { }
-                EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
-                    previewRunnerSessionId: request.PreviewRunnerSessionId);
-                return Results.Conflict(new { error = message });
             }
 
             return await StartPreviewForRunAsync(

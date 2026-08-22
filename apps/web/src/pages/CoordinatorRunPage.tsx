@@ -529,11 +529,10 @@ function previewFailureCopy(state: Extract<RunPreviewState, { status: 'failed' }
 }
 
 function usePreviewDnsWarming(previewUrl: string | null): boolean {
-  const [warming, setWarming] = useState(false);
+  const [warmedUrl, setWarmedUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!previewUrl) {
-      setWarming(false);
       return;
     }
 
@@ -544,18 +543,17 @@ function usePreviewDnsWarming(previewUrl: string | null): boolean {
     const probe = async () => {
       try {
         await fetch(previewUrl, { method: 'HEAD', mode: 'no-cors', signal: abortController.signal });
-        if (!cancelled) setWarming(false);
+        if (!cancelled) setWarmedUrl(previewUrl);
       } catch {
         attempts += 1;
         if (attempts < 60 && !cancelled) {
           retryTimer = setTimeout(() => void probe(), 5_000);
         } else if (!cancelled) {
-          setWarming(false);
+          setWarmedUrl(previewUrl);
         }
       }
     };
 
-    setWarming(true);
     void probe();
     return () => {
       cancelled = true;
@@ -564,7 +562,7 @@ function usePreviewDnsWarming(previewUrl: string | null): boolean {
     };
   }, [previewUrl]);
 
-  return warming;
+  return previewUrl !== null && warmedUrl !== previewUrl;
 }
 
 // Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
