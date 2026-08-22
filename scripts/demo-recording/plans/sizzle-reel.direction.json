@@ -1,0 +1,220 @@
+{
+  "_meta": {
+    "description": "Sizzle reel assembly direction — 90s editorial cut from Blueprint + AKS scenario footage",
+    "status": "draft",
+    "targetRuntime": "93.8s",
+    "assembledAt": "2026-08-24",
+    "draftFile": "recordings/sizzle-reel/sizzle-reel-draft.webm",
+    "beatsCovered": 13,
+    "beatsBlocked": 2,
+    "blockedBeats": ["S2.4", "S4.2"],
+    "blockerReason": "Staging limitations: session-approval-gate not deployed, coordinator returns text-only",
+    "assemblyTool": "ffmpeg",
+    "assemblyScript": "recordings/sizzle-reel/assemble.ps1"
+  },
+  "arc": {
+    "hook": { "beats": ["S0.0", "S0.1"], "shareTarget": "7%", "actual": "7.3s" },
+    "orient": { "beats": ["S1.1", "S1.2", "S1.3", "S1.4-aks"], "shareTarget": "25%", "actual": "23s" },
+    "accelerate": { "beats": ["S2.1", "S2.3", "S2.5"], "shareTarget": "22%", "actual": "20.76s" },
+    "payoff": { "beats": ["S3.1", "S3.2", "S4.1"], "shareTarget": "38%", "actual": "27s" },
+    "cta": { "beats": ["S5.1"], "shareTarget": "5%", "actual": "5s" }
+  },
+  "beats": [
+    {
+      "id": "S0.0",
+      "arc": "hook",
+      "label": "Sign-in — product proof open",
+      "source": "recordings/blueprint-demo/0.0-entra-sign-in-handoff.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "0.0",
+      "trim": { "startSec": 5, "durationSec": 4 },
+      "camera": "full-frame",
+      "narration": "This is Agentweaver.",
+      "notes": "Entra login moment — product trust signal first"
+    },
+    {
+      "id": "S0.1",
+      "arc": "hook",
+      "label": "Live topology — team already working",
+      "source": "recordings/final-takes/trailhead-travel-studio/2.3-watch-work-plan.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "2.3",
+      "trim": { "startSec": 0, "durationSec": 5 },
+      "camera": "full-frame",
+      "narration": "Your AI team, running live.",
+      "notes": "Topology graph appearing — dynamic hook before setup"
+    },
+    {
+      "id": "S1.1",
+      "arc": "orient",
+      "label": "Create project — blank to configured in seconds",
+      "source": "recordings/final-takes/trailhead-travel-studio/1.1-create-project.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "1.1",
+      "trim": { "startSec": 2, "durationSec": 9 },
+      "camera": "full-frame",
+      "narration": "Start with a blank project.",
+      "notes": "Shows project creation flow"
+    },
+    {
+      "id": "S1.2",
+      "arc": "orient",
+      "label": "Choose blueprint — team and skills assembled",
+      "source": "recordings/final-takes/trailhead-travel-studio/1.2-choose-blueprint.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "1.2",
+      "trim": { "startSec": 2, "durationSec": 9 },
+      "camera": "full-frame",
+      "narration": "Pick a blueprint. Specialists and skills — ready.",
+      "notes": "Blueprint selection → team assembled"
+    },
+    {
+      "id": "S1.3",
+      "arc": "orient",
+      "label": "Inspect team — agents with real skills",
+      "source": "recordings/final-takes/trailhead-travel-studio/1.3-inspect-team.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "1.3",
+      "trim": { "startSec": 5, "durationSec": 8 },
+      "camera": "full-frame",
+      "narration": "Each agent has tools, memory, and purpose.",
+      "notes": "Team panel showing agent skills and MCP config"
+    },
+    {
+      "id": "S1.4-aks",
+      "arc": "orient",
+      "label": "AKS ops context — enterprise scale",
+      "source": "recordings/final-takes/aks-product-operations/beat-1-1.webm",
+      "sourceScenario": "AKS",
+      "sourceBeat": "1.1",
+      "trim": { "startSec": 3, "durationSec": 6 },
+      "camera": "full-frame",
+      "narration": "Works at enterprise scale too.",
+      "notes": "AKS repo context shot — shows cross-domain applicability"
+    },
+    {
+      "id": "S2.1",
+      "arc": "accelerate",
+      "label": "OutcomeSpec confirmed — AI takes direction",
+      "source": "recordings/final-takes/trailhead-travel-studio/2.2-confirm-plan.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "2.2",
+      "trim": { "startSec": 2, "durationSec": 8 },
+      "camera": "full-frame",
+      "narration": "Give it a goal. It plans.",
+      "notes": "OutcomeSpec / plan confirmation moment"
+    },
+    {
+      "id": "S2.3",
+      "arc": "accelerate",
+      "label": "Board — tasks created, work assigned",
+      "source": "recordings/final-takes/trailhead-travel-studio/2.4-review-board.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "2.4",
+      "trim": { "startSec": 0, "durationSec": 4.76 },
+      "camera": "full-frame",
+      "narration": "Tasks appear. Agents pick them up.",
+      "notes": "Full clip — only 4.76s source"
+    },
+    {
+      "id": "S2.4-BLOCKED",
+      "arc": "accelerate",
+      "label": "Preview approval gate — BLOCKED",
+      "status": "BLOCKED",
+      "blockerReason": "session-approval-gate not deployed to staging (requires PR #838 deploy)",
+      "source": "MISSING",
+      "sourceBeat": "2.5",
+      "fallback": "Skip beat; adjust timing to absorb ~6s from payoff beats"
+    },
+    {
+      "id": "S2.5",
+      "arc": "accelerate",
+      "label": "Distributed trace — full observability",
+      "source": "recordings/final-takes/trailhead-travel-studio/2.7-review-trace.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "2.7",
+      "trim": { "startSec": 2, "durationSec": 8 },
+      "camera": "full-frame",
+      "narration": "Every step traced. Every decision visible.",
+      "notes": "Trace panel open, spans visible"
+    },
+    {
+      "id": "S3.1",
+      "arc": "payoff",
+      "label": "Scheduled sweep — autonomous ops",
+      "source": "recordings/final-takes/trailhead-travel-studio/3.1-schedule-sweep.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "3.1",
+      "trim": { "startSec": 2, "durationSec": 8 },
+      "camera": "full-frame",
+      "narration": "Schedule it. It runs itself.",
+      "notes": "Schedule config → sweep execution"
+    },
+    {
+      "id": "S3.2",
+      "arc": "payoff",
+      "label": "GitHub triage — from issue to plan",
+      "source": "recordings/final-takes/trailhead-travel-studio/3.2-github-triage.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "3.2",
+      "trim": { "startSec": 2, "durationSec": 9 },
+      "camera": "full-frame",
+      "narration": "Pull in GitHub issues. Triage happens automatically.",
+      "notes": "GitHub issue import → coordinator triage"
+    },
+    {
+      "id": "S4.1",
+      "arc": "payoff",
+      "label": "Chat triage — conversational workflow trigger",
+      "source": "recordings/final-takes/trailhead-travel-studio/4.1-chat-triage.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "4.1",
+      "trim": { "startSec": 3, "durationSec": 10 },
+      "camera": "full-frame",
+      "narration": "Or just ask. It opens a workflow.",
+      "notes": "Chat message → coordinator routes to Bug Fix workflow"
+    },
+    {
+      "id": "S4.2-BLOCKED",
+      "arc": "payoff",
+      "label": "PR close loop — BLOCKED",
+      "status": "BLOCKED",
+      "blockerReason": "Requires Bug Fix multi-agent workflow run + GitHub PR in demo repo",
+      "source": "MISSING",
+      "sourceBeat": "4.7",
+      "fallback": "Skip beat; CTA immediately follows S4.1"
+    },
+    {
+      "id": "S5.1",
+      "arc": "cta",
+      "label": "MCP tools — extensible by design",
+      "source": "recordings/final-takes/trailhead-travel-studio/5.1-drive-from-tools.webm",
+      "sourceScenario": "Blueprint",
+      "sourceBeat": "5.1",
+      "trim": { "startSec": 5, "durationSec": 5 },
+      "camera": "full-frame",
+      "narration": "Any tool. Any model. Your team.",
+      "notes": "MCP tool panel — extensibility signal; fade to black"
+    }
+  ],
+  "assembly": {
+    "command": "See recordings/sizzle-reel/assemble.ps1",
+    "output": "recordings/sizzle-reel/sizzle-reel-draft.webm",
+    "draftDuration": "93.8s",
+    "draftFrames": 2813,
+    "draftSizeMB": 6.2,
+    "codec": "libvpx-vp9",
+    "resolution": "1920x1080",
+    "fps": 30
+  },
+  "postProduction": {
+    "narrationTrack": "scripts/demo-recording/narration/sizzle-reel-narration.md",
+    "pendingSteps": [
+      "Record voiceover against draft video",
+      "Review pacing — S4.1 flows directly to S5.1 (no S4.2), may need trim adjustment",
+      "Add headline overlays per narration script",
+      "Unblock S2.4 and S4.2 after staging deploy + Bug Fix workflow run",
+      "Re-assemble with unblocked beats and final narration"
+    ]
+  }
+}

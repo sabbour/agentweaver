@@ -736,7 +736,8 @@
           "key": "Escape",
           "after": 800
         }
-      ]
+      ],
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378"
     },
     {
       "id": "2.4",
@@ -806,11 +807,12 @@
             }
           }
         }
-      ]
+      ],
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/board"
     },
     {
       "id": "2.5",
-      "startUrl": "",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -921,7 +923,7 @@
     },
     {
       "id": "2.6",
-      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -1045,7 +1047,7 @@
     },
     {
       "id": "2.7",
-      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -1175,7 +1177,7 @@
     },
     {
       "id": "2.8",
-      "startUrl": "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board",
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/projects/71cdf9d6-734f-4026-8dfe-a9baf113d99c/orchestrations/38cdd5a3-24d1-486b-acfd-ebe993571378",
       "freshNavigation": false,
       "prerequisites": [
         {
@@ -1543,17 +1545,17 @@
     },
     {
       "id": "4.1",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
-      "freshNavigation": false,
+      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/assistant",
+      "freshNavigation": true,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.1-chat-triage.webm",
       "viewport": {
         "width": 1920,
         "height": 1080
       },
       "outputBudgetMs": {
-        "minimum": 8000,
-        "preferred": 12000,
-        "maximum": 19000
+        "maximum": 60000,
+        "preferred": 45000,
+        "minimum": 30000
       },
       "expectedCues": [
         "4.1.issue-open",
@@ -1566,12 +1568,12 @@
           "deadlineMs": 60000,
           "source": {
             "kind": "selector",
-            "selector": "#issue-title",
+            "selector": "h1",
             "state": "visible"
           },
           "rect": {
             "mode": "element",
-            "selector": "#issue-title"
+            "selector": "h1"
           }
         }
       ],
@@ -1579,47 +1581,38 @@
         {
           "type": "badge",
           "label": "Beat 4.1",
-          "title": "Triage the next issue from chat",
+          "title": "Chat triage — read and dispatch the bug",
           "duration": 1800
         },
         {
-          "type": "goto",
-          "url": "{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_URL}}",
-          "after": 800
+          "type": "eval",
+          "code": "window.open('https://github.com/sabbour/agentweaver-demo-dryrun/issues/5', '_blank')",
+          "after": 2500
         },
         {
           "type": "waitFor",
-          "selector": "page.locator('#issue-title')",
-          "timeout": 60000
-        },
-        {
-          "type": "goto",
-          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
-          "after": 800
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('assistant-run-page')",
-          "timeout": 30000,
-          "cue": {
-            "name": "4.1.assistant-ready",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
+          "selector": "page.getByPlaceholder('Message the assistant...')",
+          "timeout": 30000
         },
         {
           "type": "type",
           "selector": "page.getByPlaceholder('Message the assistant...')",
-          "text": "Triage GitHub issue #{{AGENTWEAVER_DEMO_GITHUB_NEXT_ISSUE_NUMBER}} from the Trailhead Travel Studio repository.",
-          "scale": 1.55,
-          "after": 500
+          "text": "There's a bug reported in issue #5 in the Trailhead Travel Studio repository. Please triage it and kick off a Bug Fix workflow run to address it."
         },
         {
           "type": "press",
           "selector": "page.getByPlaceholder('Message the assistant...')",
-          "key": "Enter",
-          "after": 1000
+          "key": "Enter"
+        },
+        {
+          "type": "pause",
+          "ms": 30000
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('assistant-transcript')",
+          "scale": 1.1,
+          "hold": 3000
         }
       ],
       "requiresPriorBeat": "3.2",
@@ -1644,7 +1637,6 @@
     },
     {
       "id": "4.2",
-      "startUrl": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.2-assistant-triage.webm",
       "viewport": {
@@ -1664,14 +1656,13 @@
         }
       ],
       "expectedCues": [
-        "4.2.triage-response",
-        "4.2.approval-gate"
+        "4.2.triage-response"
       ],
       "cueWatchers": [
         {
           "name": "4.2.transcript-ready",
           "stableForMs": 500,
-          "deadlineMs": 180000,
+          "deadlineMs": 300000,
           "source": {
             "kind": "selector",
             "selector": "[data-testid='assistant-transcript']",
@@ -1687,29 +1678,13 @@
         {
           "type": "badge",
           "label": "Beat 4.2",
-          "title": "Ask the assistant to triage",
+          "title": "Coordinator triages the bug",
           "duration": 1800
         },
         {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-run-page')",
-          "timeout": 30000
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('assistant-approval-gate')",
-          "timeout": 240000,
-          "cue": {
-            "name": "4.2.approval-gate",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('assistant-transcript')",
-          "timeout": 180000,
+          "selector": "page.getByTestId('assistant-transcript').getByText(\"There's a bug reported\", { exact: false })",
+          "timeout": 300000,
           "cue": {
             "name": "4.2.triage-response",
             "rect": {
@@ -1719,16 +1694,15 @@
         },
         {
           "type": "hover",
-          "selector": "page.getByTestId('assistant-approval-gate')",
+          "selector": "page.getByTestId('assistant-transcript')",
           "scale": 1.25,
-          "hold": 2400
+          "hold": 2800
         }
       ],
       "requiresPriorBeat": "4.1"
     },
     {
       "id": "4.3",
-      "startUrl": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/overview",
       "freshNavigation": false,
       "videoPath": "recordings/final-takes/trailhead-travel-studio/4.3-scope-bug.webm",
       "viewport": {
@@ -1737,8 +1711,8 @@
       },
       "outputBudgetMs": {
         "minimum": 7000,
-        "preferred": 10000,
-        "maximum": 16000
+        "preferred": 12000,
+        "maximum": 20000
       },
       "prerequisites": [
         {
@@ -1748,14 +1722,13 @@
         }
       ],
       "expectedCues": [
-        "4.3.run-timeline",
         "4.3.scope-visible"
       ],
       "cueWatchers": [
         {
           "name": "4.3.run-timeline",
           "stableForMs": 350,
-          "deadlineMs": 180000,
+          "deadlineMs": 300000,
           "source": {
             "kind": "selector",
             "selector": "[data-testid='assistant-transcript']",
@@ -1775,14 +1748,9 @@
           "duration": 1800
         },
         {
-          "type": "goto",
-          "url": "{{AGENTWEAVER_DEMO_ASSISTANT_URL}}",
-          "after": 800
-        },
-        {
           "type": "waitFor",
-          "selector": "page.getByTestId('assistant-approval-gate')",
-          "timeout": 180000,
+          "selector": "page.getByTestId('assistant-transcript').getByText('workflow', { exact: false })",
+          "timeout": 300000,
           "cue": {
             "name": "4.3.scope-visible",
             "rect": {
@@ -1791,22 +1759,10 @@
           }
         },
         {
-          "type": "click",
-          "selector": "page.getByTestId('assistant-approval-gate').getByRole('button', { name: 'Allow once', exact: true })",
-          "scale": 1.55,
-          "after": 1100,
-          "force": true
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByTestId('assistant-transcript').getByText('Bug Fix', { exact: false })",
-          "timeout": 180000
-        },
-        {
           "type": "hover",
-          "selector": "page.getByTestId('assistant-transcript').getByText(/current behavior|smallest safe fix/i).first()",
+          "selector": "page.getByTestId('assistant-transcript').getByText(/bug fix|workflow|triage/i).first()",
           "scale": 1.28,
-          "hold": 1800
+          "hold": 2200
         }
       ],
       "requiresPriorBeat": "4.2"

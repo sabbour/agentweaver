@@ -56,9 +56,13 @@ export function parseCleanupOptions(argv) {
 }
 
 export function assertPlanTargetsBaseUrl(captureConfig, baseUrl) {
-  const startUrls = captureConfig.beats.map((beat) => beat.startUrl);
+  // Continuation beats (cross-beat URL continuity) legitimately omit startUrl.
+  // Only beats that declare a startUrl are checked; at least one must exist.
+  const startUrls = captureConfig.beats
+    .map((beat) => beat.startUrl)
+    .filter((startUrl) => startUrl != null);
   if (startUrls.length === 0 || startUrls.some((startUrl) => typeof startUrl !== 'string' || !URL.canParse(startUrl))) {
-    throw new Error('Cleanup refused: every active-plan beat must declare an absolute staging startUrl.');
+    throw new Error('Cleanup refused: at least one beat must declare an absolute staging startUrl, and all declared startUrls must be valid.');
   }
   const origins = new Set(
     startUrls

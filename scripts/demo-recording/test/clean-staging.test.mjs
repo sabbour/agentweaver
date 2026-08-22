@@ -51,6 +51,30 @@ test('staging cleanup refuses any open recorder session despite a different --se
   );
 });
 
+test('staging cleanup accepts a plan with continuation beats that omit startUrl', async () => {
+  const mixedConfig = {
+    fixture,
+    beats: [
+      { startUrl: 'https://staging.example/overview' },
+      { id: 'continuation-beat' }, // no startUrl — cross-beat continuity
+    ],
+  };
+  let received;
+  await cleanStaging({
+    confirmed: true,
+    plan: 'demo.capture.json',
+    baseUrl: 'https://staging.example',
+    authRoot: '.auth',
+    session: 'agentweaver-demo',
+  }, {
+    loadCaptureConfig: async () => mixedConfig,
+    listSessions: () => new Map(),
+    createApiFromSession: async () => ({ listAllProjects: async () => [] }),
+    cleanFixtures: async (options) => { received = options; return { discoveredProjectCount: 0 }; },
+  });
+  assert.ok(received, 'cleanFixtures should have been called');
+});
+
 test('staging cleanup refuses a plan that does not target its staging base URL', async () => {
   await assert.rejects(
     cleanStaging({
