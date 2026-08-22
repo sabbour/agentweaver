@@ -109,14 +109,18 @@ public sealed class PreviewRunnerToolProviderStartPreviewTests
         // Step 2: observe_bound_port — its own text must still tell the model to call start_preview.
         var observeResult = (await tools["observe_bound_port"].InvokeAsync(
             new AIFunctionArguments(new Dictionary<string, object?> { ["session_id"] = "sess-1" })))!.ToString();
-        observeResult.Should().Contain("Call start_preview(port=6800) next.");
+        observeResult.Should().Contain("Call start_preview(port=6800, session_id=sess-1) next.");
 
         // Step 3: start_preview — this is the tool the agent used to fail to find (#334). It must
         // exist, and calling it must actually finalize a durable, externally-reachable preview URL
         // rather than dead-ending.
         tools.Should().ContainKey("start_preview");
         var previewResult = (await tools["start_preview"].InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 6800 })))!.ToString();
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["port"] = 6800,
+                ["session_id"] = "sess-1",
+            })))!.ToString();
 
         previewResult.Should().Contain("https://preview.example.com/p/tok",
             because: "the agent must receive a real, shareable preview URL — not a dead end");

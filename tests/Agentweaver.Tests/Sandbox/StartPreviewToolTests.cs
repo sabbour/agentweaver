@@ -67,13 +67,13 @@ public sealed class StartPreviewToolTests
     }
 
     [Fact]
-    public void StartPreview_Signature_ExposesOnlyPort()
+    public void StartPreview_Signature_ExposesPortAndSessionId()
     {
         var schema = GetStartPreview(new CapturingHandler(HttpStatusCode.OK, "{}")).JsonSchema.GetRawText();
 
         schema.Should().Contain("port", because: "the model supplies the port to expose");
         schema.Should().NotContain("target_port", because: "the wire DTO name must not leak into the tool schema");
-        schema.Should().NotContain("runId", because: "runId is server-bound in the closure, never a model argument");
+        schema.Should().Contain("session_id", because: "the observed process session is required to prove liveness before publication");`r`n        schema.Should().NotContain("runId", because: "runId is server-bound in the closure, never a model argument");
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public sealed class StartPreviewToolTests
             """{"session_id":"tok","target_port":3000,"preview_url":"https://preview.example.com/p/tok"}""");
         var tool = GetStartPreview(handler);
 
-        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000 }));
+        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" }));
 
         handler.LastMethod.Should().Be(HttpMethod.Post);
         handler.LastPath.Should().Be($"/api/runs/{RunId}/sandbox/preview");
@@ -99,7 +99,7 @@ public sealed class StartPreviewToolTests
         var tool = GetStartPreview(handler);
 
         var result = (await tool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000 })))?.ToString() ?? "";
+            new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" })))?.ToString() ?? "";
 
         result.Should().Contain("https://preview.example.com/p/tok",
             because: "the tool returns the approved preview URL back to the agent");
@@ -114,11 +114,11 @@ public sealed class StartPreviewToolTests
         var tool = GetStartPreview(handler);
 
         var act = async () => await tool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000 }));
+            new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" }));
         await act.Should().NotThrowAsync();
 
         var result = (await tool.InvokeAsync(
-            new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000 })))?.ToString() ?? "";
+            new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" })))?.ToString() ?? "";
         result.Should().Contain("start_preview failed:");
         result.Should().Contain("403");
     }
@@ -136,7 +136,7 @@ public sealed class StartPreviewToolTests
         var logger = new CapturingLogger();
 
         var tool = PreviewPublishTool.Build("http://localhost", null, RunId, http, logger: logger);
-        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000 }));
+        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" }));
 
         logger.HasEntryMatching(LogLevel.Warning, "start_preview").Should().BeTrue(
             because: "a non-success HTTP response must produce a durable log entry naming the tool");
@@ -163,7 +163,7 @@ public sealed class StartPreviewToolTests
         var logger = new CapturingLogger();
 
         var tool = PreviewPublishTool.Build("http://localhost", fakeApiKey, RunId, http, logger: logger);
-        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000 }));
+        await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" }));
 
         logger.Entries.Should().NotBeEmpty();
         foreach (var entry in logger.Entries)

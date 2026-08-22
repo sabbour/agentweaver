@@ -68,6 +68,7 @@ public static class SandboxEndpoints
             ISandboxPreviewService previewService,
             RunStreamStore streamStore,
             IRunStore runStore,
+            IPreviewRunnerHttpClient previewRunnerClient,
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
@@ -86,6 +87,8 @@ public static class SandboxEndpoints
                     ct,
                     allowInternalService: true) is { } denied)
                 return denied;
+            if (string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId))
+                return Results.BadRequest(new { error = "preview_runner_session_id is required." });
 
             var previewContext = LatestPreviewContext(streamStore, runId);
             var outcome = await previewGate.RequestApprovalAsync(
@@ -114,20 +117,62 @@ public static class SandboxEndpoints
                     statusCode: StatusCodes.Status403Forbidden);
             }
 
-            // Approval can outlive the agent's preview process. Re-read the run immediately before
-            // publishing its Gateway resources so a terminal run cannot produce a dead URL.
+            // Approval can outlive both the run and its preview process. Check the authoritative
+            // AgentHost session immediately before creating Gateway resources, so no dead URL is published.
             var currentRun = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
             if (currentRun is null) return Results.NotFound();
             if (EndpointHelpers.IsTerminal(currentRun.Status))
             {
-                return Results.Conflict(new
+                const string message = "Preview session has exited; a preview URL cannot be published for a terminal run.";
+                EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
+                    previewRunnerSessionId: request.PreviewRunnerSessionId);
+                return Results.Conflict(new { error = message });
+            }
+
+            PreviewRunnerHealthResult health;
+            try
+            {
+                health = await previewRunnerClient.HealthCheckAsync(
+                    runId,
+                    BearerToken(httpContext),
+                    request.PreviewRunnerSessionId,
+                    request.TargetPort,
+                    "/",
+                    ct).ConfigureAwait(false);
+            }
+            catch (PreviewRunnerHttpException)
+            {
+                const string message = "Preview session has exited or is unreachable; a preview URL cannot be published.";
+                try
                 {
-                    error = "Preview session has exited; a preview URL cannot be published for a terminal run.",
-                });
+                    await previewRunnerClient.StopProcessAsync(
+                        runId, BearerToken(httpContext), request.PreviewRunnerSessionId, "preview_session_exited", ct)
+                        .ConfigureAwait(false);
+                }
+                catch (PreviewRunnerHttpException) { }
+                EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
+                    previewRunnerSessionId: request.PreviewRunnerSessionId);
+                return Results.Conflict(new { error = message });
+            }
+
+            if (!health.Healthy)
+            {
+                const string message = "Preview session is no longer healthy; a preview URL cannot be published.";
+                try
+                {
+                    await previewRunnerClient.StopProcessAsync(
+                        runId, BearerToken(httpContext), request.PreviewRunnerSessionId, "preview_session_exited", ct)
+                        .ConfigureAwait(false);
+                }
+                catch (PreviewRunnerHttpException) { }
+                EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
+                    previewRunnerSessionId: request.PreviewRunnerSessionId);
+                return Results.Conflict(new { error = message });
             }
 
             return await StartPreviewForRunAsync(
-                runId, request.TargetPort, currentRun, previewService, portForwardService, streamStore, logger, ct);
+                runId, request.TargetPort, currentRun, previewService, portForwardService, streamStore, logger, ct,
+                request.PreviewRunnerSessionId);
         });
 
         // POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry
@@ -509,6 +554,14 @@ public static class SandboxEndpoints
         }
     }
 
+    private static string? BearerToken(HttpContext httpContext)
+    {
+        var authorization = httpContext.Request.Headers.Authorization.ToString();
+        return authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authorization["Bearer ".Length..]
+            : null;
+    }
+
     private static void EmitPreviewFailure(
         RunStreamStore streamStore,
         string runId,
@@ -809,6 +862,9 @@ public sealed record StartPreviewRequest
 {
     [System.Text.Json.Serialization.JsonPropertyName("target_port")]
     public int TargetPort { get; init; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("preview_runner_session_id")]
+    public string? PreviewRunnerSessionId { get; init; }
 }
 
 /// <summary>Typed status of a Gateway-direct preview registration (spec-006 decouple-preview).</summary>

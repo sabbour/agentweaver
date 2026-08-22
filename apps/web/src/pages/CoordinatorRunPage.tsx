@@ -539,14 +539,16 @@ function usePreviewDnsWarming(previewUrl: string | null): boolean {
 
     let cancelled = false;
     let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const abortController = new AbortController();
     const probe = async () => {
       try {
-        await fetch(previewUrl, { method: 'HEAD', mode: 'no-cors' });
+        await fetch(previewUrl, { method: 'HEAD', mode: 'no-cors', signal: abortController.signal });
         if (!cancelled) setWarming(false);
       } catch {
         attempts += 1;
         if (attempts < 60 && !cancelled) {
-          setTimeout(() => void probe(), 5_000);
+          retryTimer = setTimeout(() => void probe(), 5_000);
         } else if (!cancelled) {
           setWarming(false);
         }
@@ -555,7 +557,11 @@ function usePreviewDnsWarming(previewUrl: string | null): boolean {
 
     setWarming(true);
     void probe();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+      abortController.abort();
+    };
   }, [previewUrl]);
 
   return warming;

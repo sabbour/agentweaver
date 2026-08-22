@@ -136,7 +136,7 @@ internal sealed class PreviewRunnerToolProvider(
                     ct).ConfigureAwait(false);
 
                 var nextStep = observed.Healthy
-                    ? $"Call start_preview(port={observed.Port}) next."
+                    ? $"Call start_preview(port={observed.Port}, session_id={observed.SessionId}) next."
                     : $"Observation is NOT healthy (reason={observed.Reason ?? "unknown"}); do NOT call start_preview. Fix the app so it comes up on the discovered port and retry observe_bound_port.";
                 return $"bound_port_observed: session_id={observed.SessionId}, port={observed.Port}, app_port={observed.AppPort}, healthy={observed.Healthy}, reason={observed.Reason ?? "n/a"}, evidence={observed.Evidence}, health={observed.HealthEvidence}. {nextStep}";
             },

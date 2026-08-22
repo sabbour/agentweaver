@@ -144,14 +144,23 @@ export async function readAppRoutingState(cfg, { exec = execDefault } = {}) {
   });
 }
 
-export async function configureDefaultDomainExternalDnsInterval({ exec = execDefault, log = logDefault } = {}) {
-  const result = await exec.capture(
-    "kubectl",
-    ["get", "deployment", "default-domain-dns-external-dns", "--namespace", "app-routing-system", "--output", "json"],
-    { json: true, allowFailure: true },
-  );
+export async function configureDefaultDomainExternalDnsInterval({
+  exec = execDefault,
+  log = logDefault,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  let result;
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    result = await exec.capture(
+      "kubectl",
+      ["get", "deployment", "default-domain-dns-external-dns", "--namespace", "app-routing-system", "--output", "json"],
+      { json: true, allowFailure: true },
+    );
+    if (result.code === 0 || attempt === 12) break;
+    await sleep(5_000);
+  }
   if (result.code !== 0 || !result.json) {
-    log.skip("Managed default-domain ExternalDNS deployment is not available yet; skipping interval configuration.");
+    log.skip("Managed default-domain ExternalDNS deployment was not available after 60 seconds; skipping interval configuration.");
     return false;
   }
 
