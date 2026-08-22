@@ -1603,6 +1603,16 @@
           "type": "press",
           "selector": "page.getByPlaceholder('Message the assistant...')",
           "key": "Enter"
+        },
+        {
+          "type": "pause",
+          "ms": 30000
+        },
+        {
+          "type": "hover",
+          "selector": "page.getByTestId('assistant-transcript')",
+          "scale": 1.1,
+          "hold": 3000
         }
       ],
       "requiresPriorBeat": "3.2",
