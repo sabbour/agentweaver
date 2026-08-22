@@ -528,8 +528,13 @@ function previewFailureCopy(state: Extract<RunPreviewState, { status: 'failed' }
   return state.message ? `${reason}: ${state.message}` : reason;
 }
 
-function usePreviewDnsWarming(previewUrl: string | null): boolean {
-  const [warmedUrl, setWarmedUrl] = useState<string | null>(null);
+type PreviewDnsStatus = 'idle' | 'warming' | 'ready' | 'timed_out';
+
+function usePreviewDnsStatus(previewUrl: string | null): PreviewDnsStatus {
+  const [probeState, setProbeState] = useState<{ url: string | null; status: PreviewDnsStatus }>({
+    url: null,
+    status: 'idle',
+  });
 
   useEffect(() => {
     if (!previewUrl) {
@@ -543,13 +548,13 @@ function usePreviewDnsWarming(previewUrl: string | null): boolean {
     const probe = async () => {
       try {
         await fetch(previewUrl, { method: 'HEAD', mode: 'no-cors', signal: abortController.signal });
-        if (!cancelled) setWarmedUrl(previewUrl);
+        if (!cancelled) setProbeState({ url: previewUrl, status: 'ready' });
       } catch {
         attempts += 1;
         if (attempts < 60 && !cancelled) {
           retryTimer = setTimeout(() => void probe(), 5_000);
         } else if (!cancelled) {
-          setWarmedUrl(previewUrl);
+          setProbeState({ url: previewUrl, status: 'timed_out' });
         }
       }
     };
@@ -562,7 +567,8 @@ function usePreviewDnsWarming(previewUrl: string | null): boolean {
     };
   }, [previewUrl]);
 
-  return previewUrl !== null && warmedUrl !== previewUrl;
+  if (!previewUrl) return 'idle';
+  return probeState.url === previewUrl ? probeState.status : 'warming';
 }
 
 // Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
@@ -2671,7 +2677,7 @@ export function CoordinatorRunPage() {
   const runPreviewState = useMemo(() => latestPreviewStateFromEvents(events), [events]);
   const activePreviewSession = previewSession ?? previewSessions.find((session) => previewUrlFromSession(session)) ?? previewSessions[0];
   const activePreviewUrl = runPreviewState.status === 'ready' ? runPreviewState.previewUrl : null;
-  const previewDnsWarming = usePreviewDnsWarming(activePreviewUrl);
+  const previewDnsStatus = usePreviewDnsStatus(activePreviewUrl);
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase)
@@ -4232,9 +4238,19 @@ export function CoordinatorRunPage() {
           <>
             <div className={styles.previewStatusStack}>
               <Text weight="semibold">{compact ? 'Build & Test preview is active.' : 'Preview from Build & Test is active.'}</Text>
-              {previewDnsWarming && (
+              {previewDnsStatus === 'warming' && (
                 <Text className={styles.previewStatusReason} role="status">
                   Warming up — DNS is propagating. Retrying for up to 5 minutes.
+                </Text>
+              )}
+              {previewDnsStatus === 'ready' && (
+                <Text className={styles.previewStatusReason} role="status">
+                  Preview DNS is ready.
+                </Text>
+              )}
+              {previewDnsStatus === 'timed_out' && (
+                <Text className={styles.previewStatusReason} role="status">
+                  Preview DNS is still propagating. Try opening the preview again soon.
                 </Text>
               )}
               {runPreviewState.targetPort && <Text className={styles.previewStatusReason}>Port {runPreviewState.targetPort}</Text>}
