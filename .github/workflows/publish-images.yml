@@ -75,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -115,7 +115,7 @@ jobs:
       # apps/web/Dockerfile deliberately never runs npm itself: it copies the
       # prebuilt apps/web/dist produced here, matching what the ACR build path
       # does (scripts/azure/steps/20-build-push-images.mjs -> prepareFrontendDist).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: matrix.frontendBuild
         with:
           node-version: '24'
