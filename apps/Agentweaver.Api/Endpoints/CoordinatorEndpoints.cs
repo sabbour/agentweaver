@@ -408,7 +408,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
             id,
-            caller.User,
+            CallerDisplayName(caller),
             request?.AllowTaskPromotion ?? false,
             ct);
 
@@ -654,7 +654,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             RequestChanges: request.RequestChanges,
             Feedback: request.Feedback,
             TargetFiles: request.TargetFiles,
-            Reviewer: caller.User);
+            Reviewer: CallerDisplayName(caller));
 
         var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
             scopeFactory,
@@ -727,6 +727,13 @@ static bool ShouldUsePersistedAssemblyDiff(Run run) =>
         or RunStatus.MergeFailed
         or RunStatus.Declined
         or RunStatus.Completed;
+
+/// <summary>Returns the most human-readable identity for the caller: display name first,
+/// GitHub login as fallback, raw user ID (OID/key) as last resort.</summary>
+static string CallerDisplayName(CallerContext caller) =>
+    !string.IsNullOrWhiteSpace(caller.DisplayName) ? caller.DisplayName!
+    : !string.IsNullOrWhiteSpace(caller.GitHubLogin) ? caller.GitHubLogin!
+    : caller.User;
 
 static IResult BadRequestError(string error, string message) =>
     Results.Json(new { error, message }, statusCode: StatusCodes.Status400BadRequest);
