@@ -10,6 +10,28 @@
 # pick up OS-level patches. Trivy scans for HIGH/CRITICAL CVEs gate every build.
 # Pinned tool versions below are bumped automatically by Dependabot (see .github/dependabot.yml).
 
+# Go-based helper tools are built in a separate stage so we can pin the Go
+# patch line that Trivy evaluates and override transitive Go modules when
+# upstream binary releases lag a fix.
+FROM golang:1.26.6 AS go-tools
+ARG GH_CLI_VERSION=2.98.0
+ARG BUILDCTL_VERSION=0.32.2
+WORKDIR /src
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --branch "v${GH_CLI_VERSION}" --depth 1 https://github.com/cli/cli.git gh \
+    && cd gh \
+    && go get golang.org/x/mod@v0.40.0 \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gh ./cmd/gh
+
+RUN git clone --branch "v${BUILDCTL_VERSION}" --depth 1 https://github.com/moby/buildkit.git buildkit \
+    && cd buildkit \
+    && go get golang.org/x/mod@v0.40.0 \
+    && go mod vendor \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/buildctl ./cmd/buildctl
+
 # Build stage
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
@@ -18,7 +40,7 @@ COPY ["apps/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj", "apps/Agentweav
 COPY ["packages/", "packages/"]
 COPY Directory.Build.props .
 
-# Bumped 1.0.67 -> 1.0.71-3 (latest published, 2026-07-15) to pick up whatever
+# Bumped 1.0.71-3 -> 1.0.80 (latest published, 2026-08-24) to pick up whatever
 # Go stdlib / golang.org/x/net patch level GitHub compiled the CLI binary with.
 # The `copilot` binary is a prebuilt, third-party compiled artifact — we cannot
 # patch its embedded Go stdlib/x-net ourselves; bumping to the newest release is
@@ -26,13 +48,13 @@ COPY Directory.Build.props .
 # "Package: golang.org/x/net" CVEs against this binary after the bump, that is a
 # residual, accepted-risk finding pending an upstream copilot-cli release built
 # against a newer Go toolchain (see apps/Agentweaver.AgentHost/.trivyignore).
-ARG COPILOT_CLI_VERSION=1.0.71-3
+ARG COPILOT_CLI_VERSION=1.0.80
 # SHA-1 shasum published by the npm registry for this exact tarball (from
 # `npm view @github/copilot-linux-x64@${COPILOT_CLI_VERSION} dist.shasum`).
 # Pinning + verifying this closes the "mutable remote tooling" supply-chain
 # gap: without it, a compromised/replaced tarball at this URL would be piped
 # straight into `tar` and run as part of the image with no integrity check.
-ARG COPILOT_CLI_SHA1=82ec5a02af1864e177da19bab4ff50c4840917f5
+ARG COPILOT_CLI_SHA1=8418f636cf15277bd1c3497d52ebf9d4249a77ce
 RUN mkdir -p /copilot-bin && \
     curl -fsSL -o /tmp/copilot.tgz "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" && \
     echo "${COPILOT_CLI_SHA1}  /tmp/copilot.tgz" | sha1sum -c - && \
@@ -67,13 +89,13 @@ ARG GIT_SHA=unknown
 # curl|bash execution of unpinned upstream scripts).
 ARG NODE_VERSION=24.19.0
 ARG NODE_SHA256=f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4
-ARG YQ_VERSION=4.53.3
-ARG YQ_SHA256=fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4
+ARG YQ_VERSION=4.53.6
+ARG YQ_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
 ARG NPM_VERSION=12.0.2
 ARG NODEMON_VERSION=3.1.14
-ARG TYPESCRIPT_VERSION=7.0.2
+ARG TYPESCRIPT_VERSION=7.1.0-dev.20260817.1
 ARG TS_NODE_VERSION=10.9.2
-ARG PNPM_VERSION=11.13.1
+ARG PNPM_VERSION=11.22.0
 
 LABEL org.opencontainers.image.version="${IMAGE_TAG}"
 LABEL org.opencontainers.image.revision="${GIT_SHA}"
@@ -144,23 +166,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── GitHub CLI ────────────────────────────────────────────────────────────────
-# `apt-get install gh` (no version pin) previously let GHA's Docker layer cache
-# silently keep serving whatever `gh` build got baked into the cache the first
-# time this layer ran — `apt-get update` re-runs but BuildKit reuses the whole
-# RUN's cached *result* verbatim as long as the instruction text is unchanged,
-# so the actually-latest `gh` package was never re-fetched. ARG GH_CLI_CACHE_BUST
-# is interpolated into the RUN command so bumping it (Dependabot / maintenance
-# workflow) forces a fresh apt-get update+install, closing gh's embedded
-# Go stdlib/grpc-go CVEs (e.g. GHSA-hrxh-6v49-42gf) as new gh releases ship.
-ARG GH_CLI_CACHE_BUST=2026-07-23
-RUN echo "cache-bust: ${GH_CLI_CACHE_BUST}" \
-    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-        > /etc/apt/sources.list.d/github-cli.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends gh \
-    && rm -rf /var/lib/apt/lists/*
+# Upstream gh releases still carry golang.org/x/mod v0.38.0 in their published
+# module graph, so build the exact tag from source here with Go 1.26.6 and an
+# explicit x/mod override until the official release line catches up.
+COPY --from=go-tools /out/gh /usr/local/bin/gh
+RUN chmod 0755 /usr/local/bin/gh \
+    && gh --version
 
 # ── yq (YAML processor) ───────────────────────────────────────────────────────
 RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" \
@@ -172,13 +183,10 @@ RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}
 # Downloaded as a checksum-verified tarball from nodejs.org instead of piping
 # NodeSource's mutable setup_<major>.x script into bash — that script is
 # fetched and executed as root with no version pin or content verification.
-# npm is self-updated to latest *before* the global tool installs: the
-# bundled npm in this Node release has transitive deps (node-gyp -> tar /
-# undici) carrying CVEs with upstream fixes (e.g. CVE-2026-59873/59874 in
-# tar, CVE-2026-12151 in undici); newer npm pulls in patched versions,
-# closing those out of the Trivy HIGH/CRITICAL gate without touching the
-# scan config itself. npm global packages are pinned to exact versions
-# instead of resolving whatever "latest" happens to publish at build time.
+# npm is self-updated to latest *before* the global tool installs, then its
+# bundled runtime deps are surgically overlaid where upstream still bundles
+# older tar/undici builds. pnpm and TypeScript are pinned to newer releases
+# that already carry the patched transitive/runtime bits.
 RUN curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
     && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 \
@@ -188,6 +196,8 @@ RUN curl -fsSL -o /tmp/node.tar.gz "https://nodejs.org/dist/v${NODE_VERSION}/nod
     && npm install --prefix /tmp/npm-runtime-fixes --ignore-scripts --no-save --no-package-lock \
         brace-expansion@5.0.9 \
         ip-address@10.3.1 \
+        tar@7.5.21 \
+        undici@6.28.0 \
     && cp -a /tmp/npm-runtime-fixes/node_modules/. /usr/local/lib/node_modules/npm/node_modules/ \
     && rm -rf /tmp/npm-runtime-fixes \
     && npm install -g \
@@ -224,11 +234,11 @@ RUN mkdir -p /workspace /app/config /app/logs && chown -R 1000:1000 /workspace /
 # symlink because an agent reaches for `docker build`, and a missing binary is indistinguishable
 # from a broken image; the shim answers every other subcommand with the reason it cannot work here.
 # Keep BUILDCTL_VERSION current: buildctl is a Go binary, so its embedded stdlib is what the Trivy
-# gate scans, and an old release fails the build on Go CVEs even though the client itself is fine.
-ARG BUILDCTL_VERSION=0.32.2
-RUN curl -fsSL "https://github.com/moby/buildkit/releases/download/v${BUILDCTL_VERSION}/buildkit-v${BUILDCTL_VERSION}.linux-amd64.tar.gz" \
-        | tar -xz -C /usr/local bin/buildctl \
-    && chmod 0755 /usr/local/bin/buildctl \
+# gate scans. Build it from the tagged source with Go 1.26.6 so CVE fixes are
+# available as soon as the source tree is compatible, not only after a new
+# release artifact ships.
+COPY --from=go-tools /out/buildctl /usr/local/bin/buildctl
+RUN chmod 0755 /usr/local/bin/buildctl \
     && buildctl --version
 COPY apps/Agentweaver.AgentHost/sandbox/awx-docker /usr/local/bin/awx-docker
 RUN chmod 0755 /usr/local/bin/awx-docker \
