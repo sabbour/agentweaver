@@ -377,6 +377,16 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
                     new PodExecRequest { Op = PodExecOps.Ports, Handle = handle },
                     ct)
                 .ConfigureAwait(false);
+
+            // #849 review: the sidecar now fails closed (an Error frame) instead of an empty port
+            // list when the session cannot be scanned at all (e.g. it was started with
+            // networkEnabled=false, so its sockets are not visible in the sidecar's own network
+            // namespace). Surfacing that distinctly here — rather than folding it into the same
+            // "[]" the caller sees for "not listening yet" — is the whole point of the fix below:
+            // the catch clause logs the real reason instead of a generic transport failure.
+            if (frame.Type == PodExecFrameTypes.Error)
+                throw new InvalidOperationException(frame.Message ?? "Executor sidecar port query failed.");
+
             return frame.Ports ?? [];
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
