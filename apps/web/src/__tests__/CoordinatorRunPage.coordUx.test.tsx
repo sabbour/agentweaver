@@ -142,6 +142,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
 
   it('surfaces a durable ready preview on Build & Test and human review', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
     vi.mocked(apiClient.getRunGraph).mockResolvedValue(graphWithBuildTest);
     vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'awaiting_review', coordinator_status: 'in_review' } as never);
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
@@ -149,25 +150,35 @@ describe('CoordinatorRunPage operator console redesign', () => {
       { sequence: 11, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'human-review' } },
     ]);
 
-    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+    try {
+      render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    const topLevelPreview = await screen.findByTestId('compact-preview-run-action', undefined, { timeout: 4000 });
-    expect(topLevelPreview.textContent).toContain('Open preview');
-    fireEvent.click(topLevelPreview);
-    expect(openSpy).toHaveBeenCalledWith('https://preview.example.test', '_blank', 'noopener,noreferrer');
+      const topLevelPreview = await screen.findByTestId('compact-preview-run-action', undefined, { timeout: 4000 });
+      expect(topLevelPreview.textContent).toContain('Open preview');
+      fireEvent.click(topLevelPreview);
+      expect(openSpy).toHaveBeenCalledWith('https://preview.example.test', '_blank', 'noopener,noreferrer');
 
-    const buildRow = await screen.findByRole('treeitem', { name: /Select Build & Test:/i }, { timeout: 4000 });
-    fireEvent.click(buildRow);
-    const buildPreview = await screen.findByTestId('selected-build-preview-cta', undefined, { timeout: 4000 });
-    expect(buildPreview.textContent).toContain('Preview from Build & Test is active');
-    fireEvent.click(within(buildPreview).getByRole('button', { name: 'Open preview' }));
-    expect(openSpy).toHaveBeenCalledWith('https://preview.example.test', '_blank', 'noopener,noreferrer');
+      const buildRow = await screen.findByRole('treeitem', { name: /Select Build & Test:/i }, { timeout: 4000 });
+      fireEvent.click(buildRow);
+      const buildPreview = await screen.findByTestId('selected-build-preview-cta', undefined, { timeout: 4000 });
+      expect(buildPreview.textContent).toContain('Preview from Build & Test is active');
+      await waitFor(() => expect(buildPreview.textContent).toContain('Preview DNS is ready.'));
+      expect(fetchSpy).toHaveBeenCalledWith('https://preview.example.test', expect.objectContaining({
+        method: 'HEAD',
+        mode: 'no-cors',
+        signal: expect.any(AbortSignal),
+      }));
+      fireEvent.click(within(buildPreview).getByRole('button', { name: 'Open preview' }));
+      expect(openSpy).toHaveBeenCalledWith('https://preview.example.test', '_blank', 'noopener,noreferrer');
 
-    fireEvent.click(await screen.findByTestId('compact-primary-run-action', undefined, { timeout: 4000 }));
-    const reviewPreview = await screen.findByTestId('human-review-preview-status', undefined, { timeout: 4000 });
-    expect(reviewPreview.textContent).toContain('Preview from Build & Test is active');
-
-    openSpy.mockRestore();
+      fireEvent.click(await screen.findByTestId('compact-primary-run-action', undefined, { timeout: 4000 }));
+      const reviewPreview = await screen.findByTestId('human-review-preview-status', undefined, { timeout: 4000 });
+      expect(reviewPreview.textContent).toContain('Preview from Build & Test is active');
+      expect(reviewPreview.textContent).toContain('Preview DNS is ready.');
+    } finally {
+      fetchSpy.mockRestore();
+      openSpy.mockRestore();
+    }
   });
 
   it('shows pending approval for the latest preview event', async () => {

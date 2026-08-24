@@ -733,7 +733,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             // The helper prints READY only after every mount succeeded; entering its namespaces
             // before that would expose the image's read-only /usr and produce confusing failures.
             var readyLine = holder.StandardOutput.ReadLineAsync();
-            var signalled = readyLine.Wait(TimeSpan.FromSeconds(30));
+            var signalled = readyLine.Wait(TimeSpan.FromSeconds(120));
             if (!signalled || !string.Equals(readyLine.Result?.Trim(), "READY", StringComparison.Ordinal)
                 || holder.HasExited)
             {

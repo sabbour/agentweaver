@@ -136,7 +136,7 @@ internal sealed class PreviewRunnerToolProvider(
                     ct).ConfigureAwait(false);
 
                 var nextStep = observed.Healthy
-                    ? $"Call start_preview(port={observed.Port}) next."
+                    ? $"Call start_preview(port={observed.Port}, session_id={observed.SessionId}) next."
                     : $"Observation is NOT healthy (reason={observed.Reason ?? "unknown"}); do NOT call start_preview. Fix the app so it comes up on the discovered port and retry observe_bound_port.";
                 return $"bound_port_observed: session_id={observed.SessionId}, port={observed.Port}, app_port={observed.AppPort}, healthy={observed.Healthy}, reason={observed.Reason ?? "n/a"}, evidence={observed.Evidence}, health={observed.HealthEvidence}. {nextStep}";
             },
@@ -461,30 +461,48 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
         }
 
         var publicPort = forwarder.PublicPort;
-
-        var forwardedHealth = await ProbeHealthAsync(state.SessionId, publicPort, healthPath, ct).ConfigureAwait(false);
         var forwardEvidence = $"forwarder:0.0.0.0:{publicPort}->127.0.0.1:{appPort}; app_evidence={appEvidence}";
+        PreviewHealthResult? forwardedHealth = null;
 
-        if (!forwardedHealth.Healthy)
+        for (var attempt = 1; attempt <= 5; attempt++)
         {
-            return new PreviewPortObservation(
-                state.SessionId,
-                publicPort,
-                forwardEvidence,
-                false,
-                $"bound_unreachable: forwarder public port {publicPort} did not pass a health check ({forwardedHealth.Evidence})",
-                appPort,
-                "bound_unreachable");
+            if (state.HasExited)
+            {
+                return new PreviewPortObservation(
+                    state.SessionId,
+                    publicPort,
+                    forwardEvidence,
+                    false,
+                    $"bound_unreachable: preview process exited before forwarder health check completed. exitCode={state.ExitCode}",
+                    appPort,
+                    "bound_unreachable");
+            }
+
+            forwardedHealth = await ProbeHealthAsync(state.SessionId, publicPort, healthPath, ct).ConfigureAwait(false);
+            if (forwardedHealth.Healthy)
+            {
+                return new PreviewPortObservation(
+                    state.SessionId,
+                    publicPort,
+                    forwardEvidence,
+                    true,
+                    $"reachable via forwarder public port {publicPort}: {forwardedHealth.Evidence} (app health: {appHealthEvidence})",
+                    appPort,
+                    null);
+            }
+
+            if (attempt < 5)
+                await Task.Delay(TimeSpan.FromSeconds(3), ct).ConfigureAwait(false);
         }
 
         return new PreviewPortObservation(
             state.SessionId,
             publicPort,
             forwardEvidence,
-            true,
-            $"reachable via forwarder public port {publicPort}: {forwardedHealth.Evidence} (app health: {appHealthEvidence})",
+            false,
+            $"bound_unreachable: forwarder public port {publicPort} did not pass a health check after 5 attempts ({forwardedHealth!.Evidence})",
             appPort,
-            null);
+            "bound_unreachable");
     }
 
     public async Task<PreviewHealthResult> HealthCheckAsync(

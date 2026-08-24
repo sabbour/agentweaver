@@ -481,7 +481,7 @@ function previewUrlFromSession(session: PortForwardSessionDto | undefined): stri
 
 type RunPreviewState =
   | { status: 'none' }
-  | { status: 'ready'; previewUrl: string; targetPort?: string }
+  | { status: 'ready'; previewUrl: string; targetPort?: string; eventSequence: number }
   | { status: 'pending'; targetPort?: string }
   | {
     status: 'failed';
@@ -502,6 +502,7 @@ function latestPreviewStateFromEvents(events: RunStreamEvent[]): RunPreviewState
           status: 'ready',
           previewUrl: String(preview),
           targetPort: targetPort == null ? undefined : String(targetPort),
+          eventSequence: evt.sequence,
         };
       }
     }
@@ -526,6 +527,49 @@ function latestPreviewStateFromEvents(events: RunStreamEvent[]): RunPreviewState
 function previewFailureCopy(state: Extract<RunPreviewState, { status: 'failed' }>): string {
   const reason = state.reason.replace(/_/g, ' ');
   return state.message ? `${reason}: ${state.message}` : reason;
+}
+
+type PreviewDnsStatus = 'idle' | 'warming' | 'ready' | 'timed_out';
+
+function usePreviewDnsStatus(previewUrl: string | null, probeKey: string | null): PreviewDnsStatus {
+  const [probeState, setProbeState] = useState<{ key: string | null; status: PreviewDnsStatus }>({
+    key: null,
+    status: 'idle',
+  });
+
+  useEffect(() => {
+    if (!previewUrl || !probeKey) {
+      return;
+    }
+
+    let cancelled = false;
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const abortController = new AbortController();
+    const probe = async () => {
+      try {
+        await fetch(previewUrl, { method: 'HEAD', mode: 'no-cors', signal: abortController.signal });
+        if (!cancelled) setProbeState({ key: probeKey, status: 'ready' });
+      } catch {
+        attempts += 1;
+        if (attempts < 60 && !cancelled) {
+          retryTimer = setTimeout(() => void probe(), 5_000);
+        } else if (!cancelled) {
+          setProbeState({ key: probeKey, status: 'timed_out' });
+        }
+      }
+    };
+
+    void probe();
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+      abortController.abort();
+    };
+  }, [previewUrl, probeKey]);
+
+  if (!previewUrl || !probeKey) return 'idle';
+  return probeState.key === probeKey ? probeState.status : 'warming';
 }
 
 // Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status.
@@ -2634,6 +2678,10 @@ export function CoordinatorRunPage() {
   const runPreviewState = useMemo(() => latestPreviewStateFromEvents(events), [events]);
   const activePreviewSession = previewSession ?? previewSessions.find((session) => previewUrlFromSession(session)) ?? previewSessions[0];
   const activePreviewUrl = runPreviewState.status === 'ready' ? runPreviewState.previewUrl : null;
+  const previewDnsProbeKey = runPreviewState.status === 'ready'
+    ? `${runPreviewState.eventSequence}:${runPreviewState.previewUrl}`
+    : null;
+  const previewDnsStatus = usePreviewDnsStatus(activePreviewUrl, previewDnsProbeKey);
 
   // Coordinator graph node status override so it never shows a stale "Pending".
   const coordNodeStatusOverride = orchPhaseToTopoStatus(orch.phase)
@@ -4194,6 +4242,21 @@ export function CoordinatorRunPage() {
           <>
             <div className={styles.previewStatusStack}>
               <Text weight="semibold">{compact ? 'Build & Test preview is active.' : 'Preview from Build & Test is active.'}</Text>
+              {previewDnsStatus === 'warming' && (
+                <Text className={styles.previewStatusReason} role="status">
+                  Warming up — DNS is propagating. Retrying for up to 5 minutes.
+                </Text>
+              )}
+              {previewDnsStatus === 'ready' && (
+                <Text className={styles.previewStatusReason} role="status">
+                  Preview DNS is ready.
+                </Text>
+              )}
+              {previewDnsStatus === 'timed_out' && (
+                <Text className={styles.previewStatusReason} role="status">
+                  Preview DNS is still propagating. Try opening the preview again soon.
+                </Text>
+              )}
               {runPreviewState.targetPort && <Text className={styles.previewStatusReason}>Port {runPreviewState.targetPort}</Text>}
             </div>
             <Button appearance="primary" size="small" icon={<OpenRegular />} onClick={openPreview}>
