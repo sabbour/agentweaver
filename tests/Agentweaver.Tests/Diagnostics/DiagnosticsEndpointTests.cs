@@ -111,6 +111,7 @@ public sealed class DiagnosticsEndpointTests : IClassFixture<ProjectsWebApplicat
         names.Should().Contain("heartbeat_service");
         names.Should().Contain("project_store");
         names.Should().Contain("github_cli");
+        names.Should().Contain("github_cli_auth");
     }
 
     [Fact]
