@@ -25,6 +25,12 @@ span itself only carries the tool name and status. A failed tool call shows its 
 place of the output, with distinct error styling. If no matching event is found (for example, an
 older run recorded before this correlation existed), the panel shows a placeholder message instead.
 
+Each span, and the panel header, also shows an **AIC** (AI Credit) cost chip. An LLM span shows the
+cost of that one model turn; an Invoke Agent span shows the summed cost of every turn and tool call
+nested beneath it; the panel header shows the total cost across the whole run. The underlying value
+is `agentweaver.aiu.nano` (nano-AIU), sourced from the model turn's `agent.turn.usage` event and
+formatted with the same `AIC` unit used elsewhere in the app (see `formatAic`/`CostChip`).
+
 ## Troubleshooting empty traces
 
 An empty `spans` collection can mean that Application Insights has not produced trace data yet.
@@ -52,6 +58,7 @@ truncated failing KQL, so operators can distinguish a query failure from a genui
 | Hierarchical trace panel | `apps/web/src/components/runs/TransactionTracePanel.tsx:294` |
 | Parent/child reconstruction and synthetic LLM leaf | `apps/web/src/components/runs/traceTree.ts:22` |
 | Tool call argument/output correlation by `callId` | `apps/web/src/components/runs/traceTree.ts:1` (`buildToolCallIndex`) |
+| AIC cost aggregation per span/agent invocation/run | `apps/web/src/components/runs/traceTree.ts` (`aggregateNanoAiu`, `totalNanoAiu`) |
 | Trace DTO | `apps/Agentweaver.Api/Metrics/MetricsDtos.cs:133` |
 | Trace endpoint | `apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:130` |
 | AppInsights trace query and span classification | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:522` |
