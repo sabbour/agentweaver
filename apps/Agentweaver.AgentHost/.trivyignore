@@ -16,8 +16,18 @@
 # Bundled @typescript/typescript-linux-x64 native tsc binary (optional dep of
 # the `typescript` npm package), pinned to 7.1.0-dev.20260817.1 — the newest
 # prerelease on npm as of 2026-08-24 (`npm view typescript versions`). It
-# embeds golang.org/x/text v0.38.0 (fixed: 0.39.0); this is a prebuilt,
-# third-party Go binary whose embedded module graph we cannot patch
-# ourselves. Re-check on the next maintenance rebuild and drop this entry
-# once a newer typescript prerelease ships with a patched x/text.
+# embeds golang.org/x/text v0.38.0 (fixed: 0.39.0) and stdlib v1.26.4 (fixed:
+# 1.25.13, 1.26.6, 1.27.0-rc.3); this is a prebuilt, third-party Go binary
+# whose embedded module graph we cannot patch ourselves. Re-check on the
+# next maintenance rebuild and drop these entries once a newer typescript
+# prerelease ships with a patched Go toolchain/x-text.
 CVE-2026-56852
+CVE-2026-33818
+CVE-2026-39821
+CVE-2026-39822
+CVE-2026-46600
+CVE-2026-56853
+CVE-2026-56858
+CVE-2026-56859
+CVE-2026-56860
+CVE-2026-56862
