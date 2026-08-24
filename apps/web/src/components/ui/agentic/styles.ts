@@ -71,6 +71,11 @@ export const useAgenticStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
   },
+  changeRequestBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
 
   // AgentStep — timeline item
   stepList: {

@@ -4,6 +4,7 @@ import {
   Button,
   Spinner,
   Text,
+  Textarea,
   mergeClasses,
 } from '@fluentui/react-components';
 import {
@@ -56,11 +57,13 @@ export interface ApprovalGateProps {
   disclaimer?: ReactNode;
   approveLabel?: ReactNode;
   denyLabel?: ReactNode;
+  changeLabel?: ReactNode;
   additionalActions?: ReactNode;
   /** Disables the primary Approve and Deny buttons (e.g. while an async request is in flight). */
   disabled?: boolean;
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
+  onRequestChanges?: (stepId: string, feedback: string) => void;
 }
 
 export function ApprovalGate({
@@ -70,12 +73,28 @@ export function ApprovalGate({
   disclaimer,
   approveLabel = 'Approve',
   denyLabel = 'Deny',
+  changeLabel,
   additionalActions,
   disabled,
   onApprove,
   onDeny,
+  onRequestChanges,
 }: ApprovalGateProps) {
   const styles = useAgenticStyles();
+  const [requestingChanges, setRequestingChanges] = useState(false);
+  const [changeFeedback, setChangeFeedback] = useState('');
+
+  const handleSendChanges = () => {
+    onRequestChanges?.(stepId, changeFeedback);
+    setRequestingChanges(false);
+    setChangeFeedback('');
+  };
+
+  const handleCancelChanges = () => {
+    setRequestingChanges(false);
+    setChangeFeedback('');
+  };
+
   return (
     <div className={styles.approvalGate} role="region" aria-label="Approval required">
       {body && (
@@ -87,15 +106,51 @@ export function ApprovalGate({
       {disclaimer && (
         <Text className={styles.approvalDisclaimer}>{disclaimer}</Text>
       )}
-      <div className={styles.approvalActions}>
-        <Button appearance="primary" disabled={disabled} data-testid="approval-gate-approve-btn" onClick={() => onApprove?.(stepId)}>
-          {approveLabel}
-        </Button>
-        {additionalActions}
-        <Button appearance="secondary" disabled={disabled} data-testid="approval-gate-deny-btn" onClick={() => onDeny?.(stepId)}>
-          {denyLabel}
-        </Button>
-      </div>
+      {requestingChanges ? (
+        <div className={styles.changeRequestBox}>
+          <Textarea
+            placeholder="Describe what the agent should change"
+            value={changeFeedback}
+            onChange={(_, data) => setChangeFeedback(data.value)}
+            rows={3}
+            resize="vertical"
+            aria-label="Changes requested comment"
+          />
+          <div className={styles.approvalActions}>
+            <Button
+              appearance="primary"
+              disabled={disabled || changeFeedback.trim().length === 0}
+              data-testid="approval-gate-send-changes-btn"
+              onClick={handleSendChanges}
+            >
+              Send
+            </Button>
+            <Button appearance="secondary" disabled={disabled} onClick={handleCancelChanges}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className={styles.approvalActions}>
+          <Button appearance="primary" disabled={disabled} data-testid="approval-gate-approve-btn" onClick={() => onApprove?.(stepId)}>
+            {approveLabel}
+          </Button>
+          {changeLabel !== undefined && (
+            <Button
+              appearance="secondary"
+              disabled={disabled}
+              data-testid="approval-gate-change-btn"
+              onClick={() => setRequestingChanges(true)}
+            >
+              {changeLabel}
+            </Button>
+          )}
+          {additionalActions}
+          <Button appearance="secondary" disabled={disabled} data-testid="approval-gate-deny-btn" onClick={() => onDeny?.(stepId)}>
+            {denyLabel}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -131,11 +186,12 @@ export interface AgentStepProps {
   step: AgentStep;
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
+  onRequestChanges?: (stepId: string, feedback: string) => void;
   /** When true, forces the step (and its descendants) open regardless of local toggle state. */
   forceOpen?: boolean;
 }
 
-export function AgentStepItem({ step, onApprove, onDeny, forceOpen = false }: AgentStepProps) {
+export function AgentStepItem({ step, onApprove, onDeny, onRequestChanges, forceOpen = false }: AgentStepProps) {
   const styles = useAgenticStyles();
   const autoOpen =
     step.defaultOpen !== undefined
@@ -198,8 +254,10 @@ export function AgentStepItem({ step, onApprove, onDeny, forceOpen = false }: Ag
               disclaimer={step.disclaimer}
               approveLabel={step.approveLabel}
               denyLabel={step.denyLabel}
+              changeLabel={step.changeLabel}
               onApprove={onApprove}
               onDeny={onDeny}
+              onRequestChanges={onRequestChanges}
             />
           )}
           {step.artifacts && step.artifacts.length > 0 && (
@@ -218,6 +276,7 @@ export function AgentStepItem({ step, onApprove, onDeny, forceOpen = false }: Ag
                   step={child}
                   onApprove={onApprove}
                   onDeny={onDeny}
+                  onRequestChanges={onRequestChanges}
                   forceOpen={forceOpen}
                 />
               ))}
@@ -235,12 +294,13 @@ export interface AgentStepListProps {
   steps: AgentStep[];
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
+  onRequestChanges?: (stepId: string, feedback: string) => void;
   className?: string;
   forceOpen?: boolean;
   'aria-label'?: string;
 }
 
-export function AgentStepList({ steps, onApprove, onDeny, className, forceOpen = false, 'aria-label': ariaLabel }: AgentStepListProps) {
+export function AgentStepList({ steps, onApprove, onDeny, onRequestChanges, className, forceOpen = false, 'aria-label': ariaLabel }: AgentStepListProps) {
   const styles = useAgenticStyles();
   return (
     <ol
@@ -253,6 +313,7 @@ export function AgentStepList({ steps, onApprove, onDeny, className, forceOpen =
           step={step}
           onApprove={onApprove}
           onDeny={onDeny}
+          onRequestChanges={onRequestChanges}
           forceOpen={forceOpen}
         />
       ))}
@@ -282,6 +343,7 @@ export interface AgentActivitySessionProps {
   completedCount?: number;
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
+  onRequestChanges?: (stepId: string, feedback: string) => void;
   defaultCollapsed?: boolean;
   className?: string;
   'aria-label'?: string;
@@ -294,6 +356,7 @@ export function AgentActivitySession({
   completedCount,
   onApprove,
   onDeny,
+  onRequestChanges,
   defaultCollapsed = false,
   className,
   'aria-label': ariaLabel,
@@ -344,6 +407,7 @@ export function AgentActivitySession({
             steps={steps}
             onApprove={onApprove}
             onDeny={onDeny}
+            onRequestChanges={onRequestChanges}
             forceOpen={showAll}
             aria-label={ariaLabel ?? 'Run activity steps'}
           />
