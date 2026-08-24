@@ -5,7 +5,7 @@ namespace Agentweaver.AgentTools;
 /// </summary>
 public sealed record SandboxToolOptions(
     bool ShellEnabled,
-    int DefaultTimeoutMs = 30_000)
+    int DefaultTimeoutMs = 300_000)
 {
     /// <summary>
     /// Allowed repository roots accessible as read-only inside the sandbox.
