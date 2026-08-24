@@ -126,6 +126,26 @@ test("buildRuntimeConfigLiterals() passes AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT
   assert.equal(literals.ENTRA_TENANT_ID, "66666666-7777-8888-9999-000000000000");
 });
 
+test("buildRuntimeConfigLiterals() throws when AUTH_MODE=Entra but ENTRA_CLIENT_ID is missing", () => {
+  assert.throws(
+    () => buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "Entra", ENTRA_CLIENT_ID: "", ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000" }),
+    /ENTRA_CLIENT_ID or ENTRA_TENANT_ID is empty/,
+  );
+});
+
+test("buildRuntimeConfigLiterals() throws when AUTH_MODE=Entra but ENTRA_TENANT_ID is missing", () => {
+  assert.throws(
+    () => buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "Entra", ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555", ENTRA_TENANT_ID: "" }),
+    /ENTRA_CLIENT_ID or ENTRA_TENANT_ID is empty/,
+  );
+});
+
+test("buildRuntimeConfigLiterals() does NOT throw when AUTH_MODE=GitHubLegacy with empty Entra fields", () => {
+  assert.doesNotThrow(
+    () => buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "GitHubLegacy", ENTRA_CLIENT_ID: "", ENTRA_TENANT_ID: "" }),
+  );
+});
+
 test("rewriteOverlayKustomization() rewrites every images: entry and configMapGenerator literal, leaving structure intact", () => {
   const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
   const original = fs.readFileSync(overlayPath, "utf8");
@@ -192,6 +212,17 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
     agentHostSaManifest,
     /azure\.workload\.identity\/client-id: 11111111-2222-3333-4444-555555555555/,
     "agent-host ServiceAccount must NOT use the KV-privileged API identity",
+  );
+  const sandboxTemplate = manifestForFilename(docs, "sandbox-template-agenthost.yaml");
+  assert.match(
+    sandboxTemplate,
+    /name: NODE_OPTIONS\s*\n\s*value: --max-old-space-size=1024[\s\S]*?name: agentweaver-agent-host[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 1000m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 2Gi\s*\n\s*requests:\s*\n\s*cpu: 400m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 1Gi/,
+    "AgentHost must pass the preview Node heap cap and retain its explicit resource reservation",
+  );
+  assert.match(
+    sandboxTemplate,
+    /name: agentweaver-exec[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 1000m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 2Gi\s*\n\s*requests:\s*\n\s*cpu: 600m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 1Gi/,
+    "The executor that runs previews must retain explicit resource reservation and limits",
   );
   const mcpDeployment = manifestForFilename(docs, "mcp-deployment.yaml");
   assert.match(

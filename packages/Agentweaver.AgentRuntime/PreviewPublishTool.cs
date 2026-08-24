@@ -49,6 +49,7 @@ public static class PreviewPublishTool
         return AIFunctionFactory.Create(
             async (
                 [Description("The port your web server is listening on inside the sandbox, e.g. 3000")] int port,
+                [Description("The preview process session_id returned by observe_bound_port. This proves the process is still alive before publishing.")] string session_id,
                 CancellationToken ct = default) =>
             {
                 HttpResponseMessage response;
@@ -56,7 +57,7 @@ public static class PreviewPublishTool
                 {
                     response = await http.PostAsJsonAsync(
                         $"api/runs/{runId}/sandbox/preview",
-                        new { target_port = port },
+                        new { target_port = port, preview_runner_session_id = session_id },
                         ct).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)

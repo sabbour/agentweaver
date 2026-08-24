@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -92,6 +93,7 @@ public sealed record MarketplaceBrowsePage(
 /// <summary>A marketplace candidate's stable identity (import location + display name) before its
 /// short definition is fetched for the current page.</summary>
 internal sealed record MarketplaceCandidate(string Location, string Name);
+internal sealed record PreviewCloneCacheEntry(string Directory, string? Subpath, DateTimeOffset ExpiresAt);
 
 /// <summary>Result of upserting a single skill during acquisition.</summary>
 public sealed record SkillUpsertView
@@ -152,6 +154,7 @@ public sealed class SkillCatalogService
     private static readonly TimeSpan MarketplaceFetchTimeout = TimeSpan.FromSeconds(60);
     private const int MarketplaceFetchConcurrency = 16;
     private const long MaxMarketplaceSubtreeBytes = 32L * 1024 * 1024;
+    private static readonly TimeSpan PreviewCloneCacheTtl = TimeSpan.FromMinutes(10);
 
     /// <summary>Hard ceiling on how many candidate skills a single marketplace browse will list.</summary>
     private const int MaxMarketplaceCandidates = 500;
@@ -186,6 +189,7 @@ public sealed class SkillCatalogService
     private readonly IMarketplaceCatalogIndexer? _catalogIndexer;
     private readonly ILogger<SkillCatalogService> _logger;
     private readonly AuthMode _authMode;
+    private readonly ConcurrentDictionary<string, PreviewCloneCacheEntry> _previewCloneCache = new(StringComparer.Ordinal);
 
     public SkillCatalogService(
         ISkillStore skills,
@@ -361,8 +365,10 @@ public sealed class SkillCatalogService
             return (SkillOutcome.Invalid, "Repository URL is required.", null);
 
         string? cloneDir = null;
+        var cacheClone = false;
         try
         {
+            PurgeExpiredPreviewClones();
             var source = SkillImportSource.Parse(repoUrl);
             IReadOnlyList<RawSkill> discovered;
             if (source.RawSkillUri is not null)
@@ -372,11 +378,13 @@ public sealed class SkillCatalogService
             else
             {
                 cloneDir = await CloneToTempAsync(
-                    source.CloneUrl!, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
+                    source.CloneUrl!, repoUrl, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
                 var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(checkoutRef))
                     await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
                 discovered = DiscoverSkills(cloneDir, subpath);
+                CachePreviewClone(project.Id, repoUrl, cloneDir, subpath);
+                cacheClone = true;
             }
             var candidates = BuildCandidates(discovered);
             if (candidates.Count == 0)
@@ -394,7 +402,8 @@ public sealed class SkillCatalogService
         }
         finally
         {
-            TryDeleteDirectory(cloneDir);
+            if (!cacheClone)
+                TryDeleteDirectory(cloneDir);
         }
     }
 
@@ -410,6 +419,7 @@ public sealed class SkillCatalogService
         string? cloneDir = null;
         try
         {
+            PurgeExpiredPreviewClones();
             var source = SkillImportSource.Parse(repoUrl);
             IReadOnlyList<RawSkill> discovered;
             if (source.RawSkillUri is not null)
@@ -418,12 +428,21 @@ public sealed class SkillCatalogService
             }
             else
             {
-                cloneDir = await CloneToTempAsync(
-                    source.CloneUrl!, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
-                var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
-                if (!string.IsNullOrWhiteSpace(checkoutRef))
-                    await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
-                discovered = DiscoverSkills(cloneDir, subpath);
+                var cachedClone = TakePreviewClone(project.Id, repoUrl);
+                if (cachedClone is not null && Directory.Exists(cachedClone.Directory))
+                {
+                    cloneDir = cachedClone.Directory;
+                    discovered = DiscoverSkills(cloneDir, cachedClone.Subpath);
+                }
+                else
+                {
+                    cloneDir = await CloneToTempAsync(
+                        source.CloneUrl!, repoUrl, ResolveGitHubPrincipal(caller, project), project.Id, ct).ConfigureAwait(false);
+                    var (checkoutRef, subpath) = await ResolveRefAsync(cloneDir, source, ct).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(checkoutRef))
+                        await Task.Run(() => CheckoutRef(cloneDir, checkoutRef!), ct).ConfigureAwait(false);
+                    discovered = DiscoverSkills(cloneDir, subpath);
+                }
             }
             if (discovered.Count == 0)
                 return new SkillAcquisitionResult { Outcome = SkillOutcome.Invalid, Error = AcceptedSkillSourceMessage };
@@ -1242,7 +1261,8 @@ public sealed class SkillCatalogService
     }
 
     private async Task<string> CloneToTempAsync(
-        string repoUrl,
+        string cloneUrl,
+        string sourceRepository,
         string owner,
         ProjectId projectId,
         CancellationToken ct)
@@ -1250,17 +1270,60 @@ public sealed class SkillCatalogService
         // Defense in depth: only wire the caller's GitHub token as a credential when the clone
         // target is exactly github.com. The Parse allowlist already guarantees this, but scoping
         // here ensures a token is never offered (and thus never leaked) to any other host.
-        var token = SkillImportSource.IsAllowedCloneHost(repoUrl)
+        var token = SkillImportSource.IsAllowedCloneHost(cloneUrl)
             ? await ResolveTokenAsync(owner, projectId, ct).ConfigureAwait(false)
             : null;
         var dir = Path.Combine(AppPaths.DataDirectory, "skill-import", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.GetDirectoryName(dir)!);
         // Clone runs synchronously in LibGit2Sharp; offload so we don't block the request thread.
         await Task.Run(
-            () => _gitInit.Clone(dir, repoUrl, token ?? string.Empty, GitClonePurpose.SkillImport),
+            () => _gitInit.Clone(dir, sourceRepository, token ?? string.Empty, GitClonePurpose.SkillImport),
             ct).ConfigureAwait(false);
         return dir;
     }
+
+    private void CachePreviewClone(ProjectId projectId, string repoUrl, string cloneDir, string? subpath)
+    {
+        var key = BuildPreviewCloneCacheKey(projectId, repoUrl);
+        var entry = new PreviewCloneCacheEntry(cloneDir, subpath, DateTimeOffset.UtcNow.Add(PreviewCloneCacheTtl));
+        if (_previewCloneCache.TryGetValue(key, out var existing))
+            _previewCloneCache[key] = entry;
+        else
+            _previewCloneCache.TryAdd(key, entry);
+
+        if (existing is not null && !string.Equals(existing.Directory, cloneDir, StringComparison.Ordinal))
+            TryDeleteDirectory(existing.Directory);
+    }
+
+    private PreviewCloneCacheEntry? TakePreviewClone(ProjectId projectId, string repoUrl)
+    {
+        var key = BuildPreviewCloneCacheKey(projectId, repoUrl);
+        if (!_previewCloneCache.TryRemove(key, out var entry))
+            return null;
+
+        if (entry.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            TryDeleteDirectory(entry.Directory);
+            return null;
+        }
+
+        return entry;
+    }
+
+    private void PurgeExpiredPreviewClones()
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var (key, entry) in _previewCloneCache)
+        {
+            if (entry.ExpiresAt > now)
+                continue;
+            if (_previewCloneCache.TryRemove(key, out var removed))
+                TryDeleteDirectory(removed.Directory);
+        }
+    }
+
+    private static string BuildPreviewCloneCacheKey(ProjectId projectId, string repoUrl) =>
+        $"{projectId}:{repoUrl.Trim()}";
 
     /// <summary>
     /// Resolves the checkout ref + subpath for an import source against a freshly cloned repo.

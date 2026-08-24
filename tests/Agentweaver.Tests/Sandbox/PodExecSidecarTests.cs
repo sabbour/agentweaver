@@ -1,5 +1,6 @@
 extern alias agenthost;
 
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Agentweaver.SandboxExec;
@@ -348,6 +349,204 @@ public sealed class PodExecSidecarTests
             + "directly-invoked executor covered by KataBwrapExecutorTests");
     }
 
+    /// <summary>
+    /// Regression for #849: <see cref="PodExecSandboxClient.StartSupervisedProcessAsync"/> used to
+    /// return a "successful" handle — with a real, but meaningless, local relay PID — the instant the
+    /// local relay process launched, without ever waiting to hear whether the sidecar's spawn (bwrap
+    /// startup, sandbox-child resolution) actually succeeded. A spawn that failed left callers with a
+    /// handle that could never observe a port or a log line, and no diagnostic explaining why. This
+    /// drives a real, guaranteed-to-fail spawn (a working directory bwrap cannot chdir into) through
+    /// the full sidecar boundary and asserts the failure surfaces as a thrown exception instead of a
+    /// silently-broken handle.
+    /// </summary>
+    [SidecarLinuxFact]
+    public async Task StartSupervisedProcess_ThrowsInsteadOfReturningAHandleWhenTheSidecarSpawnFails()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var root = NewRoot();
+        var (workspace, _) = CreateTwoRuns(root);
+        await using var harness = PodExecTestHarness.StartServer(root);
+        var client = PodExecTestHarness.CreateClient(harness.SocketPath);
+        client.RegisterTrustedWorkspace(workspace);
+        client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
+
+        var missingWorkingDirectory = Path.Combine(workspace, "does-not-exist");
+
+        var act = async () => await client.StartSupervisedProcessAsync(
+            "echo should-never-print",
+            missingWorkingDirectory,
+            null,
+            networkEnabled: false)
+            .WaitAsync(TimeSpan.FromSeconds(30));
+
+        (await act.Should().ThrowAsync<InvalidOperationException>(
+                "a spawn the sidecar could not actually start must fail loudly instead of handing "
+                + "back a PID that will never expose a port or a log line"))
+            .Which.Message.Should().NotBeNullOrWhiteSpace();
+    }
+
+    /// <summary>
+    /// Review regression for #849: <see cref="PodExecPortScanner"/> reads <c>/proc/net/tcp*</c> from
+    /// the executor sidecar's own network namespace, which only ever matches the workload's namespace
+    /// when the workload was started with <c>networkEnabled=true</c> (see <see cref="KataBwrapExecutor"/>'s
+    /// conditional <c>--unshare-net</c>). This proves the scan actually finds a real socket bound by a
+    /// bwrap-sandboxed process under that exact configuration -- the same one
+    /// <c>PreviewRunner.StartPreviewProcessAsync</c> always uses -- rather than assuming shared procfs
+    /// visibility without a runtime check.
+    /// </summary>
+    [SidecarLinuxFact]
+    public async Task GetListeningPorts_DiscoversARealWorkloadListenerWhenNetworkIsShared()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var root = NewRoot();
+        var (workspace, _) = CreateTwoRuns(root);
+        await using var harness = PodExecTestHarness.StartServer(root);
+        var client = PodExecTestHarness.CreateClient(harness.SocketPath);
+        client.RegisterTrustedWorkspace(workspace);
+        client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
+
+        var port = FindFreeTcpPort();
+
+        // Matches issue #849's own reproduction command and PreviewRunner's networkEnabled: true.
+        var supervised = await StartSupervisedProcessResilientlyAsync(
+            client,
+            $"python3 -m http.server {port} --bind 127.0.0.1",
+            workspace,
+            networkEnabled: true);
+
+        try
+        {
+            IReadOnlyList<int> ports = [];
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            while (DateTime.UtcNow < deadline)
+            {
+                ports = await supervised.GetListeningPortsAsync();
+                if (ports.Contains(port))
+                    break;
+                await Task.Delay(250);
+            }
+
+            ports.Should().Contain(port,
+                "the scanner must discover a real listening socket owned by the sandboxed process "
+                + "group when the workload shares the sidecar's network namespace (networkEnabled=true), "
+                + "the only configuration observe_bound_port/health_check ever use");
+        }
+        finally
+        {
+            await supervised.StopAsync(TimeSpan.FromSeconds(2));
+            supervised.Process.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Review regression for #849: a session started with <c>networkEnabled=false</c> gets its own,
+    /// unshared network namespace (<c>KataBwrapExecutor</c> adds <c>--unshare-net</c>), so
+    /// <see cref="PodExecPortScanner"/> can never observe its sockets no matter how long it waits.
+    /// The sidecar must fail this query loudly instead of silently returning an empty list that would
+    /// be indistinguishable from "the workload just isn't listening yet" -- exactly the kind of
+    /// silent, undiagnosable failure this fix exists to eliminate.
+    /// </summary>
+    [SidecarLinuxFact]
+    public async Task GetListeningPorts_FailsClosedInsteadOfSilentlyEmptyWhenNetworkIsIsolated()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var root = NewRoot();
+        var (workspace, _) = CreateTwoRuns(root);
+        await using var harness = PodExecTestHarness.StartServer(root);
+        var client = PodExecTestHarness.CreateClient(harness.SocketPath);
+        client.RegisterTrustedWorkspace(workspace);
+        client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
+
+        var supervised = await StartSupervisedProcessResilientlyAsync(
+            client,
+            "while :; do sleep 1; done",
+            workspace,
+            networkEnabled: false);
+
+        try
+        {
+            var act = async () => await supervised.GetListeningPortsAsync();
+
+            (await act.Should().ThrowAsync<InvalidOperationException>(
+                    "a session started with networkEnabled=false lives in its own network namespace; "
+                    + "the scanner can never see its sockets and must fail loudly instead of returning "
+                    + "an empty list indistinguishable from \"not listening yet\""))
+                .Which.Message.Should().Contain("network namespace");
+        }
+        finally
+        {
+            await supervised.StopAsync(TimeSpan.FromSeconds(2));
+            supervised.Process.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Review regression for #849: the relay's start handshake only proves the sidecar's spawn (bwrap
+    /// startup, sandbox-child resolution) succeeded -- it says nothing about whether the workload has
+    /// actually bound a port yet. This drives a process that starts immediately but only binds a port
+    /// several seconds later (a slow dev server / HMR startup, matching the field reports) and proves
+    /// the port is genuinely undiscoverable until the delayed bind completes, and discoverable once it
+    /// does -- the behaviour <c>PreviewRunner.ObserveBoundPortAsync</c>'s 500ms polling loop relies on.
+    /// </summary>
+    [SidecarLinuxFact]
+    public async Task GetListeningPorts_OnlySucceedsAfterADelayedBindCompletes()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var root = NewRoot();
+        var (workspace, _) = CreateTwoRuns(root);
+        await using var harness = PodExecTestHarness.StartServer(root);
+        var client = PodExecTestHarness.CreateClient(harness.SocketPath);
+        client.RegisterTrustedWorkspace(workspace);
+        client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
+
+        var port = FindFreeTcpPort();
+        var bindDelay = TimeSpan.FromSeconds(3);
+
+        var supervised = await StartSupervisedProcessResilientlyAsync(
+            client,
+            $"sleep {bindDelay.TotalSeconds:0}; python3 -m http.server {port} --bind 127.0.0.1",
+            workspace,
+            networkEnabled: true);
+
+        try
+        {
+            var startedAt = DateTime.UtcNow;
+            var initialPorts = await supervised.GetListeningPortsAsync();
+            initialPorts.Should().NotContain(port,
+                "the start handshake only confirms the process started, not that it has bound a port "
+                + "yet -- observing it as bound this early would mean the check races the real bind");
+
+            IReadOnlyList<int> ports = [];
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            while (DateTime.UtcNow < deadline)
+            {
+                ports = await supervised.GetListeningPortsAsync();
+                if (ports.Contains(port))
+                    break;
+                await Task.Delay(250);
+            }
+
+            (DateTime.UtcNow - startedAt).Should().BeGreaterThanOrEqualTo(bindDelay,
+                "the port must not be observed as discovered before the delayed bind actually happens");
+            ports.Should().Contain(port,
+                "polling (matching PreviewRunner.ObserveBoundPortAsync's 500ms loop) must eventually "
+                + "discover a port that binds only after a startup delay");
+        }
+        finally
+        {
+            await supervised.StopAsync(TimeSpan.FromSeconds(2));
+            supervised.Process.Dispose();
+        }
+    }
+
     private static async Task<PodExecFrame> SendRawAsync(string socketPath, PodExecRequest request)
     {
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
@@ -365,6 +564,60 @@ public sealed class PodExecSidecarTests
         var root = Path.Combine(AppContext.BaseDirectory, $"podexec-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    /// <summary>
+    /// <see cref="KataBwrapExecutor"/>'s sandbox-child resolution has a real (and rare) fail-closed
+    /// safety net: it refuses to supervise a bwrap child whose resolved process group collides with
+    /// the executor's own. On CI runners with a small, heavily-recycled PID space, running many bwrap
+    /// spawns back-to-back can occasionally land on that exact collision by coincidence -- observed in
+    /// CI as "bwrap sandbox child ... shares the executor's process group ...; refusing to supervise
+    /// it." That race is orthogonal to everything these tests assert (it fires before the sidecar ever
+    /// registers a session), so retry past it a handful of times instead of letting a one-in-thousands
+    /// PID collision flake an otherwise-deterministic assertion about port scanning.
+    /// </summary>
+    private static async Task<PodExecSandboxClient.RemoteSupervisedProcess> StartSupervisedProcessResilientlyAsync(
+        PodExecSandboxClient client,
+        string commandLine,
+        string workingDirectory,
+        bool networkEnabled)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await client.StartSupervisedProcessAsync(
+                    commandLine,
+                    workingDirectory,
+                    null,
+                    networkEnabled);
+            }
+            catch (InvalidOperationException ex) when (
+                attempt < 5
+                && ex.Message.Contains("shares the executor's process group", StringComparison.Ordinal))
+            {
+                await Task.Delay(100 * attempt);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Picks a free loopback TCP port on this process's own network namespace. Valid as "the" port a
+    /// networkEnabled=true sandboxed workload can bind, precisely because that workload shares this
+    /// namespace (no <c>--unshare-net</c>) -- the same invariant the scanner itself relies on.
+    /// </summary>
+    private static int FindFreeTcpPort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            return ((IPEndPoint)listener.LocalEndpoint).Port;
+        }
+        finally
+        {
+            listener.Stop();
+        }
     }
 
     private static (string Workspace, string Sibling) CreateTwoRuns(string root)

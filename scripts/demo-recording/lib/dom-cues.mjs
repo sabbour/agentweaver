@@ -54,6 +54,7 @@ export function browserDomCueBootstrapSource() {
         const rect = definition.rect ?? { mode: 'matched-element' };
         if (rect.mode === 'none') return { rect: null, rectStatus: 'not-requested' };
         let value = null;
+        if (rect.mode === 'viewport') value = { x: 0, y: 0, width: innerWidth, height: innerHeight };
         if (rect.mode === 'matched-element') value = elementRect(matchedElements[0]);
         if (rect.mode === 'element' || rect.mode === 'first-matching') value = elementRect(query(rect.selector)[0]);
         if (rect.mode === 'union') value = unionRect(query(rect.selector));

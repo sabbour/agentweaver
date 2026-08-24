@@ -145,13 +145,13 @@ Narration: "Here in the Decisions tab, the team's accepted decisions are carried
 
 On screen: From the same project context, open **Decisions** and show a real, non-empty accepted decision.
 
-## Beat 3.1 — Schedule recurring dependency sweeps
+## Beat 3.1 — Schedule recurring software delivery
 
-Narration: "Not everything should run on a schedule — but some things should. I'll set up a weekly dependency sweep, since checking for outdated or vulnerable dependencies is naturally recurring work, regardless of what we're shipping."
+Narration: "Not everything should run on a schedule — but some things should. I'll set up a weekly Software Delivery run, since keeping dependencies current and the codebase healthy is naturally recurring work, regardless of what else we're shipping."
 
 Fresh navigation: false
 
-On screen: Open **Workflows**, choose the dependency-sweep workflow, add a weekly schedule, and save it. This beat starts from the project you already created; do not recreate or reclone anything.
+On screen: Open **Workflows**, choose the **Software Delivery** workflow, add a weekly schedule, and save it. This beat starts from the project you already created; do not recreate or reclone anything.
 
 ## Beat 3.2 — Trigger bug triage from GitHub
 

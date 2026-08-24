@@ -56,9 +56,18 @@ export function parseCleanupOptions(argv) {
 }
 
 export function assertPlanTargetsBaseUrl(captureConfig, baseUrl) {
-  const startUrls = captureConfig.beats.map((beat) => beat.startUrl);
-  if (startUrls.length === 0 || startUrls.some((startUrl) => typeof startUrl !== 'string' || !URL.canParse(startUrl))) {
-    throw new Error('Cleanup refused: every active-plan beat must declare an absolute staging startUrl.');
+  // Continuation beats (cross-beat URL continuity) legitimately omit startUrl.
+  // Only beats that declare a startUrl are checked; at least one must exist.
+  // Template placeholders (e.g. "{{AGENTWEAVER_DEMO_PROJECT_URL}}/board") are runtime-resolved
+  // and cannot be validated statically — skip them, but require at least one absolute URL.
+  const allStartUrls = captureConfig.beats
+    .map((beat) => beat.startUrl)
+    .filter((startUrl) => startUrl != null);
+  const startUrls = allStartUrls.filter(
+    (startUrl) => typeof startUrl === 'string' && !startUrl.startsWith('{{'),
+  );
+  if (startUrls.length === 0 || startUrls.some((startUrl) => !URL.canParse(startUrl))) {
+    throw new Error('Cleanup refused: at least one beat must declare an absolute staging startUrl, and all declared startUrls must be valid.');
   }
   const origins = new Set(
     startUrls
@@ -103,7 +112,7 @@ export async function cleanStaging(options, dependencies = {}) {
 async function main() {
   const result = await cleanStaging(parseCleanupOptions(process.argv.slice(2)));
   process.stdout.write(
-    `Removed ${result.discoveredProjectCount} declared demo fixture project(s); verified none remain.\n`,
+    `Removed ${result.discoveredProjectCount} declared demo fixture project(s) and ${result.discoveredSessionCount} session(s); verified none remain.\n`,
   );
 }
 

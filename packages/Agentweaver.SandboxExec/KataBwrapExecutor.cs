@@ -371,7 +371,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             // lost with "write error: Bad file descriptor").
             var (sandboxInitPid, workloadProcessGroupId) =
                 await ResolveSandboxProcessAsync(process, ct).ConfigureAwait(false);
-            return new SupervisedProcess(process, sandboxInitPid, workloadProcessGroupId);
+            return new SupervisedProcess(process, sandboxInitPid, workloadProcessGroupId, networkEnabled);
         }
         catch
         {
@@ -733,7 +733,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             // The helper prints READY only after every mount succeeded; entering its namespaces
             // before that would expose the image's read-only /usr and produce confusing failures.
             var readyLine = holder.StandardOutput.ReadLineAsync();
-            var signalled = readyLine.Wait(TimeSpan.FromSeconds(30));
+            var signalled = readyLine.Wait(TimeSpan.FromSeconds(120));
             if (!signalled || !string.Equals(readyLine.Result?.Trim(), "READY", StringComparison.Ordinal)
                 || holder.HasExited)
             {
@@ -1349,8 +1349,17 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
 
     internal sealed record MountSpec(string Source, string Target, bool ReadOnly);
 
+    /// <summary>
+    /// <paramref name="NetworkEnabled"/> records whether this workload shares the executor sidecar's
+    /// network namespace (<c>true</c>, no <c>--unshare-net</c>) or was isolated into its own (<c>false</c>).
+    /// Port discovery (<see cref="PodExecPortScanner"/>) reads <c>/proc/net/tcp*</c> from the sidecar's
+    /// own namespace, so it can only ever see sockets owned by a workload where this is <c>true</c> —
+    /// callers must check it before scanning (#849 review) instead of silently getting an empty result
+    /// back for a namespace-isolated workload.
+    /// </summary>
     public sealed record SupervisedProcess(
         Process Process,
         int SandboxInitPid,
-        int WorkloadProcessGroupId);
+        int WorkloadProcessGroupId,
+        bool NetworkEnabled);
 }

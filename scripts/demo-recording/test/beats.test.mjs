@@ -110,6 +110,12 @@ class FakeCapturePage {
     return new FakeApprovalSourceLocator(this.locatorCards[selector] ?? [], this);
   }
 
+  context() {
+    return this._fakeContext ?? new FakeCaptureContext();
+  }
+
+  setDefaultTimeout() {}
+
   async waitForTimeout(ms) {
     let remaining = ms;
     while (remaining > 0) {
@@ -129,6 +135,8 @@ class FakeCapturePage {
     this.currentUrl = url;
   }
 
+  async waitForLoadState() {}
+
   async evaluate(arg, data) {
     if (typeof arg !== 'function') return undefined;
     return arg(data);
@@ -143,7 +151,20 @@ class FakeCapturePage {
   }
 }
 
-async function runCaptureScriptOnPage(plan, page) {
+class FakeCaptureContext {
+  constructor(nextPage = null) {
+    this.nextPage = nextPage;
+  }
+
+  async waitForEvent(eventName) {
+    assert.equal(eventName, 'page');
+    if (!this.nextPage) throw new Error('No page event queued');
+    return this.nextPage;
+  }
+}
+
+async function executeCaptureScript(plan, page, context = new FakeCaptureContext()) {
+  page._fakeContext = context;
   const src = renderCaptureScript(plan);
   const capture = eval(`(${src})`);
   const previousNow = Date.now;
@@ -165,8 +186,7 @@ async function runCaptureScriptOnPage(plan, page) {
   globalThis.__demoApprovalWatcherNextId = 0;
   Date.now = () => page.nowMs;
   try {
-    await capture(page);
-    return page;
+    return await capture(page, context);
   } finally {
     Date.now = previousNow;
     if (previousWindow === undefined) {
@@ -186,6 +206,11 @@ async function runCaptureScriptOnPage(plan, page) {
     }
     delete globalThis.__demoApprovalWatcherNextId;
   }
+}
+
+async function runCaptureScriptOnPage(plan, page, context = new FakeCaptureContext()) {
+  await executeCaptureScript(plan, page, context);
+  return page;
 }
 
 async function runCaptureScriptWithCards({ plan, locatorCards }) {
@@ -265,7 +290,7 @@ test('capture script moves the cursor AFTER the zoom transform settles (recomput
   // The zoom transform is applied first...
   const zoomIdx = src.indexOf('__demoZoomFocus');
   // ...then the element box is recomputed post-transform...
-  const recomputeIdx = src.indexOf('const zbox = (await locator.boundingBox())');
+  const recomputeIdx = src.indexOf('const zbox = (await locator.boundingBox({ timeout: 60000 }))');
   // ...and only then is the cursor pointed at the post-transform center.
   const pointIdx = src.indexOf('const pointAt');
   assert.ok(zoomIdx > 0, 'expected a zoom-focus call');
@@ -354,6 +379,22 @@ test('capture script still navigates when a later beat targets a different start
   assert.deepEqual(page.gotoCalls, ['https://x/y', 'https://x/z']);
 });
 
+test('capture script follows a newly opened tab and continues on the new page', async () => {
+  const originalPage = new FakeCapturePage();
+  const previewPage = new FakeCapturePage();
+  previewPage.currentUrl = 'https://x/preview';
+  const result = await executeCaptureScript({
+    beatId: '4.2',
+    startUrl: 'https://x/workflow',
+    videoPath: 'beat-4-2.webm',
+    steps: [{ type: 'followNewPage', timeout: 1500 }],
+  }, originalPage, new FakeCaptureContext(previewPage));
+
+  assert.equal(result.url, 'https://x/preview');
+  assert.equal(previewPage.__demoCueSink, null, 'expected the new page cleanup path to run');
+  assert.equal(previewPage.__demoCaptureBeatId, '4.2');
+});
+
 test('capture script runs and stops the approval watcher around the step loop', () => {
   const src = renderCaptureScript({
     startUrl: 'https://x/y',
@@ -365,7 +406,7 @@ test('capture script runs and stops the approval watcher around the step loop', 
   const tryIdx = src.indexOf('  try {', watcherStartIdx);
   const clickIdx = src.indexOf("await click(approvalButton, 1.02, 700, true);");
   const watcherStopIdx = src.indexOf('await approvalWatcher.catch(() => {});');
-  const screencastStopIdx = src.indexOf('await page.screencast.stop().catch(() => {});');
+  const screencastStopIdx = src.lastIndexOf('await page.screencast.stop().catch(() => {});');
   assert.ok(screencastIdx > 0, 'expected screencast startup');
   assert.ok(watcherStartIdx > screencastIdx, 'expected approval watcher after screencast startup');
   assert.ok(tryIdx > watcherStartIdx, 'expected approval watcher before the step loop try block');
@@ -491,7 +532,7 @@ test('capture script supports eval, drag, waitFor, forced clicks and selector-sc
   // waitFor waits on a real element becoming visible (replaces fixed short timeouts)
   assert.ok(src.includes(".waitFor({ state: 'visible', timeout: 45000 })"), 'expected a visible waitFor with the given timeout');
   // forced clicks pass { force: true } through to locator.click
-  assert.ok(src.includes('force ? { force: true } : {}'), 'expected the click helper to honor force');
+  assert.ok(src.includes('force ? { force: true, timeout: 60000 } : { timeout: 60000 }'), 'expected the click helper to honor force');
   assert.ok(/await click\(.*'Approve'.*, true\);/s.test(src), 'expected the Approve click to be forced');
   // press can be scoped to a selector instead of the global keyboard
   assert.ok(src.includes(".press(\"Enter\")"), 'expected a selector-scoped press');

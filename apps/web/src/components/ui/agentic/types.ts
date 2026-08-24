@@ -33,6 +33,8 @@ export interface AgentStep {
   approveLabel?: ReactNode;
   /** Label for the deny button (default: "Deny"). */
   denyLabel?: ReactNode;
+  /** Inline "request changes" button label. When set, a Change button appears that expands a feedback textarea before resubmitting to the agents. */
+  changeLabel?: ReactNode;
   /** Whether the step panel is open on first render. Defaults to true when status is "running" or needsInput is true. */
   defaultOpen?: boolean;
   artifacts?: AgentArtifact[];

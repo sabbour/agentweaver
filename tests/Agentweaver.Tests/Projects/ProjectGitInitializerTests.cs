@@ -78,6 +78,37 @@ public sealed class ProjectGitInitializerTests : IDisposable
             "skill imports must resolve valid pinned branches and historical tags");
     }
 
+    [Fact]
+    public void TryGetSingleSegmentTreeBranchName_ReturnsBranchForSimpleTreeUrl()
+    {
+        var branch = ProjectGitInitializer.TryGetSingleSegmentTreeBranchName(
+            "https://github.com/octo/repo/tree/dev/.github/skills/sample");
+
+        branch.Should().Be("dev");
+    }
+
+    [Fact]
+    public void TryGetSingleSegmentTreeBranchName_IgnoresSlashContainingRefs()
+    {
+        var branch = ProjectGitInitializer.TryGetSingleSegmentTreeBranchName(
+            "https://github.com/octo/repo/tree/feature/demo/.github/skills/sample");
+
+        branch.Should().BeNull(
+            "slash-containing refs stay on the full-history path until the cloned repo can disambiguate them");
+    }
+
+    [Fact]
+    public void CreateCloneOptions_SkillImportShallowBranchUsesDepthOneAndBranchName()
+    {
+        var options = ProjectGitInitializer.CreateCloneOptions(
+            "ephemeral-test-token",
+            GitClonePurpose.SkillImport,
+            "dev");
+
+        options.FetchOptions.Depth.Should().Be(ProjectGitInitializer.ProjectCreationCloneDepth);
+        options.BranchName.Should().Be("dev");
+    }
+
     private string NewTempDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"aw-gitinit-{Guid.NewGuid():N}");
