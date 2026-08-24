@@ -115,7 +115,7 @@ jobs:
           node-version: '24'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', 'nuget.config', 'Directory.*', '**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
