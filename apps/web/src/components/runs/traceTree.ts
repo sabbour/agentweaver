@@ -131,3 +131,26 @@ export function findNode(nodes: TraceNode[], key: string | null): TraceNode | nu
   }
   return null;
 }
+
+/**
+ * AIC (AI Credit) cost attributed to a single node, in nano-AIU (issue #852). Only `llm` nodes
+ * (real or the synthetic leaf synthesized from an invoke-agent turn) carry their own cost — every
+ * other node type contributes 0 directly and only aggregates its descendants below.
+ */
+function ownNanoAiu(node: TraceNode): number {
+  return node.type === 'llm' ? (node.span.totalNanoAiu ?? 0) : 0;
+}
+
+/**
+ * Aggregates AIC cost for a node: its own cost (if an LLM turn) plus every descendant's cost,
+ * recursively. For an invoke-agent node this sums every model turn nested beneath it; for a root
+ * span this sums every turn in the whole run.
+ */
+export function aggregateNanoAiu(node: TraceNode): number {
+  return node.children.reduce((sum, child) => sum + aggregateNanoAiu(child), ownNanoAiu(node));
+}
+
+/** Total AIC cost across an entire trace forest — the run-level rollup (issue #852). */
+export function totalNanoAiu(nodes: TraceNode[]): number {
+  return nodes.reduce((sum, node) => sum + aggregateNanoAiu(node), 0);
+}

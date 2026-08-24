@@ -746,6 +746,7 @@ public sealed class AppInsightsMetricsService
                     Model = model,
                     InputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.input_tokens"),
                     OutputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.output_tokens"),
+                    TotalNanoAiu = ReadDimensionLong(customDimensions, "agentweaver.aiu.nano"),
                     OperationName = operationName,
                 };
             })

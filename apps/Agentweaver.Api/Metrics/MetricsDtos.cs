@@ -153,6 +153,7 @@ public sealed record RunTraceSpanDto
     [JsonPropertyName("model")] public string? Model { get; init; }
     [JsonPropertyName("inputTokens")] public long? InputTokens { get; init; }
     [JsonPropertyName("outputTokens")] public long? OutputTokens { get; init; }
+    [JsonPropertyName("totalNanoAiu")] public long? TotalNanoAiu { get; init; }
     [JsonPropertyName("operationName")] public string? OperationName { get; init; }
 }
 

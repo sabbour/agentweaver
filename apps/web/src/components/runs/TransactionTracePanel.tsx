@@ -18,10 +18,14 @@ import {
 } from '@fluentui/react-icons';
 import { formatModelLabel } from '../../utils/agentIdentity';
 import { AgentIdentity } from '../AgentIdentity';
-import { buildToolCallIndex,
+import { CostChip } from '../CostChip';
+import { formatAic } from '../costChipFormat';
+import { aggregateNanoAiu,
+  buildToolCallIndex,
   buildTraceTree,
   collectExpandableKeys,
-  findNode } from './traceTree';
+  findNode,
+  totalNanoAiu } from './traceTree';
 import { Body, EmptyState, TitleText } from '../ui';
 import { useEffect, useMemo, useState } from 'react';
 import type { RunTraceDto } from '../../api/types';
@@ -294,6 +298,7 @@ function TraceRow({
           <Text className={styles.rowName} title={name}>{name}</Text>
         )}
         <span className={styles.spacer} />
+        <CostChip totalNanoAiu={aggregateNanoAiu(node)} ariaLabel={`AI credit cost ${formatAic(aggregateNanoAiu(node))} AIC`} />
         <Text className={styles.duration}>{formatDurationMs(node.span.durationMs)}</Text>
       </button>
       {hasChildren && isExpanded && node.children.map((child) => (
@@ -335,6 +340,8 @@ function TraceDetail({
 }) {
   const { span, type } = node;
   const toolDetail = type === 'tool' && span.toolCallId ? toolCallIndex.get(span.toolCallId) : undefined;
+  const nodeCost = aggregateNanoAiu(node);
+  const costLabel = type === 'invoke-agent' ? 'AIC (agent invocation)' : type === 'llm' ? 'AIC (this turn)' : 'AIC';
   return (
     <div className={styles.detail}>
       <div className={styles.detailPanelHeader}>
@@ -348,6 +355,11 @@ function TraceDetail({
         <div className={styles.detailGrid}>
           <DetailRow label="Event time" value={new Date(span.timestamp).toLocaleString()} styles={styles} />
           <DetailRow label="Duration" value={formatDurationMs(span.durationMs)} styles={styles} />
+          <DetailRow
+            label={costLabel}
+            value={nodeCost > 0 ? `${formatAic(nodeCost)} AIC` : '—'}
+            styles={styles}
+          />
           <DetailRow
             label="Status"
             value={(
@@ -453,6 +465,7 @@ export function TransactionTracePanel({
   }, [runId]);
 
   const tree = useMemo(() => buildTraceTree(trace.spans), [trace.spans]);
+  const runTotalNanoAiu = useMemo(() => totalNanoAiu(tree), [tree]);
 
   useEffect(() => {
     // Expand every node with children by default so the full hierarchy is visible.
@@ -479,6 +492,12 @@ export function TransactionTracePanel({
         <div className={styles.panelHeaderTitle}>
           <TitleText as="h2">{title}</TitleText>
           <Badge appearance="outline" size="small">Distributed traces</Badge>
+          {runTotalNanoAiu > 0 && (
+            <CostChip
+              totalNanoAiu={runTotalNanoAiu}
+              ariaLabel={`Total AI credit cost for this run ${formatAic(runTotalNanoAiu)} AIC`}
+            />
+          )}
         </div>
         <Body tone="muted">{subtitle}</Body>
       </div>

@@ -1,4 +1,4 @@
-import { buildToolCallIndex, buildTraceTree } from '../components/runs/traceTree';
+import { aggregateNanoAiu, buildToolCallIndex, buildTraceTree, totalNanoAiu } from '../components/runs/traceTree';
 import { describe, expect, it } from 'vitest';
 import type { PersistedRunEvent, RunTraceSpanDto } from '../api/types';
 function span(partial: Partial<RunTraceSpanDto> & { id: string }): RunTraceSpanDto {
@@ -90,5 +90,55 @@ describe('buildToolCallIndex', () => {
 
   it('returns an empty index for no events', () => {
     expect(buildToolCallIndex([]).size).toBe(0);
+  });
+});
+
+describe('AIC (AI Credit) aggregation', () => {
+  it('attributes cost to a real llm node from its own totalNanoAiu', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'llm-1', spanType: 'llm', model: 'gpt-4o', totalNanoAiu: 5_000_000_000 }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(aggregateNanoAiu(tree[0])).toBe(5_000_000_000);
+  });
+
+  it('attributes zero cost to a tool node with no descendants', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'tool-1', spanType: 'tool', toolName: 'grep' }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(aggregateNanoAiu(tree[0])).toBe(0);
+  });
+
+  it('aggregates an invoke-agent node from its synthetic LLM leaf (single turn)', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'agent', spanType: 'invoke-agent', agentName: 'trinity', model: 'gpt-4o', totalNanoAiu: 7_667_650_000 }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(aggregateNanoAiu(tree[0])).toBe(7_667_650_000);
+  });
+
+  it('aggregates an invoke-agent node across multiple nested turns and tool calls', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'agent', spanType: 'invoke-agent', agentName: 'trinity' }),
+      span({ id: 'turn-1', parentId: 'agent', spanType: 'llm', model: 'gpt-4o', totalNanoAiu: 2_000_000_000, timestamp: '2026-07-06T00:00:01.000Z' }),
+      span({ id: 'tool-1', parentId: 'agent', spanType: 'tool', toolName: 'grep', timestamp: '2026-07-06T00:00:02.000Z' }),
+      span({ id: 'turn-2', parentId: 'agent', spanType: 'llm', model: 'gpt-4o', totalNanoAiu: 3_000_000_000, timestamp: '2026-07-06T00:00:03.000Z' }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(aggregateNanoAiu(tree[0])).toBe(5_000_000_000);
+  });
+
+  it('rolls up the run-level total across every root span in the forest', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'agent-1', spanType: 'invoke-agent', agentName: 'trinity', model: 'gpt-4o', totalNanoAiu: 1_000_000_000 }),
+      span({ id: 'agent-2', spanType: 'invoke-agent', agentName: 'tank', model: 'gpt-4o', totalNanoAiu: 4_000_000_000, timestamp: '2026-07-06T00:01:00.000Z' }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(totalNanoAiu(tree)).toBe(5_000_000_000);
+  });
+
+  it('returns zero for an empty forest', () => {
+    expect(totalNanoAiu([])).toBe(0);
   });
 });

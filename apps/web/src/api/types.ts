@@ -1504,6 +1504,7 @@ export interface RunTraceSpanDto {
   model?: string | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  totalNanoAiu?: number | null;
   operationName?: string | null;
 }
 
