@@ -1,5 +1,51 @@
-import type { RunTraceSpanDto } from '../../api/types';
+import type { PersistedRunEvent, RunTraceSpanDto } from '../../api/types';
 export type SpanType = 'invoke-agent' | 'llm' | 'tool';
+
+/** Arguments/output pulled from the persisted tool.call/tool.result/tool.error event log,
+ *  keyed by callId, so the trace panel can show what a tool span actually did (issue #850). */
+export interface ToolCallDetail {
+  arguments?: Record<string, unknown>;
+  content?: string;
+  errorMessage?: string;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * Correlates persisted `tool.call` / `tool.result` / `tool.error` run events by `callId` so the
+ * trace panel can display arguments and output for a tool span even though the AppInsights-backed
+ * span itself only carries the tool name/status/duration. Malformed or missing payloads are
+ * skipped rather than throwing, since this is best-effort enrichment of the trace UI.
+ */
+export function buildToolCallIndex(events: PersistedRunEvent[]): Map<string, ToolCallDetail> {
+  const index = new Map<string, ToolCallDetail>();
+  for (const event of events) {
+    const payload = event.payload;
+    const callId = asString(payload?.['callId']);
+    if (!callId) continue;
+    const entry = index.get(callId) ?? {};
+    if (event.type === 'tool.call') {
+      const args = asRecord(payload['arguments']);
+      if (args) entry.arguments = args;
+    } else if (event.type === 'tool.result') {
+      const content = asString(payload['content']);
+      if (content !== undefined) entry.content = content;
+    } else if (event.type === 'tool.error') {
+      const errorMessage = asString(payload['errorMessage']);
+      if (errorMessage !== undefined) entry.errorMessage = errorMessage;
+    } else {
+      continue;
+    }
+    index.set(callId, entry);
+  }
+  return index;
+}
 
 export interface TraceNode {
   key: string;
@@ -84,4 +130,27 @@ export function findNode(nodes: TraceNode[], key: string | null): TraceNode | nu
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * AIC (AI Credit) cost attributed to a single node, in nano-AIU (issue #852). Only `llm` nodes
+ * (real or the synthetic leaf synthesized from an invoke-agent turn) carry their own cost — every
+ * other node type contributes 0 directly and only aggregates its descendants below.
+ */
+function ownNanoAiu(node: TraceNode): number {
+  return node.type === 'llm' ? (node.span.totalNanoAiu ?? 0) : 0;
+}
+
+/**
+ * Aggregates AIC cost for a node: its own cost (if an LLM turn) plus every descendant's cost,
+ * recursively. For an invoke-agent node this sums every model turn nested beneath it; for a root
+ * span this sums every turn in the whole run.
+ */
+export function aggregateNanoAiu(node: TraceNode): number {
+  return node.children.reduce((sum, child) => sum + aggregateNanoAiu(child), ownNanoAiu(node));
+}
+
+/** Total AIC cost across an entire trace forest — the run-level rollup (issue #852). */
+export function totalNanoAiu(nodes: TraceNode[]): number {
+  return nodes.reduce((sum, node) => sum + aggregateNanoAiu(node), 0);
 }
