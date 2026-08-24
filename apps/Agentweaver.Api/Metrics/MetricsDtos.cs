@@ -149,6 +149,7 @@ public sealed record RunTraceSpanDto
     [JsonPropertyName("resultCode")] public string? ResultCode { get; init; }
     [JsonPropertyName("agentName")] public string? AgentName { get; init; }
     [JsonPropertyName("toolName")] public string? ToolName { get; init; }
+    [JsonPropertyName("toolCallId")] public string? ToolCallId { get; init; }
     [JsonPropertyName("model")] public string? Model { get; init; }
     [JsonPropertyName("inputTokens")] public long? InputTokens { get; init; }
     [JsonPropertyName("outputTokens")] public long? OutputTokens { get; init; }

@@ -18,13 +18,14 @@ import {
 } from '@fluentui/react-icons';
 import { formatModelLabel } from '../../utils/agentIdentity';
 import { AgentIdentity } from '../AgentIdentity';
-import { buildTraceTree,
+import { buildToolCallIndex,
+  buildTraceTree,
   collectExpandableKeys,
   findNode } from './traceTree';
 import { Body, EmptyState, TitleText } from '../ui';
 import { useEffect, useMemo, useState } from 'react';
 import type { RunTraceDto } from '../../api/types';
-import type { SpanType, TraceNode } from './traceTree';
+import type { SpanType, ToolCallDetail, TraceNode } from './traceTree';
 import type { ReactNode } from 'react';
 
 const useStyles = makeStyles({
@@ -164,6 +165,23 @@ const useStyles = makeStyles({
     fontSize: '14px',
     flexShrink: 0,
     color: tokens.colorStatusDangerForeground1,
+  },
+  codeBlock: {
+    margin: 0,
+    padding: tokens.spacingVerticalS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    maxHeight: '320px',
+    overflow: 'auto',
+  },
+  codeBlockError: {
+    backgroundColor: tokens.colorStatusDangerBackground1,
+    color: tokens.colorStatusDangerForeground1,
+    border: `1px solid ${tokens.colorStatusDangerBorder1}`,
   },
 });
 
@@ -307,13 +325,16 @@ function DetailRow({ label, value, styles }: { label: string; value: ReactNode; 
 function TraceDetail({
   node,
   roleByAgent,
+  toolCallIndex,
   styles,
 }: {
   node: TraceNode;
   roleByAgent?: Record<string, string>;
+  toolCallIndex: Map<string, ToolCallDetail>;
   styles: ReturnType<typeof useStyles>;
 }) {
   const { span, type } = node;
+  const toolDetail = type === 'tool' && span.toolCallId ? toolCallIndex.get(span.toolCallId) : undefined;
   return (
     <div className={styles.detail}>
       <div className={styles.detailPanelHeader}>
@@ -363,6 +384,28 @@ function TraceDetail({
           )}
         </div>
       </div>
+      {type === 'tool' && (
+        <>
+          <div>
+            <Text className={styles.detailSectionTitle}>Arguments</Text>
+            {toolDetail?.arguments ? (
+              <pre className={styles.codeBlock}>{JSON.stringify(toolDetail.arguments, null, 2)}</pre>
+            ) : (
+              <Text className={styles.detailValue}>No arguments recorded for this call.</Text>
+            )}
+          </div>
+          <div>
+            <Text className={styles.detailSectionTitle}>Output</Text>
+            {toolDetail?.errorMessage ? (
+              <pre className={mergeClasses(styles.codeBlock, styles.codeBlockError)}>{toolDetail.errorMessage}</pre>
+            ) : toolDetail?.content ? (
+              <pre className={styles.codeBlock}>{toolDetail.content}</pre>
+            ) : (
+              <Text className={styles.detailValue}>No output recorded for this call.</Text>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -380,6 +423,7 @@ export function TransactionTracePanel({
 }) {
   const styles = useStyles();
   const [trace, setTrace] = useState<RunTraceDto>({ runId, spans: [] });
+  const [toolCallIndex, setToolCallIndex] = useState<Map<string, ToolCallDetail>>(new Map());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -387,12 +431,21 @@ export function TransactionTracePanel({
     let cancelled = false;
     const loadTrace = async () => {
       setTrace({ runId, spans: [] });
+      setToolCallIndex(new Map());
       setSelectedKey(null);
       try {
         const next = await apiClient.getRunTraces(runId);
         if (!cancelled) setTrace(next);
       } catch {
         if (!cancelled) setTrace({ runId, spans: [] });
+      }
+      try {
+        // The persisted run event log carries tool.call/tool.result/tool.error payloads
+        // (arguments + output) that the AppInsights-backed trace span itself lacks (#850).
+        const events = await apiClient.getRunEvents(runId);
+        if (!cancelled) setToolCallIndex(buildToolCallIndex(events));
+      } catch {
+        if (!cancelled) setToolCallIndex(new Map());
       }
     };
     void loadTrace();
@@ -449,7 +502,7 @@ export function TransactionTracePanel({
             ))}
           </div>
           {selectedNode ? (
-            <TraceDetail node={selectedNode} roleByAgent={roleByAgent} styles={styles} />
+            <TraceDetail node={selectedNode} roleByAgent={roleByAgent} toolCallIndex={toolCallIndex} styles={styles} />
           ) : (
             <div className={styles.detail}>
               <EmptyState title="Select a span to view its details." />
