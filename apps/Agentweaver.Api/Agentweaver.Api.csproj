@@ -16,7 +16,7 @@
          harness can discover routes and request/response shapes instead of relying on hand-wrapped
          SDK-style subcommands. Built-in package (no Swashbuckle needed) since this project targets
          net10.0, which supports AddOpenApi()/MapOpenApi(). -->
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
     <!-- Security override: Microsoft.AspNetCore.OpenApi 10.0.10 pulls the vulnerable Microsoft.OpenApi
          2.0.0 transitively (GHSA-v5pm-xwqc-g5wc, stack-overflow DoS on circular schema references).
          Pin the patched 2.x line directly, same override pattern used for SQLitePCLRaw above. -->
@@ -39,8 +39,8 @@
          GHSA-2m69-gcr7-jv3q (NU1903). The lib.e_sqlite3 package is intentionally separable from the
          managed core/provider, so bumping only the native binary is the supported way to patch. -->
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
-    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.9.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.3.0" />
     <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.3.0" />
     <PackageReference Include="YamlDotNet" Version="18.0.0" />
