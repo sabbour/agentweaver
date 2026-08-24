@@ -36,6 +36,9 @@ jobs:
   build-and-scan:
     name: Build, Scan & Push
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.tag }}
+      trivy_gate_failed: ${{ steps.trivy_gate_status.outputs.failed }}
 
     steps:
       - name: Checkout
@@ -84,6 +87,8 @@ jobs:
       # (exit-code 1). The SARIF step below is upload-only (exit-code 0) and
       # never gates the build — it exists purely to populate the Security tab.
       - name: Run Trivy vulnerability scan (gate)
+        id: trivy_gate
+        continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
@@ -92,6 +97,11 @@ jobs:
           exit-code: "1"          # Fail the build on HIGH/CRITICAL CVEs
           ignore-unfixed: true    # Only flag CVEs that have a fix available
           trivyignores: apps/Agentweaver.AgentHost/.trivyignore
+
+      - name: Record Trivy gate outcome
+        if: always()
+        id: trivy_gate_status
+        run: echo "failed=${{ steps.trivy_gate.outcome == 'failure' }}" >> "$GITHUB_OUTPUT"
 
       - name: Run Trivy vulnerability scan (SARIF for Security tab)
         if: always()
@@ -114,9 +124,12 @@ jobs:
       # ── Push to ACR (schedule, dev/main push, or manual dispatch with push=true) ──
       - name: Log in to ACR
         if: >
-          github.event_name == 'schedule' ||
-          (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) ||
-          (github.event_name == 'workflow_dispatch' && inputs.push_to_acr == true)
+          steps.trivy_gate.outcome == 'success' &&
+          (
+            github.event_name == 'schedule' ||
+            (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) ||
+            (github.event_name == 'workflow_dispatch' && inputs.push_to_acr == true)
+          )
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -126,9 +139,12 @@ jobs:
       - name: Push to ACR
         id: push
         if: >
-          github.event_name == 'schedule' ||
-          (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) ||
-          (github.event_name == 'workflow_dispatch' && inputs.push_to_acr == true)
+          steps.trivy_gate.outcome == 'success' &&
+          (
+            github.event_name == 'schedule' ||
+            (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) ||
+            (github.event_name == 'workflow_dispatch' && inputs.push_to_acr == true)
+          )
         run: |
           az acr login --name agentweaverregistry
           docker tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
@@ -177,3 +193,17 @@ jobs:
           echo "| Trigger | ${{ github.event_name }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Trivy severity gate | HIGH, CRITICAL (unfixed only) |" >> "$GITHUB_STEP_SUMMARY"
+
+  enforce-trivy-gate:
+    name: Enforce Trivy HIGH/CRITICAL gate
+    needs: build-and-scan
+    runs-on: ubuntu-latest
+    if: always() && needs.build-and-scan.result == 'success'
+    steps:
+      - name: Fail when the gate scan found fixable vulnerabilities
+        run: |
+          if [ "${{ needs.build-and-scan.outputs.trivy_gate_failed }}" = "true" ]; then
+            echo "::error::Trivy found HIGH/CRITICAL vulnerabilities in ${{ env.IMAGE }}:${{ needs.build-and-scan.outputs.image_tag }}. SARIF was uploaded successfully; review the GitHub Security tab for details."
+            exit 1
+          fi
+          echo "Trivy gate passed for ${{ env.IMAGE }}:${{ needs.build-and-scan.outputs.image_tag }}."
