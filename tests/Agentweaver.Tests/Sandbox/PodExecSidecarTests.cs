@@ -412,10 +412,10 @@ public sealed class PodExecSidecarTests
         var port = FindFreeTcpPort();
 
         // Matches issue #849's own reproduction command and PreviewRunner's networkEnabled: true.
-        var supervised = await client.StartSupervisedProcessAsync(
+        var supervised = await StartSupervisedProcessResilientlyAsync(
+            client,
             $"python3 -m http.server {port} --bind 127.0.0.1",
             workspace,
-            null,
             networkEnabled: true);
 
         try
@@ -463,10 +463,10 @@ public sealed class PodExecSidecarTests
         client.RegisterTrustedWorkspace(workspace);
         client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
 
-        var supervised = await client.StartSupervisedProcessAsync(
+        var supervised = await StartSupervisedProcessResilientlyAsync(
+            client,
             "while :; do sleep 1; done",
             workspace,
-            null,
             networkEnabled: false);
 
         try
@@ -510,10 +510,10 @@ public sealed class PodExecSidecarTests
         var port = FindFreeTcpPort();
         var bindDelay = TimeSpan.FromSeconds(3);
 
-        var supervised = await client.StartSupervisedProcessAsync(
+        var supervised = await StartSupervisedProcessResilientlyAsync(
+            client,
             $"sleep {bindDelay.TotalSeconds:0}; python3 -m http.server {port} --bind 127.0.0.1",
             workspace,
-            null,
             networkEnabled: true);
 
         try
@@ -564,6 +564,41 @@ public sealed class PodExecSidecarTests
         var root = Path.Combine(AppContext.BaseDirectory, $"podexec-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    /// <summary>
+    /// <see cref="KataBwrapExecutor"/>'s sandbox-child resolution has a real (and rare) fail-closed
+    /// safety net: it refuses to supervise a bwrap child whose resolved process group collides with
+    /// the executor's own. On CI runners with a small, heavily-recycled PID space, running many bwrap
+    /// spawns back-to-back can occasionally land on that exact collision by coincidence -- observed in
+    /// CI as "bwrap sandbox child ... shares the executor's process group ...; refusing to supervise
+    /// it." That race is orthogonal to everything these tests assert (it fires before the sidecar ever
+    /// registers a session), so retry past it a handful of times instead of letting a one-in-thousands
+    /// PID collision flake an otherwise-deterministic assertion about port scanning.
+    /// </summary>
+    private static async Task<PodExecSandboxClient.RemoteSupervisedProcess> StartSupervisedProcessResilientlyAsync(
+        PodExecSandboxClient client,
+        string commandLine,
+        string workingDirectory,
+        bool networkEnabled)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await client.StartSupervisedProcessAsync(
+                    commandLine,
+                    workingDirectory,
+                    null,
+                    networkEnabled);
+            }
+            catch (InvalidOperationException ex) when (
+                attempt < 5
+                && ex.Message.Contains("shares the executor's process group", StringComparison.Ordinal))
+            {
+                await Task.Delay(100 * attempt);
+            }
+        }
     }
 
     /// <summary>
