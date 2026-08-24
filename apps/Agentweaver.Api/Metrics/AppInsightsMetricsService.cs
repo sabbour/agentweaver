@@ -721,6 +721,8 @@ public sealed class AppInsightsMetricsService
                 var spanKind = ReadDimension(customDimensions, "agentweaver.span.kind");
                 var toolName = ReadDimension(customDimensions, "gen_ai.tool.name")
                     ?? ReadDimension(customDimensions, "tool_name");
+                var toolCallId = ReadDimension(customDimensions, "tool.call.id")
+                    ?? ReadDimension(customDimensions, "gen_ai.tool.call.id");
                 var operationName = ReadDimension(customDimensions, "gen_ai.operation.name");
                 var model = ReadDimension(customDimensions, "gen_ai.response.model")
                     ?? ReadDimension(customDimensions, "gen_ai.request.model")
@@ -737,12 +739,14 @@ public sealed class AppInsightsMetricsService
                     Success = ReadBool(row[5]),
                     ResultCode = NullIfWhiteSpace(row[6]?.ToString()),
                     ToolName = toolName,
+                    ToolCallId = toolCallId,
                     AgentName = ReadDimension(customDimensions, "agent_name")
                         ?? ReadDimension(customDimensions, "gen_ai.agent.name")
                         ?? ResolveFallbackAgentName(agentNameByRunId, spanRunId, runId),
                     Model = model,
                     InputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.input_tokens"),
                     OutputTokens = ReadDimensionLong(customDimensions, "gen_ai.usage.output_tokens"),
+                    TotalNanoAiu = ReadDimensionLong(customDimensions, "agentweaver.aiu.nano"),
                     OperationName = operationName,
                 };
             })
