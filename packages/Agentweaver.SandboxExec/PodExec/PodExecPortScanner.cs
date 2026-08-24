@@ -9,8 +9,19 @@ namespace Agentweaver.SandboxExec.PodExec;
 /// <para>The AgentHost used to walk <c>/proc/&lt;pid&gt;/fd</c> for the preview process itself. With
 /// the process boundary moved into the executor sidecar, those PIDs no longer exist in the
 /// AgentHost's PID namespace, so the scan runs here — where the sandboxed process group is visible —
-/// and only its result (a port list) crosses the boundary. Containers in a pod share one network
-/// namespace, so a port observed here is the same port the preview gateway reaches.</para>
+/// and only its result (a port list) crosses the boundary.</para>
+///
+/// <para><b>Network-namespace invariant (#849 review):</b> this reads <c>/proc/net/tcp*</c> from THIS
+/// process's own network namespace, not the workload's. That is only ever the workload's namespace
+/// too when the workload was started with <c>networkEnabled=true</c> — <see cref="KataBwrapExecutor"/>
+/// omits <c>--unshare-net</c> in that case, so the sandboxed process shares this namespace, matching
+/// the pod's single, gateway-reachable network namespace. A workload started with
+/// <c>networkEnabled=false</c> gets its own, unshared namespace, and this scan can never observe its
+/// sockets no matter how long it waits — <see cref="PodExecServer"/> must (and does) reject a port
+/// query for such a session with an explicit error instead of calling this method, rather than let it
+/// return a silently-empty, indistinguishable-from-"not listening yet" list. Preview sessions
+/// (<c>PreviewRunner.StartPreviewProcessAsync</c>) always pass <c>networkEnabled: true</c>, which is
+/// what makes this scan valid for the <c>observe_bound_port</c>/<c>health_check</c> path.</para>
 /// </summary>
 internal static class PodExecPortScanner
 {
