@@ -29,6 +29,7 @@ RUN git clone --branch "v${GH_CLI_VERSION}" --depth 1 https://github.com/cli/cli
 RUN git clone --branch "v${BUILDCTL_VERSION}" --depth 1 https://github.com/moby/buildkit.git buildkit \
     && cd buildkit \
     && go get golang.org/x/mod@v0.40.0 \
+    && go mod vendor \
     && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/buildctl ./cmd/buildctl
 
 # Build stage
