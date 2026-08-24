@@ -397,7 +397,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             ShellEnabled: sandboxPolicy.ShellEnabled,
             DefaultTimeoutMs: controlledBuildTestShell
                 ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
-                : 30_000)
+                : (int)TimeSpan.FromMinutes(5).TotalMilliseconds)
         {
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
