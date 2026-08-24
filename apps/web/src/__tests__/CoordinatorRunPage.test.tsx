@@ -380,9 +380,39 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
 
     const approvalGate = await screen.findByLabelText('Approvals and gates', undefined, { timeout: 4000 });
     expect(approvalGate.textContent).toContain('Approve & merge');
-    expect(approvalGate.textContent).toContain('You can request changes from the Artifacts tab.');
+    expect(approvalGate.textContent).toContain('Change');
+    expect(approvalGate.textContent).not.toContain('You can request changes from the Artifacts tab.');
     expect(within(approvalGate).queryByRole('button', { name: /open outcome plan/i })).toBeNull();
     expect(within(approvalGate).queryByRole('button', { name: /open assembly artifacts/i })).toBeNull();
+  });
+
+  it('requests assembly changes with reviewer feedback via the inline Change button', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'awaiting_review',
+      coordinator_status: 'in_review',
+    } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const reviewRow = await screen.findByRole('treeitem', { name: /Select Human Review: Action needed/i }, { timeout: 4000 });
+    fireEvent.click(reviewRow);
+
+    const approvalGate = await screen.findByLabelText('Approvals and gates', undefined, { timeout: 4000 });
+    fireEvent.click(within(approvalGate).getByRole('button', { name: 'Change' }));
+
+    const feedbackBox = within(approvalGate).getByLabelText('Changes requested comment');
+    fireEvent.change(feedbackBox, { target: { value: 'Please tighten the error messaging.' } });
+
+    fireEvent.click(within(approvalGate).getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      expect(apiClient.reviewAssembly).toHaveBeenCalledWith(
+        'coord-run-1',
+        'request_changes',
+        'Please tighten the error messaging.',
+      );
+    });
   });
 
   it('labels Build & Test as a build/test gate and surfaces the active preview there', async () => {

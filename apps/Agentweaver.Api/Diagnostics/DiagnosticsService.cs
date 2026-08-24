@@ -102,7 +102,7 @@ public sealed class DiagnosticsService
         checks.Add(CheckBuiltInReviewPolicy());
         checks.Add(CheckHeartbeatService());
         checks.Add(await CheckProjectStoreAsync(ct).ConfigureAwait(false));
-        checks.Add(await CheckGitHubCliAsync(ct).ConfigureAwait(false));
+        checks.AddRange(await CheckGitHubCliAsync(ct).ConfigureAwait(false));
 
         // Pull counts from the live run store. Provider-aware (spec-018): EF over MemoryDbContext for
         // Postgres, raw SQLite SQL over SqliteDb otherwise. The concrete SqliteDb has no `runs` table
@@ -988,40 +988,99 @@ public sealed class DiagnosticsService
         }
     }
 
-    private static async Task<DiagnosticsCheckDto> CheckGitHubCliAsync(CancellationToken ct)
+    private static async Task<IReadOnlyList<DiagnosticsCheckDto>> CheckGitHubCliAsync(CancellationToken ct)
     {
-        var sw = Stopwatch.StartNew();
+        var installedSw = Stopwatch.StartNew();
+        DiagnosticsCheckDto installed;
         try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            using var installedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            installedCts.CancelAfter(TimeSpan.FromSeconds(5));
 
             using var proc = new Process();
-            proc.StartInfo = new ProcessStartInfo("gh", "auth status")
+            proc.StartInfo = new ProcessStartInfo("gh", "--version")
             {
                 RedirectStandardOutput = true,
-                RedirectStandardError  = true,
                 UseShellExecute        = false,
                 CreateNoWindow         = true,
             };
             proc.Start();
-            await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false);
-            sw.Stop();
+            await proc.WaitForExitAsync(installedCts.Token).ConfigureAwait(false);
+            var version = (await proc.StandardOutput.ReadToEndAsync(installedCts.Token).ConfigureAwait(false)).Trim();
+            installedSw.Stop();
 
-            return proc.ExitCode == 0
-                ? Pass("github_cli", "gh auth status: authenticated", sw)
-                : Warn("github_cli", $"gh auth status exited {proc.ExitCode}: not authenticated or token expired", sw);
+            if (proc.ExitCode != 0)
+            {
+                return
+                [
+                    Warn("github_cli", $"gh --version exited {proc.ExitCode}", installedSw),
+                    Warn("github_cli_auth", "Skipped because gh is unavailable", installedSw),
+                ];
+            }
+
+            installed = Pass("github_cli", $"Installed: {version}", installedSw);
         }
         catch (OperationCanceledException)
         {
-            sw.Stop();
-            return Warn("github_cli", "gh auth status timed out after 5 s", sw);
+            installedSw.Stop();
+            return
+            [
+                Warn("github_cli", "gh --version timed out after 5 s", installedSw),
+                Warn("github_cli_auth", "Skipped because gh availability could not be determined", installedSw),
+            ];
         }
         catch (Exception ex)
         {
-            sw.Stop();
-            // gh not installed or not on PATH — this is a warn, not a page-level failure.
-            return Warn("github_cli", $"gh not available: {ex.Message}", sw);
+            installedSw.Stop();
+            return
+            [
+                Warn("github_cli", $"gh not available: {ex.Message}", installedSw),
+                Warn("github_cli_auth", "Skipped because gh is unavailable", installedSw),
+            ];
+        }
+
+        var authSw = Stopwatch.StartNew();
+        try
+        {
+            using var authCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            authCts.CancelAfter(TimeSpan.FromSeconds(5));
+
+            using var authProc = new Process();
+            authProc.StartInfo = new ProcessStartInfo("gh", "auth status")
+            {
+                RedirectStandardError = true,
+                UseShellExecute       = false,
+                CreateNoWindow        = true,
+            };
+            authProc.Start();
+            await authProc.WaitForExitAsync(authCts.Token).ConfigureAwait(false);
+            authSw.Stop();
+
+            return
+            [
+                installed,
+                authProc.ExitCode == 0
+                    ? Pass("github_cli_auth", "gh auth status: authenticated", authSw)
+                    : Warn("github_cli_auth", "gh is not authenticated (optional for API readiness)", authSw),
+            ];
+        }
+        catch (OperationCanceledException)
+        {
+            authSw.Stop();
+            return
+            [
+                installed,
+                Warn("github_cli_auth", "gh auth status timed out after 5 s (optional for API readiness)", authSw),
+            ];
+        }
+        catch (Exception ex)
+        {
+            authSw.Stop();
+            return
+            [
+                installed,
+                Warn("github_cli_auth", $"gh auth status could not be checked: {ex.Message}", authSw),
+            ];
         }
     }
 

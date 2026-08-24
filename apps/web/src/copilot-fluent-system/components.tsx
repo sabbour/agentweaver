@@ -2197,6 +2197,7 @@ export interface ChainOfThoughtProps {
   defaultTab?: 'activity' | 'artifacts';
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
+  onRequestChanges?: (stepId: string, feedback: string) => void;
   className?: string;
 }
 
@@ -2233,11 +2234,25 @@ interface CotStepRowProps {
   onToggle: () => void;
   onApprove?: (stepId: string) => void;
   onDeny?: (stepId: string) => void;
+  onRequestChanges?: (stepId: string, feedback: string) => void;
 }
 
-function CotStepRow({ step, open, onToggle, onApprove, onDeny }: CotStepRowProps) {
+function CotStepRow({ step, open, onToggle, onApprove, onDeny, onRequestChanges }: CotStepRowProps) {
   const hasSub = Boolean(step.body || step.needsInput);
   const titleId = `azf-cot-step-${step.id}`;
+  const [requestingChanges, setRequestingChanges] = useState(false);
+  const [changeFeedback, setChangeFeedback] = useState('');
+
+  const handleSendChanges = () => {
+    onRequestChanges?.(step.id, changeFeedback);
+    setRequestingChanges(false);
+    setChangeFeedback('');
+  };
+
+  const handleCancelChanges = () => {
+    setRequestingChanges(false);
+    setChangeFeedback('');
+  };
 
   return (
     <li className="azf-cot__step" data-status={step.status ?? 'pending'}>
@@ -2274,14 +2289,44 @@ function CotStepRow({ step, open, onToggle, onApprove, onDeny }: CotStepRowProps
               {step.disclaimer && (
                 <Text size={200} className="azf-cot__approval-note">{step.disclaimer}</Text>
               )}
-              <div className="azf-row azf-cot__approval-actions">
-                <Button appearance="primary" onClick={() => onApprove?.(step.id)}>
-                  {step.approveLabel ?? 'Approve'}
-                </Button>
-                <Button appearance="secondary" onClick={() => onDeny?.(step.id)}>
-                  {step.denyLabel ?? 'Deny'}
-                </Button>
-              </div>
+              {requestingChanges ? (
+                <div className="azf-stack azf-cot__change-request">
+                  <Textarea
+                    placeholder="Describe what the agent should change"
+                    value={changeFeedback}
+                    onChange={(_, data) => setChangeFeedback(data.value)}
+                    rows={3}
+                    resize="vertical"
+                    aria-label="Changes requested comment"
+                  />
+                  <div className="azf-row azf-cot__approval-actions">
+                    <Button
+                      appearance="primary"
+                      disabled={changeFeedback.trim().length === 0}
+                      onClick={handleSendChanges}
+                    >
+                      Send
+                    </Button>
+                    <Button appearance="secondary" onClick={handleCancelChanges}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="azf-row azf-cot__approval-actions">
+                  <Button appearance="primary" onClick={() => onApprove?.(step.id)}>
+                    {step.approveLabel ?? 'Approve'}
+                  </Button>
+                  {step.changeLabel !== undefined && (
+                    <Button appearance="secondary" onClick={() => setRequestingChanges(true)}>
+                      {step.changeLabel}
+                    </Button>
+                  )}
+                  <Button appearance="secondary" onClick={() => onDeny?.(step.id)}>
+                    {step.denyLabel ?? 'Deny'}
+                  </Button>
+                </div>
+              )}
             </div>
           ) : (
             step.body && <Text size={300} className="azf-cot__step-body">{step.body}</Text>
@@ -2337,6 +2382,7 @@ export function ChainOfThought({
   defaultTab = 'activity',
   onApprove,
   onDeny,
+  onRequestChanges,
   className,
 }: ChainOfThoughtProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -2419,6 +2465,7 @@ export function ChainOfThought({
                     onToggle={() => toggleStep(step.id)}
                     onApprove={onApprove}
                     onDeny={onDeny}
+                    onRequestChanges={onRequestChanges}
                   />
                 ))}
               </ol>

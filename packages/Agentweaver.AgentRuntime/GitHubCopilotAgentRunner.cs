@@ -232,14 +232,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         void EmitToolCallOnce(string callId, string toolName, object? arguments)
         {
             if (emittedCalls.TryAdd(callId, 0))
-                Emit("tool.call", new { callId, toolName, arguments });
+                Emit("tool.call", new { callId, toolName, arguments = SensitiveDataRedactor.RedactObject(arguments) });
         }
 
         void EmitToolResultOnce(string callId, string content)
         {
             EmitToolCallOnce(callId, "unknown", null); // defensive call-before-result
             if (emittedTerminals.TryAdd(callId, 0))
-                Emit("tool.result", new { callId, content });
+                Emit("tool.result", new { callId, content = SensitiveDataRedactor.RedactJsonStringIfApplicable(content) });
         }
 
         void EmitToolErrorOnce(string callId, string errorMessage)

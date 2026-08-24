@@ -1500,9 +1500,11 @@ export interface RunTraceSpanDto {
   resultCode?: string | null;
   agentName?: string | null;
   toolName?: string | null;
+  toolCallId?: string | null;
   model?: string | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  totalNanoAiu?: number | null;
   operationName?: string | null;
 }
 
