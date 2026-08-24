@@ -133,6 +133,56 @@
 - ef2de84: Transaction traces now show tool call arguments and output in the Execute Tool detail panel, display AIC cost at every span level (turn, agent invocation, and run total), and redact sensitive values in tool payloads before persistence and API delivery.
 - aaf4900: Reject workflow drafts that start with verdict-producing review or build/test nodes, and request a corrected generated workflow before it is returned.
 
+## 0.18.5
+
+### Patch Changes
+
+- 1c3c608: feat(auth): add adopt-session-token endpoint for GitHubLegacy mode
+
+  Adds POST /api/auth/github/adopt-session-token so that callers already
+  authenticated with a GitHub bearer token can promote that token into the
+  IGitHubTokenStore without requiring a separate device-flow sign-in.
+  Only available in GitHubLegacy auth mode.
+
+- c27c4fd: Fail Blueprint demo triage capture early when its current issue, PR, or assistant-route prerequisites are unavailable.
+- 795a1ba: fix: persist terminal WorkPlan status when coordinator run already stopped
+
+  CoordinatorDispatchService detected a terminal coordinator run but returned early without calling SetWorkPlanStatusAsync, leaving WorkPlans permanently stuck in dispatching. This caused the reconciler to re-arm every ~10 s forever (infinite loop). Fix calls SetWorkPlanStatusAsync before the early return and adds a regression test.
+
+  Fixes #808.
+
+- 9054667: fix(deploy): auto-load params.<username>.json for deploy-from-local
+
+  Prevents AUTH_MODE from resetting to GitHubLegacy on every deploy-from-local run.
+
+- 8e482b3: fix(auth): return inconclusive instead of false on Copilot probe 401/403
+- 23e0732: fix: null-guard legacy history.json deserialization
+
+  Guards against NullReferenceException when creating projects from repositories
+  that contain legacy history.json files with null entries, preventing a crash
+  on project creation for affected repositories.
+
+- 4cc099d: Surface GitHub token expiry prominently and improve renewal resilience.
+
+  - Show a warning banner and Re-link CTA in the UI when a GitHub OAuth token has expired or been revoked, so users know why coordinator runs fail
+  - Fix entitlement probe endpoint (switched from `copilot_internal/v2/token` to `GET /models`) so Copilot entitlement status displays correctly for all linked accounts
+  - Distinguish transient (network, 5xx) vs permanent (expired token, bad credentials) refresh failures — transient failures no longer sign the user out
+  - Add proactive background refresh service that renews expiring tokens up to 2 hours before expiry, preventing mid-run token failures
+  - Fix AgentHost sandbox executor to survive concurrent claim deletion during coordinator runs
+
+- cff3d6b: Show model latency percentile checkpoints in readable seconds and minutes.
+- b8ab020: feat(auth): add adopt-session-token endpoint for GitHubLegacy mode
+
+  Adds `POST /api/auth/github/adopt-session-token` so that callers already
+  authenticated with a GitHub bearer token in GitHubLegacy mode can promote
+  that token into the `IGitHubTokenStore` without requiring a separate
+  device-flow sign-in. This unblocks GitHub-origin project operations
+  (clone, webhook provisioning) for GitHubLegacy deployments.
+
+- 1d83edf: fix(projects): create GitHub projects from a shallow clone so large repositories open promptly while skill imports retain history for pinned tags.
+- 1eec73b: Add an isolated, unauthenticated recording mode for capturing the safe Entra sign-in handoff without restoring saved browser storage.
+- aaf4900: Reject workflow drafts that start with verdict-producing review or build/test nodes, and request a corrected generated workflow before it is returned.
+
 ## 0.18.2
 
 ### Patch Changes
