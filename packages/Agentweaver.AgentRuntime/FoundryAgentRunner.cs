@@ -243,7 +243,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
             var toolResults = new List<AIContent>();
             foreach (var call in calls)
             {
-                Emit("tool.call", new { callId = call.CallId, toolName = call.Name, arguments = call.Arguments });
+                Emit("tool.call", new { callId = call.CallId, toolName = call.Name, arguments = SensitiveDataRedactor.RedactObject(call.Arguments) });
 
                 // Backward-compat aliases: GPT models have strong training on Copilot CLI's
                 // built-in tool names and may hallucinate them even when the schema says otherwise.
@@ -321,7 +321,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
                         toolArgs.ToDictionary(k => k.Key, k => (object?)k.Value));
                     var raw = await tool.InvokeAsync(fnArgs, ct);
                     resultText = raw?.ToString() ?? string.Empty;
-                    Emit("tool.result", new { callId = call.CallId, content = resultText });
+                    Emit("tool.result", new { callId = call.CallId, content = SensitiveDataRedactor.RedactJsonStringIfApplicable(resultText) });
                 }
                 catch (Exception ex)
                 {

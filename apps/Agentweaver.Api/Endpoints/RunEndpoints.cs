@@ -533,7 +533,16 @@ app.MapGet("/api/runs/{id}/events", async (
     var result = persisted.Select(rec =>
     {
         object payload;
-        try { payload = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rec.PayloadJson); }
+        try
+        {
+            var element = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(rec.PayloadJson);
+            // Defensive second layer (issue #850 security follow-up): the emitters already redact
+            // sensitive tool.call/tool.result/tool.error fields before persisting, but redact again
+            // here so any row persisted before that fix shipped is still masked in the API response.
+            payload = IsToolPayloadEventType(rec.EventType)
+                ? Agentweaver.Domain.SensitiveDataRedactor.RedactElement(element)
+                : element;
+        }
         catch { payload = new { }; }
         // Use the row's persisted CreatedAt (server append time) as the timestamp source so a
         // replayed/finished run's timeline reflects when each event actually happened, not "now".
@@ -2283,6 +2292,13 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
     }
 });
     }
+
+/// <summary>
+/// True for event types whose payload can carry tool call arguments/results/errors
+/// (<c>tool.call</c>, <c>tool.result</c>, <c>tool.error</c>) and therefore needs the defensive
+/// redaction pass in the persisted-events endpoint (issue #850 security follow-up).
+/// </summary>
+static bool IsToolPayloadEventType(string eventType) => eventType is "tool.call" or "tool.result" or "tool.error";
 
 /// <summary>
 /// Strips NUL, C0 control characters (0x00-0x1F, excluding \t and \n), DEL (0x7F),

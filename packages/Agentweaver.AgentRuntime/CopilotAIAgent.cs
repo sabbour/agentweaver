@@ -1290,14 +1290,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     internal void EmitToolCallOnce(string callId, string toolName, object? arguments)
     {
         if (_emittedCalls.TryAdd(callId, 0))
-            Emit("tool.call", new { callId, toolName, arguments });
+            Emit("tool.call", new { callId, toolName, arguments = SensitiveDataRedactor.RedactObject(arguments) });
     }
 
     internal void EmitToolResultOnce(string callId, string content)
     {
         EmitToolCallOnce(callId, "unknown", null); // defensive call-before-result
         if (_emittedTerminals.TryAdd(callId, 0))
-            Emit("tool.result", new { callId, content });
+            Emit("tool.result", new { callId, content = SensitiveDataRedactor.RedactJsonStringIfApplicable(content) });
     }
 
     internal void EmitToolErrorOnce(string callId, string errorMessage)
