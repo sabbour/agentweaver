@@ -210,6 +210,33 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
         string workingDirectory,
         IReadOnlyDictionary<string, string>? environment,
         bool networkEnabled,
+        CancellationToken ct = default) =>
+        await StartSupervisedProcessAsync(
+                commandLine,
+                workingDirectory,
+                environment,
+                networkEnabled,
+                HandshakeTimeout,
+                ct)
+            .ConfigureAwait(false);
+
+    /// <summary>
+    /// How long to wait for the sidecar's <c>started</c>/<c>error</c> handshake (relayed by
+    /// <see cref="PodExecRelay"/>) before giving up on a spawn. Generous headroom over
+    /// <c>KataBwrapExecutor</c>'s ~10s sandbox-child resolution window plus bwrap/user-namespace
+    /// setup under load.
+    /// </summary>
+    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Test seam: same as the public overload but with an injectable handshake timeout.
+    /// </summary>
+    internal async Task<RemoteSupervisedProcess> StartSupervisedProcessAsync(
+        string commandLine,
+        string workingDirectory,
+        IReadOnlyDictionary<string, string>? environment,
+        bool networkEnabled,
+        TimeSpan handshakeTimeout,
         CancellationToken ct = default)
     {
         var handle = Guid.NewGuid().ToString("n");
@@ -258,6 +285,14 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
                 .ConfigureAwait(false);
             await process.StandardInput.FlushAsync(ct).ConfigureAwait(false);
             process.StandardInput.Close();
+
+            // #849: block until the sidecar itself confirms the sandboxed process actually started
+            // (bwrap launched, its sandbox child resolved) instead of reporting success the instant
+            // the LOCAL relay process is running. Without this, a spawn that failed or was still
+            // resolving on the sidecar side returned a "successful" handle whose PID belonged only to
+            // the relay — observe_bound_port and health_check then had nothing real to find and
+            // failed with no actionable evidence.
+            await AwaitStartHandshakeAsync(process, handle, handshakeTimeout, ct).ConfigureAwait(false);
             return new RemoteSupervisedProcess(process, handle, this);
         }
         catch
@@ -271,6 +306,64 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
             process.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Reads the single handshake line <see cref="PodExecRelay"/> writes to its own stdout once the
+    /// sidecar's <c>started</c> or <c>error</c> frame arrives, and turns a timeout, an error marker,
+    /// or an early relay exit into a thrown exception. Must run BEFORE the caller starts treating the
+    /// relay's stdout as forwarded workload logs (see <see cref="PodExecRelay.RunAsync"/>), since it
+    /// consumes exactly the first line of that stream.
+    /// </summary>
+    private static async Task AwaitStartHandshakeAsync(
+        Process process,
+        string handle,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        handshakeCts.CancelAfter(timeout);
+        string? line;
+        try
+        {
+            line = await process.StandardOutput.ReadLineAsync(handshakeCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"Timed out after {timeout.TotalSeconds:0}s waiting for the executor sidecar to confirm " +
+                $"sandboxed process (handle={handle}) started; the sidecar may still be resolving the " +
+                "sandbox child or bwrap may be stuck.");
+        }
+
+        if (line is null)
+        {
+            var exitDetail = process.HasExited
+                ? $"exit code {SafeExitCode(process)}"
+                : "stream closed";
+            throw new InvalidOperationException(
+                $"Executor sidecar closed the connection ({exitDetail}) before confirming sandboxed " +
+                $"process (handle={handle}) started.");
+        }
+
+        if (line.StartsWith(PodExecRelay.HandshakeErrorMarkerPrefix, StringComparison.Ordinal))
+        {
+            var detail = line[PodExecRelay.HandshakeErrorMarkerPrefix.Length..];
+            throw new InvalidOperationException(
+                $"Executor sidecar rejected sandboxed process (handle={handle}): {detail}");
+        }
+
+        if (!string.Equals(line, PodExecRelay.HandshakeReadyMarker, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Executor sidecar sent an unexpected handshake for sandboxed process (handle={handle}): '{line}'.");
+        }
+    }
+
+    private static int SafeExitCode(Process process)
+    {
+        try { return process.ExitCode; }
+        catch { return -1; }
     }
 
     /// <summary>Listening TCP ports owned by a spawned session's sandboxed process group.</summary>
@@ -288,7 +381,12 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger?.LogDebug(ex, "Executor sidecar port query failed for handle {Handle}.", handle);
+            // Warning (not Debug, #849): a failed port query silently returned [] here, which
+            // observe_bound_port/health_check then reported as "no listening port discovered" with no
+            // way to tell a transport failure apart from the app genuinely not listening yet. Logging
+            // at Warning makes the real cause (e.g. a stale handle, a sidecar restart) visible without
+            // needing debug-level logging enabled in production.
+            _logger?.LogWarning(ex, "Executor sidecar port query failed for handle {Handle}.", handle);
             return [];
         }
     }

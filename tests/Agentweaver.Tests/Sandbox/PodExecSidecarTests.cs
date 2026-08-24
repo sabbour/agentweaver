@@ -348,6 +348,44 @@ public sealed class PodExecSidecarTests
             + "directly-invoked executor covered by KataBwrapExecutorTests");
     }
 
+    /// <summary>
+    /// Regression for #849: <see cref="PodExecSandboxClient.StartSupervisedProcessAsync"/> used to
+    /// return a "successful" handle — with a real, but meaningless, local relay PID — the instant the
+    /// local relay process launched, without ever waiting to hear whether the sidecar's spawn (bwrap
+    /// startup, sandbox-child resolution) actually succeeded. A spawn that failed left callers with a
+    /// handle that could never observe a port or a log line, and no diagnostic explaining why. This
+    /// drives a real, guaranteed-to-fail spawn (a working directory bwrap cannot chdir into) through
+    /// the full sidecar boundary and asserts the failure surfaces as a thrown exception instead of a
+    /// silently-broken handle.
+    /// </summary>
+    [SidecarLinuxFact]
+    public async Task StartSupervisedProcess_ThrowsInsteadOfReturningAHandleWhenTheSidecarSpawnFails()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        var root = NewRoot();
+        var (workspace, _) = CreateTwoRuns(root);
+        await using var harness = PodExecTestHarness.StartServer(root);
+        var client = PodExecTestHarness.CreateClient(harness.SocketPath);
+        client.RegisterTrustedWorkspace(workspace);
+        client.RegisterRuntimeHome(workspace, CreateRuntimeHome(root));
+
+        var missingWorkingDirectory = Path.Combine(workspace, "does-not-exist");
+
+        var act = async () => await client.StartSupervisedProcessAsync(
+            "echo should-never-print",
+            missingWorkingDirectory,
+            null,
+            networkEnabled: false)
+            .WaitAsync(TimeSpan.FromSeconds(30));
+
+        (await act.Should().ThrowAsync<InvalidOperationException>(
+                "a spawn the sidecar could not actually start must fail loudly instead of handing "
+                + "back a PID that will never expose a port or a log line"))
+            .Which.Message.Should().NotBeNullOrWhiteSpace();
+    }
+
     private static async Task<PodExecFrame> SendRawAsync(string socketPath, PodExecRequest request)
     {
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
