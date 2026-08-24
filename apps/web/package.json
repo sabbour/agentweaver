@@ -25,6 +25,9 @@
     "remark-gfm": "4.0.1",
     "yaml": "^2.9.0"
   },
+  "overrides": {
+    "tabster": "8.7.0"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@testing-library/dom": "^10.4.1",
