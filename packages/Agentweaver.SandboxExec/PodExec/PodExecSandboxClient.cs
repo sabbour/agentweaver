@@ -222,11 +222,19 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
 
     /// <summary>
     /// How long to wait for the sidecar's <c>started</c>/<c>error</c> handshake (relayed by
-    /// <see cref="PodExecRelay"/>) before giving up on a spawn. Generous headroom over
-    /// <c>KataBwrapExecutor</c>'s ~10s sandbox-child resolution window plus bwrap/user-namespace
-    /// setup under load.
+    /// <see cref="PodExecRelay"/>) before giving up on a spawn.
+    ///
+    /// <para>MUST stay above <c>KataBwrapExecutor.StartWritableSystemRootHolder</c>'s own internal
+    /// wait — currently 120s — for the per-run writable system root's bwrap "hold" helper to report
+    /// <c>READY</c>. That holder setup runs (and can fail slowly) before the sidecar ever emits a
+    /// <c>started</c>/<c>error</c> frame, so a client-side timeout shorter than the server's own
+    /// wait makes this handshake time out first every time the root setup is merely slow rather than
+    /// broken, abandoning the socket and turning the eventual server-side failure into a "Broken
+    /// pipe" instead of a clean, reported handshake error (issue: preview kept hitting 30s
+    /// <c>observe_bound_port</c> timeouts even after the #849 handshake fix landed). 150s gives 30s
+    /// of headroom above that 120s ceiling.</para>
     /// </summary>
-    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(150);
 
     /// <summary>
     /// Test seam: same as the public overload but with an injectable handshake timeout.
