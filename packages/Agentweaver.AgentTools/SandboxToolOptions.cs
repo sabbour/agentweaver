@@ -52,6 +52,9 @@ public sealed record SandboxToolOptions(
     /// executor expires first and returns a graceful, recoverable <c>timed_out:true</c>; the
     /// watchdog then only trips for a genuinely hung/unkillable process rather than duplicating the
     /// per-command timeout and fatally aborting the turn as <c>shell_execution_timeout</c>.
+    /// Increased from 60 s to 5 min to account for the slower process-teardown latency inside
+    /// Kata VM hardware-isolation (SIGTERM relay through the Kata agent can take tens of seconds
+    /// on a cold or loaded node, causing the 60 s grace to be consumed before the process exits).
     /// </summary>
-    public static readonly TimeSpan WatchdogTimeoutGrace = TimeSpan.FromSeconds(60);
+    public static readonly TimeSpan WatchdogTimeoutGrace = TimeSpan.FromMinutes(5);
 }
