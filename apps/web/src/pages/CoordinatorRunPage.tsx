@@ -3975,6 +3975,17 @@ export function CoordinatorRunPage() {
     }
   }, [reconnectStream, runId]);
 
+  const handleAssemblyRequestChanges = useCallback(async (_stepId: string, comment: string) => {
+    if (!runId) return;
+    setAutomationError(null);
+    try {
+      await apiClient.reviewAssembly(runId, 'request_changes', comment);
+      reconnectStream();
+    } catch (err) {
+      setAutomationError(`Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
+    }
+  }, [reconnectStream, runId]);
+
   // Nested agentic progress tree: coordinator/agents and their tasks with live status.
   const approvalSteps = useMemo<AgentStep[]>(() => reviewActionable
     ? [{
@@ -3985,9 +3996,10 @@ export function CoordinatorRunPage() {
         status: 'warning',
         needsInput: true,
         riskText: 'Approve to merge and finalize (Merge \u2192 Scribe), or decline to send it back.',
-        disclaimer: 'You can request changes from the Artifacts tab.',
+        disclaimer: undefined,
         approveLabel: 'Approve & merge',
         denyLabel: 'Decline',
+        changeLabel: 'Change',
         defaultOpen: true,
       }]
     : [], [reviewActionable]);
@@ -4577,6 +4589,7 @@ export function CoordinatorRunPage() {
                   steps={approvalSteps}
                   onApprove={() => void handleAssemblyApproval('approve')}
                   onDeny={() => void handleAssemblyApproval('decline')}
+                  onRequestChanges={(_stepId, feedback) => void handleAssemblyRequestChanges(_stepId, feedback)}
                   aria-label="Approvals and gates"
                 />
               </div>

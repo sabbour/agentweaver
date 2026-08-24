@@ -161,6 +161,8 @@ export interface AzfAgentStep {
   approveLabel?: ReactNode;
   /** Secondary deny button label (defaults to "Deny"). */
   denyLabel?: ReactNode;
+  /** Inline "request changes" button label. When set, a Change button appears that expands a feedback textarea. */
+  changeLabel?: ReactNode;
   /** Inline semantic badge rendered after the step title (e.g. "Approved by user"). */
   badge?: AzfStepBadge;
   /** Whether the step's sub-content is expanded on first render. */
