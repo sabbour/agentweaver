@@ -213,6 +213,17 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
     /azure\.workload\.identity\/client-id: 11111111-2222-3333-4444-555555555555/,
     "agent-host ServiceAccount must NOT use the KV-privileged API identity",
   );
+  const sandboxTemplate = manifestForFilename(docs, "sandbox-template-agenthost.yaml");
+  assert.match(
+    sandboxTemplate,
+    /name: NODE_OPTIONS\s*\n\s*value: --max-old-space-size=1024[\s\S]*?name: agentweaver-agent-host[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 1000m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 2Gi\s*\n\s*requests:\s*\n\s*cpu: 400m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 1Gi/,
+    "AgentHost must pass the preview Node heap cap and retain its explicit resource reservation",
+  );
+  assert.match(
+    sandboxTemplate,
+    /name: agentweaver-exec[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 1000m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 2Gi\s*\n\s*requests:\s*\n\s*cpu: 600m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 1Gi/,
+    "The executor that runs previews must retain explicit resource reservation and limits",
+  );
   const mcpDeployment = manifestForFilename(docs, "mcp-deployment.yaml");
   assert.match(
     mcpDeployment,
