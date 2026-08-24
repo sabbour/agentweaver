@@ -18,13 +18,18 @@ import {
 } from '@fluentui/react-icons';
 import { formatModelLabel } from '../../utils/agentIdentity';
 import { AgentIdentity } from '../AgentIdentity';
-import { buildTraceTree,
+import { CostChip } from '../CostChip';
+import { formatAic } from '../costChipFormat';
+import { aggregateNanoAiu,
+  buildToolCallIndex,
+  buildTraceTree,
   collectExpandableKeys,
-  findNode } from './traceTree';
+  findNode,
+  totalNanoAiu } from './traceTree';
 import { Body, EmptyState, TitleText } from '../ui';
 import { useEffect, useMemo, useState } from 'react';
 import type { RunTraceDto } from '../../api/types';
-import type { SpanType, TraceNode } from './traceTree';
+import type { SpanType, ToolCallDetail, TraceNode } from './traceTree';
 import type { ReactNode } from 'react';
 
 const useStyles = makeStyles({
@@ -165,6 +170,23 @@ const useStyles = makeStyles({
     flexShrink: 0,
     color: tokens.colorStatusDangerForeground1,
   },
+  codeBlock: {
+    margin: 0,
+    padding: tokens.spacingVerticalS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    maxHeight: '320px',
+    overflow: 'auto',
+  },
+  codeBlockError: {
+    backgroundColor: tokens.colorStatusDangerBackground1,
+    color: tokens.colorStatusDangerForeground1,
+    border: `1px solid ${tokens.colorStatusDangerBorder1}`,
+  },
 });
 
 function typeLabel(type: SpanType): string {
@@ -276,6 +298,7 @@ function TraceRow({
           <Text className={styles.rowName} title={name}>{name}</Text>
         )}
         <span className={styles.spacer} />
+        <CostChip totalNanoAiu={aggregateNanoAiu(node)} ariaLabel={`AI credit cost ${formatAic(aggregateNanoAiu(node))} AIC`} />
         <Text className={styles.duration}>{formatDurationMs(node.span.durationMs)}</Text>
       </button>
       {hasChildren && isExpanded && node.children.map((child) => (
@@ -307,13 +330,18 @@ function DetailRow({ label, value, styles }: { label: string; value: ReactNode; 
 function TraceDetail({
   node,
   roleByAgent,
+  toolCallIndex,
   styles,
 }: {
   node: TraceNode;
   roleByAgent?: Record<string, string>;
+  toolCallIndex: Map<string, ToolCallDetail>;
   styles: ReturnType<typeof useStyles>;
 }) {
   const { span, type } = node;
+  const toolDetail = type === 'tool' && span.toolCallId ? toolCallIndex.get(span.toolCallId) : undefined;
+  const nodeCost = aggregateNanoAiu(node);
+  const costLabel = type === 'invoke-agent' ? 'AIC (agent invocation)' : type === 'llm' ? 'AIC (this turn)' : 'AIC';
   return (
     <div className={styles.detail}>
       <div className={styles.detailPanelHeader}>
@@ -327,6 +355,11 @@ function TraceDetail({
         <div className={styles.detailGrid}>
           <DetailRow label="Event time" value={new Date(span.timestamp).toLocaleString()} styles={styles} />
           <DetailRow label="Duration" value={formatDurationMs(span.durationMs)} styles={styles} />
+          <DetailRow
+            label={costLabel}
+            value={nodeCost > 0 ? `${formatAic(nodeCost)} AIC` : '—'}
+            styles={styles}
+          />
           <DetailRow
             label="Status"
             value={(
@@ -363,6 +396,28 @@ function TraceDetail({
           )}
         </div>
       </div>
+      {type === 'tool' && (
+        <>
+          <div>
+            <Text className={styles.detailSectionTitle}>Arguments</Text>
+            {toolDetail?.arguments ? (
+              <pre className={styles.codeBlock}>{JSON.stringify(toolDetail.arguments, null, 2)}</pre>
+            ) : (
+              <Text className={styles.detailValue}>No arguments recorded for this call.</Text>
+            )}
+          </div>
+          <div>
+            <Text className={styles.detailSectionTitle}>Output</Text>
+            {toolDetail?.errorMessage ? (
+              <pre className={mergeClasses(styles.codeBlock, styles.codeBlockError)}>{toolDetail.errorMessage}</pre>
+            ) : toolDetail?.content ? (
+              <pre className={styles.codeBlock}>{toolDetail.content}</pre>
+            ) : (
+              <Text className={styles.detailValue}>No output recorded for this call.</Text>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -380,6 +435,7 @@ export function TransactionTracePanel({
 }) {
   const styles = useStyles();
   const [trace, setTrace] = useState<RunTraceDto>({ runId, spans: [] });
+  const [toolCallIndex, setToolCallIndex] = useState<Map<string, ToolCallDetail>>(new Map());
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -387,6 +443,7 @@ export function TransactionTracePanel({
     let cancelled = false;
     const loadTrace = async () => {
       setTrace({ runId, spans: [] });
+      setToolCallIndex(new Map());
       setSelectedKey(null);
       try {
         const next = await apiClient.getRunTraces(runId);
@@ -394,12 +451,21 @@ export function TransactionTracePanel({
       } catch {
         if (!cancelled) setTrace({ runId, spans: [] });
       }
+      try {
+        // The persisted run event log carries tool.call/tool.result/tool.error payloads
+        // (arguments + output) that the AppInsights-backed trace span itself lacks (#850).
+        const events = await apiClient.getRunEvents(runId);
+        if (!cancelled) setToolCallIndex(buildToolCallIndex(events));
+      } catch {
+        if (!cancelled) setToolCallIndex(new Map());
+      }
     };
     void loadTrace();
     return () => { cancelled = true; };
   }, [runId]);
 
   const tree = useMemo(() => buildTraceTree(trace.spans), [trace.spans]);
+  const runTotalNanoAiu = useMemo(() => totalNanoAiu(tree), [tree]);
 
   useEffect(() => {
     // Expand every node with children by default so the full hierarchy is visible.
@@ -426,6 +492,12 @@ export function TransactionTracePanel({
         <div className={styles.panelHeaderTitle}>
           <TitleText as="h2">{title}</TitleText>
           <Badge appearance="outline" size="small">Distributed traces</Badge>
+          {runTotalNanoAiu > 0 && (
+            <CostChip
+              totalNanoAiu={runTotalNanoAiu}
+              ariaLabel={`Total AI credit cost for this run ${formatAic(runTotalNanoAiu)} AIC`}
+            />
+          )}
         </div>
         <Body tone="muted">{subtitle}</Body>
       </div>
@@ -449,7 +521,7 @@ export function TransactionTracePanel({
             ))}
           </div>
           {selectedNode ? (
-            <TraceDetail node={selectedNode} roleByAgent={roleByAgent} styles={styles} />
+            <TraceDetail node={selectedNode} roleByAgent={roleByAgent} toolCallIndex={toolCallIndex} styles={styles} />
           ) : (
             <div className={styles.detail}>
               <EmptyState title="Select a span to view its details." />
