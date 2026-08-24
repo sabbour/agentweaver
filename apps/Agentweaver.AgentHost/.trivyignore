@@ -13,5 +13,11 @@
 # this file is touched): if a newer upstream release closes an entry, remove
 # it so Trivy resumes enforcing it.
 #
-# No active suppressions remain. Keep the file so the workflow path stays
-# stable and future, explicitly-reviewed suppressions have a canonical home.
+# Bundled @typescript/typescript-linux-x64 native tsc binary (optional dep of
+# the `typescript` npm package), pinned to 7.1.0-dev.20260817.1 — the newest
+# prerelease on npm as of 2026-08-24 (`npm view typescript versions`). It
+# embeds golang.org/x/text v0.38.0 (fixed: 0.39.0); this is a prebuilt,
+# third-party Go binary whose embedded module graph we cannot patch
+# ourselves. Re-check on the next maintenance rebuild and drop this entry
+# once a newer typescript prerelease ships with a patched x/text.
+CVE-2026-56852
