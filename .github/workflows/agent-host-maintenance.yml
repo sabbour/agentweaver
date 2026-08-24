@@ -107,7 +107,7 @@ jobs:
 
       - name: Upload Trivy SARIF to GitHub Security tab
         if: always()              # Upload even on scan failure so results are visible
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
 
