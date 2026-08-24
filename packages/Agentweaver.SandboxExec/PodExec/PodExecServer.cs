@@ -386,6 +386,26 @@ public sealed class PodExecServer : IAsyncDisposable
             return;
         }
 
+        // #849 review: PodExecPortScanner reads /proc/net/tcp* from THIS process's own network
+        // namespace. That only observes the workload's sockets when the workload shares this
+        // namespace (networkEnabled=true, no --unshare-net — see KataBwrapExecutor). A workload
+        // started with networkEnabled=false lives in its own, unshared network namespace, so the
+        // scan can never see its sockets; silently returning an empty port list here would be
+        // exactly the "false empty result" this fix exists to eliminate. Fail loudly instead so the
+        // caller can tell "not listening yet" apart from "this session cannot be scanned at all".
+        if (!session.Supervised.NetworkEnabled)
+        {
+            await WriteAsync(
+                writer,
+                Error(
+                    "Port discovery is unsupported for this session: it was started with " +
+                    "networkEnabled=false, so its sandboxed process runs in its own network " +
+                    "namespace and its sockets are not visible in the executor sidecar's " +
+                    "/proc/net/tcp*."),
+                ct).ConfigureAwait(false);
+            return;
+        }
+
         var ports = PodExecPortScanner.ListeningPortsForProcessGroup(session.ProcessGroupId);
         await WriteAsync(
             writer,
