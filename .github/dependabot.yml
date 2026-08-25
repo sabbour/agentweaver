@@ -11,6 +11,8 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
 
   # Root npm workspace
   - package-ecosystem: "npm"
@@ -22,6 +24,8 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
     groups:
       dev-tooling:
         patterns:
@@ -43,6 +47,8 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
     groups:
       react-ecosystem:
         patterns:
@@ -65,6 +71,8 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
     groups:
       aspnetcore:
         patterns:
@@ -82,42 +90,46 @@ updates:
   - package-ecosystem: "docker"
     directory: "/apps/Agentweaver.Api"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
 
   # Docker — AgentHost
   - package-ecosystem: "docker"
     directory: "/apps/Agentweaver.AgentHost"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
 
   # Docker — MCP
   - package-ecosystem: "docker"
     directory: "/apps/Agentweaver.Mcp"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
 
   # Docker — Web
   - package-ecosystem: "docker"
     directory: "/apps/web"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
