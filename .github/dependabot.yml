@@ -12,6 +12,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
 
   # Root npm workspace
   - package-ecosystem: "npm"
@@ -24,6 +25,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
     groups:
       dev-tooling:
         patterns:
@@ -46,6 +48,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
     groups:
       react-ecosystem:
         patterns:
@@ -69,6 +72,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
     groups:
       aspnetcore:
         patterns:
@@ -92,6 +96,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
 
   # Docker — AgentHost
   - package-ecosystem: "docker"
@@ -103,6 +108,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
 
   # Docker — MCP
   - package-ecosystem: "docker"
@@ -114,6 +120,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
 
   # Docker — Web
   - package-ecosystem: "docker"
@@ -125,3 +132,4 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     rebase-strategy: "disabled"
+    open-pull-requests-limit: 5
