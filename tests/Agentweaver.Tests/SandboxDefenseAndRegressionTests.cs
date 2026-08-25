@@ -66,6 +66,10 @@ public sealed class BubblewrapSandboxCommandTests
 
         payload.Should().NotContain("--ro-bind /usr /usr",
             "broad /usr mount replaced by targeted --ro-bind-try for bin/lib dirs");
+        payload.Should().Contain("--dir /usr",
+            "the targeted /usr mounts need their parent directory in bwrap's empty root");
+        payload.Should().Contain("--dir /usr/share",
+            "the Node.js library mount needs its parent directory in bwrap's empty root");
         payload.Should().Contain("--ro-bind-try /usr/bin /usr/bin");
         payload.Should().Contain("--ro-bind-try /usr/lib /usr/lib");
         payload.Should().Contain("--ro-bind-try /usr/share/nodejs /usr/share/nodejs");

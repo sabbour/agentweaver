@@ -63,6 +63,9 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
         return
             "exec bwrap" +
             $" --bind {wd} /workspace" +
+            " --dir /usr" +
+            " --dir /usr/local" +
+            " --dir /usr/share" +
             " --ro-bind-try /usr/bin /usr/bin" +
             " --ro-bind-try /usr/lib /usr/lib" +
             " --ro-bind-try /usr/lib64 /usr/lib64" +

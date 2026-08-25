@@ -606,7 +606,7 @@ public sealed class KataBwrapExecutorTests : IDisposable
         Directory.CreateDirectory(Path.Combine(home, ".config"));
     }
 
-    private static string Run(string fileName, params string[] arguments)
+    private string Run(string fileName, params string[] arguments)
     {
         var psi = new ProcessStartInfo
         {
@@ -616,6 +616,11 @@ public sealed class KataBwrapExecutorTests : IDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        psi.Environment["HOME"] = _runtimeHome;
+        psi.Environment["DOTNET_CLI_HOME"] = _runtimeHome;
+        psi.Environment["XDG_CACHE_HOME"] = Path.Combine(_runtimeHome, ".cache");
+        psi.Environment["XDG_DATA_HOME"] = Path.Combine(_runtimeHome, ".local", "share");
+        psi.Environment["XDG_CONFIG_HOME"] = Path.Combine(_runtimeHome, ".config");
         foreach (var argument in arguments)
             psi.ArgumentList.Add(argument);
         using var process = Process.Start(psi)

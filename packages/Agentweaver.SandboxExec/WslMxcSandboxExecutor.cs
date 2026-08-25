@@ -138,6 +138,9 @@ internal sealed class WslMxcSandboxExecutor : ISandboxExecutor
             "wd=$(pwd -P); sandbox_home=\"${XDG_CACHE_HOME%/.cache}\";" +
             " [ -n \"$sandbox_home\" ] || sandbox_home=\"$HOME\"; exec bwrap" +
             " --bind \"$wd\" /workspace" +
+            " --dir /usr" +
+            " --dir /usr/local" +
+            " --dir /usr/share" +
             " --ro-bind-try /usr/bin /usr/bin" +
             " --ro-bind-try /usr/lib /usr/lib" +
             " --ro-bind-try /usr/lib64 /usr/lib64" +
