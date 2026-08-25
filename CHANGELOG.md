@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.19.1
+
+### Patch Changes
+
+- 501d756: Bump actions/cache from 4 to 6
+- 9643764: Bump the fluent-ui group in /apps/web with 2 updates
+- d4418dd: Bump Microsoft.AspNetCore.Mvc.Testing and 9 others
+- b0d1307: Bump the azure-sdk group with 5 updates
+- 367b0ac: Bump the opentelemetry group with 2 updates
+- ffcd870: Fix a regression where the "Outcome plan confirmed by ..." banner and lifecycle event still showed a raw Entra object ID (GUID) instead of a display name. PR #854 only covered the interactive human confirmation path (`ConfirmOutcomeSpecAsync`); Direct-mode auto-confirmation and autopilot/unattended outcome-spec confirmation (fresh runs, retried backlog-pickup runs, and run retries) still attributed `confirmedBy` to the raw `SubmittingUser` identity. These paths now carry a resolved human-readable display name (falling back to the raw identity only when no display name is known) so the GUID no longer leaks into the confirmation message.
+- 453675a: Fix issue #850 follow-up: custom tools registered by an `IAgentRuntimeToolProvider` (`start_preview`, `start_preview_process`, `observe_bound_port`, `health_check`, `stop_preview_process`) never recorded `tool.call`/`tool.result`/`tool.error` RunEvents or an `execute_tool` OTel span, since they go through the SDK's `ExternalToolRequestedEvent`/`ExternalToolCompletedEvent` pairing rather than the native `ToolExecutionStartEvent`/`ToolExecutionCompleteEvent` lifecycle PR #853 instrumented. The Execute Tool detail panel showed "No arguments/output recorded for this call" for these tools even though they executed successfully. Provider tools are now wrapped so their arguments and output are recorded (redacted) directly around the real invocation, sharing one callId across the span and RunEvents.
+- 28d34d3: Fix the agent host maintenance scan so Trivy SARIF uploads still reach GitHub Security while the workflow continues to enforce HIGH and CRITICAL vulnerability failures, and refresh the agent host image toolchain to pick up current Trivy fixes.
+- 7c8a89a: fix(sandbox): raise handshake timeout to exceed writable-root wait; address bwrap CPU throttling
+  
+  Preview kept failing with repeated 30s `observe_bound_port` timeouts even after the v0.19.0
+  `observe_bound_port` handshake fix landed. Root cause: `PodExecSandboxClient`'s handshake
+  timeout (30s) was shorter than `KataBwrapExecutor`'s own internal wait (120s) for the
+  per-run writable-system-root "hold" helper to report `READY`, so the client gave up and
+  abandoned the connection before the sidecar could ever report success or failure, which the
+  sidecar then observed as a broken pipe.
+  
+  - Raised `PodExecSandboxClient.HandshakeTimeout` from 30s to 150s (safely above the
+    writable-root wait) and documented the dependency between the two timeouts.
+  - Rebalanced the `agentweaver-agent-host` sandbox pod's CPU split so the CPU-heavy
+    `agentweaver-exec` container (which runs the bwrap writable-root setup) gets more
+    request/limit headroom (600m/1000m -> 700m/1200m), taken from the thin relay-only
+    `agentweaver-agent-host` container (400m/1000m -> 300m/800m). Combined pod-level totals
+    (1000m request / 2000m limit) are unchanged, so katapool scheduling density is unaffected.
+- 13d25a1: Fix the Trace Summary "Latest" stat to compute MAX(started_at) across all candidates instead
+  of trusting list order, reverse "Recent coordinator runs" back to newest-first (matching the
+  `/runs` API's deterministic newest-first order), and add a "View trace" button on the
+  orchestration run detail page that jumps directly to that run's trace.
+
 ## 0.19.0
 
 ### Minor Changes
