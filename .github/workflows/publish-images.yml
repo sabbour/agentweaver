@@ -98,9 +98,78 @@ jobs:
             echo "- Tags: \`${{ steps.plan.outputs.tags }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Scopes the build matrix to images whose sources actually changed, so a
+  # single-image commit (e.g. only apps/Agentweaver.Mcp) doesn't rebuild all
+  # 4 containers. Filters mirror the per-image `watchedPaths` in
+  # scripts/azure/image-spec.mjs (the same single source of truth the ACR
+  # deploy toolchain uses for its own build-vs-retag decision), so the two
+  # never disagree about what feeds each image.
+  #
+  # Only meaningful for a `push` trigger: `release` and `workflow_dispatch`
+  # always build every image (see the `build` job's `if:`), and a
+  # before/after diff isn't well-defined for those events anyway.
+  changes:
+    name: Detect changed images
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      agentweaver-api: ${{ steps.filter.outputs.agentweaver-api }}
+      agentweaver-frontend: ${{ steps.filter.outputs.agentweaver-frontend }}
+      agentweaver-mcp: ${{ steps.filter.outputs.agentweaver-mcp }}
+      agentweaver-agent-host: ${{ steps.filter.outputs.agentweaver-agent-host }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            agentweaver-api:
+              - 'agentweaver.sln'
+              - 'global.json'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'nuget.config'
+              - 'packages/**'
+              - 'VERSION'
+              - 'apps/Agentweaver.Api/**'
+              - 'apps/Agentweaver.Api.Data/**'
+              - 'apps/Agentweaver.Api.Migrations.Postgres/**'
+            agentweaver-frontend:
+              - 'apps/web/**'
+              - 'apps/Agentweaver.Web/**'
+            agentweaver-mcp:
+              - 'agentweaver.sln'
+              - 'global.json'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'nuget.config'
+              - 'packages/**'
+              - 'VERSION'
+              - 'apps/Agentweaver.Mcp/**'
+            agentweaver-agent-host:
+              - 'agentweaver.sln'
+              - 'global.json'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'nuget.config'
+              - 'packages/**'
+              - 'VERSION'
+              - 'apps/Agentweaver.AgentHost/**'
+
   build:
     name: ${{ matrix.name }}
-    needs: plan
+    needs: [plan, changes]
+    # Push to `main` and any GitHub Release always rebuild every image (a
+    # release must be complete); `workflow_dispatch` also always builds all
+    # (the caller explicitly asked for a full build). Every other push (dev,
+    # release/vX.Y.Z) only builds images whose watched paths changed, per
+    # the `changes` job above.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      github.ref == 'refs/heads/main' ||
+      needs.changes.outputs[matrix.name] == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -146,7 +215,9 @@ jobs:
       # labels and the runtime provenance env vars every Dockerfile declares,
       # so a running container can always report the exact build it came from.
       # The GitHub Actions layer cache keeps unchanged images (notably the
-      # heavy agent-host) cheap even though all four are built every run.
+      # heavy agent-host) cheap on the runs where they do build. The `changes`
+      # job below scopes most pushes to only the images whose sources
+      # actually changed; `main`/release/dispatch still build all four.
       - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v6
         with:

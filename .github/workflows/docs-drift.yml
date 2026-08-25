@@ -14,6 +14,22 @@ name: Docs Drift Check
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      # Generator + its source of truth (apps/Agentweaver.Mcp/Tools/*.cs) and
+      # every file gen-docs.mjs writes/checks (see scripts/gen-docs.mjs header).
+      - 'scripts/gen-docs.mjs'
+      - 'apps/Agentweaver.Mcp/Tools/**'
+      - 'docs/**'
+      - '.github/agents/agentweaver.agent.md'
+      - 'apps/Agentweaver.Api/Projects/Templates/agentweaver.agent.md'
+      # curated-drift-nudge's own drift-prone code paths (code_re below) plus
+      # the docs/** paths it diffs against.
+      - 'apps/Agentweaver.Api/Endpoints/**'
+      - 'apps/Agentweaver.Api/Workflows/**'
+      - 'apps/Agentweaver.Api/Blueprints/**'
+      - 'packages/Agentweaver.Squad/Catalog/Resources/blueprints/**'
+      - 'packages/Agentweaver.Squad/Catalog/Resources/workflows/**'
+      - '.github/workflows/docs-drift.yml'
 
 permissions:
   contents: read
