@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import type { Project, WorkflowRunDto } from '../../api/types';
@@ -96,10 +96,14 @@ function TracePreview({ runId, roleByAgent }: { runId: string; roleByAgent: Reco
 export function ObservabilityTracesPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
+  const [searchParams] = useSearchParams();
+  // Supports deep-linking straight to a run's trace, e.g. via a "View trace" button on the
+  // run detail page (`/projects/{id}/orchestrations/{runId}?...` -> `?run={runId}`).
+  const focusRunId = searchParams.get('run');
   const [project, setProject] = useState<Project | null>(null);
   const [roleByAgent, setRoleByAgent] = useState<Record<string, string>>({});
   const [runs, setRuns] = useState<WorkflowRunDto[]>([]);
-  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(focusRunId);
   const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,7 +135,9 @@ export function ObservabilityTracesPage() {
       .then(([projectDto, runPage]) => {
         if (cancelled) return;
         setProject(projectDto);
-        setRuns([...runPage.items].reverse().filter(isCoordinatorRun).slice(0, 10));
+        // `/runs` already returns newest-first (deterministic OrderByDescending(StartedAt)) —
+        // keep that order so "Recent coordinator runs" shows the most recent run first.
+        setRuns(runPage.items.filter(isCoordinatorRun).slice(0, 10));
         setError(null);
       })
       .catch((err) => { if (!cancelled) setError(formatError(err)); })
@@ -141,11 +147,15 @@ export function ObservabilityTracesPage() {
 
   const summary = useMemo(() => {
     const statuses = runs.map((run) => run.coordinator_status ?? run.status);
+    const startedTimestamps = runs
+      .map((run) => (run.started_at ? new Date(run.started_at).getTime() : NaN))
+      .filter((time) => !Number.isNaN(time));
+    const latestTimestamp = startedTimestamps.length > 0 ? Math.max(...startedTimestamps) : null;
     return {
       total: runs.length,
       active: statuses.filter(isActiveStatus).length,
       failed: statuses.filter((status) => /(failed|declined|blocked)/i.test(status)).length,
-      latest: runs[0]?.started_at ? new Date(runs[0].started_at).toLocaleDateString() : '—',
+      latest: latestTimestamp !== null ? new Date(latestTimestamp).toLocaleDateString() : '—',
     };
   }, [runs]);
 
@@ -189,6 +199,12 @@ export function ObservabilityTracesPage() {
           <StatTile label="Latest" value={summary.latest} hint="Run start date" />
         </div>
       </PageSection>
+
+      {focusRunId && !runs.some((run) => (run.workflow_run_id ?? run.execution_id) === focusRunId) && (
+        <PageSection title="Focused trace" description="Opened directly from the run detail page.">
+          <TracePreview runId={focusRunId} roleByAgent={roleByAgent} />
+        </PageSection>
+      )}
 
       {loading && !runs.length ? (
         <LoadingState label="Loading traces" />
