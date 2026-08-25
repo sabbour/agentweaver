@@ -9,6 +9,10 @@ using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 using Agentweaver.Tests.Helpers;
 
+// GitHub.Copilot.SDK 1.0.11 added GitHub.Copilot.Rpc.RunOptions, which collides with the
+// Agentweaver domain record of the same name; this file means the Agentweaver one.
+using RunOptions = Agentweaver.Domain.RunOptions;
+
 namespace Agentweaver.Tests.Runtime;
 
 /// <summary>
