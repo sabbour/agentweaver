@@ -5,8 +5,11 @@ on:
     paths:
       - '.squad/team.md'
       - '.ai-team/team.md'
-      - '.github/labels.json'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
 
 permissions:
   issues: write
@@ -16,10 +19,10 @@ jobs:
   sync-labels:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7
 
       - name: Parse roster and sync labels
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 #v9
         with:
           script: |
             const fs = require('fs');
@@ -65,19 +68,102 @@ jobs:
 
             // Define label color palette for squad labels
             const SQUAD_COLOR = '9B8FCC';
-            const MEMBER_COLOR = '9B8FCC';
             const COPILOT_COLOR = '10b981';
 
-            const manifest = JSON.parse(fs.readFileSync('.github/labels.json', 'utf8'));
+            // Curated palette of visually distinct colors for squad member labels.
+            // These have good contrast with white text and avoid colors used by
+            // other label groups (go:*, release:*, type:*, priority:*, status:*).
+            const SQUAD_MEMBER_PALETTE = [
+              'E06C75', // soft red
+              'E5C07B', // gold
+              '56B6C2', // teal
+              'C678DD', // purple
+              '61AFEF', // blue
+              '98C379', // green
+              'D19A66', // orange
+              'BE5046', // rust
+              '7EC8E3', // sky blue
+              '9ECE6A', // lime
+              'F7768E', // pink
+              'FF9E64', // tangerine
+              '7AA2F7', // periwinkle
+              'BB9AF7', // lavender
+              '73DACA', // mint
+              '2AC3DE', // cyan
+              'DB4B4B', // crimson
+              'E0AF68', // amber
+              '449DAB', // dark teal
+              'A9DC76', // chartreuse
+            ];
+
+            // Deterministic color from palette based on agent slug hash
+            const usedColors = new Set();
+
+            function getAgentColor(slug) {
+              let hash = 0;
+              for (const char of slug) {
+                hash = ((hash << 5) - hash) + char.charCodeAt(0);
+                hash = hash & hash;
+              }
+              let index = Math.abs(hash) % SQUAD_MEMBER_PALETTE.length;
+              // Linear probe to avoid collisions
+              let attempts = 0;
+              while (usedColors.has(SQUAD_MEMBER_PALETTE[index]) && attempts < SQUAD_MEMBER_PALETTE.length) {
+                index = (index + 1) % SQUAD_MEMBER_PALETTE.length;
+                attempts++;
+              }
+              usedColors.add(SQUAD_MEMBER_PALETTE[index]);
+              return SQUAD_MEMBER_PALETTE[index];
+            }
+
+            // Define go: and release: labels (static)
+            const GO_LABELS = [
+              { name: 'go:yes', color: '0E8A16', description: 'Ready to implement' },
+              { name: 'go:no', color: 'B60205', description: 'Not pursuing' },
+              { name: 'go:needs-research', color: 'FBCA04', description: 'Needs investigation' }
+            ];
+
+            const RELEASE_LABELS = [
+              { name: 'release:v0.4.0', color: '6B8EB5', description: 'Targeted for v0.4.0' },
+              { name: 'release:v0.5.0', color: '6B8EB5', description: 'Targeted for v0.5.0' },
+              { name: 'release:v0.6.0', color: '8B7DB5', description: 'Targeted for v0.6.0' },
+              { name: 'release:v1.0.0', color: '8B7DB5', description: 'Targeted for v1.0.0' },
+              { name: 'release:backlog', color: 'D4E5F7', description: 'Not yet targeted' }
+            ];
+
+            const TYPE_LABELS = [
+              { name: 'type:feature', color: 'DDD1F2', description: 'New capability' },
+              { name: 'type:bug', color: 'FF0422', description: 'Something broken' },
+              { name: 'type:spike', color: 'F2DDD4', description: 'Research/investigation — produces a plan, not code' },
+              { name: 'type:docs', color: 'D4E5F7', description: 'Documentation work' },
+              { name: 'type:chore', color: 'D4E5F7', description: 'Maintenance, refactoring, cleanup' },
+              { name: 'type:epic', color: 'CC4455', description: 'Parent issue that decomposes into sub-issues' }
+            ];
+
+            // High-signal labels — these MUST visually dominate all others
+            const SIGNAL_LABELS = [
+              { name: 'bug', color: 'FF0422', description: 'Something isn\'t working' },
+              { name: 'feedback', color: '00E5FF', description: 'User feedback — high signal, needs attention' }
+            ];
+
+            const PRIORITY_LABELS = [
+              { name: 'priority:p0', color: 'B60205', description: 'Blocking release' },
+              { name: 'priority:p1', color: 'D93F0B', description: 'This sprint' },
+              { name: 'priority:p2', color: 'FBCA04', description: 'Next sprint' }
+            ];
 
             function slugify(t) { return t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
 
-            const labels = [...manifest.managedLabels];
+            // Ensure the base "squad" triage label exists
+            const labels = [
+              { name: 'squad', color: SQUAD_COLOR, description: 'Squad triage inbox — Lead will assign to a member' }
+            ];
 
             for (const member of members) {
+              const slug = slugify(member.name);
               labels.push({
-                name: `squad:${slugify(member.name)}`,
-                color: MEMBER_COLOR,
+                name: `squad:${slug}`,
+                color: getAgentColor(slug),
                 description: `Assigned to ${member.name} (${member.role})`
               });
             }
@@ -90,6 +176,13 @@ jobs:
                 description: 'Assigned to @copilot (Coding Agent) for autonomous work'
               });
             }
+
+            // Add go:, release:, type:, priority:, and high-signal labels
+            labels.push(...GO_LABELS);
+            labels.push(...RELEASE_LABELS);
+            labels.push(...TYPE_LABELS);
+            labels.push(...PRIORITY_LABELS);
+            labels.push(...SIGNAL_LABELS);
 
             // Sync labels (create or update)
             for (const label of labels) {
