@@ -276,6 +276,8 @@ test("run: non-interactive path resolves config from flags and env, then delegat
       "id-123",
       "--github-client-secret",
       "topsecret",
+      "--image-source",
+      "acr-build",
     ],
     env: { GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" },
     prompt: { isInteractive: () => false },
@@ -398,6 +400,8 @@ test("run: rejects cross-region Postgres when access mode remains private", asyn
         "id-123",
         "--github-client-secret",
         "topsecret",
+        "--image-source",
+        "acr-build",
       ],
       env: {},
       prompt: { isInteractive: () => false },
@@ -464,6 +468,8 @@ test("run: allows cross-region Postgres when access mode is explicitly public", 
       "id-123",
       "--github-client-secret",
       "topsecret",
+      "--image-source",
+      "acr-build",
     ],
     env: {
       RESOURCE_GROUP: "my-rg",
@@ -792,7 +798,7 @@ test("run: outputs summary includes the GitHub OAuth callback URL derived from t
   const log = { ...noopLog(), field: (label, value) => fields.push([label, value]) };
 
   await run({
-    argv: ["--resource-group", "my-rg", "--github-client-id", "id-123", "--github-client-secret", "topsecret"],
+    argv: ["--resource-group", "my-rg", "--github-client-id", "id-123", "--github-client-secret", "topsecret", "--image-source", "acr-build"],
     env: { GITHUB_CLIENT_ID: "", GITHUB_CLIENT_SECRET: "" },
     prompt: { isInteractive: () => false },
     exec,
@@ -824,7 +830,7 @@ test("run: --skip-postgres and --skip-oauth-key omit those steps from the call s
   const resolveVariablesFn = async () => ({ RESOURCE_GROUP: "rg", IMAGE_TAG: "dev", AGENTHOST_IMAGE_TAG: "dev" });
 
   await run({
-    argv: ["--skip-postgres", "--skip-oauth-key", "--github-client-id", "id", "--github-client-secret", "sec"],
+    argv: ["--skip-postgres", "--skip-oauth-key", "--github-client-id", "id", "--github-client-secret", "sec", "--image-source", "acr-build"],
     env: {},
     prompt: { isInteractive: () => false },
     exec,
@@ -870,7 +876,7 @@ test("run: loads GITHUB_CLIENT_ID/SECRET from a params-file (JSONC) when no flag
   const resolveVariablesFn = async () => ({ IMAGE_TAG: "dev", AGENTHOST_IMAGE_TAG: "dev" });
 
   await run({
-    argv: ["--params-file", paramsPath],
+    argv: ["--params-file", paramsPath, "--image-source", "acr-build"],
     env: {},
     prompt: { isInteractive: () => false },
     exec,
@@ -1010,6 +1016,8 @@ test("run: GITHUB_ALLOWED_ORG resolves from a flag, appears in the resolved-conf
       "sec",
       "--github-allowed-org",
       " microsoft , azure-management-and-platforms ",
+      "--image-source",
+      "acr-build",
     ],
     env: {},
     prompt: { isInteractive: () => false },
@@ -1081,6 +1089,8 @@ test("run: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID resolve from flags, appear 
       "11111111-1111-1111-1111-111111111111",
       "--entra-tenant-id",
       "22222222-2222-2222-2222-222222222222",
+      "--image-source",
+      "acr-build",
     ],
     env: {},
     prompt: { isInteractive: () => false },
@@ -1120,7 +1130,7 @@ test("run: AUTH_MODE defaults to GitHubLegacy when not provided", async () => {
   };
 
   await run({
-    argv: ["--resource-group", "my-rg", "--github-client-id", "id", "--github-client-secret", "sec"],
+    argv: ["--resource-group", "my-rg", "--github-client-id", "id", "--github-client-secret", "sec", "--image-source", "acr-build"],
     env: {},
     prompt: { isInteractive: () => false },
     exec,
@@ -1147,7 +1157,7 @@ test("run: --auth-mode rejects an invalid value with a clear validation error", 
 test("run: --auth-mode Entra without --entra-client-id/--entra-tenant-id fails with a clear error", async () => {
   await assert.rejects(
     run({
-      argv: ["--github-client-id", "id", "--github-client-secret", "sec", "--auth-mode", "Entra"],
+      argv: ["--github-client-id", "id", "--github-client-secret", "sec", "--auth-mode", "Entra", "--image-source", "acr-build"],
       env: {},
       prompt: { isInteractive: () => false },
       log: noopLog(),
@@ -1184,7 +1194,7 @@ test("run: NEVER logs the GitHub OAuth client secret anywhere in output", async 
   }
 
   await run({
-    argv: ["--github-client-id", "id", "--github-client-secret", SECRET_VALUE],
+    argv: ["--github-client-id", "id", "--github-client-secret", SECRET_VALUE, "--image-source", "acr-build"],
     env: {},
     prompt: { isInteractive: () => false },
     exec,
