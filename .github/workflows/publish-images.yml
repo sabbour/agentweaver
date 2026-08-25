@@ -105,12 +105,12 @@ jobs:
   # deploy toolchain uses for its own build-vs-retag decision), so the two
   # never disagree about what feeds each image.
   #
-  # Only meaningful for a `push` trigger: `release` and `workflow_dispatch`
-  # always build every image (see the `build` job's `if:`), and a
-  # before/after diff isn't well-defined for those events anyway.
+  # Runs unconditionally so that `build` (which needs this job) is never
+  # skipped due to a skipped dependency. The filter step only runs on push;
+  # for release/workflow_dispatch the outputs are empty and the build step's
+  # own `if` handles those events without referencing these outputs.
   changes:
     name: Detect changed images
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       agentweaver-api: ${{ steps.filter.outputs.agentweaver-api }}
@@ -119,9 +119,11 @@ jobs:
       agentweaver-agent-host: ${{ steps.filter.outputs.agentweaver-agent-host }}
     steps:
       - uses: actions/checkout@v4
+        if: github.event_name == 'push'
 
       - uses: dorny/paths-filter@v3
         id: filter
+        if: github.event_name == 'push'
         with:
           filters: |
             agentweaver-api:
@@ -160,16 +162,14 @@ jobs:
   build:
     name: ${{ matrix.name }}
     needs: [plan, changes]
-    # Push to `main` and any GitHub Release always rebuild every image (a
-    # release must be complete); `workflow_dispatch` also always builds all
-    # (the caller explicitly asked for a full build). Every other push (dev,
-    # release/vX.Y.Z) only builds images whose watched paths changed, per
-    # the `changes` job above.
+    # Always run the job so the matrix can expand; per-image path filtering
+    # is enforced at the build step level (where matrix context is valid).
+    # `changes` is skipped for release/workflow_dispatch events, so we must
+    # not gate the job on it — only on whether a push event happened at all.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'release' ||
-      github.ref == 'refs/heads/main' ||
-      needs.changes.outputs[matrix.name] == 'true'
+      github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -215,10 +215,15 @@ jobs:
       # labels and the runtime provenance env vars every Dockerfile declares,
       # so a running container can always report the exact build it came from.
       # The GitHub Actions layer cache keeps unchanged images (notably the
-      # heavy agent-host) cheap on the runs where they do build. The `changes`
-      # job below scopes most pushes to only the images whose sources
-      # actually changed; `main`/release/dispatch still build all four.
+      # heavy agent-host) cheap on the runs where they do build.
+      # `matrix` context is available in step-level `if` (not job-level), so
+      # the path-filter guard lives here: main/release/dispatch always build;
+      # dev/release-branch pushes only build images whose sources changed.
       - name: Build and push ${{ matrix.name }}
+        if: >-
+          github.event_name != 'push' ||
+          github.ref == 'refs/heads/main' ||
+          needs.changes.outputs[matrix.name] == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
