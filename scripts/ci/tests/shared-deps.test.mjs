@@ -620,4 +620,7 @@ test('validation path classification keeps layer and stack policy deterministic'
     areasForPaths(['.github/workflows/ci.yml']),
     ['node', 'harness', 'web', 'docs', 'dotnet'],
   );
+  // Other workflows don't run these suites, so they must select no areas.
+  assert.deepEqual(areasForPaths(['.github/workflows/docs-drift.yml']), []);
+  assert.deepEqual(areasForPaths(['.github/workflows/publish-images.yml']), []);
 });

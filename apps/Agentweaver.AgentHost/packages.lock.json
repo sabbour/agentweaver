@@ -126,8 +126,8 @@
       },
       "GitHub.Copilot.SDK": {
         "type": "Transitive",
-        "resolved": "1.0.2",
-        "contentHash": "u12oXKXcdozIfDuSS2BcaamMvkHLl6obP2Xw2t1BwmWFlCkcvTGbbxwe2RmIeM2vJND9ZDrmCK5t3ftSaZNVJQ==",
+        "resolved": "1.0.11",
+        "contentHash": "92CcbAoPQ60Lr7ho7uO5uNYkkxlVux6AhsoZv2WbZz6DcXfvUihHaX8rxNdxM5xv1bIa/WrBE4EadZgJakp3Lw==",
         "dependencies": {
           "Microsoft.Extensions.AI.Abstractions": "10.2.0"
         }
@@ -147,44 +147,44 @@
       },
       "Microsoft.Agents.AI": {
         "type": "Transitive",
-        "resolved": "1.11.1",
-        "contentHash": "c12CNAae3xtpjCWfuBYXS4Ul/tM8XQf9yC0YhUR30OkXhdpgX++wf7Gez0poELS3EddZ0iy/BNp6of5TWP/21Q==",
+        "resolved": "1.19.0",
+        "contentHash": "t8scDj5Qx0xUT8owJdUYBIwlEbSUBpYFAhtf0nfhERSWi3IQ8637gfOuZsvW3IIRsUSjq966fOgrJXjBp6R22A==",
         "dependencies": {
-          "Microsoft.Agents.AI.Abstractions": "1.11.1",
-          "Microsoft.Extensions.AI": "10.6.0",
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0",
-          "Microsoft.Extensions.AI.Evaluation": "10.6.0",
+          "Microsoft.Agents.AI.Abstractions": "1.19.0",
+          "Microsoft.Extensions.AI": "10.9.0",
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0",
+          "Microsoft.Extensions.AI.Evaluation": "10.9.0",
           "Microsoft.Extensions.Compliance.Abstractions": "10.5.0",
-          "Microsoft.Extensions.VectorData.Abstractions": "9.7.0",
+          "Microsoft.Extensions.VectorData.Abstractions": "10.7.0",
           "Microsoft.ML.Tokenizers": "2.0.0"
         }
       },
       "Microsoft.Agents.AI.A2A": {
         "type": "Transitive",
-        "resolved": "1.11.1-preview.260625.1",
-        "contentHash": "JgBO/Zs9ejm0Px013JDGWUiz9KxLfIMEl4e4LC32sAwV0T+HqtFsbGEixLBjhM/XpaGYO5g05yNhGkpE0zFq+Q==",
+        "resolved": "1.19.0-preview.260822.1",
+        "contentHash": "TWaF3GZ0D4iRofaqH2q0dxLmJfZangZAxwONfbCdWWXKKfQVpc3H59CA3c7hmICpGIn7ztOeVxDqce7jYRdfLw==",
         "dependencies": {
           "A2A": "1.0.0-preview2",
-          "Microsoft.Agents.AI.Abstractions": "1.11.1",
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0"
+          "Microsoft.Agents.AI.Abstractions": "1.19.0",
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0"
         }
       },
       "Microsoft.Agents.AI.Abstractions": {
         "type": "Transitive",
-        "resolved": "1.11.1",
-        "contentHash": "VmTHbr2ilqF+NNVDk6Isl/h5e6QUpDzk9ZzhsFO2E5zv2UrIZmTunsRSfYP4Ou698SHrkPVvBh+dcNDW4bWsOw==",
+        "resolved": "1.19.0",
+        "contentHash": "Aw/MMRWjuics4Ryuv3qqj7Bvrv8KCQmKI7X5EQLoR77YJE4gpD8lOh/6GkLzWS1kZwyA1T04V7jgCMw2DCVyEQ==",
         "dependencies": {
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0"
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0"
         }
       },
       "Microsoft.Agents.AI.GitHub.Copilot": {
         "type": "Transitive",
-        "resolved": "1.11.1-rc1",
-        "contentHash": "IhceBQBKWPB+fdPVq49awBhGstO9mOXRtxFXLIG014kdDWwSuaf6P10m6XakENy17/G/A0uUjt8slPQ6V8lyJw==",
+        "resolved": "1.19.0",
+        "contentHash": "CsA7ffseMFLJ3yVSR7svpRPKCX5jsqN6t9dTT+y9vv87T384yx5Wb/XnlMMN698w85gpQ/dyHB6oGPl4KgP8wA==",
         "dependencies": {
-          "GitHub.Copilot.SDK": "1.0.0",
-          "Microsoft.Agents.AI.Abstractions": "1.11.1",
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0"
+          "GitHub.Copilot.SDK": "1.0.5",
+          "Microsoft.Agents.AI.Abstractions": "1.19.0",
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0"
         }
       },
       "Microsoft.Agents.AI.Hosting": {
@@ -221,16 +221,16 @@
       },
       "Microsoft.Agents.AI.Workflows": {
         "type": "Transitive",
-        "resolved": "1.11.1",
-        "contentHash": "VLlU3Zl6tWvn8EFjqyyOUuWm391XBFQbqCHLrsvqoOf2w1NA3oNvXeqFgCJI8HqmnDXO5L4o/AtHrVxWglheag==",
+        "resolved": "1.19.0",
+        "contentHash": "1klIJHO9CwEP8RaUGGGrjXdlYcRnp5uxTSkqjbUzR/zr6ZlHuPvSCav+27MzIi76Jubud0SWTqbi1rYRbnfRIw==",
         "dependencies": {
-          "Microsoft.Agents.AI": "1.11.1",
-          "Microsoft.Agents.AI.Abstractions": "1.11.1",
-          "Microsoft.Extensions.AI": "10.6.0",
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0",
-          "Microsoft.Extensions.AI.Evaluation": "10.6.0",
+          "Microsoft.Agents.AI": "1.19.0",
+          "Microsoft.Agents.AI.Abstractions": "1.19.0",
+          "Microsoft.Extensions.AI": "10.9.0",
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0",
+          "Microsoft.Extensions.AI.Evaluation": "10.9.0",
           "Microsoft.Extensions.Compliance.Abstractions": "10.5.0",
-          "Microsoft.Extensions.VectorData.Abstractions": "9.7.0",
+          "Microsoft.Extensions.VectorData.Abstractions": "10.7.0",
           "Microsoft.ML.Tokenizers": "2.0.0",
           "OpenTelemetry.Api": "1.15.3"
         }
@@ -247,10 +247,10 @@
       },
       "Microsoft.Extensions.AI.Evaluation": {
         "type": "Transitive",
-        "resolved": "10.6.0",
-        "contentHash": "fHu9H93p7jM2KiXC/6Kd511Gly1rR/VVSIr0FpQ0K381KSHNkSKgp7UAceAPe8wuUMBNXlhcI0q8UocjneuBVg==",
+        "resolved": "10.9.0",
+        "contentHash": "X1W8yH63os/Me/5+ipZLmgRXjZJDJ1kUHxYRWxqP3c/DezHfSHD+Qf5nKgN1EHIY9GYqkIBTvtPEC8Hs+t4KBQ==",
         "dependencies": {
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0"
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0"
         }
       },
       "Microsoft.Extensions.AI.OpenAI": {
@@ -269,10 +269,10 @@
       },
       "Microsoft.Extensions.VectorData.Abstractions": {
         "type": "Transitive",
-        "resolved": "9.7.0",
-        "contentHash": "Vth/omSCX2vR0JabzSRU/hdPhr0CvUVZlaS2lJPWHrEwvak8ntrQLDtLMtMiWKSvviGBe/WmjUW8gA3qqn9tjw==",
+        "resolved": "10.7.0",
+        "contentHash": "eh0JLxoztc9Wz7TrFVRQyotMY9CBh2t22lMPvzy61yaBDDFBsrisrFOD4NId2z/ujwsHVKDtyfDb9tkXwSV5Vw==",
         "dependencies": {
-          "Microsoft.Extensions.AI.Abstractions": "9.5.0"
+          "Microsoft.Extensions.AI.Abstractions": "10.7.0"
         }
       },
       "Microsoft.Identity.Client": {
@@ -443,11 +443,11 @@
           "Agentweaver.SandboxExec": "[1.0.0, )",
           "Agentweaver.SandboxFs": "[1.0.0, )",
           "Azure.AI.OpenAI": "[2.1.0, )",
-          "GitHub.Copilot.SDK": "[1.0.2, )",
+          "GitHub.Copilot.SDK": "[1.0.11, )",
           "Microsoft.AgentGovernance": "[4.0.0, 5.0.0)",
-          "Microsoft.Agents.AI.A2A": "[1.11.1-preview.260625.1, )",
-          "Microsoft.Agents.AI.GitHub.Copilot": "[1.11.1-rc1, )",
-          "Microsoft.Agents.AI.Workflows": "[1.11.1, )",
+          "Microsoft.Agents.AI.A2A": "[1.19.0-preview.260822.1, )",
+          "Microsoft.Agents.AI.GitHub.Copilot": "[1.19.0, )",
+          "Microsoft.Agents.AI.Workflows": "[1.19.0, )",
           "Microsoft.Extensions.AI": "[10.9.0, )",
           "Microsoft.Extensions.AI.OpenAI": "[10.9.0, )",
           "ModelContextProtocol": "[0.3.0-preview.2, )"

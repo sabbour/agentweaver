@@ -248,7 +248,7 @@ Flags:
   --skip-oauth-key            Skip MCP OAuth signing key provisioning (16-provision-oauth-signing-key).
   --force                     Allow GHCR/custom import to overwrite an existing target ACR tag if the digest differs.
   --image-tag <tag>           Use this image tag instead of the derived default.
-  --image-source <source>     Image source: 'acr-build' (default), 'ghcr', or 'custom'.
+  --image-source <source>     Image source: 'ghcr' (default), 'acr-build', or 'custom'.
   --ghcr-ref <ref>            Required with --image-source ghcr; only accepts immutable refs (vX.Y.Z or sha-<hex>).
   --ghcr-token <token>        Optional GHCR registry token for private-package import; NEVER echoed/logged.
   --image-api <ref>           Required with --image-source custom; fully-qualified ref for agentweaver-api.
@@ -503,7 +503,7 @@ function buildSchema({ prompt, az }) {
     },
     NAMESPACE: { default: DEFAULTS.NAMESPACE },
     IMAGE_SOURCE: {
-      default: "acr-build",
+      default: "ghcr",
       validate: (value) => (
         IMAGE_SOURCE_VALUES.includes(String(value))
           ? undefined
