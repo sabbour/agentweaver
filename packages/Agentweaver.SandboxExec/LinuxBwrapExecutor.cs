@@ -86,7 +86,7 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
             " --unshare-user" +
             (networkEnabled ? "" : " --unshare-net") +
             " --new-session" +
-            $" -- /bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
+            $" -- /usr/bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(

@@ -307,73 +307,41 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
               }
             }
             """);
-        var sandboxVariables = new Dictionary<string, string>
-        {
-            ["HOME"] = ".agentweaver-home",
-            ["XDG_CACHE_HOME"] = ".agentweaver-home/.cache",
-            ["XDG_DATA_HOME"] = ".agentweaver-home/.local/share",
-            ["XDG_CONFIG_HOME"] = ".agentweaver-home/.config",
-        };
-        foreach (var path in sandboxVariables.Values)
-            Directory.CreateDirectory(Path.Combine(workspace, path));
+        var executor = new RecordingExecutor(realExecutor);
+        using var tracker = new ShellExecutionTracker();
+        var context = BuildContext(executor, tracker, workspace);
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
 
-        var originalValues = sandboxVariables.Keys.ToDictionary(
-            name => name,
-            Environment.GetEnvironmentVariable);
-        var originalWslEnv = Environment.GetEnvironmentVariable("WSLENV");
-        foreach (var (name, value) in sandboxVariables)
-            Environment.SetEnvironmentVariable(name, value);
-        if (OperatingSystem.IsWindows())
-        {
-            var wslVariables = (originalWslEnv ?? "")
-                .Split(':', StringSplitOptions.RemoveEmptyEntries)
-                .ToHashSet(StringComparer.Ordinal);
-            foreach (var name in sandboxVariables.Keys)
-                wslVariables.Add(name);
-            Environment.SetEnvironmentVariable("WSLENV", string.Join(':', wslVariables));
-        }
-        try
-        {
-            var executor = new RecordingExecutor(realExecutor);
-            using var tracker = new ShellExecutionTracker();
-            var context = BuildContext(executor, tracker, workspace);
-            var tool = CopilotAIAgent.BuildSessionConfigTools(
-                context,
-                includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?>
+            {
+                ["command"] =
+                    "unset npm_config_cache NPM_CONFIG_CACHE && " +
+                    "npm install --ignore-scripts --no-audit --no-fund && " +
+                    "test -f node_modules/agentweaver-cache-fixture/index.js && " +
+                    "test -d \"$HOME/.npm\" && " +
+                    "find \"$HOME/.npm\" -type f -print -quit | grep -q .",
+            }));
 
-            var result = await tool.InvokeAsync(new AIFunctionArguments(
-                new Dictionary<string, object?>
-                {
-                    ["command"] =
-                        "unset npm_config_cache NPM_CONFIG_CACHE && " +
-                        "npm install --ignore-scripts --no-audit --no-fund && " +
-                        "test -f node_modules/agentweaver-cache-fixture/index.js && " +
-                        "test -d \"$HOME/.npm\" && " +
-                        "find \"$HOME/.npm\" -type f -print -quit | grep -q .",
-                }));
-
-            result?.ToString().Should().Contain("exit_code: 0");
-            File.ReadAllText(Path.Combine(
-                workspace, "node_modules", "agentweaver-cache-fixture", "index.js"))
-                .Should().Be("module.exports = 'installed';");
-            Directory.EnumerateFiles(
-                    Path.Combine(workspace, ".agentweaver-home", ".npm"),
-                    "*",
-                    SearchOption.AllDirectories)
-                .Should().NotBeEmpty("npm must write its cache beneath the sandbox-local HOME");
-            executor.LastCommand.Should().NotBeNull();
-            var readWritePaths = executor.LastCommand!.FilesystemPolicy.ReadWritePaths;
-            readWritePaths.Should().Contain(workspace);
-            readWritePaths.Should().NotContain(
-                path => path.Contains(".agentweaver-home", StringComparison.OrdinalIgnoreCase),
-                "the sandbox-local HOME should remain covered by the writable workspace root rather than being added as an extra writable mount");
-        }
-        finally
-        {
-            foreach (var (name, value) in originalValues)
-                Environment.SetEnvironmentVariable(name, value);
-            Environment.SetEnvironmentVariable("WSLENV", originalWslEnv);
-        }
+        result?.ToString().Should().Contain("exit_code: 0");
+        File.ReadAllText(Path.Combine(
+            workspace, "node_modules", "agentweaver-cache-fixture", "index.js"))
+            .Should().Be("module.exports = 'installed';");
+        Directory.EnumerateFiles(
+                Path.Combine(workspace, ".agentweaver-home", ".npm"),
+                "*",
+                SearchOption.AllDirectories)
+            .Should().NotBeEmpty("npm must write its cache beneath the sandbox-local HOME");
+        executor.LastCommand.Should().NotBeNull();
+        executor.LastCommand!.Environment.Should().Contain(
+            new KeyValuePair<string, string>("HOME", ".agentweaver-home"));
+        var readWritePaths = executor.LastCommand.FilesystemPolicy.ReadWritePaths;
+        readWritePaths.Should().Contain(workspace);
+        readWritePaths.Should().NotContain(
+            path => path.Contains(".agentweaver-home", StringComparison.OrdinalIgnoreCase),
+            "the sandbox-local HOME should remain covered by the writable workspace root rather than being added as an extra writable mount");
     }
 
     private static CopilotAIAgent BuildAgent(ISandboxExecutor executor)
