@@ -68,6 +68,16 @@
           "OpenTelemetry.Api": "1.15.3"
         }
       },
+      "Microsoft.Extensions.AI": {
+        "type": "Direct",
+        "requested": "[10.9.0, )",
+        "resolved": "10.9.0",
+        "contentHash": "ymREzi/+uQ9KL0d0ir3FXHUb/XLHyLYcJYH/7A/uO6rg6Km8hUk++nMRG4/gDpDYrrU6s6YIpSDTexofexMGRg==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0",
+          "System.Numerics.Tensors": "10.0.11"
+        }
+      },
       "OpenTelemetry.Extensions.Hosting": {
         "type": "Direct",
         "requested": "[1.17.0, )",
@@ -230,19 +240,10 @@
         "resolved": "10.0.9",
         "contentHash": "Aq7M8lG6BrHeatqKqncVm9m55ec34k6nnfPRLe/PvGg+b/pAsRM2ejofeKmCLjTXMa+5NGXm382f8CG/D5WDow=="
       },
-      "Microsoft.Extensions.AI": {
-        "type": "Transitive",
-        "resolved": "10.6.0",
-        "contentHash": "30EQA5M7ouoC1rhK0WARh+qm0CSvHToEV9MwkFY7tp42RAFnofirklXP0R/E9xi3pcbJtkNs0Ty2wromtUgXLw==",
-        "dependencies": {
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0",
-          "System.Numerics.Tensors": "10.0.8"
-        }
-      },
       "Microsoft.Extensions.AI.Abstractions": {
         "type": "Transitive",
-        "resolved": "10.6.0",
-        "contentHash": "JCkVoyqBqi9r3Vs5Qo5PfZobT0+CWeOx+9y9yggBxtW9s/X5CAoa7Iw/tP/rfUdz+nxRKMSBmrytYgwmu60lgA=="
+        "resolved": "10.9.0",
+        "contentHash": "//nASHMCJVxnYfE/WSzfaLOao6/q816kPpgB9rxU0gfSmAny1u3rfQT0D4xAmcIo4yQqJs7rAeBB+M/dIMdZYA=="
       },
       "Microsoft.Extensions.AI.Evaluation": {
         "type": "Transitive",
@@ -254,11 +255,11 @@
       },
       "Microsoft.Extensions.AI.OpenAI": {
         "type": "Transitive",
-        "resolved": "10.6.0",
-        "contentHash": "LtqD8u5fqljZ+0Y6EsKOo+4YouNb0t+jU5J3rfOadMR1RCM5a36+2SB4tEuJpCTiqC31GeeJscyzFmIuwCZx+Q==",
+        "resolved": "10.9.0",
+        "contentHash": "1e2eO85ZpSBKarCTwRf1PmZJVGF09UJ23314bTmdxjFvY5LyHgeZNXcDU5S89upwnuGUbJSSnW8DXK3ntqbsMw==",
         "dependencies": {
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0",
-          "OpenAI": "2.10.0"
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0",
+          "OpenAI": "[2.12.0, 2.13.0)"
         }
       },
       "Microsoft.Extensions.Compliance.Abstractions": {
@@ -327,10 +328,10 @@
       },
       "OpenAI": {
         "type": "Transitive",
-        "resolved": "2.10.0",
-        "contentHash": "e5gAhMDcX5bFmmtR+lT6qZxJoaGb0SkIplPUUdKwcC4xerCh471hTIsrvfkou7scfZD9YQk6C06dP3NwBqHw1A==",
+        "resolved": "2.12.0",
+        "contentHash": "rKyVV0sJPo7pn0Ya5dgRs5ggGbjvnKcYSvYV2jITKgFIfeo2XHjgyi6UqNT/OnF0YBqjsNpPdgM6QjzYczWplg==",
         "dependencies": {
-          "System.ClientModel": "1.10.0"
+          "System.ClientModel": "1.14.0"
         }
       },
       "OpenTelemetry": {
@@ -399,8 +400,8 @@
       },
       "System.Numerics.Tensors": {
         "type": "Transitive",
-        "resolved": "10.0.8",
-        "contentHash": "pcyglC5R0BXGyD8cntjFXJhACpPyk7H7eN0zKW/5d5MIcmRUPVZrjytZ2Bsn9igzQJGg5xIOOokPHFLnfiEuxQ=="
+        "resolved": "10.0.11",
+        "contentHash": "4jNNt67NhCqf3bf2FN0mrsC+EH60L7Sny6poqVeiviB27Kw7TQzMmgn8HIaPc8E9EcuGusUyfeu21gLfzcBpDA=="
       },
       "System.Security.Cryptography.ProtectedData": {
         "type": "Transitive",
@@ -447,8 +448,8 @@
           "Microsoft.Agents.AI.A2A": "[1.11.1-preview.260625.1, )",
           "Microsoft.Agents.AI.GitHub.Copilot": "[1.11.1-rc1, )",
           "Microsoft.Agents.AI.Workflows": "[1.11.1, )",
-          "Microsoft.Extensions.AI": "[10.6.0, )",
-          "Microsoft.Extensions.AI.OpenAI": "[10.6.0, )",
+          "Microsoft.Extensions.AI": "[10.9.0, )",
+          "Microsoft.Extensions.AI.OpenAI": "[10.9.0, )",
           "ModelContextProtocol": "[0.3.0-preview.2, )"
         }
       },
@@ -458,7 +459,7 @@
           "Agentweaver.Domain": "[1.0.0, )",
           "Agentweaver.SandboxExec": "[1.0.0, )",
           "Agentweaver.SandboxFs": "[1.0.0, )",
-          "Microsoft.Extensions.AI": "[10.5.1, )"
+          "Microsoft.Extensions.AI": "[10.9.0, )"
         }
       },
       "agentweaver.domain": {

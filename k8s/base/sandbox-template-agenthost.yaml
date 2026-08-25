@@ -196,15 +196,25 @@ spec:
           # of overpacking one node into eviction. Limits are unchanged so a single heavy build can
           # still burst. The terminal-event emission-robustness half (flush-before-teardown / durable
           # terminal publication) is tracked separately as defense-in-depth under #242.
+          #
+          # CPU rebalanced 400m/1000m -> 300m/800m (fix/handshake-timeout-writable-root): this
+          # container is a thin A2A/relay process — the actual CPU-heavy work (bwrap mount
+          # namespace setup, npm/pip/git, the preview process itself) runs in agentweaver-exec
+          # below. Under concurrent load the exec container's per-run writable-system-root "hold"
+          # helper was CPU-starved by its 600m/1000m split and routinely missed its internal 120s
+          # READY wait, which the client's (now 150s) handshake timeout then also timed out on,
+          # surfacing as repeated observe_bound_port failures. Pod-level totals are UNCHANGED
+          # (request 1000m, limit 2000m combined), so the katapool ~3-pods/node density math above
+          # still holds — only the split moved, from agent-host toward agentweaver-exec.
           resources:
             requests:
               memory: "1Gi"
-              cpu: "400m"
+              cpu: "300m"
               # Reserve real build headroom (checkout + node_modules/.next + package caches).
               ephemeral-storage: "1Gi"
             limits:
               memory: "2Gi"
-              cpu: "1000m"
+              cpu: "800m"
               ephemeral-storage: "4Gi"
           volumeMounts:
             - name: workspace
@@ -288,14 +298,23 @@ spec:
           # deliberately UNCHANGED versus the single-container layout (requests 1000m/2Gi, limits
           # 2000m/4Gi) so katapool scheduling density and burst ceiling stay exactly as documented
           # above; the budget is split rather than added.
+          #
+          # CPU rebalanced 600m/1000m -> 700m/1200m (fix/handshake-timeout-writable-root): this is
+          # the container that actually does the CPU-heavy work under bubblewrap — including
+          # KataBwrapExecutor's per-run writable-system-root "hold" helper, which mounts a tmpfs
+          # overlay and must print READY within its own internal 120s wait before the client's
+          # handshake timeout gives up. The previous 600m request left that helper CPU-starved under
+          # concurrent runs on a node, so it routinely missed its 120s window. Moved 100m of request
+          # and 200m of limit here from agent-host above; combined pod totals (1000m request /
+          # 2000m limit) are unchanged, so scheduling density is unaffected.
           resources:
             requests:
               memory: "1Gi"
-              cpu: "600m"
+              cpu: "700m"
               ephemeral-storage: "1Gi"
             limits:
               memory: "2Gi"
-              cpu: "1000m"
+              cpu: "1200m"
               ephemeral-storage: "4Gi"
           volumeMounts:
             - name: workspace
