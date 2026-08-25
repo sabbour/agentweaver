@@ -94,7 +94,7 @@ Separate worktrees prevent that collision.
      --jq '{mergeable, mergeState: .mergeStateStatus, checks: [.statusCheckRollup[] | {name, status, conclusion}]}'
    ```
    Confirm `mergeable` is `MERGEABLE` (no conflicts) and every required check
-   (`.NET tests`, `Node toolchain tests`, `Web tests`, `Docs build`, `Web lint`,
+   (`.NET tests`, `Node toolchain tests`, `Web tests`, `Docs build`,
    `Changeset advisory`) shows `conclusion: SUCCESS` or `SKIPPED` (path-conditional
    jobs report `SKIPPED` when their path group didn't change, which still satisfies
    the required check). Re-run any failed required check once

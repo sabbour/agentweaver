@@ -26,7 +26,6 @@ Create an **active branch ruleset** targeting only `dev`:
     - `Node toolchain tests`
     - `Web tests`
     - `Docs build`
-    - `Web lint`
     - `Changeset advisory`
 
 ## Repository merge settings

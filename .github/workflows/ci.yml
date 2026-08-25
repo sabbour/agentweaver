@@ -14,10 +14,11 @@ name: CI
 #
 # A `changes` job classifies the PR/push diff by path group first, and every
 # suite job below only runs `if:` its group actually changed (a change to this
-# workflow file itself always trips every group). A job whose `if:` is false is
-# reported to GitHub as "skipped", which required-status-checks rulesets treat
-# as passing, so this stays safe for branch protection while saving CI minutes
-# on diffs (e.g. docs-only PRs) that can't affect the skipped suites.
+# file, `.github/workflows/ci.yml`, always trips every group). A job whose `if:`
+# is false is reported to GitHub as "skipped", which required-status-checks
+# rulesets treat as passing, so this stays safe for branch protection while
+# saving CI minutes on diffs (e.g. docs-only PRs) that can't affect the skipped
+# suites.
 # `Changeset advisory` always runs regardless of paths, since it must evaluate
 # every PR for whether a changeset was needed.
 
@@ -51,9 +52,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # dorny/paths-filter classifies the PR/push diff into named groups below.
-      # Every group includes .github/workflows/** so a change to this pipeline
-      # itself always trips every downstream job, never leaving a suite skipped
-      # just because the workflow that runs it changed.
+      # Every group includes this workflow's own path (.github/workflows/ci.yml)
+      # so a change to this pipeline always trips every downstream job, never
+      # leaving a suite skipped just because the workflow that runs it changed.
+      # It is deliberately NOT `.github/workflows/**`: the other workflows here
+      # (agent-host-maintenance, docs-drift, publish-images, squad-*, ...) do not
+      # run any of these suites, so editing them used to trigger the entire
+      # matrix -- a comment-only edit to an unrelated workflow cost a full .NET,
+      # web, node, docs and diagram run. Only ci.yml decides what these jobs do.
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -66,12 +72,12 @@ jobs:
               - '**/*.sln'
               - 'global.json'
               - 'nuget.config'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             web:
               - 'apps/web/**'
               - 'scripts/ci/shared-deps.mjs'
               - 'scripts/ci/validate.mjs'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             node-toolchain:
               - 'scripts/azure/**'
               - 'scripts/changesets/**'
@@ -81,19 +87,19 @@ jobs:
               - 'scripts/harness-judge/**'
               - 'scripts/harness-shared/**'
               - 'scripts/persona-briefs/**'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             docs:
               - 'docs/**'
               - 'scripts/ci/shared-deps.mjs'
               - 'scripts/ci/validate.mjs'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             diagrams:
               - 'docs/diagrams/**'
               - 'docs/diagram-renderer/**'
               - 'README.md'
               - 'docs/guide/architecture-aks.md'
               - 'scripts/docs/**'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
 
   dotnet-tests:
     name: .NET tests
@@ -227,19 +233,8 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
 
       # Tests and lint deliberately share one job so npm ci runs only once.
-      # The lightweight Web lint status job below preserves the existing
-      # branch-protection check name.
       - name: Run web tests and lint
         run: node scripts/ci/validate.mjs --profile ci --area web
-
-  web-lint:
-    name: Web lint
-    needs: [changes, web-tests]
-    if: always() && needs.changes.outputs.web == 'true' && needs.web-tests.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Confirm co-located lint passed
-        run: echo "Web lint passed in the Web tests job."
 
   docs-build:
     name: Docs build

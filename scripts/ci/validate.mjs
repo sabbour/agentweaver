@@ -173,7 +173,11 @@ export function areasForPaths(paths) {
     ) {
       areas.add('dotnet');
     }
-    if (filePath.startsWith('.github/workflows/')) {
+    // Only ci.yml drives these suites. Other workflow files (docs-drift,
+    // publish-images, squad-*, ...) don't, so editing them must not force a
+    // full local revalidation -- this mirrors the paths-filter groups in
+    // .github/workflows/ci.yml exactly, and the two must stay in sync.
+    if (filePath === '.github/workflows/ci.yml') {
       for (const area of ALL_AREAS) {
         areas.add(area);
       }
