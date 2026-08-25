@@ -11,6 +11,7 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
 
   # Root npm workspace
   - package-ecosystem: "npm"
@@ -22,6 +23,7 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
     groups:
       dev-tooling:
         patterns:
@@ -43,6 +45,7 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
     groups:
       react-ecosystem:
         patterns:
@@ -65,6 +68,7 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
     groups:
       aspnetcore:
         patterns:
@@ -82,42 +86,42 @@ updates:
   - package-ecosystem: "docker"
     directory: "/apps/Agentweaver.Api"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
 
   # Docker — AgentHost
   - package-ecosystem: "docker"
     directory: "/apps/Agentweaver.AgentHost"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
 
   # Docker — MCP
   - package-ecosystem: "docker"
     directory: "/apps/Agentweaver.Mcp"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
 
   # Docker — Web
   - package-ecosystem: "docker"
     directory: "/apps/web"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
     labels:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    rebase-strategy: "disabled"
