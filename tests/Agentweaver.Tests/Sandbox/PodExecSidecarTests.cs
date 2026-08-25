@@ -178,8 +178,23 @@ public sealed class PodExecSidecarTests
 
         try
         {
-            var line = await supervised.Process.StandardOutput.ReadLineAsync()
-                .WaitAsync(TimeSpan.FromSeconds(30));
+            // A single ReadLineAsync races the workload's own stdout flush: bubblewrap/setsid can
+            // interleave a blank line or shell chatter ahead of the echo depending on scheduling, so
+            // this polls a bounded number of lines for the expected one instead of asserting the very
+            // first line read is it.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            string? line = null;
+            while (DateTime.UtcNow < deadline)
+            {
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                    break;
+
+                line = await supervised.Process.StandardOutput.ReadLineAsync().WaitAsync(remaining);
+                if (line == "preview-listening")
+                    break;
+            }
+
             line.Should().Be(
                 "preview-listening",
                 "the sandboxed process must inherit a working stdout, not one bubblewrap closed");

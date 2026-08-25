@@ -7,10 +7,13 @@ name: CI
 # keeping the suites off a single shared runner keeps the signal reliable.
 #
 # Commands mirror the ones documented in CONTRIBUTING.md exactly:
-#   - node scripts/ci/validate.mjs --profile ci --area dotnet
 #   - node scripts/ci/validate.mjs --profile ci --area node,harness
 #   - node scripts/ci/validate.mjs --profile ci --area web
 #   - node scripts/ci/validate.mjs --profile ci --area docs
+# `dotnet-tests` is the one exception: it splits validate.mjs's own restore/build/test sequence
+# for .NET (also documented in CONTRIBUTING.md -> Testing, as the "locked restore, one build,
+# then test exact outputs" trio) into separate steps, so the ~40-test Kata runtime gate can run
+# against that build BEFORE the full suite instead of after it -- see the comments on those steps.
 #
 # A `changes` job classifies the PR/push diff by path group first, and every
 # suite job below only runs `if:` its group actually changed (a change to this
@@ -130,10 +133,14 @@ jobs:
           restore-keys: |
             nuget-${{ runner.os }}-${{ runner.arch }}-
 
-      # Restore is locked, build runs once, and tests reuse that exact output.
-      # bin/obj remain private to this checkout.
-      - name: Run .NET validation
-        run: node scripts/ci/validate.mjs --profile ci --area dotnet
+      # Split out of `node scripts/ci/validate.mjs --profile ci --area dotnet` (still the
+      # documented command for a full local run, see CONTRIBUTING.md -> Testing) so the Kata
+      # gate below can run against this exact build BEFORE the full suite, instead of after it.
+      # Locked restore + one build, mirroring validate.mjs's runDotnet exactly.
+      - name: Restore and build .NET test project
+        run: |
+          dotnet restore tests/Agentweaver.Tests/Agentweaver.Tests.csproj --locked-mode -p:CopilotSkipCliDownload=true
+          dotnet build tests/Agentweaver.Tests/Agentweaver.Tests.csproj --no-restore -p:CopilotSkipCliDownload=true
 
       # Every sandbox proof that needs a real bubblewrap runtime carries
       # [Trait("Category", "KataRuntime")], so this gate can never drift away from a
@@ -150,50 +157,73 @@ jobs:
         if: steps.bwrap-cache.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap
 
+      # This gate runs BEFORE the full 3,500+ test suite (moved from after it): every sandbox proof
+      # that needs a real bubblewrap runtime carries [Trait("Category", "KataRuntime")], so it can
+      # never drift away from a renamed test the way a hardcoded FullyQualifiedName list did.
+      # AGENTWEAVER_REQUIRE_BWRAP=1 turns "bubblewrap missing/unusable" from a silent early return
+      # into a failure. Running this ~40-test, ~90s gate first means a broken sandbox runtime fails
+      # the job in well under two minutes instead of after ~7 more minutes of the full suite.
+      # Wrapped in a retry (max 2 attempts): this gate is the one most exposed to runner-level
+      # flakiness (a transient namespace setup failure), and a spurious failure here would
+      # otherwise force a full ~8-minute rerun of a job that hadn't even reached the expensive
+      # part yet. The full suite below is deliberately NOT retried: a real test failure there
+      # should fail once, not be masked by a second attempt.
       - name: Run Kata Linux runtime regressions
+        uses: nick-fields/retry@v3
         env:
           AGENTWEAVER_REQUIRE_BWRAP: "1"
           KATA_RUNTIME_FILTER: Category=KataRuntime
           KATA_RUNTIME_MIN_TESTS: "34"
+        with:
+          timeout_minutes: 3
+          max_attempts: 2
+          command: |
+            set -euo pipefail
+            # The gate is worthless if bwrap is absent or cannot create a user namespace.
+            # `bwrap --version` proves the binary; the product's own availability probe
+            # (asserted by KataRuntimeGate_HasARealBubblewrapRuntimeWhenTheGateRequiresOne)
+            # proves the namespaces, using exactly the flags the executor uses.
+            bwrap --version
+            # Ubuntu 24.04 runners ship kernel.apparmor_restrict_unprivileged_userns=1, which
+            # denies the uid map bwrap needs ("setting up uid map: Permission denied"). This is
+            # runner configuration only: it changes nothing about the production pod, which is
+            # unprivileged, drops ALL capabilities and runs under Kata. Without it the gate can
+            # only ever report "runtime unusable", which is precisely the silent hole this step
+            # exists to close, so a failure to relax it is left to fail the job below.
+            if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+              sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            fi
+            # Smoke-test the exact namespace set the executor uses before spending a test run.
+            bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc --dev /dev \
+              -- /bin/true
+            echo "bubblewrap user+pid namespaces are usable on this runner."
+            echo "::group::Tests selected by ${KATA_RUNTIME_FILTER}"
+            dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
+              --no-build --no-restore -p:CopilotSkipCliDownload=true \
+              --list-tests --filter "${KATA_RUNTIME_FILTER}" \
+              | tee kata-runtime-selected.txt
+            echo "::endgroup::"
+            selected=$(grep -cE '^[[:space:]]+Agentweaver\.Tests\.' kata-runtime-selected.txt || echo 0)
+            echo "Selected ${selected} Kata runtime tests (minimum ${KATA_RUNTIME_MIN_TESTS})."
+            if [ "${selected}" -lt "${KATA_RUNTIME_MIN_TESTS}" ]; then
+              echo "::error::${KATA_RUNTIME_FILTER} selected ${selected} tests, expected at least ${KATA_RUNTIME_MIN_TESTS}. The trait was probably dropped from a sandbox regression."
+              exit 1
+            fi
+            dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
+              --no-build \
+              --no-restore \
+              -p:CopilotSkipCliDownload=true \
+              --filter "${KATA_RUNTIME_FILTER}" \
+              --logger "trx;LogFileName=kata-runtime.trx" \
+              --results-directory kata-runtime-results
+
+      # Reuses the exact build output from "Restore and build .NET test project" above (no-build,
+      # no-restore), same as the tail end of validate.mjs's runDotnet. Not retried: see the note on
+      # the Kata gate above.
+      - name: Run full .NET test suite
         run: |
-          set -euo pipefail
-          # The gate is worthless if bwrap is absent or cannot create a user namespace.
-          # `bwrap --version` proves the binary; the product's own availability probe
-          # (asserted by KataRuntimeGate_HasARealBubblewrapRuntimeWhenTheGateRequiresOne)
-          # proves the namespaces, using exactly the flags the executor uses.
-          bwrap --version
-          # Ubuntu 24.04 runners ship kernel.apparmor_restrict_unprivileged_userns=1, which
-          # denies the uid map bwrap needs ("setting up uid map: Permission denied"). This is
-          # runner configuration only: it changes nothing about the production pod, which is
-          # unprivileged, drops ALL capabilities and runs under Kata. Without it the gate can
-          # only ever report "runtime unusable", which is precisely the silent hole this step
-          # exists to close, so a failure to relax it is left to fail the job below.
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          # Smoke-test the exact namespace set the executor uses before spending a test run.
-          bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc --dev /dev \
-            -- /bin/true
-          echo "bubblewrap user+pid namespaces are usable on this runner."
-          echo "::group::Tests selected by ${KATA_RUNTIME_FILTER}"
           dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
-            --no-build --no-restore -p:CopilotSkipCliDownload=true \
-            --list-tests --filter "${KATA_RUNTIME_FILTER}" \
-            | tee kata-runtime-selected.txt
-          echo "::endgroup::"
-          selected=$(grep -cE '^[[:space:]]+Agentweaver\.Tests\.' kata-runtime-selected.txt || echo 0)
-          echo "Selected ${selected} Kata runtime tests (minimum ${KATA_RUNTIME_MIN_TESTS})."
-          if [ "${selected}" -lt "${KATA_RUNTIME_MIN_TESTS}" ]; then
-            echo "::error::${KATA_RUNTIME_FILTER} selected ${selected} tests, expected at least ${KATA_RUNTIME_MIN_TESTS}. The trait was probably dropped from a sandbox regression."
-            exit 1
-          fi
-          dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
-            --no-build \
-            --no-restore \
-            -p:CopilotSkipCliDownload=true \
-            --filter "${KATA_RUNTIME_FILTER}" \
-            --logger "trx;LogFileName=kata-runtime.trx" \
-            --results-directory kata-runtime-results
+            --no-build --no-restore -p:CopilotSkipCliDownload=true
 
       - name: Upload Kata runtime evidence
         if: always()

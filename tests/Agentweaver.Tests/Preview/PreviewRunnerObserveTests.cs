@@ -360,7 +360,11 @@ public sealed class PreviewRunnerObserveTests
                 "test_graceful_term",
                 CancellationToken.None);
 
-            File.ReadAllText(marker).Should().Be("term");
+            // StopPreviewProcessAsync returning only proves the sidecar Ack'd the stop request; the
+            // trap's own write of the marker file can still be landing on disk a beat later (the sidecar
+            // waits on its OWN supervised wrapper process, not on this host's view of the bind-mounted
+            // file). Poll for the marker instead of reading it once, so this doesn't race that write.
+            await WaitForFileContentAsync(marker, "term", TimeSpan.FromSeconds(5));
         }
         finally
         {
@@ -375,6 +379,32 @@ public sealed class PreviewRunnerObserveTests
         while (!File.Exists(path) && DateTime.UtcNow < deadline)
             await Task.Delay(20);
         File.Exists(path).Should().BeTrue($"the preview workload should create {path}");
+    }
+
+    private static async Task WaitForFileContentAsync(string path, string expectedContent, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        string? observed = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (File.Exists(path))
+            {
+                try
+                {
+                    observed = File.ReadAllText(path);
+                    if (observed == expectedContent)
+                        return;
+                }
+                catch (IOException)
+                {
+                    // The writer may still hold the file open; retry on the next poll tick.
+                }
+            }
+
+            await Task.Delay(20);
+        }
+
+        observed.Should().Be(expectedContent, $"{path} should settle to '{expectedContent}' within {timeout}");
     }
 
     private static async Task RequireNodeAsync()

@@ -102,7 +102,7 @@ internal sealed class RunCommandTool : ISandboxTool
                 var cmd = new SandboxCommand(
                     command,
                     ctx.WorkingDirectory,
-                    BuildCommandEnvironment(scratchDirectory),
+                    BuildCommandEnvironment(ctx.WorkingDirectory, scratchDirectory),
                     fsPolicy,
                     timeout,
                     NetworkEnabled: ctx.Options.NetworkEnabled,
@@ -156,19 +156,35 @@ internal sealed class RunCommandTool : ISandboxTool
             ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR");
     }
 
-    private static IReadOnlyDictionary<string, string>? BuildCommandEnvironment(string? scratchDirectory)
+    private static IReadOnlyDictionary<string, string> BuildCommandEnvironment(
+        string workingDirectory,
+        string? scratchDirectory)
     {
-        if (string.IsNullOrWhiteSpace(scratchDirectory))
-            return null;
+        const string sandboxHome = ".agentweaver-home";
+        var sandboxHomePath = Path.Combine(workingDirectory, sandboxHome);
+        Directory.CreateDirectory(Path.Combine(sandboxHomePath, ".cache"));
+        Directory.CreateDirectory(Path.Combine(sandboxHomePath, ".local", "share"));
+        Directory.CreateDirectory(Path.Combine(sandboxHomePath, ".config"));
 
-        return new Dictionary<string, string>(StringComparer.Ordinal)
+        var environment = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["AGENTWEAVER_SCRATCH"] = scratchDirectory,
-            ["AGENTWEAVER_SCRATCH_DIR"] = scratchDirectory,
-            ["TMPDIR"] = scratchDirectory,
-            ["TMP"] = scratchDirectory,
-            ["TEMP"] = scratchDirectory,
+            ["HOME"] = sandboxHome,
+            ["DOTNET_CLI_HOME"] = sandboxHome,
+            ["XDG_CACHE_HOME"] = $"{sandboxHome}/.cache",
+            ["XDG_DATA_HOME"] = $"{sandboxHome}/.local/share",
+            ["XDG_CONFIG_HOME"] = $"{sandboxHome}/.config",
         };
+
+        if (!string.IsNullOrWhiteSpace(scratchDirectory))
+        {
+            environment["AGENTWEAVER_SCRATCH"] = scratchDirectory;
+            environment["AGENTWEAVER_SCRATCH_DIR"] = scratchDirectory;
+            environment["TMPDIR"] = scratchDirectory;
+            environment["TMP"] = scratchDirectory;
+            environment["TEMP"] = scratchDirectory;
+        }
+
+        return environment;
     }
 
     private static bool IsDestructivePattern(string command, string[] patterns)
