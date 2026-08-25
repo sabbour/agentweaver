@@ -12,7 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="Azure.Monitor.OpenTelemetry.Exporter" Version="1.8.3" />
-    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
     <!--
       A2A server hosting packages — pinned to the same preview stamp as the worker A2A client
       (1.11.1-preview.260625.1) per spec §4.7.1 / H7.
