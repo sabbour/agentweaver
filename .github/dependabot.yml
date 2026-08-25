@@ -65,6 +65,12 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      # GitHub.Copilot.SDK became strong-named at 1.0.4 (PKT=cc7b13ffcd2ddd51).
+      # MAG must be bumped to >=1.14.0-rc1 before accepting SDK >=1.0.4.
+      # Remove this ignore together with the MAG 1.19.0 bump in PR #906.
+      - dependency-name: "GitHub.Copilot.SDK"
+        versions: [">=1.0.4"]
     groups:
       aspnetcore:
         patterns:
