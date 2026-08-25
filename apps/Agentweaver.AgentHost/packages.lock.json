@@ -445,9 +445,9 @@
           "Azure.AI.OpenAI": "[2.1.0, )",
           "GitHub.Copilot.SDK": "[1.0.11, )",
           "Microsoft.AgentGovernance": "[4.0.0, 5.0.0)",
-          "Microsoft.Agents.AI.A2A": "[1.11.1-preview.260625.1, )",
+          "Microsoft.Agents.AI.A2A": "[1.19.0-preview.260822.1, )",
           "Microsoft.Agents.AI.GitHub.Copilot": "[1.19.0, )",
-          "Microsoft.Agents.AI.Workflows": "[1.11.1, )",
+          "Microsoft.Agents.AI.Workflows": "[1.19.0, )",
           "Microsoft.Extensions.AI": "[10.9.0, )",
           "Microsoft.Extensions.AI.OpenAI": "[10.9.0, )",
           "ModelContextProtocol": "[0.3.0-preview.2, )"
