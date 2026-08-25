@@ -21,15 +21,16 @@ npm run azure:deploy-from-release -- vX.Y.Z
 ```
 
 `release:publish` creates the annotated tag and GitHub Release only.
-`azure:deploy-from-release` requires that existing published tag, builds or
-retags its images, deploys them, and verifies the live environment. Add
-`--image-source ghcr` to import the images already published for that tag by
+`azure:deploy-from-release` requires that existing published tag, imports or
+rebuilds its images, deploys them, and verifies the live environment. By
+default it imports the images already published for that tag by
 `.github/workflows/publish-images.yml` instead of rebuilding them from source —
 this is the fastest way to deploy an already-tagged release and never touches
-cluster/ACR/Postgres/identity infrastructure:
+cluster/ACR/Postgres/identity infrastructure. Add `--image-source acr-build`
+to rebuild the images from source into ACR instead:
 
 ```bash
-npm run azure:deploy-from-release -- vX.Y.Z --image-source ghcr
+npm run azure:deploy-from-release -- vX.Y.Z --image-source acr-build
 ```
 
 For the normal first shipment to the default environment:
@@ -176,7 +177,7 @@ restricted server-side logs.
 |---|---|
 | `npm run azure:release` | Full semver release (see above) |
 | `npm run release:publish` | Create the annotated tag and GitHub Release without deploying |
-| `npm run azure:deploy-from-release -- vX.Y.Z [--image-source ghcr]` | Deploy an existing published release (rebuild from source, or import already-published GHCR images) |
+| `npm run azure:deploy-from-release -- vX.Y.Z [--image-source acr-build]` | Deploy an existing published release (import already-published GHCR images by default, or rebuild from source) |
 | `npm run azure:provision-infra` | Provision/redeploy AKS, identity, monitoring, OAuth signing key, and PostgreSQL |
 | `npm run azure:deploy-from-local` | Build, push, and verify images in ACR, then redeploy and cycle the warm pool |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Deploy an arbitrary exact commit through a temporary detached worktree |
