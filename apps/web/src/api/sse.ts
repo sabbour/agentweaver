@@ -87,6 +87,7 @@ export type EventType =
   | 'tool.output'
   | 'tool.exec_result'
   | 'shell.approval_required'
+  | 'tool.approval_context'
   | 'tool.approval_required'
   | 'sandbox.selected'
   | 'sandbox.warning'

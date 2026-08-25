@@ -536,6 +536,12 @@ function processEvent(
 
     // A coordinator bubbles a child subtask's tool approval as this type; its payload carries the
     // owning child run id so approve/deny can target it (issue #196). Handled identically here.
+    // tool.approval_context is the DurableToolApprovalGate event type for HITL gates (e.g.
+    // start_preview); it carries the same requestId/toolName/url payload as tool.approval_required
+    // but uses PascalCase keys. Both must produce an ApprovalRequestItem so the "Needs input:"
+    // banner appears and the operator can allow/deny.
+    case 'tool.approval_context':
+    // falls through
     case 'tool.approval_required':
     // falls through
     case 'coordinator.child_approval_required': {
