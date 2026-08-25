@@ -926,7 +926,8 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                 request.Autopilot,
                 ct,
                 workflowOverrideId: request.WorkflowOverrideId,
-                startMode: startMode);
+                startMode: startMode,
+                submittingUserDisplayName: CoordinatorEndpoints.CallerDisplayName(caller));
         }
         catch (NoTeamException)
         {
