@@ -34,6 +34,14 @@ public sealed class SandboxImageBuildSocketTests
     /// Accepts one connection and writes <paramref name="reply"/>, standing in for whatever process
     /// happens to hold the socket path. Nothing here parses the probe's request: the probe is only
     /// entitled to conclude from what comes back.
+    ///
+    /// Runs on a dedicated background <see cref="Thread"/> rather than <see cref="Task.Run"/>: the
+    /// probe's own receive timeout (750ms, see <c>KataBwrapExecutor.ImageBuildProbeTimeoutMs</c>) is
+    /// sized for a healthy daemon answering in microseconds, not for this thread also having to wait
+    /// its turn behind whatever else the shared ThreadPool is running for other parallel tests. A
+    /// starved pool could delay <c>Accept()</c> past that budget and make a real builder look absent.
+    /// Blocking here until the thread has actually started removes that scheduling variable, so the
+    /// only latency left in the race is the accept-and-reply itself, comfortably inside the budget.
     /// </summary>
     private static Socket StartListener(string socketPath, byte[]? reply)
     {
@@ -41,8 +49,10 @@ public sealed class SandboxImageBuildSocketTests
         listener.Bind(new UnixDomainSocketEndPoint(socketPath));
         listener.Listen(1);
 
-        _ = Task.Run(() =>
+        using var started = new ManualResetEventSlim(false);
+        var thread = new Thread(() =>
         {
+            started.Set();
             try
             {
                 using var accepted = listener.Accept();
@@ -58,7 +68,12 @@ public sealed class SandboxImageBuildSocketTests
             catch (ObjectDisposedException)
             {
             }
-        });
+        })
+        {
+            IsBackground = true,
+        };
+        thread.Start();
+        started.Wait(TimeSpan.FromSeconds(5));
 
         return listener;
     }
