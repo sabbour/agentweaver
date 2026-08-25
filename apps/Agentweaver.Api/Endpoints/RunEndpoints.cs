@@ -1346,6 +1346,10 @@ app.MapPost("/api/runs/{id}/retry", async (
     RunId newRunId;
     try
     {
+        // Attribute any subsequent unattended/autopilot outcome-spec confirmation to the caller
+        // retrying the run (best-effort human-readable identity), instead of letting it fall through
+        // to the raw SubmittingUser (e.g. an Entra OID) — see #853/#854.
+        var retryCallerDisplayName = CoordinatorEndpoints.CallerDisplayName(ApiKeyAuthMiddleware.GetCaller(httpContext));
         if (isCoordinatorRun && run.Origin == RunOrigin.BacklogPickup)
         {
             // Re-enter as a fresh unattended coordinator run; do NOT re-claim a backlog task.
@@ -1353,7 +1357,9 @@ app.MapPost("/api/runs/{id}/retry", async (
             var autoApproveTools = project?.PickupAutoApproveTools ?? true;
             var autopilot = project?.PickupAutopilot ?? true;
             newRunId = await coordinator
-                .StartRetriedPickupCoordinatorRunAsync(run, autoApproveTools, autopilot, ct)
+                .StartRetriedPickupCoordinatorRunAsync(
+                    run, autoApproveTools, autopilot, ct,
+                    submittingUserDisplayName: retryCallerDisplayName)
                 .ConfigureAwait(false);
         }
         else if (isCoordinatorRun)
@@ -1372,7 +1378,8 @@ app.MapPost("/api/runs/{id}/retry", async (
                 autoApproveTools: sourceOptions.AutoApproveTools,
                 autopilot: sourceOptions.Autopilot,
                 ct,
-                retriedFrom: run.Id.ToString())
+                retriedFrom: run.Id.ToString(),
+                submittingUserDisplayName: retryCallerDisplayName)
                 .ConfigureAwait(false);
         }
         else

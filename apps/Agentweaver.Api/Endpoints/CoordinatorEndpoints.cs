@@ -729,8 +729,11 @@ static bool ShouldUsePersistedAssemblyDiff(Run run) =>
         or RunStatus.Completed;
 
 /// <summary>Returns the most human-readable identity for the caller: display name first,
-/// GitHub login as fallback, raw user ID (OID/key) as last resort.</summary>
-static string CallerDisplayName(CallerContext caller) =>
+/// GitHub login as fallback, raw user ID (OID/key) as last resort. Internal (not private) so the
+/// coordinator-start endpoints (<see cref="ProjectEndpoints"/>, <see cref="RunEndpoints"/>) can
+/// attribute unattended/autopilot outcome-spec confirmations to a human-readable name instead of
+/// persisting the raw Entra OID as <c>SubmittingUser</c> and later surfacing it verbatim (#853).</summary>
+internal static string CallerDisplayName(CallerContext caller) =>
     !string.IsNullOrWhiteSpace(caller.DisplayName) ? caller.DisplayName!
     : !string.IsNullOrWhiteSpace(caller.GitHubLogin) ? caller.GitHubLogin!
     : caller.User;
