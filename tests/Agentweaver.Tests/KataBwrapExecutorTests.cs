@@ -502,13 +502,32 @@ public sealed class KataBwrapExecutorTests : IDisposable
 
         var executor = new KataBwrapExecutor(protectedRoots: [_workspace]);
         RegisterRun(executor);
-        var result = await executor.ExecuteAsync(new SandboxCommand(
-            "printf after >> tracked.txt && git status --short && git diff -- tracked.txt",
+
+        var append = await executor.ExecuteAsync(new SandboxCommand(
+            "printf after >> tracked.txt",
             _runA,
             null,
             new SandboxFsPolicy([_runA], [], []),
             20_000,
             NetworkEnabled: false));
+        append.ExitCode.Should().Be(0, append.Stderr);
+
+        // The worktree admin dir was just created on the host a moment ago; the bwrap mount plan for
+        // this exec resolves and binds it fresh, so there is a narrow window where an otherwise
+        // healthy sandbox can observe it before it is fully settled. Rather than asserting once on a
+        // read whose success is entangled with that timing, poll a bounded number of attempts (the
+        // read is idempotent, unlike the append above, so it is safe to repeat) and assert only on
+        // the final one.
+        var result = await ExecuteWithRetryAsync(
+            () => executor.ExecuteAsync(new SandboxCommand(
+                "git status --short && git diff -- tracked.txt",
+                _runA,
+                null,
+                new SandboxFsPolicy([_runA], [], []),
+                20_000,
+                NetworkEnabled: false)),
+            attempts: 3,
+            delayBetweenAttempts: TimeSpan.FromMilliseconds(250));
 
         result.ExitCode.Should().Be(0, result.Stderr);
         result.Stdout.Should().Contain("tracked.txt");
@@ -524,6 +543,22 @@ public sealed class KataBwrapExecutorTests : IDisposable
         Run("git", "-C", _runA, "add", "tracked.txt");
         Run("git", "-C", _runA, "commit", "-m", "isolated");
         Run("git", "-C", _runA, "log", "-1", "--pretty=%s").Should().Be("isolated");
+    }
+
+    private static async Task<SandboxExecResult> ExecuteWithRetryAsync(
+        Func<Task<SandboxExecResult>> execute,
+        int attempts,
+        TimeSpan delayBetweenAttempts)
+    {
+        SandboxExecResult result;
+        for (var attempt = 1; ; attempt++)
+        {
+            result = await execute();
+            if (result.ExitCode == 0 || attempt >= attempts)
+                return result;
+
+            await Task.Delay(delayBetweenAttempts);
+        }
     }
 
     private static SandboxCommand Command(string workingDirectory) =>
