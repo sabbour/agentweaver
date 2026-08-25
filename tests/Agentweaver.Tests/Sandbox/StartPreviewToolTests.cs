@@ -150,6 +150,116 @@ public sealed class StartPreviewToolTests
     }
 
     [Fact]
+    public void BuildSessionConfigTools_WrapsProviderTools_WhenInstrumentProviderToolSupplied()
+    {
+        // #850 follow-up: PreviewRunnerToolProvider tools (start_preview and its siblings) must be
+        // routed through instrumentProviderTool so their tool.call/tool.result/tool.error and
+        // execute_tool span are recorded directly around invocation. This asserts the plumbing in
+        // BuildSessionConfigTools actually applies the delegate to every provider-built tool,
+        // rather than silently keeping the un-instrumented original.
+        using var workspace = new TempWorkspace();
+        var context = new SandboxToolContext(
+            AgentId: "qa-engineer",
+            WorkingDirectory: workspace.Path,
+            SandboxRoot: workspace.Path,
+            Executor: SandboxExecutorFactory.CreatePassthrough(),
+            FileTools: new SandboxedFileTools(workspace.Path),
+            SearchTools: new SandboxedSearchTools(workspace.Path),
+            Redactor: SandboxOutputRedactor.Default,
+            Options: new SandboxToolOptions(ShellEnabled: false),
+            Logger: NullLogger.Instance,
+            RunId: RunId);
+
+        var provider = new FakeToolProvider(GetStartPreview(new CapturingHandler(HttpStatusCode.OK, "{}")));
+        var wrappedNames = new List<string>();
+
+        var tools = CopilotAIAgent.BuildSessionConfigTools(
+            context, ProjectId, AgentName, "http://localhost", apiKey: null,
+            toolProviders: [provider],
+            instrumentProviderTool: tool =>
+            {
+                wrappedNames.Add(tool.Name);
+                return new MarkerAIFunction(tool);
+            });
+
+        wrappedNames.Should().Contain("start_preview");
+        tools.Should().ContainSingle(t => t.Name == "start_preview")
+            .Which.Should().BeOfType<MarkerAIFunction>(
+                because: "provider tools must be routed through instrumentProviderTool, not added raw");
+    }
+
+    [Fact]
+    public async Task InstrumentedCustomAIFunction_OnSuccess_EmitsCallThenResultWithSameId_AndOpensSpan()
+    {
+        // The core #850 root-cause fix: start_preview (and its PreviewRunnerToolProvider siblings)
+        // previously had no tool.call/tool.result/execute_tool-span instrumentation at all, so the
+        // trace panel could never correlate a span to a RunEvent. This asserts the wrapper mints one
+        // callId shared by the span and both RunEvents, and forwards the real arguments/result.
+        var inner = GetStartPreview(new CapturingHandler(HttpStatusCode.OK,
+            """{"session_id":"tok","target_port":3000,"preview_url":"https://preview.example.com/p/tok"}"""));
+
+        var calls = new List<(string CallId, string ToolName, object? Args)>();
+        var results = new List<(string CallId, string Content)>();
+        var spanStarts = new List<(string CallId, string ToolName)>();
+        var spanCompletes = new List<(string CallId, bool Success, string? Error)>();
+
+        var wrapped = new CopilotAIAgent.InstrumentedCustomAIFunction(
+            inner,
+            emitToolCallOnce: (callId, toolName, args) => calls.Add((callId, toolName, args)),
+            emitToolResultOnce: (callId, content) => results.Add((callId, content)),
+            emitToolErrorOnce: (_, _) => throw new InvalidOperationException("should not error on success"),
+            startToolSpan: (callId, toolName, _) => spanStarts.Add((callId, toolName)),
+            completeToolSpan: (callId, success, error, _) => spanCompletes.Add((callId, success, error)));
+
+        var result = (await wrapped.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" })))?.ToString() ?? "";
+
+        calls.Should().ContainSingle();
+        results.Should().ContainSingle();
+        spanStarts.Should().ContainSingle();
+        spanCompletes.Should().ContainSingle();
+
+        var callId = calls[0].CallId;
+        callId.Should().NotBeNullOrEmpty();
+        results[0].CallId.Should().Be(callId, because: "the span tag and RunEvents must share one id for frontend correlation");
+        spanStarts[0].CallId.Should().Be(callId);
+        spanCompletes[0].CallId.Should().Be(callId);
+
+        calls[0].ToolName.Should().Be("start_preview");
+        spanCompletes[0].Success.Should().BeTrue();
+        result.Should().Contain("https://preview.example.com/p/tok");
+        results[0].Content.Should().Contain("https://preview.example.com/p/tok",
+            because: "the real tool output must be recorded, not a placeholder ack");
+    }
+
+    [Fact]
+    public async Task InstrumentedCustomAIFunction_OnException_EmitsErrorNotResult_AndClosesSpanAsFailed()
+    {
+        var inner = new ThrowingAIFunction("start_preview", new InvalidOperationException("boom"));
+
+        var calls = new List<string>();
+        string? errorMessage = null;
+        var spanCompletes = new List<(bool Success, string? Error)>();
+
+        var wrapped = new CopilotAIAgent.InstrumentedCustomAIFunction(
+            inner,
+            emitToolCallOnce: (callId, _, _) => calls.Add(callId),
+            emitToolResultOnce: (_, _) => throw new InvalidOperationException("should not succeed"),
+            emitToolErrorOnce: (_, message) => errorMessage = message,
+            startToolSpan: (_, _, _) => { },
+            completeToolSpan: (_, success, error, _) => spanCompletes.Add((success, error)));
+
+        var act = async () => await wrapped.InvokeAsync(new AIFunctionArguments());
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("boom");
+
+        calls.Should().ContainSingle();
+        errorMessage.Should().Be("boom");
+        spanCompletes.Should().ContainSingle();
+        spanCompletes[0].Success.Should().BeFalse();
+        spanCompletes[0].Error.Should().Be("boom");
+    }
+
+    [Fact]
     public async Task StartPreview_OnFailure_DoesNotLogSensitiveDataFromResponseBodyOrApiKey()
     {
         // Regression test: the response body may echo back sensitive values (a leaked token, an
@@ -177,6 +287,37 @@ public sealed class StartPreviewToolTests
                 because: "Authorization header-shaped values must be redacted before logging");
         }
     }
+}
+
+/// <summary>Fake provider that yields a single pre-built <see cref="AIFunction"/>, ignoring context.</summary>
+internal sealed class FakeToolProvider(AIFunction tool) : Agentweaver.AgentRuntime.IAgentRuntimeToolProvider
+{
+    public IEnumerable<AIFunction> BuildTools(SandboxToolContext context)
+    {
+        yield return tool;
+    }
+}
+
+/// <summary>Marker wrapper used only to assert BuildSessionConfigTools routed a tool through instrumentProviderTool.</summary>
+internal sealed class MarkerAIFunction(AIFunction inner) : AIFunction
+{
+    public override string Name => inner.Name;
+    public override string Description => inner.Description;
+
+    protected override ValueTask<object?> InvokeCoreAsync(
+        AIFunctionArguments arguments, CancellationToken cancellationToken) =>
+        inner.InvokeAsync(arguments, cancellationToken);
+}
+
+/// <summary>Fake tool that always throws, used to exercise InstrumentedCustomAIFunction's error path.</summary>
+internal sealed class ThrowingAIFunction(string name, Exception toThrow) : AIFunction
+{
+    public override string Name => name;
+    public override string Description => "throws for testing";
+
+    protected override ValueTask<object?> InvokeCoreAsync(
+        AIFunctionArguments arguments, CancellationToken cancellationToken) =>
+        throw toThrow;
 }
 
 /// <summary>Fake handler that records the last request's method, path and body.</summary>
