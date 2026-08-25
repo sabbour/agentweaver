@@ -545,10 +545,14 @@ function processEvent(
     case 'tool.approval_required':
     // falls through
     case 'coordinator.child_approval_required': {
-      // Server emits camelCase (requestId, toolName); accept both for resilience.
-      const requestId = String(event.payload['request_id'] ?? event.payload['requestId'] ?? '');
-      const toolName = String(event.payload['tool_name'] ?? event.payload['toolName'] ?? '');
-      const url = event.payload['url'] != null ? String(event.payload['url']) : null;
+      // Server emits camelCase (requestId, toolName); tool.approval_context from
+      // DurableToolApprovalGate uses PascalCase (RequestId, ToolName, Url) because
+      // the payload is serialized from a C# record. Accept all forms for resilience.
+      const requestId = String(event.payload['request_id'] ?? event.payload['requestId'] ?? event.payload['RequestId'] ?? '');
+      const toolName = String(event.payload['tool_name'] ?? event.payload['toolName'] ?? event.payload['ToolName'] ?? '');
+      const url = (event.payload['url'] ?? event.payload['Url']) != null
+        ? String(event.payload['url'] ?? event.payload['Url'])
+        : null;
       const childRunId = event.payload['childRunId'] ?? event.payload['child_run_id'];
       const approvalItem: ApprovalRequestItem = {
         kind: 'approval-request',
