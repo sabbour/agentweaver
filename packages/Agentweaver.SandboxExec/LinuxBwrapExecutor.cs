@@ -63,9 +63,6 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
         return
             "exec bwrap" +
             $" --bind {wd} /workspace" +
-            " --dir /usr" +
-            " --dir /usr/local" +
-            " --dir /usr/share" +
             " --ro-bind-try /usr/bin /usr/bin" +
             " --ro-bind-try /usr/lib /usr/lib" +
             " --ro-bind-try /usr/lib64 /usr/lib64" +
@@ -89,7 +86,7 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
             " --unshare-user" +
             (networkEnabled ? "" : " --unshare-net") +
             " --new-session" +
-            $" -- /usr/bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
+            $" -- /bin/bash -c \"$(printf %s '{b64}' | base64 -d)\"";
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
