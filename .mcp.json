@@ -2,7 +2,12 @@
   "mcpServers": {
     "agentweaver": {
       "command": "dotnet",
-      "args": ["run", "--project", "apps/Agentweaver.Mcp", "--no-build"],
+      "args": [
+        "run",
+        "--project",
+        "apps/Agentweaver.Mcp",
+        "--no-build"
+      ],
       "env": {
         "AGENTWEAVER_API_URL": "http://localhost:5000",
         "AGENTWEAVER_API_KEY": ""
@@ -12,7 +17,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@bradygaster/squad-cli@0.10.0",
+        "@bradygaster/squad-cli@0.12.0",
         "state-mcp"
       ],
       "env": {},
