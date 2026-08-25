@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.20.0
+
+### Minor Changes
+
+- 41d98a1: Align the remaining Microsoft Agent Framework packages onto the 1.19.x line:
+  `Microsoft.Agents.AI.Workflows` 1.11.1 → 1.19.0 and `Microsoft.Agents.AI.A2A`
+  1.11.1-preview.260625.1 → 1.19.0-preview.260822.1.
+  
+  This completes the dependency alignment started when `GitHub.Copilot.SDK` was
+  bumped to 1.0.11 alongside `Microsoft.Agents.AI.GitHub.Copilot` 1.19.0 (the SDK
+  became strong-named in 1.0.4, so the adapter had to be rebuilt against the
+  signed assembly). That change moved `Microsoft.Agents.AI.Abstractions` to 1.19.0
+  while `Workflows` and `A2A` stayed on 1.11.1, leaving the framework split across
+  two release lines; this brings them back onto a single line.
+  
+  `Microsoft.Agents.AI.Workflows` moves off the prerelease-adjacent 1.11.1 build
+  onto stable 1.19.0. The public surface is additive across the range — no types
+  or members used by Agentweaver were removed — so no source changes were needed.
+  Transitively this also advances `Microsoft.Agents.AI` to 1.19.0,
+  `Microsoft.Extensions.AI.Evaluation` to 10.9.0 and
+  `Microsoft.Extensions.VectorData.Abstractions` to 10.7.0; none of the APIs
+  dropped in those packages are referenced by Agentweaver.
+- 3fdaa24: Deployment scripts now default to GHCR (`--image-source ghcr`) instead of ACR-build. This is faster for release deployments since GHCR images are pre-built by CI. ACR-build remains available as an explicit option.
+
+### Patch Changes
+
+- bbb9396: Fix agent-host-maintenance workflow to push to GHCR instead of ACR. ACR login via azure/login OIDC is not available in this workflow context.
+- 0cc6ff3: Cache Playwright browsers and bubblewrap in CI to avoid re-downloading on every run. Draft-gate expensive jobs so stacked PRs don't burn full CI on upper frames. Remove the redundant `web-lint` echo job and the `diagrams-in-sync` job.
+- 16bc62b: Reorder Kata runtime gate before the full .NET test suite so failures surface in ~90s instead of ~8min. Add max 2 retries on the gate step only. Fix 4 flaky Kata/sandbox timing tests.
+- 5bfae29: Scope the CI `changes` path filter to `.github/workflows/ci.yml` instead of `.github/workflows/**`, so editing an unrelated workflow (agent-host-maintenance, docs-drift, publish-images, squad-*) no longer runs the entire .NET, web, Node toolchain, docs and diagram matrix. Applies the same scoping to `areasForPaths` in `scripts/ci/validate.mjs` so local and CI classification stay in sync. Also removes the `Web lint` job, an echo-only stub that could never fail and billed a full minute on every web change; lint still runs in `Web tests`.
+- 15ae5b9: Bump `GitHub.Copilot.SDK` from 1.0.2 to 1.0.11, together with
+  `Microsoft.Agents.AI.GitHub.Copilot` from 1.11.1-rc1 to 1.19.0.
+  
+  The two must move together: `GitHub.Copilot.SDK` became strong-named in 1.0.4
+  (`PublicKeyToken` went from `null` to `cc7b13ffcd2ddd51`), while
+  `Microsoft.Agents.AI.GitHub.Copilot` 1.11.1-rc1 was compiled against the
+  unsigned SDK and records an assembly reference of
+  `GitHub.Copilot.SDK, Version=1.0.0.0, PublicKeyToken=null`. A weakly-named
+  assembly reference can never bind to a strong-named definition, so bumping the
+  SDK on its own produced `error CS0012: The type 'CopilotClient' is defined in an
+  assembly that is not referenced` in `Agentweaver.AgentRuntime`. Version drift
+  alone was not the problem — SDK 1.0.3 still builds fine against the old adapter.
+  
+  `Microsoft.Agents.AI.GitHub.Copilot` 1.19.0 is built against the signed SDK and
+  is the first stable (non-prerelease) line of the adapter, so this also moves the
+  package off an `-rc1` prerelease.
+- 4acfc9a: Set rebase-strategy: disabled on all Dependabot update configs to stop rebase storms. Dependabot PRs will no longer re-run CI on every push to dev.
+- 36f230b: Gate docs-drift workflow on relevant paths (was running 624 times/month on unrelated changes). Scope publish-images matrix to only build images whose sources changed (except on main/release).
+- 16bc62b: Fix intermittent Kata test failure caused by setsid race in bwrap process group detection
+
 ## 0.19.2
 
 ### Patch Changes
