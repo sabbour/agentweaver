@@ -4465,6 +4465,17 @@ export function CoordinatorRunPage() {
                     {primaryAction.label}
                   </Button>
                 )}
+                {projectId && runId && (
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    icon={<OpenRegular />}
+                    onClick={() => navigate(`/projects/${projectId}/observability/traces?run=${runId}`)}
+                    data-testid="view-trace-button"
+                  >
+                    View trace
+                  </Button>
+                )}
                 <Button
                   appearance={isRetryable ? 'secondary' : 'subtle'}
                   size="small"
