@@ -761,29 +761,43 @@ export function TeamPage() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    Promise.all([
-      apiClient.getTeam(projectId).catch((err) => {
-        if (err instanceof ApiError && err.status === 404) return null;
-        throw err;
-      }),
-      apiClient.getTemplates().catch(() => [] as TeamTemplateDto[]),
-      apiClient.getProject(projectId).catch(() => null as Project | null),
-    ])
-      .then(([t, s, p]) => {
-        if (!cancelled) {
-          setTeam(t);
-          setScenarios(s);
-          setProject(p);
-        }
+    setTeam(null);
+    setProject(null);
+    setScenarios([]);
+    setLoading(true);
+    setError(null);
+
+    void apiClient.getTeam(projectId)
+      .then((t) => {
+        if (!cancelled) setTeam(t);
       })
       .catch((err) => {
-        if (!cancelled) setError(
-          err instanceof ApiError
-            ? `API error ${err.status}: ${err.body}`
-            : err instanceof Error ? err.message : String(err),
-        );
+        if (!cancelled && !(err instanceof ApiError && err.status === 404)) {
+          setError(
+            err instanceof ApiError
+              ? `API error ${err.status}: ${err.body}`
+              : err instanceof Error ? err.message : String(err),
+          );
+        }
       })
       .finally(() => { if (!cancelled) setLoading(false); });
+
+    void apiClient.getTemplates()
+      .then((s) => {
+        if (!cancelled) setScenarios(s);
+      })
+      .catch(() => {
+        if (!cancelled) setScenarios([]);
+      });
+
+    void apiClient.getProject(projectId)
+      .then((p) => {
+        if (!cancelled) setProject(p);
+      })
+      .catch(() => {
+        if (!cancelled) setProject(null);
+      });
+
     return () => { cancelled = true; };
   }, [projectId]);
 

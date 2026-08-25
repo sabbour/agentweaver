@@ -371,8 +371,13 @@
         },
         {
           "type": "waitFor",
+          "selector": "page.getByRole('heading', { name: 'Agents', exact: true }).or(page.locator('h1, h2').filter({ hasText: 'Agents' })).first()",
+          "timeout": 10000
+        },
+        {
+          "type": "waitFor",
           "selector": "page.getByLabel('Project agents')",
-          "timeout": 20000
+          "timeout": 60000
         },
         {
           "type": "click",
@@ -628,6 +633,11 @@
               "mode": "matched-element"
             }
           }
+        },
+        {
+          "type": "eval",
+          "code": "document.querySelector('[role=\"group\"]')?.scrollIntoView?.({ behavior: 'instant', block: 'end' })",
+          "after": 300
         },
         {
           "type": "waitFor",
