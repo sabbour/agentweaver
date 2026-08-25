@@ -33,7 +33,7 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.7" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
     <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.19.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <!-- Security override: force the patched native SQLite binary (bundles SQLite 3.50.3) over the
          vulnerable 2.1.11 pulled transitively by Microsoft.Data.Sqlite / EF Core Sqlite. Fixes
          GHSA-2m69-gcr7-jv3q (NU1903). The lib.e_sqlite3 package is intentionally separable from the
