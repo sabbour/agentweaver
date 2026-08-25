@@ -261,8 +261,8 @@
       },
       "GitHub.Copilot.SDK": {
         "type": "Transitive",
-        "resolved": "1.0.2",
-        "contentHash": "u12oXKXcdozIfDuSS2BcaamMvkHLl6obP2Xw2t1BwmWFlCkcvTGbbxwe2RmIeM2vJND9ZDrmCK5t3ftSaZNVJQ==",
+        "resolved": "1.0.11",
+        "contentHash": "92CcbAoPQ60Lr7ho7uO5uNYkkxlVux6AhsoZv2WbZz6DcXfvUihHaX8rxNdxM5xv1bIa/WrBE4EadZgJakp3Lw==",
         "dependencies": {
           "Microsoft.Extensions.AI.Abstractions": "10.2.0"
         }
@@ -316,20 +316,20 @@
       },
       "Microsoft.Agents.AI.Abstractions": {
         "type": "Transitive",
-        "resolved": "1.11.1",
-        "contentHash": "VmTHbr2ilqF+NNVDk6Isl/h5e6QUpDzk9ZzhsFO2E5zv2UrIZmTunsRSfYP4Ou698SHrkPVvBh+dcNDW4bWsOw==",
+        "resolved": "1.19.0",
+        "contentHash": "Aw/MMRWjuics4Ryuv3qqj7Bvrv8KCQmKI7X5EQLoR77YJE4gpD8lOh/6GkLzWS1kZwyA1T04V7jgCMw2DCVyEQ==",
         "dependencies": {
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0"
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0"
         }
       },
       "Microsoft.Agents.AI.GitHub.Copilot": {
         "type": "Transitive",
-        "resolved": "1.11.1-rc1",
-        "contentHash": "IhceBQBKWPB+fdPVq49awBhGstO9mOXRtxFXLIG014kdDWwSuaf6P10m6XakENy17/G/A0uUjt8slPQ6V8lyJw==",
+        "resolved": "1.19.0",
+        "contentHash": "CsA7ffseMFLJ3yVSR7svpRPKCX5jsqN6t9dTT+y9vv87T384yx5Wb/XnlMMN698w85gpQ/dyHB6oGPl4KgP8wA==",
         "dependencies": {
-          "GitHub.Copilot.SDK": "1.0.0",
-          "Microsoft.Agents.AI.Abstractions": "1.11.1",
-          "Microsoft.Extensions.AI.Abstractions": "10.6.0"
+          "GitHub.Copilot.SDK": "1.0.5",
+          "Microsoft.Agents.AI.Abstractions": "1.19.0",
+          "Microsoft.Extensions.AI.Abstractions": "10.9.0"
         }
       },
       "Microsoft.Bcl.AsyncInterfaces": {
@@ -850,10 +850,10 @@
           "Agentweaver.SandboxExec": "[1.0.0, )",
           "Agentweaver.SandboxFs": "[1.0.0, )",
           "Azure.AI.OpenAI": "[2.1.0, )",
-          "GitHub.Copilot.SDK": "[1.0.2, )",
+          "GitHub.Copilot.SDK": "[1.0.11, )",
           "Microsoft.AgentGovernance": "[4.0.0, 5.0.0)",
           "Microsoft.Agents.AI.A2A": "[1.11.1-preview.260625.1, )",
-          "Microsoft.Agents.AI.GitHub.Copilot": "[1.11.1-rc1, )",
+          "Microsoft.Agents.AI.GitHub.Copilot": "[1.19.0, )",
           "Microsoft.Agents.AI.Workflows": "[1.11.1, )",
           "Microsoft.Extensions.AI": "[10.9.0, )",
           "Microsoft.Extensions.AI.OpenAI": "[10.9.0, )",

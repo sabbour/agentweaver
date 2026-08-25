@@ -39,7 +39,7 @@ export function parseArgs(argv = []) {
   let tag;
   let dryRun = false;
   let help = false;
-  let imageSource = "acr-build";
+  let imageSource = "ghcr";
   let ghcrToken;
 
   const takeValue = (i, name) => {
@@ -87,18 +87,18 @@ export const HELP_TEXT = `deploy-from-release -- deploy an existing published Ag
 
 Usage:
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z [--dry-run]
-  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --image-source ghcr [--ghcr-token <token>]
+  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --image-source acr-build
 
 Requires an existing annotated git tag and matching GitHub Release. The
 working tree must be clean and HEAD must equal the tag commit. By default
-(--image-source acr-build), builds vX.Y.Z images from source into ACR. Pass
---image-source ghcr to import the images already published for this release
+(--image-source ghcr), imports the images already published for this release
 by .github/workflows/publish-images.yml instead of rebuilding them -- the
 GHCR ref is always the release tag itself, and the GHCR owner/repository is
 derived from the repo's GitHub origin remote. --ghcr-token/GHCR_TOKEN is only
-needed for private-package auth. Either way, this deploys them, verifies live
-provenance against the tag, waits for the AgentHost warm pool, and runs
-health verification.
+needed for private-package auth. Pass --image-source acr-build to build
+vX.Y.Z images from source into ACR instead. Either way, this deploys them,
+verifies live provenance against the tag, waits for the AgentHost warm pool,
+and runs health verification.
 `;
 
 export async function previousReleaseTag(tag, { cwd, capture }) {

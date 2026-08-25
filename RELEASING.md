@@ -11,7 +11,7 @@ Repository release identity and Azure deployment are separate operations.
 | `npm run azure:deploy-from-local` | Current HEAD short SHA | Deploy local work to an existing environment. No release identity is created or consumed. |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Resolved exact commit SHA | Deploy any committed ref without switching or modifying the caller's checkout. |
 | `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag and GitHub Release from the exact protected-`main` SHA. No Azure work. |
-| `npm run azure:deploy-from-release -- vX.Y.Z [--image-source ghcr]` | Existing published semver tag | Build (or, with `--image-source ghcr`, import already-published) and deploy that exact release to the configured environment. |
+| `npm run azure:deploy-from-release -- vX.Y.Z [--image-source acr-build]` | Existing published semver tag | Import already-published GHCR images by default (or, with `--image-source acr-build`, rebuild from source) and deploy that exact release to the configured environment. |
 | `npm run azure:release` | Prepared `vX.Y.Z` | First-shipment convenience command: publish, then deploy the same release. |
 | `npm run azure:verify` | Running environment | Read-only health verification. |
 
@@ -108,13 +108,13 @@ requires a clean checkout whose `HEAD` equals the annotated tag, verifies that
 the GitHub Release and prepared metadata exist, and then builds/deploys/verifies
 the release without publishing anything new.
 
-By default, `azure:deploy-from-release` rebuilds the release images from source
-into ACR (`--image-source acr-build`). To reuse the images that
+By default, `azure:deploy-from-release` imports the release images that
 `.github/workflows/publish-images.yml` already published for this exact tag
-instead of rebuilding them, add `--image-source ghcr`:
+(`--image-source ghcr`) instead of rebuilding them. To rebuild the release
+images from source into ACR instead, add `--image-source acr-build`:
 
 ```bash
-npm run azure:deploy-from-release -- vX.Y.Z --image-source ghcr
+npm run azure:deploy-from-release -- vX.Y.Z --image-source acr-build
 ```
 
 The GHCR ref is always the release tag itself, and the GHCR owner/repository
@@ -152,9 +152,10 @@ publishes container images to GitHub's container/artifact registry via the
 Release images are published from the `release: published` event, i.e. as a
 consequence of `npm run release:publish`, so the tag, the GitHub Release, and the
 `vX.Y.Z` images all describe the same exact `main` SHA. Publishing images is
-independent of deployment: `azure:deploy-from-release` still builds/retags and ships
-into the configured Azure environment by default, or add `--image-source ghcr`
-to import these already-published images instead of rebuilding them.
+independent of deployment: `azure:deploy-from-release` imports these
+already-published images by default, or add `--image-source acr-build` to
+build/retag and ship them into the configured Azure environment from source
+instead.
 
 ## Local and infrastructure deployment
 

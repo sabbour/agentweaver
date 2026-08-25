@@ -46,7 +46,7 @@ test("deploy-from-release requires one vX.Y.Z tag", () => {
     tag: "v1.2.3",
     dryRun: false,
     help: false,
-    imageSource: "acr-build",
+    imageSource: "ghcr",
     ghcrToken: undefined,
   });
   assert.throws(() => parseArgs([]), /Usage/);
@@ -132,7 +132,7 @@ test("deploy-from-release builds, deploys, verifies provenance, waits, then veri
   };
 
   const result = await run({
-    argv: ["v1.2.3"],
+    argv: ["v1.2.3", "--image-source", "acr-build"],
     repoRoot: "/repo",
     exec,
     log,
