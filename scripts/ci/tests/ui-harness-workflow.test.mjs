@@ -28,3 +28,32 @@ test("UI harness changes select the required Node toolchain job", () => {
     /run: node scripts\/ci\/validate\.mjs --profile ci --area node,harness/,
   );
 });
+
+test("path filters escalate on ci.yml only, never on every workflow file", () => {
+  const filters = workflowSection("          filters: |\n", "\n  dotnet-tests:\n");
+
+  // A `.github/workflows/**` glob makes an edit to any unrelated workflow
+  // (agent-host-maintenance, docs-drift, publish-images, squad-*, ...) trip
+  // every group and run the whole matrix. Only ci.yml drives these suites.
+  assert.doesNotMatch(
+    filters,
+    /\.github\/workflows\/\*\*/,
+    "path filters must not escalate on every workflow file",
+  );
+
+  // Every group must still escalate on ci.yml itself, so a change to the
+  // pipeline can never leave a suite silently skipped.
+  const groups = ["dotnet", "web", "node-toolchain", "docs", "diagrams"];
+  assert.equal(
+    filters.match(/- '\.github\/workflows\/ci\.yml'/g)?.length,
+    groups.length,
+    `each of the ${groups.length} filter groups must include .github/workflows/ci.yml`,
+  );
+});
+
+test("no echo-only stub jobs remain in the pipeline", () => {
+  // `Web lint` was a job whose only step echoed that lint had passed elsewhere.
+  // It could never fail, and each run still billed a full minute.
+  assert.doesNotMatch(WORKFLOW, /^\s+web-lint:$/m);
+  assert.doesNotMatch(WORKFLOW, /name: Web lint/);
+});

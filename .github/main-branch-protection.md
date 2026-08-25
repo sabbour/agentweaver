@@ -28,8 +28,6 @@ Create an **active branch ruleset** targeting only `main`:
     - `Node toolchain tests`
     - `Web tests`
     - `Docs build`
-  - Do **not** require `Web lint`; it remains advisory until its documented
-    backlog is cleared.
 
 Only these PRs may enter `main`:
 
