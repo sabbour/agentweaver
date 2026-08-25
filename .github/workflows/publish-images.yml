@@ -148,7 +148,7 @@ jobs:
       # The GitHub Actions layer cache keeps unchanged images (notably the
       # heavy agent-host) cheap even though all four are built every run.
       - name: Build and push ${{ matrix.name }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
