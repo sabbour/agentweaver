@@ -113,7 +113,7 @@ export function useCoordinatorRunModel(runId: string, runStatus?: string): Coord
         }
       } else if (item.kind === 'lifecycle') {
         const t = item.event.type;
-        if (t === 'tool.approval_required' || t === 'coordinator.child_approval_required' || t === 'shell.approval_required') {
+        if (t === 'tool.approval_context' || t === 'tool.approval_required' || t === 'coordinator.child_approval_required' || t === 'shell.approval_required') {
           openApprovalCount += 1; // conservative; Timeline pairs resolution for display
         }
       }
