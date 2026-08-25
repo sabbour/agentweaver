@@ -1,7 +1,7 @@
 name: Agent Host Image Maintenance
 
 # Rebuilds the agentweaver-agent-host image weekly to pick up OS-level patches,
-# runs a Trivy CVE scan (HIGH/CRITICAL gate), and pushes to ACR.
+# runs a Trivy CVE scan (HIGH/CRITICAL gate), and pushes to GHCR.
 # Also triggered on any Dockerfile change so security posture is validated on every PR.
 
 on:
@@ -27,9 +27,10 @@ permissions:
   security-events: write   # for uploading Trivy SARIF results
   id-token: write          # for actions/attest-build-provenance (Sigstore/OIDC)
   attestations: write      # for actions/attest-build-provenance
+  packages: write          # for pushing images to GHCR
 
 env:
-  ACR: agentweaverregistry.azurecr.io
+  GHCR: ghcr.io
   IMAGE: agentweaver-agent-host
 
 jobs:
@@ -121,8 +122,8 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
 
-      # ── Push to ACR (schedule, dev/main push, or manual dispatch with push=true) ──
-      - name: Log in to ACR
+      # ── Push to GHCR (schedule, dev/main push, or manual dispatch with push=true) ──
+      - name: Log in to GHCR
         if: >
           steps.trivy_gate.outcome == 'success' &&
           (
@@ -130,13 +131,13 @@ jobs:
             (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')) ||
             (github.event_name == 'workflow_dispatch' && inputs.push_to_acr == true)
           )
-        uses: azure/login@v2
+        uses: docker/login-action@v3
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push to ACR
+      - name: Push to GHCR
         id: push
         if: >
           steps.trivy_gate.outcome == 'success' &&
@@ -146,10 +147,9 @@ jobs:
             (github.event_name == 'workflow_dispatch' && inputs.push_to_acr == true)
           )
         run: |
-          az acr login --name agentweaverregistry
-          docker tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
-            ${{ env.ACR }}/${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
-          PUSH_OUTPUT=$(docker push ${{ env.ACR }}/${{ env.IMAGE }}:${{ steps.tag.outputs.tag }})
+          FULL_IMAGE="ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE }}"
+          docker tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} "${FULL_IMAGE}:${{ steps.tag.outputs.tag }}"
+          PUSH_OUTPUT=$(docker push "${FULL_IMAGE}:${{ steps.tag.outputs.tag }}")
           echo "${PUSH_OUTPUT}"
           DIGEST=$(echo "${PUSH_OUTPUT}" | grep -oP 'digest:\s*\Ksha256:[a-f0-9]+')
           if [ -z "${DIGEST}" ]; then
@@ -159,27 +159,26 @@ jobs:
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
           # Also update the 'patched' rolling tag so clusters can reference a known-good base
-          docker tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} \
-            ${{ env.ACR }}/${{ env.IMAGE }}:patched
-          docker push ${{ env.ACR }}/${{ env.IMAGE }}:patched
+          docker tag ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} "${FULL_IMAGE}:patched"
+          docker push "${FULL_IMAGE}:patched"
 
-          echo "✅ Pushed ${{ env.ACR }}/${{ env.IMAGE }}:${{ steps.tag.outputs.tag }} (${DIGEST})"
-          echo "✅ Updated rolling tag: ${{ env.ACR }}/${{ env.IMAGE }}:patched"
+          echo "✅ Pushed ${FULL_IMAGE}:${{ steps.tag.outputs.tag }} (${DIGEST})"
+          echo "✅ Updated rolling tag: ${FULL_IMAGE}:patched"
 
       # ── Build provenance attestation ─────────────────────────────────────────
-      # 'prov-<sha>' (and 'patched') are ordinary, mutable ACR tags on their own:
+      # 'prov-<sha>' (and 'patched') are ordinary, mutable GHCR tags on their own:
       # anyone with registry write access could re-point them at a different
       # digest later, with no cryptographic binding back to *this* verified
       # GitHub Actions run. This generates a Sigstore-backed SLSA provenance
       # attestation for the exact digest just pushed, and stores it alongside
-      # the image in ACR (OCI referrers) so it can be verified independently
+      # the image in GHCR (OCI referrers) so it can be verified independently
       # of tag mutability (e.g. `gh attestation verify oci://... --owner ...`).
       # Pinned to the full commit SHA for v4.1.1, not a floating major-version tag.
       - name: Attest build provenance
         if: steps.push.outcome == 'success'
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-name: ${{ env.ACR }}/${{ env.IMAGE }}
+          subject-name: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
