@@ -374,6 +374,43 @@ describe('timelineReducer', () => {
     expect(card.childRunId).toBeNull();
   });
 
+  // DurableToolApprovalGate emits "tool.approval_context" (not "tool.approval_required")
+  // with PascalCase keys. Verify the reducer builds a pending ApprovalRequestItem so
+  // the "Needs input:" banner can appear for HITL gates like start_preview.
+  it('tool.approval_context (PascalCase payload) creates pending approval card', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.approval_context', {
+        RequestId: 'ctx-req-001',
+        ToolName: 'start_preview',
+        Url: 'sandbox-preview:3423',
+      }),
+    ]);
+    const turn = s.items[0] as TurnGroupItem;
+    expect(turn.steps).toHaveLength(1);
+    const card = turn.steps[0] as ApprovalRequestItem;
+    expect(card.kind).toBe('approval-request');
+    expect(card.requestId).toBe('ctx-req-001');
+    expect(card.toolName).toBe('start_preview');
+    expect(card.url).toBe('sandbox-preview:3423');
+    expect(card.resolved).toBe(false);
+    expect(card.childRunId).toBeNull();
+    expect(s.pendingApprovals.has('ctx-req-001')).toBe(true);
+  });
+
+  it('tool.approval_context then tool.approval_resolved resolves the card', () => {
+    const s = fold([
+      makeEvent('agent.turn.start', { turnId: 'T1' }),
+      makeEvent('tool.approval_context', { RequestId: 'ctx-req-002', ToolName: 'start_preview', Url: 'sandbox-preview:3423' }),
+      makeEvent('tool.approval_resolved', { requestId: 'ctx-req-002', approved: true, expired: false }),
+    ]);
+    const turn = s.items[0] as TurnGroupItem;
+    const card = turn.steps[0] as ApprovalRequestItem;
+    expect(card.resolved).toBe(true);
+    expect(card.resolvedScope).toBe('once');
+    expect(s.pendingApprovals.has('ctx-req-002')).toBe(false);
+  });
+
   // T-14: tool.approval_resolved with expired=true marks the card expired
   it('tool.approval_resolved (expired) marks pending approval as expired', () => {
     const s = fold([
