@@ -1,5 +1,138 @@
 # Changelog
 
+## 0.19.0
+
+### Minor Changes
+
+- acb84b5: feat: built-in workflows support edit, schedule, and event triggers via copy-on-write
+
+  Editing, scheduling, or adding event triggers to a built-in workflow now automatically
+  creates a local project copy (with the same name) instead of failing silently. Built-in
+  entries are hidden from the list when a local copy exists, eliminating duplicate rows.
+
+### Patch Changes
+
+- 71869ee: The Human review approval card now includes a Change option that expands an inline feedback textarea, letting reviewers request specific agent revisions without declining the run outright.
+- a8d1924: Fix blueprint demo beat hold times (2.4, 4.2, 4.3) to meet output budget minimums
+- bc9c903: Replace hardcoded staging project/orchestration IDs in blueprint capture plan with env-var placeholders
+
+  Beats 2.3–2.8 had hardcoded project ID (71cdf9d6) and orchestration ID (38cdd5a3) in their startUrls.
+  These break after clean-staging removes the old project.
+
+  Fix: replace with {{AGENTWEAVER_DEMO_PROJECT_URL}}/board and {{AGENTWEAVER_DEMO_ORCHESTRATION_URL}}.
+  Add AGENTWEAVER_DEMO_ORCHESTRATION_URL prerequisite to all affected beats.
+
+- 1c3c608: feat(auth): add adopt-session-token endpoint for GitHubLegacy mode
+
+  Adds POST /api/auth/github/adopt-session-token so that callers already
+  authenticated with a GitHub bearer token can promote that token into the
+  IGitHubTokenStore without requiring a separate device-flow sign-in.
+  Only available in GitHubLegacy auth mode.
+
+- c27c4fd: Fail Blueprint demo triage capture early when its current issue, PR, or assistant-route prerequisites are unavailable.
+- 3556ffe: fix(demo): beat capture fixes, narration scripts, and clean-staging improvements
+
+  - Beat 4.1: add 30s pause after Enter so SPA navigates to /assistant?runId before beat 4.2 starts
+  - Beats 4.2+4.3: remove startUrl for cross-beat URL continuity; use transcript text waitFor
+  - clean-staging: accept continuation beats (no startUrl) and unresolved env-var placeholders
+  - clean-staging: fix mojibake em dash in Blueprint fixture projectName
+  - Add narration scripts for AKS, Blueprint, and sizzle reel scenarios
+  - Add sizzle reel direction manifest (93.8s draft, 13/15 beats assembled)
+
+- 7627e63: Bump @types/node from 26.1.1 to 26.2.0
+- f06ddae: Bump actions/github-script from 7 to 9
+- 07e669d: Bump @testing-library/user-event from 14.6.1 to 14.6.4 in /apps/web
+- 237fd73: Bump coverlet.collector from 6.0.2 to 10.0.1
+- 2583d3c: Bump postcss from 8.5.17 to 8.5.26 in /apps/web
+- f7790f5: Bump the npm_and_yarn group across 3 directories with 5 updates
+- 795a1ba: fix: persist terminal WorkPlan status when coordinator run already stopped
+
+  CoordinatorDispatchService detected a terminal coordinator run but returned early without calling SetWorkPlanStatusAsync, leaving WorkPlans permanently stuck in dispatching. This caused the reconciler to re-arm every ~10 s forever (infinite loop). Fix calls SetWorkPlanStatusAsync before the early return and adds a regression test.
+
+  Fixes #808.
+
+- 2ec55b6: fix(ux): auto-switch from outcome-plan to approval session on real-time approval event
+
+  When a coordinator.child_approval_required event arrives via SSE while the
+  outcome-plan panel is visible, automatically switch to the child agent's session
+  panel so the session-approval-gate is immediately visible without a manual tree
+  click. Previously users (and recordings) had to click a tree item to expose the
+  approval gate, which was non-obvious and caused beat 2.5 recording failures.
+
+- 78e8890: The Outcome plan confirmation banner and assembly review now show the user's display name or GitHub login instead of a raw identity GUID.
+- 9054667: fix(deploy): auto-load params.<username>.json for deploy-from-local
+
+  Prevents AUTH_MODE from resetting to GitHubLegacy on every deploy-from-local run.
+
+- 8e482b3: fix(auth): return inconclusive instead of false on Copilot probe 401/403
+- 8dfbc88: fix(deploy): guard against empty Entra config in buildRuntimeConfigLiterals to prevent 503 errors
+- 89e964a: Install GitHub CLI in the API runtime image and split the `github_cli` health diagnostic into separate installation and authentication checks so the health endpoint reports each concern independently.
+- 23e0732: fix: null-guard legacy history.json deserialization
+
+  Guards against NullReferenceException when creating projects from repositories
+  that contain legacy history.json files with null entries, preventing a crash
+  on project creation for affected repositories.
+
+- a415cac: Fix `observe_bound_port`/`health_check` silently reporting a preview process as started
+  when the sidecar's sandboxed spawn actually failed or was still resolving. The relay now
+  emits a start handshake (ready/error) from the sidecar's `Started`/`Error` frame, and
+  `StartSupervisedProcessAsync` blocks on it (30s timeout) before returning, so a failed
+  spawn now throws immediately instead of yielding a real-but-useless local PID that would
+  forever report `no_listening_port_discovered` with empty logs.
+- fc47339: Fix preview runner pod OOM kills by setting explicit resource requests/limits and Node.js heap cap
+
+  Sets 1Gi memory request and 2Gi memory limit on AgentHost and agentweaver-exec containers in the
+  SandboxTemplate. Adds NODE_OPTIONS=--max-old-space-size=1024 to prevent V8 heap growth from
+  triggering cgroup OOM kills during Next.js/Vite preview server startup. Adds deploy-render test
+  assertions to lock these values into the rendered deployment contract.
+
+  Fixes #845.
+
+- 0575d91: fix(preview): keep preview startup and forwarding responsive while DNS warms
+
+  Preview startup now tolerates Kata writable-root setup latency and cold forwarder
+  health checks. The interface also reports DNS warm-up while a new preview hostname
+  becomes reachable, instead of implying the URL is immediately ready.
+
+- 295f0c1: fix(sandbox): increase shell watchdog grace and default timeout for Kata VM environments
+
+  In Kata hardware-isolation, SIGTERM relay through the Kata agent can take tens of seconds
+  on a cold or loaded node. The previous 60-second watchdog grace was being consumed before
+  the process fully exited, causing the watchdog to fatally abort agent turns with
+  "Shell execution exceeded its hard deadline of ~2 minutes" even when the executor had
+  already sent the cancellation signal.
+
+  Changes:
+
+  - `WatchdogTimeoutGrace`: 60 s → 5 min — gives Kata processes enough time to die after
+    the executor's `CancelAfter` fires, preventing false-positive `shell_execution_timeout` failures.
+  - `DefaultTimeoutMs`: 30 s → 5 min for non-Build/Test agent contexts — prevents premature
+    cancellation of legitimate long-running commands (npm install, git clone, cargo build, etc.)
+    when the model doesn't supply an explicit `timeout_ms`.
+
+- 4cc099d: Surface GitHub token expiry prominently and improve renewal resilience.
+
+  - Show a warning banner and Re-link CTA in the UI when a GitHub OAuth token has expired or been revoked, so users know why coordinator runs fail
+  - Fix entitlement probe endpoint (switched from `copilot_internal/v2/token` to `GET /models`) so Copilot entitlement status displays correctly for all linked accounts
+  - Distinguish transient (network, 5xx) vs permanent (expired token, bad credentials) refresh failures — transient failures no longer sign the user out
+  - Add proactive background refresh service that renews expiring tokens up to 2 hours before expiry, preventing mid-run token failures
+  - Fix AgentHost sandbox executor to survive concurrent claim deletion during coordinator runs
+
+- cff3d6b: Show model latency percentile checkpoints in readable seconds and minutes.
+- b8ab020: feat(auth): add adopt-session-token endpoint for GitHubLegacy mode
+
+  Adds `POST /api/auth/github/adopt-session-token` so that callers already
+  authenticated with a GitHub bearer token in GitHubLegacy mode can promote
+  that token into the `IGitHubTokenStore` without requiring a separate
+  device-flow sign-in. This unblocks GitHub-origin project operations
+  (clone, webhook provisioning) for GitHubLegacy deployments.
+
+- 1d83edf: fix(projects): create GitHub projects from a shallow clone so large repositories open promptly while skill imports retain history for pinned tags.
+- 1eec73b: Add an isolated, unauthenticated recording mode for capturing the safe Entra sign-in handoff without restoring saved browser storage.
+- 38ce83f: fix(skills): shallow-clone GitHub skill repositories (depth=1) for faster import; guard against NullReferenceException when repo.Head is detached.
+- ef2de84: Transaction traces now show tool call arguments and output in the Execute Tool detail panel, display AIC cost at every span level (turn, agent invocation, and run total), and redact sensitive values in tool payloads before persistence and API delivery.
+- aaf4900: Reject workflow drafts that start with verdict-producing review or build/test nodes, and request a corrected generated workflow before it is returned.
+
 ## 0.18.2
 
 ### Patch Changes

@@ -5,7 +5,7 @@ import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
 import { COORDINATOR_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DESCRIPTOR_DELEGATED, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import {
   afterEach,
   beforeEach,
@@ -153,7 +153,34 @@ async function openTopologyInspector(): Promise<HTMLElement> {
   return screen.findByTestId('topology-inspector', undefined, { timeout: 4000 });
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
+}
+
 describe('CoordinatorRunPage — unified coordinator graph view', () => {
+  it('navigates to the run trace deep link from the "View trace" header button', async () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/projects/p1/orchestrations/coord-run-1']}>
+          <Routes>
+            <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunPage />} />
+            <Route path="/projects/:projectId/observability/traces" element={<LocationProbe />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    const viewTraceButton = await screen.findByTestId('view-trace-button', undefined, { timeout: 4000 });
+    fireEvent.click(viewTraceButton);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location-probe').textContent).toBe(
+        '/projects/p1/observability/traces?run=coord-run-1',
+      ),
+    );
+  });
+
   it('renders an explicit not-found state for a missing coordinator run', async () => {
     vi.mocked(apiClient.getRunGraph).mockRejectedValue(new ApiError(404, 'not found'));
     vi.mocked(apiClient.getRun).mockRejectedValue(new ApiError(404, 'not found'));

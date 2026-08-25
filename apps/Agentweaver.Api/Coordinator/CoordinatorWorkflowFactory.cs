@@ -254,6 +254,11 @@ public sealed class CoordinatorWorkflowFactory
         var db = scopeServices.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
         var now = DateTimeOffset.UtcNow;
+        // Direct mode skips the confirmation gate entirely, so there is no interactive caller whose
+        // display name a request-time endpoint could resolve. Attribute ConfirmedBy to the human-
+        // readable identity captured at run-start; only fall back to the raw SubmittingUser (e.g. an
+        // Entra OID) when no display name is known (#853/#854).
+        var confirmedBy = input.SubmittingUserDisplayName ?? input.SubmittingUser;
         var spec = await db.OutcomeSpecs
             .FirstOrDefaultAsync(s => s.CoordinatorRunId == input.RunId, ct)
             .ConfigureAwait(false);
@@ -270,7 +275,7 @@ public sealed class CoordinatorWorkflowFactory
                 Assumptions = assumptions,
                 ClarifyingQuestions = null,
                 Status = status,
-                ConfirmedBy = input.SubmittingUser,
+                ConfirmedBy = confirmedBy,
                 AllowTaskPromotion = false,
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -285,7 +290,7 @@ public sealed class CoordinatorWorkflowFactory
             spec.Assumptions = assumptions;
             spec.ClarifyingQuestions = null;
             spec.Status = status;
-            spec.ConfirmedBy = input.SubmittingUser;
+            spec.ConfirmedBy = confirmedBy;
             spec.AllowTaskPromotion = false;
             spec.UpdatedAt = now;
         }
@@ -307,7 +312,7 @@ public sealed class CoordinatorWorkflowFactory
         entry?.RecordNext(EventTypes.CoordinatorOutcomeSpecConfirmed, new
         {
             specId = spec.Id,
-            confirmedBy = input.SubmittingUser,
+            confirmedBy,
             mode = "direct",
         });
 
