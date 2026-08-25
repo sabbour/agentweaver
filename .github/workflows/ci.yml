@@ -49,7 +49,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       diagrams: ${{ steps.filter.outputs.diagrams }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # dorny/paths-filter classifies the PR/push diff into named groups below.
       # Every group includes .github/workflows/** so a change to this pipeline
       # itself always trips every downstream job, never leaving a suite skipped
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up .NET SDK
         uses: actions/setup-dotnet@v6
@@ -194,7 +194,7 @@ jobs:
     if: needs.changes.outputs.node-toolchain == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -217,7 +217,7 @@ jobs:
     if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -247,7 +247,7 @@ jobs:
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -267,7 +267,7 @@ jobs:
     if: needs.changes.outputs.diagrams == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -299,7 +299,7 @@ jobs:
     if: github.event_name == 'pull_request' && (github.base_ref == 'dev' || startsWith(github.base_ref, 'release/v'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v7
