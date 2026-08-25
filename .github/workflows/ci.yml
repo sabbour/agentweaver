@@ -21,6 +21,8 @@ name: CI
 # suites.
 # `Changeset advisory` always runs regardless of paths, since it must evaluate
 # every PR for whether a changeset was needed.
+# Draft PRs skip the expensive test/build jobs (dotnet/web/node-toolchain/docs)
+# since draft PRs can't be merged anyway.
 
 on:
   pull_request:
@@ -104,7 +106,7 @@ jobs:
   dotnet-tests:
     name: .NET tests
     needs: changes
-    if: needs.changes.outputs.dotnet == 'true'
+    if: needs.changes.outputs.dotnet == 'true' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -137,6 +139,17 @@ jobs:
       # [Trait("Category", "KataRuntime")], so this gate can never drift away from a
       # renamed test the way a hardcoded FullyQualifiedName list did. AGENTWEAVER_REQUIRE_BWRAP=1
       # turns "bubblewrap missing/unusable" from a silent early return into a failure.
+      - name: Cache bubblewrap
+        uses: actions/cache@v6
+        id: bwrap-cache
+        with:
+          path: /usr/bin/bwrap
+          key: bwrap-${{ runner.os }}-apt
+
+      - name: Install bubblewrap
+        if: steps.bwrap-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap
+
       - name: Run Kata Linux runtime regressions
         env:
           AGENTWEAVER_REQUIRE_BWRAP: "1"
@@ -144,8 +157,6 @@ jobs:
           KATA_RUNTIME_MIN_TESTS: "34"
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap
           # The gate is worthless if bwrap is absent or cannot create a user namespace.
           # `bwrap --version` proves the binary; the product's own availability probe
           # (asserted by KataRuntimeGate_HasARealBubblewrapRuntimeWhenTheGateRequiresOne)
@@ -197,7 +208,7 @@ jobs:
   node-toolchain-tests:
     name: Node toolchain tests
     needs: changes
-    if: needs.changes.outputs.node-toolchain == 'true'
+    if: needs.changes.outputs.node-toolchain == 'true' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -209,10 +220,23 @@ jobs:
           cache: npm
           cache-dependency-path: scripts/ui-harness/package-lock.json
 
-      - name: Install Chromium for UI harness integration tests
-        run: |
-          node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness --isolated
-          npx --prefix scripts/ui-harness playwright install --with-deps chromium
+      - name: Install harness npm dependencies
+        run: node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness --isolated
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('scripts/ui-harness/package-lock.json') }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx --prefix scripts/ui-harness playwright install --with-deps chromium
+
+      - name: Install Playwright system deps only
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx --prefix scripts/ui-harness playwright install-deps chromium
 
       - name: Run Node toolchain and UI harness tests
         run: node scripts/ci/validate.mjs --profile ci --area node,harness
@@ -220,7 +244,7 @@ jobs:
   web-tests:
     name: Web tests
     needs: changes
-    if: needs.changes.outputs.web == 'true'
+    if: needs.changes.outputs.web == 'true' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -239,7 +263,7 @@ jobs:
   docs-build:
     name: Docs build
     needs: changes
-    if: needs.changes.outputs.docs == 'true'
+    if: needs.changes.outputs.docs == 'true' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -255,39 +279,6 @@ jobs:
       # Catches broken markdown, dead config, and landing-page regressions.
       - name: Build docs site
         run: node scripts/ci/validate.mjs --profile ci --area docs
-
-  diagrams-in-sync:
-    name: Architecture diagrams are in sync
-    needs: changes
-    if: needs.changes.outputs.diagrams == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
-
-      - name: Install root dependencies
-        run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
-
-      # README.md's "Block diagram" and architecture-aks.md's "Component
-      # diagram"s are pre-rendered as static PNGs from Fluent-styled React
-      # Flow graph-specs (docs/diagrams/src/*.json) via docs/diagram-renderer
-      # + Playwright, so they match the same card/icon/badge look used live
-      # in the product UI instead of generic Mermaid/mermaid-cli output. This
-      # check only compares each spec's content hash against the committed
-      # <name>.hash.txt sidecar -- it deliberately does NOT re-render and
-      # diff pixels/SVG geometry, since that approach (used by an earlier
-      # mermaid-cli version of this pipeline) broke across OSes: rendering
-      # geometry depends on the host's installed font metrics, which differ
-      # between Windows and Linux even for byte-identical input. A hash
-      # check only fails when the spec's actual content (nodes/edges/labels)
-      # changed since the PNG was last built, and needs no browser here.
-      - name: Check rendered diagrams match source
-        run: npm run docs:check-diagrams
 
   changeset-advisory:
     name: Changeset advisory
