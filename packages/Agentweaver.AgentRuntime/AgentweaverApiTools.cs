@@ -36,7 +36,14 @@ internal static class AgentweaverApiTools
         "coordinator_work_plan_get",
         "coordinator_children_get",
         "orchestration_topology",
-        "start_preview",
+        // NOTE: start_preview does NOT belong here. It moved to PreviewRunnerToolProvider (#334)
+        // and is never yielded by Build() below, but this stale entry lingered — causing the
+        // permission handler to misclassify it as a "no governance" Agentweaver API tool. Now that
+        // start_preview (and its PreviewRunnerToolProvider siblings) are wrapped by
+        // InstrumentedCustomAIFunction for tool.call/tool.result emission (#850 follow-up), leaving
+        // it here would also have skipped governance.EvaluateToolCall entirely — removed so it goes
+        // through the same governance-checked custom-tool path as start_preview_process,
+        // observe_bound_port, health_check, and stop_preview_process.
     };
 
     /// <summary>
