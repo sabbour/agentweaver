@@ -1,7 +1,9 @@
 name: Temp Regenerate NuGet Lock
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - dependabot/nuget/apps/Agentweaver.AgentHost/opentelemetry-bf7cedd030
 
 permissions:
   contents: write
