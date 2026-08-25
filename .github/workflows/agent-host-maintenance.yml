@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       push_to_acr:
-        description: "Push rebuilt image to ACR"
+        description: "Push rebuilt image to GHCR"
         type: boolean
         default: true
 
