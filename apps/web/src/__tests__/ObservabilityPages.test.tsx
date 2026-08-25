@@ -166,6 +166,93 @@ describe('observability pages', () => {
     }));
   });
 
+  it('renders recent coordinator runs newest-first and computes Latest as the max started_at', async () => {
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
+      items: [
+        {
+          workflow_run_id: 'coord-run-newest',
+          execution_id: 'coord-run-newest',
+          task: 'Most recent run',
+          agent_name: 'Coordinator',
+          status: 'in_progress',
+          coordinator_status: 'dispatching',
+          started_at: '2026-08-24T00:00:00.000Z',
+        },
+        {
+          workflow_run_id: 'coord-run-oldest',
+          execution_id: 'coord-run-oldest',
+          task: 'Older run',
+          agent_name: 'Coordinator',
+          status: 'complete',
+          coordinator_status: 'complete',
+          started_at: '2026-08-21T00:00:00.000Z',
+        },
+      ],
+      page: 1,
+      page_size: 100,
+      total_count: 2,
+      total_pages: 1,
+    });
+
+    render(
+      <Wrapper initialEntry="/projects/p1/observability/traces" path="/projects/:projectId/observability/traces">
+        <ObservabilityTracesPage />
+      </Wrapper>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // "/runs" already returns newest-first — the page must not reverse that order.
+    const taskLabels = screen.getAllByText(/(Most recent run|Older run)/).map((el) => el.textContent);
+    expect(taskLabels).toEqual(['Most recent run', 'Older run']);
+
+    // "Latest" must reflect MAX(started_at) across all candidates, not the first/last item.
+    expect(screen.getByText(new Date('2026-08-24T00:00:00.000Z').toLocaleDateString())).toBeDefined();
+  });
+
+  it('opens a focused trace directly from a ?run= deep link, e.g. from the run detail page', async () => {
+    vi.mocked(apiClient.listProjectRuns).mockResolvedValue({
+      items: [
+        {
+          workflow_run_id: 'coord-run-1',
+          execution_id: 'coord-run-1',
+          task: 'Trace coordinator flow',
+          agent_name: 'Coordinator',
+          status: 'in_progress',
+          coordinator_status: 'dispatching',
+          started_at: '2026-07-29T00:00:00.000Z',
+        },
+      ],
+      page: 1,
+      page_size: 100,
+      total_count: 1,
+      total_pages: 1,
+    });
+
+    render(
+      <Wrapper
+        initialEntry="/projects/p1/observability/traces?run=coord-run-1"
+        path="/projects/:projectId/observability/traces"
+      >
+        <ObservabilityTracesPage />
+      </Wrapper>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+
+    expect(transactionTracePanelSpy).toHaveBeenCalledWith(expect.objectContaining({ runId: 'coord-run-1' }));
+  });
+
   it('passes active and retired role titles into AgentTokenBreakdown on the agents page', async () => {
     vi.mocked(apiClient.getProjectMetrics).mockResolvedValue({
       throughput: [],
