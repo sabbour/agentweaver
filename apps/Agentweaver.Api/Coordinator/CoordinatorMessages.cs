@@ -8,6 +8,10 @@ namespace Agentweaver.Api.Coordinator;
 /// drafter can treat its established requirements as locked invariants (preserved verbatim or
 /// stronger) and change only what the feedback targets, instead of silently regressing unrelated
 /// constraints when it re-drafts (issue #315). It is null on the first draft.
+/// <see cref="SubmittingUserDisplayName"/> is the human-readable identity (display name / GitHub
+/// login) for <see cref="SubmittingUser"/>, when known. Direct mode auto-confirms the outcome spec
+/// with no confirmation gate, so it attributes <c>ConfirmedBy</c> to this value, falling back to the
+/// raw <see cref="SubmittingUser"/> (e.g. an Entra OID) only when unknown (#853/#854).
 /// </summary>
 public sealed record CoordinatorDraftInput(
     string RunId,
@@ -19,7 +23,8 @@ public sealed record CoordinatorDraftInput(
     string? WorkflowOverrideId = null,
     string? ReviseFeedback = null,
     string? OutcomeSpecGenerationModel = null,
-    OutcomeSpecDraft? PriorDraft = null);
+    OutcomeSpecDraft? PriorDraft = null,
+    string? SubmittingUserDisplayName = null);
 
 /// <summary>
 /// Data surfaced to the external caller (the confirm/revise endpoints) through the

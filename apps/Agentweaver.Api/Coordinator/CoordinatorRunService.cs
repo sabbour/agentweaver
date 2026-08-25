@@ -129,7 +129,8 @@ public sealed class CoordinatorRunService
         CancellationToken ct,
         string? workflowOverrideId = null,
         string? retriedFrom = null,
-        CoordinatorStartMode startMode = CoordinatorStartMode.DefineOutcome)
+        CoordinatorStartMode startMode = CoordinatorStartMode.DefineOutcome,
+        string? submittingUserDisplayName = null)
     {
         CoordinatorRosterGuard.EnsureDispatchableTeam(repositoryPath);
 
@@ -162,14 +163,15 @@ public sealed class CoordinatorRunService
                 run,
                 new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
                 workflowOverrideId,
-                direct: startMode == CoordinatorStartMode.Direct)
+                direct: startMode == CoordinatorStartMode.Direct,
+                submittingUserDisplayName: submittingUserDisplayName)
             .ConfigureAwait(false);
 
         // Autopilot honors the same unattended outcome-spec confirmation as the backlog-pickup paths (#228).
         // Direct mode has no confirmation gate, so only schedule for DefineOutcome — otherwise the loop would
         // spin a wasted 5-minute timeout and log a misleading "left for a human" warning.
         if (autopilot && startMode == CoordinatorStartMode.DefineOutcome)
-            ScheduleUnattendedConfirm(runId.ToString(), submittingUser);
+            ScheduleUnattendedConfirm(runId.ToString(), submittingUserDisplayName ?? submittingUser);
 
         return runId;
     }
@@ -185,7 +187,8 @@ public sealed class CoordinatorRunService
     /// behalf of the accountable human. Returns the new run id.
     /// </summary>
     public async Task<RunId> StartRetriedPickupCoordinatorRunAsync(
-        Run source, bool autoApproveTools, bool autopilot, CancellationToken ct)
+        Run source, bool autoApproveTools, bool autopilot, CancellationToken ct,
+        string? submittingUserDisplayName = null)
     {
         CoordinatorRosterGuard.EnsureDispatchableTeam(source.RepositoryPath);
 
@@ -214,13 +217,16 @@ public sealed class CoordinatorRunService
 
         await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
 
-        await ActivateAsync(run, new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot))
+        await ActivateAsync(
+                run,
+                new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
+                submittingUserDisplayName: submittingUserDisplayName)
             .ConfigureAwait(false);
 
         // Unattended confirm on behalf of the accountable human — only when Autopilot is on,
         // mirroring the heartbeat pickup path.
         if (autopilot)
-            ScheduleUnattendedConfirm(runId.ToString(), source.SubmittingUser);
+            ScheduleUnattendedConfirm(runId.ToString(), submittingUserDisplayName ?? source.SubmittingUser);
 
         return runId;
     }
@@ -255,7 +261,9 @@ public sealed class CoordinatorRunService
     /// per-run CTS (registered so Abandon -> Cts.Cancel() tears the run down, mirroring
     /// RunOrchestrator), and starts the supervised watch loop.
     /// </summary>
-    private async Task ActivateAsync(Run run, RunOptions options, string? workflowOverrideId = null, bool direct = false)
+    private async Task ActivateAsync(
+        Run run, RunOptions options, string? workflowOverrideId = null, bool direct = false,
+        string? submittingUserDisplayName = null)
     {
         var runId = run.Id.ToString();
         _runOptions.Set(runId, options);
@@ -274,7 +282,8 @@ public sealed class CoordinatorRunService
             run.RepositoryPath,
             run.ModelId,
             WorkflowOverrideId: workflowOverrideId,
-            OutcomeSpecGenerationModel: outcomeSpecGenerationModel);
+            OutcomeSpecGenerationModel: outcomeSpecGenerationModel,
+            SubmittingUserDisplayName: submittingUserDisplayName);
 
         var runCts = new CancellationTokenSource();
         var ctsRegistered = false;
