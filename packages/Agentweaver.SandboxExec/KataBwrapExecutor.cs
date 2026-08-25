@@ -369,8 +369,11 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             // bubblewrap's --info-fd: bubblewrap closes the info fd after setup, so reusing fd 1
             // for it would leave the workload without a usable stdout (preview output would be
             // lost with "write error: Bad file descriptor").
-            var (sandboxInitPid, workloadProcessGroupId) =
-                await ResolveSandboxProcessAsync(process, ct).ConfigureAwait(false);
+            var resolved = await ResolveSandboxProcessAsync(process, ct).ConfigureAwait(false);
+            if (resolved is null)
+                throw new InvalidOperationException(
+                    $"bwrap exited with code {process.ExitCode} before its sandbox child could be supervised.");
+            var (sandboxInitPid, workloadProcessGroupId) = resolved.Value;
             return new SupervisedProcess(process, sandboxInitPid, workloadProcessGroupId, networkEnabled);
         }
         catch
@@ -491,9 +494,9 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             // Resolved while bwrap is alive: once it exits, the sandbox child is gone and the group
             // can no longer be discovered, but daemonised grandchildren (build servers, watchers)
             // would survive without an explicit process-group kill.
-            var (_, processGroupId) = await ResolveSandboxProcessAsync(process, cts.Token)
-                .ConfigureAwait(false);
-            sandboxProcessGroup = Task.FromResult(processGroupId);
+            sandboxProcessGroup = Task.Run(
+                () => WaitForSandboxProcessGroup(process!, TimeSpan.FromSeconds(10)),
+                CancellationToken.None);
 
             const int stdoutCap = 4 * 1024 * 1024;
             const int stderrCap = 1 * 1024 * 1024;
@@ -1174,7 +1177,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
     /// bubblewrap's <c>--info-fd</c> would have to consume the workload's stdout. Fails closed if
     /// the sandbox never appears or would resolve to the executor's own process group.
     /// </remarks>
-    private static async Task<(int SandboxPid, int ProcessGroupId)> ResolveSandboxProcessAsync(
+    private static async Task<(int SandboxPid, int ProcessGroupId)?> ResolveSandboxProcessAsync(
         Process bwrap,
         CancellationToken ct)
     {
@@ -1185,10 +1188,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         {
             startupCts.Token.ThrowIfCancellationRequested();
             if (bwrap.HasExited)
-            {
-                throw new InvalidOperationException(
-                    $"bwrap exited with code {bwrap.ExitCode} before its sandbox child appeared.");
-            }
+                return null;
 
             var sandboxPid = TryFindChildProcess(bwrap.Id);
             if (sandboxPid > 0)
@@ -1220,6 +1220,27 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
     /// </summary>
     private static int TryResolveSandboxProcessGroup(int bwrapPid) =>
         TryReadProcessGroupId(TryFindChildProcess(bwrapPid));
+
+    /// <summary>
+    /// Polls until bubblewrap's sandbox child exists (it is forked a few milliseconds after
+    /// bubblewrap starts) and returns the process group that owns the sandbox, or 0 if the command
+    /// finished before the child could be observed.
+    /// </summary>
+    private static int WaitForSandboxProcessGroup(Process bwrap, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var processGroupId = TryResolveSandboxProcessGroup(bwrap.Id);
+            if (processGroupId > 0)
+                return processGroupId;
+            if (bwrap.HasExited)
+                return 0;
+            Thread.Sleep(5);
+        }
+
+        return 0;
+    }
 
     private static int TryFindChildProcess(int parentPid)
     {
