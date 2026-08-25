@@ -1198,9 +1198,11 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
                 {
                     if (processGroupId == ownProcessGroupId)
                     {
-                        throw new InvalidOperationException(
-                            $"bwrap sandbox child {sandboxPid} shares the executor's process group "
-                            + $"{processGroupId}; refusing to supervise it.");
+                        // bwrap --new-session calls setsid() in the child after fork; we may
+                        // observe the child before it has established its own session/process
+                        // group. Continue polling so the 10-second startup timeout handles the
+                        // rare genuine case (bwrap launched without --new-session).
+                        continue;
                     }
 
                     return (sandboxPid, processGroupId);
