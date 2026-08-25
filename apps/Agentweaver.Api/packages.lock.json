@@ -261,8 +261,8 @@
       },
       "GitHub.Copilot.SDK": {
         "type": "Transitive",
-        "resolved": "1.0.2",
-        "contentHash": "u12oXKXcdozIfDuSS2BcaamMvkHLl6obP2Xw2t1BwmWFlCkcvTGbbxwe2RmIeM2vJND9ZDrmCK5t3ftSaZNVJQ==",
+        "resolved": "1.0.11",
+        "contentHash": "92CcbAoPQ60Lr7ho7uO5uNYkkxlVux6AhsoZv2WbZz6DcXfvUihHaX8rxNdxM5xv1bIa/WrBE4EadZgJakp3Lw==",
         "dependencies": {
           "Microsoft.Extensions.AI.Abstractions": "10.2.0"
         }
@@ -850,7 +850,7 @@
           "Agentweaver.SandboxExec": "[1.0.0, )",
           "Agentweaver.SandboxFs": "[1.0.0, )",
           "Azure.AI.OpenAI": "[2.1.0, )",
-          "GitHub.Copilot.SDK": "[1.0.2, )",
+          "GitHub.Copilot.SDK": "[1.0.11, )",
           "Microsoft.AgentGovernance": "[4.0.0, 5.0.0)",
           "Microsoft.Agents.AI.A2A": "[1.11.1-preview.260625.1, )",
           "Microsoft.Agents.AI.GitHub.Copilot": "[1.11.1-rc1, )",
