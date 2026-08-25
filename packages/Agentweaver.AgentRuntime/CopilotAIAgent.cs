@@ -74,6 +74,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly IQuestionGate? _questionGate;
     private readonly IRunOptionsStore? _runOptions;
     private readonly IEnumerable<IAgentRuntimeToolProvider> _toolProviders;
+
+    // Names of tools built by an IAgentRuntimeToolProvider and wrapped in
+    // InstrumentedCustomAIFunction (populated fresh on every RebuildInnerAgent call). The
+    // permission handler consults this to avoid emitting a second, orphaned tool.call for these
+    // tools — the wrapper already records tool.call/tool.result/tool.error around the real
+    // invocation, with its own correlated callId and execute_tool span (see #850 follow-up).
+    private readonly HashSet<string> _instrumentedToolNames = new(StringComparer.Ordinal);
     protected readonly ILogger<CopilotAIAgent> _logger;
 
     // --- Per-run config — set by the workflow executor before CreateSessionAsync ---
@@ -463,6 +470,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var governance = _governance
             ?? throw new InvalidOperationException("SetupAsync must run before RebuildInnerAgent.");
 
+        _instrumentedToolNames.Clear();
         var sessionTools = BuildSessionConfigTools(
             toolContext,
             _projectId,
@@ -475,7 +483,17 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // AssemblyBuildTest. Register it whenever the registry exposes it (real isolation +
             // policy shell enabled); native shell is denied below so this is the only shell path.
             includeControlledRunCommand: true,
-            runCapabilityToken: _apiCapabilityToken);
+            runCapabilityToken: _apiCapabilityToken,
+            // #850 follow-up: instrument every IAgentRuntimeToolProvider tool (start_preview and
+            // its preview-lifecycle siblings) so their tool.call/tool.result/tool.error RunEvents
+            // and execute_tool span are recorded directly around the real invocation — see
+            // InstrumentedCustomAIFunction.
+            instrumentProviderTool: tool =>
+            {
+                _instrumentedToolNames.Add(tool.Name);
+                return new InstrumentedCustomAIFunction(
+                    tool, EmitToolCallOnce, EmitToolResultOnce, EmitToolErrorOnce, StartToolSpan, CompleteToolSpan);
+            });
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
         // list_decisions/get_memory/list_inbox/submit_decision are only registered when
         // Agentweaver API tools were built (projectId + agentName both supplied). Only tell the
@@ -1738,7 +1756,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                             foreach (var prop in apiArgsEl.EnumerateObject())
                                 apiArgs[prop.Name] = prop.Value;
                         }
-                        if (realCustomCallId is not null)
+                        // Instrumented tools (IAgentRuntimeToolProvider-built, e.g. start_preview)
+                        // already record their own tool.call/tool.result/tool.error directly around
+                        // the real invocation (see InstrumentedCustomAIFunction) — skip the
+                        // pre-emptive emit here so the trace doesn't show a second, orphaned call.
+                        if (realCustomCallId is not null && !_instrumentedToolNames.Contains(toolName))
                             emitToolCallOnce(customCallId, toolName, apiArgs);
                         return Task.FromResult<PermissionDecision>(new PermissionDecisionApproveOnce());
                     }
@@ -1762,7 +1784,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     // path dedup logic. Approved custom tools emit their call via the SDK lifecycle
                     // (ExternalToolRequestedEvent). Denied calls never reach the lifecycle so we
                     // emit the call+error pair below regardless of whether we have a real ID.
-                    if (realCustomCallId is not null)
+                    // Instrumented tools (see InstrumentedCustomAIFunction) emit their own tool.call
+                    // right before invocation, so skip this pre-emptive emit for them on the
+                    // approve path — but keep it for the deny/exception paths below, since a denied
+                    // or failed-to-evaluate call never reaches the wrapper's InvokeCoreAsync and
+                    // would otherwise go unrecorded entirely.
+                    if (realCustomCallId is not null && !_instrumentedToolNames.Contains(toolName))
                         emitToolCallOnce(customCallId, toolName, args);
 
                     var (allowed, reason) = governance.EvaluateToolCall(
@@ -1975,6 +2002,82 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     }
 
     /// <summary>
+    /// Wraps a custom <see cref="AIFunction"/> so its <c>tool.call</c> / <c>tool.result</c> /
+    /// <c>tool.error</c> RunEvents and its <c>execute_tool</c> OTel span are recorded directly
+    /// around the real invocation, instead of relying on the SDK's external-tool lifecycle
+    /// events (<c>ExternalToolRequestedEvent</c> / <c>ExternalToolCompletedEvent</c>).
+    ///
+    /// <para>
+    /// That SDK lifecycle pair exists for tools registered outside the SDK's own built-in set
+    /// (which is how every custom <see cref="AIFunction"/>, including <c>start_preview</c>, is
+    /// registered), but <c>ExternalToolCompletedEvent</c> carries no result content — only a bare
+    /// <c>RequestId</c> acknowledgement — and no <c>execute_tool</c> span is ever opened for this
+    /// pairing (that only happens for <c>ToolExecutionStartEvent</c>/<c>ToolExecutionCompleteEvent</c>,
+    /// the SDK's native-tool lifecycle). For <c>start_preview</c> specifically this meant the trace
+    /// panel could never find a matching span/RunEvent pair, so both Arguments and Output showed as
+    /// "not recorded" even though the tool executed successfully — the prior claim that issue #850's
+    /// PR #853 fully fixed this was wrong; #853 only built the frontend correlation logic and assumed
+    /// every tool populates both halves of the join.
+    /// </para>
+    ///
+    /// <para>
+    /// Instrumenting the invocation directly sidesteps the gap entirely: this wrapper mints the
+    /// <c>callId</c> itself, so the span tag and the RunEvents are guaranteed to share the same id,
+    /// and the recorded arguments/content are exactly what was passed to and returned by the tool —
+    /// nothing depends on SDK-internal event shapes or timing.
+    /// </para>
+    /// </summary>
+    // internal (not private) so StartPreviewToolTests can construct it directly and assert the
+    // emitted callId/args/content pairing without spinning up a full CopilotAIAgent instance.
+    internal sealed class InstrumentedCustomAIFunction(
+        AIFunction inner,
+        Action<string, string, object?> emitToolCallOnce,
+        Action<string, string> emitToolResultOnce,
+        Action<string, string> emitToolErrorOnce,
+        Action<string, string, DateTimeOffset?> startToolSpan,
+        Action<string, bool, string?, DateTimeOffset?> completeToolSpan) : AIFunction
+    {
+        public override string Name => inner.Name;
+        public override string Description => inner.Description;
+        public override IReadOnlyDictionary<string, object?> AdditionalProperties => inner.AdditionalProperties;
+        public override JsonElement JsonSchema => inner.JsonSchema;
+        public override JsonElement? ReturnJsonSchema => inner.ReturnJsonSchema;
+
+        protected override async ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments, CancellationToken cancellationToken)
+        {
+            var callId = Guid.NewGuid().ToString("n");
+            var argsDict = arguments.Count > 0
+                ? new Dictionary<string, object?>(arguments)
+                : null;
+
+            var startTime = DateTimeOffset.UtcNow;
+            startToolSpan(callId, inner.Name, startTime);
+            emitToolCallOnce(callId, inner.Name, argsDict);
+
+            try
+            {
+                var result = await inner.InvokeAsync(arguments, cancellationToken).ConfigureAwait(false);
+                var content = result switch
+                {
+                    null => string.Empty,
+                    string s => s,
+                    _ => JsonSerializer.Serialize(result),
+                };
+                completeToolSpan(callId, true, null, DateTimeOffset.UtcNow);
+                emitToolResultOnce(callId, content);
+                return result;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                completeToolSpan(callId, false, ex.Message, DateTimeOffset.UtcNow);
+                emitToolErrorOnce(callId, ex.Message);
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
     /// Builds the full base system prompt, optionally including the TEAM COORDINATION section.
     /// That section references list_decisions/get_memory/list_inbox/submit_decision, which are
     /// only registered as tools when Agentweaver API tools were built (see
@@ -1999,7 +2102,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? apiKey = null,
         IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
         bool includeControlledRunCommand = false,
-        string? runCapabilityToken = null)
+        string? runCapabilityToken = null,
+        Func<AIFunction, AIFunction>? instrumentProviderTool = null)
     {
         var all = SandboxToolRegistry.Build(context);
         var intentFn = all.First(f => string.Equals(f.Name, "report_intent", StringComparison.Ordinal));
@@ -2053,7 +2157,17 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             // AgentweaverApiTools above into the context every provider builds against.
             var providerContext = context with { ApiBaseUrl = apiBaseUrl, ApiKey = apiKey };
             foreach (var provider in toolProviders)
-                tools.AddRange(provider.BuildTools(providerContext));
+            {
+                foreach (var providerTool in provider.BuildTools(providerContext))
+                {
+                    // #850 follow-up: tools built by IAgentRuntimeToolProvider implementations
+                    // (start_preview, start_preview_process, observe_bound_port, health_check,
+                    // stop_preview_process) never had any tool.call/tool.result RunEvent or
+                    // execute_tool span instrumentation — see InstrumentedCustomAIFunction for why
+                    // that made start_preview's trace card show "No arguments/output recorded".
+                    tools.Add(instrumentProviderTool?.Invoke(providerTool) ?? providerTool);
+                }
+            }
         }
 
         return tools;
