@@ -190,12 +190,18 @@ spec:
           # watch stream before AgentHost flushes its terminal WorkflowOutputEvent, so a genuinely
           # successful subtask surfaces as `watch_stream_completed_without_terminal_event` (the
           # false-stall family). Raising REQUESTS to reflect a build's true working set makes the
-          # scheduler honest: CPU (1000m) becomes the binding constraint at ~3 pods/node, which also
-          # caps concurrent memory burst to ~3x4Gi=12Gi (<= 16Gi real), and forces the
-          # cluster-autoscaler (katapool minSize 1 / maxSize 5) to add kata nodes under load instead
-          # of overpacking one node into eviction. Limits are unchanged so a single heavy build can
-          # still burst. The terminal-event emission-robustness half (flush-before-teardown / durable
-          # terminal publication) is tracked separately as defense-in-depth under #242.
+          # scheduler honest: CPU (1000m) remains the binding scheduling constraint at ~3 pods/node
+          # (3x1000m=3000m < 3860m allocatable CPU; 3x3Gi=9Gi < 11.7Gi allocatable memory, so CPU
+          # wins). Fix #930 (preview-server OOM) does NOT change scheduling density — the exec
+          # container's memory REQUEST rose 1Gi->2Gi, not enough to displace CPU as the binding
+          # constraint. What changed is the per-container LIMIT (2Gi->4Gi on agentweaver-exec):
+          # limits do not affect scheduling or autoscaling, so the cluster-autoscaler (katapool
+          # minSize 1 / maxSize 5) still triggers on unschedulable pods (Insufficient cpu/memory
+          # REQUESTS), not on limit-approach. The node-level over-commit situation (3 pods can burst
+          # well past ~11.7Gi allocatable if all active simultaneously, since 3x6Gi=18Gi pod-level
+          # limits now far exceed it) is a pre-existing concern tracked separately under #242. The
+          # terminal-event emission-robustness half (flush-before-teardown / durable terminal
+          # publication) is also tracked separately as defense-in-depth under #242.
           #
           # CPU rebalanced 400m/1000m -> 300m/800m (fix/handshake-timeout-writable-root): this
           # container is a thin A2A/relay process — the actual CPU-heavy work (bwrap mount
@@ -203,9 +209,12 @@ spec:
           # below. Under concurrent load the exec container's per-run writable-system-root "hold"
           # helper was CPU-starved by its 600m/1000m split and routinely missed its internal 120s
           # READY wait, which the client's (now 150s) handshake timeout then also timed out on,
-          # surfacing as repeated observe_bound_port failures. Pod-level totals are UNCHANGED
-          # (request 1000m, limit 2000m combined), so the katapool ~3-pods/node density math above
-          # still holds — only the split moved, from agent-host toward agentweaver-exec.
+          # surfacing as repeated observe_bound_port failures. Pod-level CPU totals are UNCHANGED
+          # (request 1000m, limit 2000m combined) — only the CPU split moved, from agent-host toward
+          # agentweaver-exec. Pod-level MEMORY totals changed independently (see #930 above):
+          # requests 2Gi -> 3Gi, limits 4Gi -> 6Gi. Note these are LIMIT/REQUEST totals, not a
+          # scheduling-density change — requests.memory (3Gi/pod) stays well under the 11.7Gi
+          # allocatable at 3 pods/node, so CPU remains the binding scheduling constraint.
           resources:
             requests:
               memory: "1Gi"
@@ -294,10 +303,10 @@ spec:
             # socket itself, never inferred from this variable.
             - name: AGENTWEAVER_IMAGE_BUILD_SOCKET
               value: "/run/buildkit/buildkitd.sock"
-          # The model-controlled build/test/preview working set lives here now. Pod-level totals are
-          # deliberately UNCHANGED versus the single-container layout (requests 1000m/2Gi, limits
-          # 2000m/4Gi) so katapool scheduling density and burst ceiling stay exactly as documented
-          # above; the budget is split rather than added.
+          # The model-controlled build/test/preview working set lives here now. Pod-level CPU totals
+          # are deliberately UNCHANGED versus the single-container layout (requests 1000m, limits
+          # 2000m) so the CPU half of katapool scheduling density stays exactly as documented above;
+          # the CPU budget is split rather than added.
           #
           # CPU rebalanced 600m/1000m -> 700m/1200m (fix/handshake-timeout-writable-root): this is
           # the container that actually does the CPU-heavy work under bubblewrap — including
@@ -305,15 +314,28 @@ spec:
           # overlay and must print READY within its own internal 120s wait before the client's
           # handshake timeout gives up. The previous 600m request left that helper CPU-starved under
           # concurrent runs on a node, so it routinely missed its 120s window. Moved 100m of request
-          # and 200m of limit here from agent-host above; combined pod totals (1000m request /
-          # 2000m limit) are unchanged, so scheduling density is unaffected.
+          # and 200m of limit here from agent-host above; combined pod CPU totals (1000m request /
+          # 2000m limit) are unchanged, so CPU scheduling density is unaffected.
+          #
+          # MEMORY raised 1Gi/2Gi -> 2Gi/4Gi (fix #930): this container also runs any preview server
+          # the agent starts (`start_preview` — a Node.js/Vite dev server) alongside the agent's own
+          # process. Their combined working set regularly exceeded the previous 2Gi LIMIT, and the
+          # kernel OOM-killed the preview server (exit 137) before the agent could register the
+          # preview URL. The comment on the execution-scratch mount below already noted that
+          # "Node/Next already needs the container's 4Gi memory budget" — the limit was simply never
+          # raised to match. Raising the REQUEST 1Gi->2Gi better reflects actual working set but does
+          # not change scheduled density (CPU remains binding). Pod-level memory totals: requests
+          # 2Gi -> 3Gi, limits 4Gi -> 6Gi (agent-host's 1Gi/2Gi unchanged). Note: limits are
+          # per-cgroup ceilings, not scheduling constraints — 3 pods can still schedule per node and
+          # may approach their combined limits under concurrent load; that over-commit scenario is
+          # pre-existing and tracked under #242.
           resources:
             requests:
-              memory: "1Gi"
+              memory: "2Gi"
               cpu: "700m"
               ephemeral-storage: "1Gi"
             limits:
-              memory: "2Gi"
+              memory: "4Gi"
               cpu: "1200m"
               ephemeral-storage: "4Gi"
           volumeMounts:
