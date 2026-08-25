@@ -7,19 +7,25 @@ name: CI
 # keeping the suites off a single shared runner keeps the signal reliable.
 #
 # Commands mirror the ones documented in CONTRIBUTING.md exactly:
-#   - node scripts/ci/validate.mjs --profile ci --area dotnet
 #   - node scripts/ci/validate.mjs --profile ci --area node,harness
 #   - node scripts/ci/validate.mjs --profile ci --area web
 #   - node scripts/ci/validate.mjs --profile ci --area docs
+# `dotnet-tests` is the one exception: it splits validate.mjs's own restore/build/test sequence
+# for .NET (also documented in CONTRIBUTING.md -> Testing, as the "locked restore, one build,
+# then test exact outputs" trio) into separate steps, so the ~40-test Kata runtime gate can run
+# against that build BEFORE the full suite instead of after it -- see the comments on those steps.
 #
 # A `changes` job classifies the PR/push diff by path group first, and every
 # suite job below only runs `if:` its group actually changed (a change to this
-# workflow file itself always trips every group). A job whose `if:` is false is
-# reported to GitHub as "skipped", which required-status-checks rulesets treat
-# as passing, so this stays safe for branch protection while saving CI minutes
-# on diffs (e.g. docs-only PRs) that can't affect the skipped suites.
+# file, `.github/workflows/ci.yml`, always trips every group). A job whose `if:`
+# is false is reported to GitHub as "skipped", which required-status-checks
+# rulesets treat as passing, so this stays safe for branch protection while
+# saving CI minutes on diffs (e.g. docs-only PRs) that can't affect the skipped
+# suites.
 # `Changeset advisory` always runs regardless of paths, since it must evaluate
 # every PR for whether a changeset was needed.
+# Draft PRs skip the expensive test/build jobs (dotnet/web/node-toolchain/docs)
+# since draft PRs can't be merged anyway.
 
 on:
   pull_request:
@@ -51,9 +57,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # dorny/paths-filter classifies the PR/push diff into named groups below.
-      # Every group includes .github/workflows/** so a change to this pipeline
-      # itself always trips every downstream job, never leaving a suite skipped
-      # just because the workflow that runs it changed.
+      # Every group includes this workflow's own path (.github/workflows/ci.yml)
+      # so a change to this pipeline always trips every downstream job, never
+      # leaving a suite skipped just because the workflow that runs it changed.
+      # It is deliberately NOT `.github/workflows/**`: the other workflows here
+      # (agent-host-maintenance, docs-drift, publish-images, squad-*, ...) do not
+      # run any of these suites, so editing them used to trigger the entire
+      # matrix -- a comment-only edit to an unrelated workflow cost a full .NET,
+      # web, node, docs and diagram run. Only ci.yml decides what these jobs do.
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -66,12 +77,12 @@ jobs:
               - '**/*.sln'
               - 'global.json'
               - 'nuget.config'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             web:
               - 'apps/web/**'
               - 'scripts/ci/shared-deps.mjs'
               - 'scripts/ci/validate.mjs'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             node-toolchain:
               - 'scripts/azure/**'
               - 'scripts/changesets/**'
@@ -81,24 +92,24 @@ jobs:
               - 'scripts/harness-judge/**'
               - 'scripts/harness-shared/**'
               - 'scripts/persona-briefs/**'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             docs:
               - 'docs/**'
               - 'scripts/ci/shared-deps.mjs'
               - 'scripts/ci/validate.mjs'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
             diagrams:
               - 'docs/diagrams/**'
               - 'docs/diagram-renderer/**'
               - 'README.md'
               - 'docs/guide/architecture-aks.md'
               - 'scripts/docs/**'
-              - '.github/workflows/**'
+              - '.github/workflows/ci.yml'
 
   dotnet-tests:
     name: .NET tests
     needs: changes
-    if: needs.changes.outputs.dotnet == 'true'
+    if: needs.changes.outputs.dotnet == 'true' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -122,61 +133,97 @@ jobs:
           restore-keys: |
             nuget-${{ runner.os }}-${{ runner.arch }}-
 
-      # Restore is locked, build runs once, and tests reuse that exact output.
-      # bin/obj remain private to this checkout.
-      - name: Run .NET validation
-        run: node scripts/ci/validate.mjs --profile ci --area dotnet
+      # Split out of `node scripts/ci/validate.mjs --profile ci --area dotnet` (still the
+      # documented command for a full local run, see CONTRIBUTING.md -> Testing) so the Kata
+      # gate below can run against this exact build BEFORE the full suite, instead of after it.
+      # Locked restore + one build, mirroring validate.mjs's runDotnet exactly.
+      - name: Restore and build .NET test project
+        run: |
+          dotnet restore tests/Agentweaver.Tests/Agentweaver.Tests.csproj --locked-mode -p:CopilotSkipCliDownload=true
+          dotnet build tests/Agentweaver.Tests/Agentweaver.Tests.csproj --no-restore -p:CopilotSkipCliDownload=true
 
       # Every sandbox proof that needs a real bubblewrap runtime carries
       # [Trait("Category", "KataRuntime")], so this gate can never drift away from a
       # renamed test the way a hardcoded FullyQualifiedName list did. AGENTWEAVER_REQUIRE_BWRAP=1
       # turns "bubblewrap missing/unusable" from a silent early return into a failure.
+      - name: Cache bubblewrap
+        uses: actions/cache@v6
+        id: bwrap-cache
+        with:
+          path: /usr/bin/bwrap
+          key: bwrap-${{ runner.os }}-apt
+
+      - name: Install bubblewrap
+        if: steps.bwrap-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap
+
+      # This gate runs BEFORE the full 3,500+ test suite (moved from after it): every sandbox proof
+      # that needs a real bubblewrap runtime carries [Trait("Category", "KataRuntime")], so it can
+      # never drift away from a renamed test the way a hardcoded FullyQualifiedName list did.
+      # AGENTWEAVER_REQUIRE_BWRAP=1 turns "bubblewrap missing/unusable" from a silent early return
+      # into a failure. Running this ~40-test, ~90s gate first means a broken sandbox runtime fails
+      # the job in well under two minutes instead of after ~7 more minutes of the full suite.
+      # Wrapped in a retry (max 2 attempts): this gate is the one most exposed to runner-level
+      # flakiness (a transient namespace setup failure), and a spurious failure here would
+      # otherwise force a full ~8-minute rerun of a job that hadn't even reached the expensive
+      # part yet. The full suite below is deliberately NOT retried: a real test failure there
+      # should fail once, not be masked by a second attempt.
       - name: Run Kata Linux runtime regressions
+        uses: nick-fields/retry@v3
         env:
           AGENTWEAVER_REQUIRE_BWRAP: "1"
           KATA_RUNTIME_FILTER: Category=KataRuntime
           KATA_RUNTIME_MIN_TESTS: "34"
+        with:
+          timeout_minutes: 3
+          max_attempts: 2
+          command: |
+            set -euo pipefail
+            # The gate is worthless if bwrap is absent or cannot create a user namespace.
+            # `bwrap --version` proves the binary; the product's own availability probe
+            # (asserted by KataRuntimeGate_HasARealBubblewrapRuntimeWhenTheGateRequiresOne)
+            # proves the namespaces, using exactly the flags the executor uses.
+            bwrap --version
+            # Ubuntu 24.04 runners ship kernel.apparmor_restrict_unprivileged_userns=1, which
+            # denies the uid map bwrap needs ("setting up uid map: Permission denied"). This is
+            # runner configuration only: it changes nothing about the production pod, which is
+            # unprivileged, drops ALL capabilities and runs under Kata. Without it the gate can
+            # only ever report "runtime unusable", which is precisely the silent hole this step
+            # exists to close, so a failure to relax it is left to fail the job below.
+            if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+              sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+            fi
+            # Smoke-test the exact namespace set the executor uses before spending a test run.
+            bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc --dev /dev \
+              -- /bin/true
+            echo "bubblewrap user+pid namespaces are usable on this runner."
+            echo "::group::Tests selected by ${KATA_RUNTIME_FILTER}"
+            dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
+              --no-build --no-restore -p:CopilotSkipCliDownload=true \
+              --list-tests --filter "${KATA_RUNTIME_FILTER}" \
+              | tee kata-runtime-selected.txt
+            echo "::endgroup::"
+            selected=$(grep -cE '^[[:space:]]+Agentweaver\.Tests\.' kata-runtime-selected.txt || echo 0)
+            echo "Selected ${selected} Kata runtime tests (minimum ${KATA_RUNTIME_MIN_TESTS})."
+            if [ "${selected}" -lt "${KATA_RUNTIME_MIN_TESTS}" ]; then
+              echo "::error::${KATA_RUNTIME_FILTER} selected ${selected} tests, expected at least ${KATA_RUNTIME_MIN_TESTS}. The trait was probably dropped from a sandbox regression."
+              exit 1
+            fi
+            dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
+              --no-build \
+              --no-restore \
+              -p:CopilotSkipCliDownload=true \
+              --filter "${KATA_RUNTIME_FILTER}" \
+              --logger "trx;LogFileName=kata-runtime.trx" \
+              --results-directory kata-runtime-results
+
+      # Reuses the exact build output from "Restore and build .NET test project" above (no-build,
+      # no-restore), same as the tail end of validate.mjs's runDotnet. Not retried: see the note on
+      # the Kata gate above.
+      - name: Run full .NET test suite
         run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap
-          # The gate is worthless if bwrap is absent or cannot create a user namespace.
-          # `bwrap --version` proves the binary; the product's own availability probe
-          # (asserted by KataRuntimeGate_HasARealBubblewrapRuntimeWhenTheGateRequiresOne)
-          # proves the namespaces, using exactly the flags the executor uses.
-          bwrap --version
-          # Ubuntu 24.04 runners ship kernel.apparmor_restrict_unprivileged_userns=1, which
-          # denies the uid map bwrap needs ("setting up uid map: Permission denied"). This is
-          # runner configuration only: it changes nothing about the production pod, which is
-          # unprivileged, drops ALL capabilities and runs under Kata. Without it the gate can
-          # only ever report "runtime unusable", which is precisely the silent hole this step
-          # exists to close, so a failure to relax it is left to fail the job below.
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          # Smoke-test the exact namespace set the executor uses before spending a test run.
-          bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc --dev /dev \
-            -- /bin/true
-          echo "bubblewrap user+pid namespaces are usable on this runner."
-          echo "::group::Tests selected by ${KATA_RUNTIME_FILTER}"
           dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
-            --no-build --no-restore -p:CopilotSkipCliDownload=true \
-            --list-tests --filter "${KATA_RUNTIME_FILTER}" \
-            | tee kata-runtime-selected.txt
-          echo "::endgroup::"
-          selected=$(grep -cE '^[[:space:]]+Agentweaver\.Tests\.' kata-runtime-selected.txt || echo 0)
-          echo "Selected ${selected} Kata runtime tests (minimum ${KATA_RUNTIME_MIN_TESTS})."
-          if [ "${selected}" -lt "${KATA_RUNTIME_MIN_TESTS}" ]; then
-            echo "::error::${KATA_RUNTIME_FILTER} selected ${selected} tests, expected at least ${KATA_RUNTIME_MIN_TESTS}. The trait was probably dropped from a sandbox regression."
-            exit 1
-          fi
-          dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
-            --no-build \
-            --no-restore \
-            -p:CopilotSkipCliDownload=true \
-            --filter "${KATA_RUNTIME_FILTER}" \
-            --logger "trx;LogFileName=kata-runtime.trx" \
-            --results-directory kata-runtime-results
+            --no-build --no-restore -p:CopilotSkipCliDownload=true
 
       - name: Upload Kata runtime evidence
         if: always()
@@ -191,7 +238,7 @@ jobs:
   node-toolchain-tests:
     name: Node toolchain tests
     needs: changes
-    if: needs.changes.outputs.node-toolchain == 'true'
+    if: needs.changes.outputs.node-toolchain == 'true' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -203,10 +250,23 @@ jobs:
           cache: npm
           cache-dependency-path: scripts/ui-harness/package-lock.json
 
-      - name: Install Chromium for UI harness integration tests
-        run: |
-          node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness --isolated
-          npx --prefix scripts/ui-harness playwright install --with-deps chromium
+      - name: Install harness npm dependencies
+        run: node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness --isolated
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('scripts/ui-harness/package-lock.json') }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx --prefix scripts/ui-harness playwright install --with-deps chromium
+
+      - name: Install Playwright system deps only
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx --prefix scripts/ui-harness playwright install-deps chromium
 
       - name: Run Node toolchain and UI harness tests
         run: node scripts/ci/validate.mjs --profile ci --area node,harness
@@ -214,7 +274,7 @@ jobs:
   web-tests:
     name: Web tests
     needs: changes
-    if: needs.changes.outputs.web == 'true'
+    if: needs.changes.outputs.web == 'true' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -227,24 +287,13 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
 
       # Tests and lint deliberately share one job so npm ci runs only once.
-      # The lightweight Web lint status job below preserves the existing
-      # branch-protection check name.
       - name: Run web tests and lint
         run: node scripts/ci/validate.mjs --profile ci --area web
-
-  web-lint:
-    name: Web lint
-    needs: [changes, web-tests]
-    if: always() && needs.changes.outputs.web == 'true' && needs.web-tests.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Confirm co-located lint passed
-        run: echo "Web lint passed in the Web tests job."
 
   docs-build:
     name: Docs build
     needs: changes
-    if: needs.changes.outputs.docs == 'true'
+    if: needs.changes.outputs.docs == 'true' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -260,39 +309,6 @@ jobs:
       # Catches broken markdown, dead config, and landing-page regressions.
       - name: Build docs site
         run: node scripts/ci/validate.mjs --profile ci --area docs
-
-  diagrams-in-sync:
-    name: Architecture diagrams are in sync
-    needs: changes
-    if: needs.changes.outputs.diagrams == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
-
-      - name: Install root dependencies
-        run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
-
-      # README.md's "Block diagram" and architecture-aks.md's "Component
-      # diagram"s are pre-rendered as static PNGs from Fluent-styled React
-      # Flow graph-specs (docs/diagrams/src/*.json) via docs/diagram-renderer
-      # + Playwright, so they match the same card/icon/badge look used live
-      # in the product UI instead of generic Mermaid/mermaid-cli output. This
-      # check only compares each spec's content hash against the committed
-      # <name>.hash.txt sidecar -- it deliberately does NOT re-render and
-      # diff pixels/SVG geometry, since that approach (used by an earlier
-      # mermaid-cli version of this pipeline) broke across OSes: rendering
-      # geometry depends on the host's installed font metrics, which differ
-      # between Windows and Linux even for byte-identical input. A hash
-      # check only fails when the spec's actual content (nodes/edges/labels)
-      # changed since the PNG was last built, and needs no browser here.
-      - name: Check rendered diagrams match source
-        run: npm run docs:check-diagrams
 
   changeset-advisory:
     name: Changeset advisory

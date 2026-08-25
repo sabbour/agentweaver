@@ -98,9 +98,78 @@ jobs:
             echo "- Tags: \`${{ steps.plan.outputs.tags }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Scopes the build matrix to images whose sources actually changed, so a
+  # single-image commit (e.g. only apps/Agentweaver.Mcp) doesn't rebuild all
+  # 4 containers. Filters mirror the per-image `watchedPaths` in
+  # scripts/azure/image-spec.mjs (the same single source of truth the ACR
+  # deploy toolchain uses for its own build-vs-retag decision), so the two
+  # never disagree about what feeds each image.
+  #
+  # Runs unconditionally so that `build` (which needs this job) is never
+  # skipped due to a skipped dependency. The filter step only runs on push;
+  # for release/workflow_dispatch the outputs are empty and the build step's
+  # own `if` handles those events without referencing these outputs.
+  changes:
+    name: Detect changed images
+    runs-on: ubuntu-latest
+    outputs:
+      agentweaver-api: ${{ steps.filter.outputs.agentweaver-api }}
+      agentweaver-frontend: ${{ steps.filter.outputs.agentweaver-frontend }}
+      agentweaver-mcp: ${{ steps.filter.outputs.agentweaver-mcp }}
+      agentweaver-agent-host: ${{ steps.filter.outputs.agentweaver-agent-host }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push'
+        with:
+          filters: |
+            agentweaver-api:
+              - 'agentweaver.sln'
+              - 'global.json'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'nuget.config'
+              - 'packages/**'
+              - 'VERSION'
+              - 'apps/Agentweaver.Api/**'
+              - 'apps/Agentweaver.Api.Data/**'
+              - 'apps/Agentweaver.Api.Migrations.Postgres/**'
+            agentweaver-frontend:
+              - 'apps/web/**'
+              - 'apps/Agentweaver.Web/**'
+            agentweaver-mcp:
+              - 'agentweaver.sln'
+              - 'global.json'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'nuget.config'
+              - 'packages/**'
+              - 'VERSION'
+              - 'apps/Agentweaver.Mcp/**'
+            agentweaver-agent-host:
+              - 'agentweaver.sln'
+              - 'global.json'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'nuget.config'
+              - 'packages/**'
+              - 'VERSION'
+              - 'apps/Agentweaver.AgentHost/**'
+
   build:
     name: ${{ matrix.name }}
-    needs: plan
+    needs: [plan, changes]
+    # Always run the job so the matrix can expand; per-image path filtering
+    # is enforced at the build step level (where matrix context is valid).
+    # `changes` is skipped for release/workflow_dispatch events, so we must
+    # not gate the job on it — only on whether a push event happened at all.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -146,8 +215,15 @@ jobs:
       # labels and the runtime provenance env vars every Dockerfile declares,
       # so a running container can always report the exact build it came from.
       # The GitHub Actions layer cache keeps unchanged images (notably the
-      # heavy agent-host) cheap even though all four are built every run.
+      # heavy agent-host) cheap on the runs where they do build.
+      # `matrix` context is available in step-level `if` (not job-level), so
+      # the path-filter guard lives here: main/release/dispatch always build;
+      # dev/release-branch pushes only build images whose sources changed.
       - name: Build and push ${{ matrix.name }}
+        if: >-
+          github.event_name != 'push' ||
+          github.ref == 'refs/heads/main' ||
+          needs.changes.outputs[matrix.name] == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}

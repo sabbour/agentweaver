@@ -170,20 +170,21 @@ Pull requests and pushes to `dev` and `main` are verified by the
 (several .NET and web tests are timing-sensitive and flake under CPU contention if
 crowded onto a single runner). A `changes` job classifies each diff by path first, and
 every suite job below except `Changeset advisory` only runs when its path group
-actually changed (any edit to `.github/workflows/**` always runs everything, so the
-pipeline itself is always fully verified); a job that's skipped this way still counts
-as passing for required-status-checks purposes:
+actually changed (any edit to `.github/workflows/ci.yml` itself always runs
+everything, so the pipeline is always fully verified when it changes; edits to
+*other* workflow files don't run these suites, since they don't drive them); a
+job that's skipped this way still counts as passing for required-status-checks
+purposes:
 
 | Job | What it runs | Gating | Runs when |
 |---|---|---|---|
 | `.NET tests` | Locked restore, one build, then full test with `--no-build --no-restore` | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
 | `Node toolchain tests` | Full Node toolchain/CI-helper tests plus `npm --prefix scripts/ui-harness test` | Blocking — must pass | Node toolchain paths or UI harness/shared harness paths changed |
 | `Web tests` | Web tests and lint after one isolated `npm ci` | Blocking — must pass | `apps/web/**` changed |
-| `Web lint` | Confirms lint passed in the co-located `Web tests` job | Blocking — must pass | `apps/web/**` changed |
 | `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |
 | `Changeset advisory` | `npm run version:check && npm run changeset:check` | Blocking — must pass | Always, on every PR |
 
-The repository policy requires these six blocking jobs (path-conditional jobs count
+The repository policy requires these five blocking jobs (path-conditional jobs count
 as passing when skipped) on a branch that is up to date with `dev`. The GitHub
 ruleset described in [`.github/dev-branch-protection.md`](.github/dev-branch-protection.md)
 is **active**, so admission is mechanical: direct pushes to `dev` are rejected and

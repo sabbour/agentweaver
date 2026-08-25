@@ -369,8 +369,11 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             // bubblewrap's --info-fd: bubblewrap closes the info fd after setup, so reusing fd 1
             // for it would leave the workload without a usable stdout (preview output would be
             // lost with "write error: Bad file descriptor").
-            var (sandboxInitPid, workloadProcessGroupId) =
-                await ResolveSandboxProcessAsync(process, ct).ConfigureAwait(false);
+            var resolved = await ResolveSandboxProcessAsync(process, ct).ConfigureAwait(false);
+            if (resolved is null)
+                throw new InvalidOperationException(
+                    $"bwrap exited with code {process.ExitCode} before its sandbox child could be supervised.");
+            var (sandboxInitPid, workloadProcessGroupId) = resolved.Value;
             return new SupervisedProcess(process, sandboxInitPid, workloadProcessGroupId, networkEnabled);
         }
         catch
@@ -1174,7 +1177,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
     /// bubblewrap's <c>--info-fd</c> would have to consume the workload's stdout. Fails closed if
     /// the sandbox never appears or would resolve to the executor's own process group.
     /// </remarks>
-    private static async Task<(int SandboxPid, int ProcessGroupId)> ResolveSandboxProcessAsync(
+    private static async Task<(int SandboxPid, int ProcessGroupId)?> ResolveSandboxProcessAsync(
         Process bwrap,
         CancellationToken ct)
     {
@@ -1185,10 +1188,7 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         {
             startupCts.Token.ThrowIfCancellationRequested();
             if (bwrap.HasExited)
-            {
-                throw new InvalidOperationException(
-                    $"bwrap exited with code {bwrap.ExitCode} before its sandbox child appeared.");
-            }
+                return null;
 
             var sandboxPid = TryFindChildProcess(bwrap.Id);
             if (sandboxPid > 0)
@@ -1198,9 +1198,11 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
                 {
                     if (processGroupId == ownProcessGroupId)
                     {
-                        throw new InvalidOperationException(
-                            $"bwrap sandbox child {sandboxPid} shares the executor's process group "
-                            + $"{processGroupId}; refusing to supervise it.");
+                        // bwrap --new-session calls setsid() in the child after fork; we may
+                        // observe the child before it has established its own session/process
+                        // group. Continue polling so the 10-second startup timeout handles the
+                        // rare genuine case (bwrap launched without --new-session).
+                        continue;
                     }
 
                     return (sandboxPid, processGroupId);
