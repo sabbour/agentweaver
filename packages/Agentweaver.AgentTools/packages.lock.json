@@ -26,10 +26,10 @@
       },
       "Microsoft.AgentGovernance": {
         "type": "Transitive",
-        "resolved": "4.0.0",
-        "contentHash": "+KFzoPekc2xJIrwyXvgul7l42ubb3E3YLgkVHR6B9QCvNO0v95t2Ww8S4sF0YV2cBTSAZHBrbKLipCLx98Mc8A==",
+        "resolved": "5.0.0",
+        "contentHash": "Iy3gSXMo1pauUu1NjICclsai97YNAGOlyGFa5q7KeIhnD1DkzEB9m6idOX/uPKz24Kyn1IHmgtc+mcMHgJ7IPg==",
         "dependencies": {
-          "YamlDotNet": "18.0.0"
+          "YamlDotNet": "18.1.0"
         }
       },
       "Microsoft.Extensions.AI.Abstractions": {
@@ -119,8 +119,8 @@
       },
       "YamlDotNet": {
         "type": "Transitive",
-        "resolved": "18.0.0",
-        "contentHash": "ptHVgcYmLejGuWXV7RMFoEqFKYMXnieOlWLPzEslfDtzZ9ngMhjYwykfqjBN2+fMEAEyobozkj07lKEpR4dssA=="
+        "resolved": "18.1.0",
+        "contentHash": "5K+9KFg2TdTl7VXv88Qzi/0lqK6JFoNP3lRuImPYGRV7K/QYklDyTrj4+A+KAki1JsQi6qKY+hDyY7d6WRqjrw=="
       },
       "agentweaver.domain": {
         "type": "Project"
@@ -140,7 +140,7 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.Domain": "[1.0.0, )",
-          "Microsoft.AgentGovernance": "[4.0.0, )",
+          "Microsoft.AgentGovernance": "[5.0.0, )",
           "Microsoft.Extensions.FileSystemGlobbing": "[10.0.11, )"
         }
       }
