@@ -27,25 +27,24 @@ public sealed class CallerTokenScopeProviderTests
     }
 
     [Fact]
-    public async Task Resolve_AfterProjectIdentitySelection_ReturnsSelectedLinkedScopeForSameUserAndProjectOnly()
+    public async Task ResolveAsync_AlwaysReturnsCallerOwnScope_RegardlessOfProjectOrRequestContextOverride()
     {
+        // There is no project-level GitHub identity override anymore: the submitting user's own
+        // per-user identity must always be used, even if a request context carries stale override
+        // state (e.g. from an older client, a replayed request, or any other caller-supplied hint).
         var context = new DefaultHttpContext();
         var accessor = new HttpContextAccessor { HttpContext = context };
         var provider = new CallerTokenScopeProvider(accessor);
-        var selectedProjectId = ProjectId.Parse("00000000-0000-0000-0000-000000000001");
-        CallerTokenScopeProvider.SelectProjectIdentity(
-            context,
-            selectedProjectId,
-            "entra-user",
-            "altcat");
+        var projectId = ProjectId.Parse("00000000-0000-0000-0000-000000000001");
+        var otherProjectId = "00000000-0000-0000-0000-000000000002";
 
-        provider.Resolve("entra-user").Should()
-            .BeEquivalentTo(GitHubTokenScope.ForLinkedIdentity("entra-user", "altcat"));
-        provider.Resolve("other-user").Should()
-            .BeEquivalentTo(GitHubTokenScope.ForUser("other-user"));
-        (await provider.ResolveAsync("entra-user", selectedProjectId.ToString())).Should()
-            .BeEquivalentTo(GitHubTokenScope.ForLinkedIdentity("entra-user", "altcat"));
-        (await provider.ResolveAsync("entra-user", "00000000-0000-0000-0000-000000000002")).Should()
+        provider.Resolve("entra-user").Should().BeEquivalentTo(GitHubTokenScope.ForUser("entra-user"));
+
+        (await provider.ResolveAsync("entra-user", projectId.ToString())).Should()
+            .BeEquivalentTo(GitHubTokenScope.ForUser("entra-user"));
+        (await provider.ResolveAsync("entra-user", otherProjectId)).Should()
+            .BeEquivalentTo(GitHubTokenScope.ForUser("entra-user"));
+        (await provider.ResolveAsync("entra-user", projectId: null)).Should()
             .BeEquivalentTo(GitHubTokenScope.ForUser("entra-user"));
     }
 }

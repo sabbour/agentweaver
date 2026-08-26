@@ -173,7 +173,7 @@ public sealed class LinkedGitHubAccountsApiTests
     }
 
     [Fact]
-    public async Task ProjectAuthorizedGitHubOperation_UsesSelectedLinkedIdentityToken()
+    public async Task ProjectAuthorizedGitHubOperation_IgnoresProjectOverride_AndUsesCallerOwnDefaultIdentityToken()
     {
         const string entraUserId = "00000000-0000-0000-0000-00000000aa05";
         using var factory = new LinkedGitHubAccountsWebApplicationFactory(_ => Json(HttpStatusCode.NotFound, new { }));
@@ -197,16 +197,19 @@ public sealed class LinkedGitHubAccountsApiTests
 
         var capture = await client.PostAsJsonAsync($"/api/projects/{project.ProjectId}/backlog/tasks", new
         {
-            title = "Use selected identity",
+            title = "Use caller's own identity",
         });
 
         capture.StatusCode.Should().Be(HttpStatusCode.Created);
         var captured = await capture.Content.ReadFromJsonAsync<JsonElement>();
-        captured.GetProperty("captured_by").GetString().Should().Be("bob");
+
+        // A saved project-level override (here, "bob") must NOT change which identity's token is
+        // used: the submitting user's own default linked identity ("alice") always wins.
+        captured.GetProperty("captured_by").GetString().Should().Be("alice");
     }
 
     [Fact]
-    public async Task BackgroundGitHubOperation_AfterRequestEnds_UsesSelectedProjectIdentityToken()
+    public async Task BackgroundGitHubOperation_AfterRequestEnds_IgnoresProjectOverride_AndUsesSubmittingUserOwnDefaultToken()
     {
         const string entraUserId = "00000000-0000-0000-0000-00000000aa10";
         using var factory = new LinkedGitHubAccountsWebApplicationFactory(_ => Json(HttpStatusCode.NotFound, new { }));
@@ -227,6 +230,9 @@ public sealed class LinkedGitHubAccountsApiTests
             var project = await create.Content.ReadFromJsonAsync<ProjectResponse>();
             projectId = project!.ProjectId;
 
+            // Save a project-level override to a different login ("bob"). This must NOT alter
+            // the token used for background GitHub operations submitted by this user — the
+            // submitting user's own default token ("alice") must always win.
             (await client.PutAsJsonAsync(
                 $"/api/projects/{projectId}/github-identity",
                 new UpdateProjectGitHubIdentityRequest { GitHubLogin = "bob" }))
@@ -277,7 +283,9 @@ public sealed class LinkedGitHubAccountsApiTests
 
         await executor.HandleAsync(input, context: null!, CancellationToken.None);
 
-        prClient.AccessToken.Should().Be("tok-bob");
+        // The project's saved override ("bob") is ignored: the submitting user's own default
+        // linked identity ("alice") is used even for the project with an override configured.
+        prClient.AccessToken.Should().Be("tok-alice");
 
         await executor.HandleAsync(
             input with { RunId = "other-project-run", ProjectId = otherProjectId },
@@ -293,6 +301,66 @@ public sealed class LinkedGitHubAccountsApiTests
         (await factory.TokenStore.GetAsync(automationScope)).Status.Should().NotBe(
             GitHubTokenStatus.SignedIn,
             "webhook automation must fail closed rather than borrow a project member's linked identity");
+    }
+
+    [Fact]
+    public async Task ProvisionWebhook_IgnoresProjectOverride_AndUsesCallerOwnPerUserScope()
+    {
+        const string entraUserId = "00000000-0000-0000-0000-00000000aa11";
+        var seenAuthorizations = new List<string?>();
+        using var factory = new LinkedGitHubAccountsWebApplicationFactory(request =>
+        {
+            if (request.RequestUri!.AbsoluteUri.Contains("/hooks", StringComparison.Ordinal))
+            {
+                seenAuthorizations.Add(request.Headers.Authorization?.Parameter);
+                return request.Method == HttpMethod.Get
+                    ? Json(HttpStatusCode.OK, Array.Empty<object>())
+                    : Json(HttpStatusCode.Created, new
+                    {
+                        id = 42,
+                        config = new { url = "http://localhost/ignored", content_type = "json", insecure_ssl = "0" },
+                    });
+            }
+
+            return Json(HttpStatusCode.NotFound, new { error = "unhandled" });
+        });
+        await factory.TokenStore.LinkIdentityAsync(entraUserId, Token("tok-alice", "alice"), isDefault: true);
+        await factory.TokenStore.LinkIdentityAsync(entraUserId, Token("tok-bob", "bob"));
+        await factory.TokenStore.SetAsync(GitHubTokenScope.ForUser(entraUserId), Token("tok-alice", "alice"));
+
+        using var client = factory.CreateAuthenticatedClient(entraUserId, roles: [PlatformRoles.ProjectCreator]);
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Webhook Identity Project",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var project = await create.Content.ReadFromJsonAsync<ProjectResponse>();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+            await projectStore.UpdateOriginAsync(
+                ProjectId.Parse(project!.ProjectId),
+                ProjectOrigin.FromGitHub("acme/widgets"),
+                DateTimeOffset.UtcNow);
+        }
+
+        // Save a project-level override to a different login ("bob"). This must NOT change which
+        // identity's token is used to provision the webhook — the submitting user's own default
+        // token ("alice") must always win.
+        (await client.PutAsJsonAsync(
+            $"/api/projects/{project!.ProjectId}/github-identity",
+            new UpdateProjectGitHubIdentityRequest { GitHubLogin = "bob" }))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/projects/{project.ProjectId}/webhooks/github/provision",
+            new { });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        seenAuthorizations.Should().NotBeEmpty();
+        seenAuthorizations.Should().OnlyContain(token => token == "tok-alice");
     }
 
     [Fact]

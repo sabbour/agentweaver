@@ -308,7 +308,6 @@ app.MapPost("/api/projects/{id}/webhooks/github/provision", async (
     string id,
     IProjectStore projectStore,
     IGitHubTokenScopeProvider scopeProvider,
-    ProjectGitHubIdentityService identityService,
     IGitHubWebhookProvisioningService provisioningService,
     CancellationToken ct) =>
 {
@@ -320,22 +319,7 @@ app.MapPost("/api/projects/{id}/webhooks/github/provision", async (
     if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    GitHubTokenScope tokenScope;
-    if (!string.IsNullOrWhiteSpace(caller.EntraObjectId))
-    {
-        var effective = await identityService
-            .GetEffectiveIdentityAsync(projectId, caller.EntraObjectId!, ct)
-            .ConfigureAwait(false);
-        if (effective.EffectiveLink is null)
-            return Results.Unauthorized();
-        tokenScope = GitHubTokenScope.ForLinkedIdentity(
-            caller.EntraObjectId!,
-            effective.EffectiveLink.GitHubLogin);
-    }
-    else
-    {
-        tokenScope = scopeProvider.Resolve(caller.User);
-    }
+    var tokenScope = scopeProvider.Resolve(caller.User);
 
     var payloadUrl = new Uri(
         $"{httpContext.Request.Scheme}://{httpContext.Request.Host}{httpContext.Request.PathBase}" +
@@ -362,7 +346,7 @@ app.MapPost("/api/projects/{id}/webhooks/github/provision", async (
     .AddOpenApiOperationTransformer((operation, _, _) =>
     {
         operation.Description =
-            "Creates or updates the connected repository's GitHub webhook using the project's effective GitHub identity.";
+            "Creates or updates the connected repository's GitHub webhook using the caller's own GitHub identity.";
         return Task.CompletedTask;
     });
 
