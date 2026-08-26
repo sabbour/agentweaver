@@ -1579,7 +1579,15 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         activity.SetStatus(success ? ActivityStatusCode.Ok : ActivityStatusCode.Error, error);
         if (!success && !string.IsNullOrWhiteSpace(error))
             activity.SetTag("error.message", error);
-        if (toolResult is not null)
+        // toolResult is expected to already be passed through
+        // SensitiveDataRedactor.RedactJsonStringIfApplicable, which is a no-op for content that
+        // isn't a JSON object/array (it can't safely redact free-form text). Plain-text results
+        // (file contents, shell output, etc.) are therefore not emitted to telemetry at all —
+        // only structured JSON results are tagged, matching that helper's safety guarantee that
+        // unredacted content never reaches App Insights, which has a broader read audience than
+        // the application DB. We only need a cheap prefix check here since the full parse already
+        // happened inside RedactJsonStringIfApplicable.
+        if (toolResult is not null && IsJsonObjectOrArray(toolResult))
             activity.SetTag("gen_ai.tool.call.result", toolResult);
         if (endTime is { } ts && ts != default)
         {
@@ -1588,6 +1596,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 activity.SetEndTime(endUtc);
         }
         activity.Dispose();
+    }
+
+    /// <summary>
+    /// Cheap structural check for whether <paramref name="value"/> looks like a JSON object or
+    /// array (i.e. its trimmed content starts with <c>{</c> or <c>[</c>). Used to decide whether
+    /// a tool result is safe to attach to a span tag: only JSON-structured content has already
+    /// been through <see cref="SensitiveDataRedactor.RedactJsonStringIfApplicable"/>'s redaction
+    /// logic, so plain text is deliberately excluded. This intentionally does not re-parse the
+    /// JSON — the caller is expected to have already run the value through
+    /// <see cref="SensitiveDataRedactor.RedactJsonStringIfApplicable"/>, which performs the real
+    /// parse/redaction; this is just a lightweight gate on the result of that call.
+    /// </summary>
+    internal static bool IsJsonObjectOrArray(string value)
+    {
+        var trimmed = value.AsSpan().Trim();
+        return trimmed.Length > 0 && (trimmed[0] == '{' || trimmed[0] == '[');
     }
 
     /// <summary>

@@ -340,6 +340,43 @@ public sealed class TraceInstrumentationTests
         activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull();
     }
 
+    /// <summary>
+    /// Security regression test for Seraph's REJECT of PR #933: plain-text tool results (file
+    /// contents, shell output, etc.) must never be attached to the <c>gen_ai.tool.call.result</c>
+    /// span tag, because <c>SensitiveDataRedactor.RedactJsonStringIfApplicable</c> is a no-op for
+    /// non-JSON content and App Insights has a broader read audience than the application DB.
+    /// Only JSON-structured results (objects/arrays) are safe to tag.
+    /// </summary>
+    [Fact]
+    public void CompleteToolSpanCore_WithPlainTextResult_DoesNotSetGenAiToolCallResultTag()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "read");
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(
+            activity!, success: true, error: null, endTime: null,
+            toolResult: "line one\nline two\nsome file contents, not JSON");
+
+        activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull(
+            "plain-text results are not redactable and must never reach App Insights telemetry");
+    }
+
+    [Fact]
+    public void CompleteToolSpanCore_WithJsonArrayResult_SetsGenAiToolCallResultTag()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "list");
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(
+            activity!, success: true, error: null, endTime: null, toolResult: "[1,2,3]");
+
+        activity!.GetTagItem("gen_ai.tool.call.result").Should().Be("[1,2,3]");
+    }
+
     private static CopilotAIAgent BuildAgent()
     {
         var factory = new GitHubCopilotClientFactory(
