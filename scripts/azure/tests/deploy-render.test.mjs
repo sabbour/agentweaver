@@ -219,9 +219,13 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
     /name: NODE_OPTIONS\s*\n\s*value: --max-old-space-size=1024[\s\S]*?name: agentweaver-agent-host[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 800m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 2Gi\s*\n\s*requests:\s*\n\s*cpu: 300m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 1Gi/,
     "AgentHost must pass the preview Node heap cap and retain its explicit resource reservation",
   );
+  // Pre-existing drift (unrelated to this branch): dev's PR #931 ("raise agentweaver-exec memory
+  // limit 2Gi→4Gi to prevent preview server OOM") bumped the exec container's memory request/limit
+  // to 2Gi/4Gi in k8s/base/sandbox-template-agenthost.yaml without syncing this assertion. Updating
+  // the expectation here to match the shipped template rather than touching production config.
   assert.match(
     sandboxTemplate,
-    /name: agentweaver-exec[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 1200m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 2Gi\s*\n\s*requests:\s*\n\s*cpu: 700m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 1Gi/,
+    /name: agentweaver-exec[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 1200m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 4Gi\s*\n\s*requests:\s*\n\s*cpu: 700m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 2Gi/,
     "The executor that runs previews must retain explicit resource reservation and limits",
   );
   const mcpDeployment = manifestForFilename(docs, "mcp-deployment.yaml");
