@@ -1099,6 +1099,33 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.ToTable("OutcomeSpecs");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.ProjectGitHubIdentityOverrideRecord", b =>
+                {
+                    b.Property<string>("ProjectId")
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("EntraUserId")
+                        .HasColumnType("text")
+                        .HasColumnName("entra_user_id");
+
+                    b.Property<string>("GitHubLogin")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("github_login");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("ProjectId", "EntraUserId");
+
+                    b.HasIndex("EntraUserId", "GitHubLogin")
+                        .HasDatabaseName("IX_project_github_identity_overrides_user_login");
+
+                    b.ToTable("project_github_identity_overrides", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.ProjectRecord", b =>
                 {
                     b.Property<string>("ProjectId")

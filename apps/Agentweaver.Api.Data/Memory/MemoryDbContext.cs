@@ -47,6 +47,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<RunRecord> Runs => Set<RunRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
+    public DbSet<ProjectGitHubIdentityOverrideRecord> ProjectGitHubIdentityOverrides => Set<ProjectGitHubIdentityOverrideRecord>();
     public DbSet<ProjectRoleAssignmentRecord> ProjectRoleAssignments => Set<ProjectRoleAssignmentRecord>();
     public DbSet<BacklogTaskRecord> BacklogTasks => Set<BacklogTaskRecord>();
     public DbSet<BacklogTaskDependencyRecord> BacklogTaskDependencies => Set<BacklogTaskDependencyRecord>();
@@ -168,6 +169,16 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<WebSessionExchangeCode>().HasKey(c => c.Code);
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
+
+        model.Entity<ProjectGitHubIdentityOverrideRecord>(e =>
+        {
+            e.ToTable("project_github_identity_overrides").HasKey(x => new { x.ProjectId, x.EntraUserId });
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.EntraUserId).HasColumnName("entra_user_id");
+            e.Property(x => x.GitHubLogin).HasColumnName("github_login");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            e.HasIndex(x => new { x.EntraUserId, x.GitHubLogin }).HasDatabaseName("IX_project_github_identity_overrides_user_login");
+        });
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
         model.Entity<DismissedNotification>(e =>
