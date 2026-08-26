@@ -95,20 +95,18 @@ A declined run cannot be restarted. Submit a new orchestration with a revised ta
 
 The originating branch now contains exactly the changes you approved.
 
-## Review policy
+## Gate nodes
 
-Each project has a **Review Policy** that governs which gates run before merge. Policies are file-native YAML in `.agentweaver/review-policies/`, and support three step kinds:
+Which gates run before merge is determined by **gate nodes** placed directly in a workflow's OutcomeSpec, not by a project-level setting. A workflow can include any combination of three gate kinds:
 
-| Step kind | What it does |
+| Gate kind | What it does |
 |---|---|
-| `rai` | Responsible AI content-safety gate — may trigger automatic revision loops. On by default. |
-| `human-review` | Your explicit approve / decline / request-changes gate before any irreversible action. On by default. |
-| `rubberduck` | An optional request-changes-to-producer review loop that sends work back to the authoring agent for revision. Off by default. |
+| Human approval gate | Requires your explicit approve / decline / request-changes decision before the run can proceed past that point. |
+| Automatic gate | Evaluates a condition automatically — for example, that tests pass — and proceeds without human input when the condition is met. |
+| Triage gate | Waits for an external event, such as a GitHub webhook or label change, before the run proceeds. |
 
-The shipped **default** policy is `rai` + `human-review`, mirroring the default workflow's baked-in gates. Configure the active policy in [Project Settings → Review policy](./projects#review-policy).
+The default workflow places an automatic RAI gate before the run reaches you, followed by a human approval gate for the review stage described above — that human approval gate is mandatory and cannot be removed from a workflow. Additional gates (automatic or triage) can be composed into custom workflows to fit a team's process.
 
 ::: tip Human review is always present
-The human review step is mandatory and cannot be disabled. The platform enforces it regardless of review policy settings.
+The human approval gate before merge is mandatory. The platform enforces it regardless of how a workflow's other gates are configured.
 :::
-
-Review policies are loaded from the shared project workspace. When policy YAML changes, API replicas refresh their per-project policy cache the next time they read the registry, so a policy saved through one replica is observed by the rest of the deployment without pod restarts.
