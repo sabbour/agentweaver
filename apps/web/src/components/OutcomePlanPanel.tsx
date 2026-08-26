@@ -28,6 +28,7 @@ import {
 } from '@fluentui/react-icons';
 import { AgentStepList } from './ui/agentic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { RunStreamEvent, StreamStatus } from '../api/sse';
 import type { OutcomeSpec, OutcomeSpecStatus } from '../api/types';
 import { isTerminalRunStatus, normalizeRunStatus } from '../utils/runStatus';
@@ -226,9 +227,16 @@ interface OutcomePlanPanelProps {
   onReconnect?: () => void;
   onClarifyPlan?: () => void;
   clarificationSent?: boolean;
+  /**
+   * When provided, the confirm/clarify action row (and the Independent task promotion
+   * field above it) is reported to the caller instead of being rendered inline. This lets a
+   * host such as SlidePanel pin it outside a scrollable body so it's always visible without
+   * scrolling. Called with `null` whenever the plan isn't awaiting confirmation.
+   */
+  onFooterChange?: (node: ReactNode) => void;
 }
 
-export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCollapse, onReconnect, onClarifyPlan, clarificationSent = false }: OutcomePlanPanelProps) {
+export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCollapse, onReconnect, onClarifyPlan, clarificationSent = false, onFooterChange }: OutcomePlanPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -485,6 +493,51 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
     setReviseOpen(true);
   };
 
+  // The confirm/clarify action row, plus the Independent task promotion field above it.
+  // Rendered inline by default, but when a host supplies `onFooterChange` (e.g. SlidePanel
+  // pinning it outside a scrollable body) it's reported via that callback instead so it stays
+  // visible without scrolling.
+  const footerContent = awaiting ? (
+    <>
+      <Field
+        label="Independent task promotion"
+        hint="Optional: allow the coordinator to split genuinely separate deliverables into standalone backlog tasks. Leave off to keep all work inline in this run."
+      >
+        <Checkbox
+          checked={allowTaskPromotion}
+          disabled={acting || revising || runInterrupted || runTerminal}
+          label="Allow standalone backlog tasks for independent deliverables"
+          onChange={(_, data) => setAllowTaskPromotion(Boolean(data.checked))}
+        />
+      </Field>
+      <div role="group" className={styles.actionRow}>
+        <Button
+          appearance="primary"
+          icon={<CheckmarkCircleRegular />}
+          disabled={acting || revising || runInterrupted || runTerminal}
+          onClick={() => void handleConfirm()}
+        >
+          {acting ? 'Confirming plan...' : 'Confirm plan'}
+        </Button>
+        <Button
+          appearance="secondary"
+          icon={<EditRegular />}
+          disabled={acting || revising || runInterrupted || runTerminal}
+          onClick={openRevise}
+        >
+          Clarify plan
+        </Button>
+      </div>
+    </>
+  ) : null;
+
+  useEffect(() => {
+    if (!onFooterChange) return;
+    onFooterChange(footerContent);
+    return () => onFooterChange(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onFooterChange, awaiting, allowTaskPromotion, acting, revising, runInterrupted, runTerminal]);
+
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
@@ -596,39 +649,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         </MessageBar>
       )}
 
-      {awaiting && (
-        <>
-          <Field
-            label="Independent task promotion"
-            hint="Optional: allow the coordinator to split genuinely separate deliverables into standalone backlog tasks. Leave off to keep all work inline in this run."
-          >
-            <Checkbox
-              checked={allowTaskPromotion}
-              disabled={acting || revising || runInterrupted || runTerminal}
-              label="Allow standalone backlog tasks for independent deliverables"
-              onChange={(_, data) => setAllowTaskPromotion(Boolean(data.checked))}
-            />
-          </Field>
-          <div role="group" className={styles.actionRow}>
-            <Button
-              appearance="primary"
-              icon={<CheckmarkCircleRegular />}
-              disabled={acting || revising || runInterrupted || runTerminal}
-              onClick={() => void handleConfirm()}
-            >
-              {acting ? 'Confirming plan...' : 'Confirm plan'}
-            </Button>
-            <Button
-              appearance="secondary"
-              icon={<EditRegular />}
-              disabled={acting || revising || runInterrupted || runTerminal}
-              onClick={openRevise}
-            >
-              Clarify plan
-            </Button>
-          </div>
-        </>
-      )}
+      {!onFooterChange && footerContent}
 
 
       <Dialog open={reviseOpen} onOpenChange={(_, d) => { setReviseOpen(d.open); if (!d.open) { setAnswers([]); setExtraFeedback(''); } }}>

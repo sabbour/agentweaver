@@ -3371,6 +3371,9 @@ export function CoordinatorRunPage() {
   // ---------------------------------------------------------------------------
 
   const [planPanelOpen, setPlanPanelOpen] = useState(false);
+  // Confirm/clarify action row for the Outcome plan panel, reported by OutcomePlanPanel so it
+  // can be pinned outside the SlidePanel's scrollable body (always visible, no scrolling).
+  const [planFooter, setPlanFooter] = useState<ReactNode>(null);
   const [artifactsPanelOpen, setArtifactsPanelOpen] = useState(false);
   // Files chip opens the produced-files browser.
   const [filesPanelOpen, setFilesPanelOpen] = useState(false);
@@ -4671,6 +4674,7 @@ export function CoordinatorRunPage() {
           onClose={() => setPlanPanelOpen(false)}
           title="Outcome plan"
           width="min(880px, 96vw)"
+          footer={planFooter}
         >
           <OutcomePlanPanel
             runId={runId}
@@ -4680,6 +4684,7 @@ export function CoordinatorRunPage() {
             onCollapse={() => setPlanPanelOpen(false)}
             onReconnect={reconnectStream}
             onClarifyPlan={() => { setPlanPanelOpen(false); focusOutcomePlanComposer(); }}
+            onFooterChange={setPlanFooter}
           />
         </SlidePanel>
       )}
