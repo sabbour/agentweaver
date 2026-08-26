@@ -21,12 +21,14 @@ import {
   MenuList,
   MenuPopover,
   MenuTrigger,
+  Link as FluentLink,
   MessageBar,
   MessageBarBody,
   Spinner,
   Select,
   Textarea,
   tokens,
+  Tooltip,
 } from '@fluentui/react-components';
 import {
   AddRegular,
@@ -189,6 +191,20 @@ const EVENT_PREDICATE_LABELS: Record<WorkflowEventPredicateType, string> = {
   category: 'Discussion category',
   commentMatches: 'Exact command match',
 };
+
+// Automation triggers (schedule + webhook/event) are disabled until GitHub Apps
+// gain Copilot entitlements. See https://github.com/github/copilot-sdk/issues/551
+const AUTOMATION_TRIGGERS_ENABLED = false;
+
+const AUTOMATION_TRIGGER_TOOLTIP_CONTENT = (
+  <>
+    Scheduled and event triggers are coming soon — pending GitHub Copilot permissions
+    for GitHub Apps.{' '}
+    <FluentLink href="https://github.com/github/copilot-sdk/issues/551" target="_blank" rel="noopener noreferrer">
+      Track progress
+    </FluentLink>
+  </>
+);
 
 const REVIEW_STATES = ['approved', 'changes_requested', 'commented'] as const;
 const ISSUE_ACTIONS = [
@@ -806,30 +822,50 @@ export function WorkflowsPage() {
                 </Button>
               )}
               {wf.id && (
-                <Button
-                  appearance="subtle"
-                  size="small"
-                  disabled={duplicatingWorkflowId !== null}
-                  onClick={() => {
-                    if (wf.is_built_in) void handleCopyOnWrite(wf, 'schedule');
-                    else handleOpenSchedule(wf);
-                  }}
-                >
-                  {workflowTrigger(wf, 'schedule') ? 'Edit schedule' : 'Add schedule'}
-                </Button>
+                AUTOMATION_TRIGGERS_ENABLED ? (
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    disabled={duplicatingWorkflowId !== null}
+                    onClick={() => {
+                      if (wf.is_built_in) void handleCopyOnWrite(wf, 'schedule');
+                      else handleOpenSchedule(wf);
+                    }}
+                  >
+                    {workflowTrigger(wf, 'schedule') ? 'Edit schedule' : 'Add schedule'}
+                  </Button>
+                ) : (
+                  <Tooltip content={AUTOMATION_TRIGGER_TOOLTIP_CONTENT} relationship="label">
+                    <span>
+                      <Button appearance="subtle" size="small" disabled>
+                        {workflowTrigger(wf, 'schedule') ? 'Edit schedule' : 'Add schedule'}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                )
               )}
               {wf.id && (
-                <Button
-                  appearance="subtle"
-                  size="small"
-                  disabled={loadingEventTrigger || duplicatingWorkflowId !== null}
-                  onClick={() => {
-                    if (wf.is_built_in) void handleCopyOnWrite(wf, 'event');
-                    else void handleOpenEvent(wf);
-                  }}
-                >
-                  {workflowTrigger(wf, 'event') ? 'Edit event' : 'Add event'}
-                </Button>
+                AUTOMATION_TRIGGERS_ENABLED ? (
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    disabled={loadingEventTrigger || duplicatingWorkflowId !== null}
+                    onClick={() => {
+                      if (wf.is_built_in) void handleCopyOnWrite(wf, 'event');
+                      else void handleOpenEvent(wf);
+                    }}
+                  >
+                    {workflowTrigger(wf, 'event') ? 'Edit event' : 'Add event'}
+                  </Button>
+                ) : (
+                  <Tooltip content={AUTOMATION_TRIGGER_TOOLTIP_CONTENT} relationship="label">
+                    <span>
+                      <Button appearance="subtle" size="small" disabled>
+                        {workflowTrigger(wf, 'event') ? 'Edit event' : 'Add event'}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                )
               )}
             </>
           }

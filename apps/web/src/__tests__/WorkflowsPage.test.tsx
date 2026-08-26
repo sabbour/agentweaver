@@ -157,7 +157,13 @@ describe('WorkflowsPage', () => {
     await waitFor(() => expect(screen.getByText(/Default workflow set to Nightly Sweep/)).toBeDefined());
   });
 
-  it('renders and edits a project workflow schedule trigger', async () => {
+  // Automation triggers (schedule + event) are disabled behind AUTOMATION_TRIGGERS_ENABLED
+  // (see https://github.com/github/copilot-sdk/issues/551) — the schedule/event trigger
+  // editors are unreachable via the page until GitHub Apps gain Copilot entitlements. The
+  // dialog-editing behavior these tests used to exercise through the page remains implemented
+  // in ScheduleTriggerDialog / the event trigger editor, ready to re-enable; here we only assert
+  // the badges still render and the buttons are disabled with a "coming soon" tooltip.
+  it('renders a schedule trigger badge and shows a disabled schedule button with a coming-soon tooltip', async () => {
     const scheduled = {
       ...sampleList.workflows[1],
       valid: true,
@@ -165,24 +171,15 @@ describe('WorkflowsPage', () => {
       trigger: { type: 'schedule' as const, interval: 'weekly' as const, day_of_week: 'monday', time_of_day: '09:00' },
     };
     vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], scheduled] });
-    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue('id: nightly\nname: Nightly Sweep\nstart: done\nnodes: []\nedges: []\n');
-    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Nightly Sweep' } as never);
 
     renderPage('proj-1');
 
     expect(await screen.findByText('weekly · 09:00 UTC')).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: /edit schedule/i }));
-    expect(await screen.findByText('Schedule workflow')).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: /save schedule/i }));
-
-    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalledWith(
-      'proj-1',
-      'nightly',
-      expect.stringContaining('trigger:'),
-    ));
+    const scheduleButton = screen.getByRole('button', { name: /edit schedule/i });
+    expect(scheduleButton).toHaveProperty('disabled', true);
   });
 
-  it('renders an event-trigger badge and loads the configured event editor state', async () => {
+  it('renders an event-trigger badge and shows a disabled event button with a coming-soon tooltip', async () => {
     const eventDriven = {
       ...sampleList.workflows[1],
       valid: true,
@@ -190,29 +187,15 @@ describe('WorkflowsPage', () => {
       trigger: { type: 'event' as const, event_name: 'github.issue_comment' },
     };
     vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], eventDriven] });
-    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue(`id: nightly
-name: Nightly Sweep
-start: done
-nodes: []
-edges: []
-trigger:
-  type: event
-  event_name: github.issue_comment
-  if:
-    - comment_matches:
-        pattern: ^/agentweaver:triage$
-`);
 
     renderPage('proj-1');
 
     expect(await screen.findByText('event · issue_comment')).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: /edit event/i }));
-    expect(await screen.findByText('Event trigger')).toBeDefined();
-    expect(screen.getByText('Issue comment')).toBeDefined();
-    expect((screen.getByRole('textbox', { name: 'Exact command match' }) as HTMLInputElement).value).toBe('/agentweaver:triage');
+    const eventButton = screen.getByRole('button', { name: /edit event/i });
+    expect(eventButton).toHaveProperty('disabled', true);
   });
 
-  it('displays and edits schedule and event triggers without replacing either one', async () => {
+  it('displays both schedule and event trigger badges with both buttons disabled', async () => {
     const combined = {
       ...sampleList.workflows[1],
       valid: true,
@@ -226,132 +209,13 @@ trigger:
       default_workflow_id: 'default',
       workflows: [sampleList.workflows[0], combined],
     });
-    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue(`id: nightly
-name: Nightly Sweep
-start: done
-nodes: []
-edges: []
-triggers:
-  - type: schedule
-    interval: weekly
-    day_of_week: monday
-    time_of_day: "09:00"
-  - type: event
-    event_name: github.issues.labeled
-    if:
-      - has_label:
-          label: roadmap-review
-`);
-    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Nightly Sweep' } as never);
 
     renderPage('proj-1');
 
     expect(await screen.findByText('weekly · 09:00 UTC')).toBeDefined();
     expect(screen.getByText('event · issues.labeled')).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Edit schedule' })).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit event' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Save event' }));
-
-    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
-    const savedYaml = vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2] ?? '';
-    expect(savedYaml).toContain('triggers:');
-    expect(savedYaml).toContain('type: schedule');
-    expect(savedYaml).toContain('type: event');
-  });
-
-  it('makes the Issues action explicit and can switch an opened trigger to labeled', async () => {
-    const eventDriven = {
-      ...sampleList.workflows[1],
-      valid: true,
-      error: null,
-      triggers: [{ type: 'event' as const, event_name: 'github.issues.opened' }],
-    };
-    vi.mocked(apiClient.listWorkflows).mockResolvedValue({
-      default_workflow_id: 'default',
-      workflows: [sampleList.workflows[0], eventDriven],
-    });
-    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue(`id: nightly
-name: Nightly Sweep
-start: done
-nodes: []
-edges: []
-trigger:
-  type: event
-  event_name: github.issues.opened
-  if:
-    - has_label:
-        label: agentweaver:triage
-`);
-    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Nightly Sweep' } as never);
-
-    renderPage('proj-1');
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit event' }));
-    const actionSelect = await screen.findByRole('combobox', { name: 'Issue action' });
-    expect((actionSelect as HTMLSelectElement).value).toBe('opened');
-    fireEvent.change(actionSelect, { target: { value: 'labeled' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save event' }));
-
-    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
-    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2])
-      .toContain('event_name: github.issues.labeled');
-  });
-
-  it('builds OR event conditions and saves them back to YAML', async () => {
-    const projectWorkflow = { ...sampleList.workflows[1], valid: true, error: null };
-    vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], projectWorkflow] });
-    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue('id: nightly\nname: Nightly Sweep\nstart: done\nnodes: []\nedges: []\n');
-    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Nightly Sweep' } as never);
-
-    renderPage('proj-1');
-
-    const addEventBtns = await screen.findAllByRole('button', { name: /add event/i });
-    fireEvent.click(addEventBtns[addEventBtns.length - 1]);
-    expect(await screen.findByText('Event trigger')).toBeDefined();
-
-    fireEvent.change(screen.getByRole('combobox', { name: 'GitHub event' }), { target: { value: 'issue_comment' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add condition' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Match any of' }));
-
-    const commandInputs = screen.getAllByRole('textbox', { name: 'Exact command match' });
-    fireEvent.change(commandInputs[0], { target: { value: '/agentweaver:triage' } });
-    fireEvent.change(commandInputs[1], { target: { value: '/agentweaver:rerun' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save event' }));
-
-    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalledWith(
-      'proj-1',
-      'nightly',
-      expect.stringContaining('event_name: github.issue_comment'),
-    ));
-    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2]).toContain('or:');
-    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2]).toContain('pattern: ^/agentweaver:triage$');
-    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2]).toContain('pattern: ^/agentweaver:rerun$');
-  });
-
-  it('preserves values by splitting them into AND rows when Match any of is turned off', async () => {
-    const projectWorkflow = { ...sampleList.workflows[1], valid: true, error: null };
-    vi.mocked(apiClient.listWorkflows).mockResolvedValue({ default_workflow_id: 'default', workflows: [sampleList.workflows[0], projectWorkflow] });
-    vi.mocked(apiClient.getWorkflowYaml).mockResolvedValue('id: nightly\nname: Nightly Sweep\nstart: done\nnodes: []\nedges: []\n');
-
-    renderPage('proj-1');
-
-    const addEventBtns = await screen.findAllByRole('button', { name: /add event/i });
-    fireEvent.click(addEventBtns[addEventBtns.length - 1]);
-    expect(await screen.findByText('Event trigger')).toBeDefined();
-    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'issue_comment' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add condition' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Match any of' }));
-
-    let commandInputs = screen.getAllByRole('textbox', { name: 'Exact command match' });
-    fireEvent.change(commandInputs[0], { target: { value: '/agentweaver:triage' } });
-    fireEvent.change(commandInputs[1], { target: { value: '/agentweaver:rerun' } });
-
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Match any of' }));
-
-    commandInputs = screen.getAllByRole('textbox', { name: 'Exact command match' });
-    expect(commandInputs).toHaveLength(2);
-    expect((commandInputs[0] as HTMLInputElement).value).toBe('/agentweaver:triage');
-    expect((commandInputs[1] as HTMLInputElement).value).toBe('/agentweaver:rerun');
+    expect(screen.getByRole('button', { name: 'Edit schedule' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Edit event' })).toHaveProperty('disabled', true);
   });
 
   it('queues a workflow-bound run from Run now', async () => {
@@ -381,7 +245,7 @@ trigger:
     ));
   });
 
-  it('shows schedule button for built-in workflows (triggers copy-on-write)', async () => {
+  it('shows a disabled schedule button for built-in workflows', async () => {
     vi.mocked(apiClient.listWorkflows).mockResolvedValue({
       default_workflow_id: 'default',
       workflows: [sampleList.workflows[0]],
@@ -390,6 +254,6 @@ trigger:
     renderPage('proj-1');
 
     expect(await screen.findByRole('button', { name: /duplicate to project/i })).toBeDefined();
-    expect(screen.getByRole('button', { name: /add schedule/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: /add schedule/i })).toHaveProperty('disabled', true);
   });
 });

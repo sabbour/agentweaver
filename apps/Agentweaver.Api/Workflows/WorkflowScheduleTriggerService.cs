@@ -32,6 +32,10 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
 {
     public const string CapturedBy = "automation:schedule-trigger";
 
+    // Automation triggers disabled until GitHub Apps gain Copilot entitlements.
+    // See https://github.com/github/copilot-sdk/issues/551
+    private const bool AutomationTriggersEnabled = false;
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<WorkflowScheduleTriggerService> _logger;
     private readonly TimeProvider _timeProvider;
@@ -58,6 +62,14 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (!AutomationTriggersEnabled)
+        {
+            _logger.LogInformation("Automation triggers are disabled (pending GitHub App Copilot entitlements). Skipping schedule trigger loop.");
+            return;
+        }
+
+#pragma warning disable CS0162 // AutomationTriggersEnabled is a compile-time re-enable switch; the
+                               // code below is intentionally unreachable while it is false.
         if (!_enabled)
         {
             _logger.LogInformation("Workflow schedule trigger disabled (Workflows:ScheduleTriggerEnabled=false)");
@@ -69,6 +81,7 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
         {
             await RunTickAsync(_timeProvider.GetUtcNow(), stoppingToken).ConfigureAwait(false);
         }
+#pragma warning restore CS0162
     }
 
     /// <summary>
