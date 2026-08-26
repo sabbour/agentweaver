@@ -1308,7 +1308,20 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     internal void EmitToolCallOnce(string callId, string toolName, object? arguments)
     {
         if (_emittedCalls.TryAdd(callId, 0))
-            Emit("tool.call", new { callId, toolName, arguments = SensitiveDataRedactor.RedactObject(arguments) });
+        {
+            var redacted = SensitiveDataRedactor.RedactObject(arguments);
+            Emit("tool.call", new { callId, toolName, arguments = redacted });
+            // Tag the still-open execute_tool OTel span with the arguments so that App Insights'
+            // Gen AI trace view can show them. The RunEvent path above feeds the Agentweaver UI;
+            // App Insights reads span attributes directly, and previously saw "No arguments
+            // recorded" because ConfigureToolSpanTags never set gen_ai.tool.call.arguments.
+            if (redacted is not null && _activeToolSpans.TryGetValue(callId, out var span))
+            {
+                var argsJson = redacted.ToJsonString();
+                if (!string.IsNullOrWhiteSpace(argsJson))
+                    span.SetTag("gen_ai.tool.call.arguments", argsJson);
+            }
+        }
     }
 
     internal void EmitToolResultOnce(string callId, string content)
@@ -1391,8 +1404,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     break;
                 if (complete.Data.Success)
                 {
-                    CompleteToolSpan(callId, success: true, error: null, endTime: complete.Timestamp);
-                    EmitToolResultOnce(callId, complete.Data.Result?.Content ?? string.Empty);
+                    var resultContent = complete.Data.Result?.Content ?? string.Empty;
+                    CompleteToolSpan(callId, success: true, error: null, endTime: complete.Timestamp, toolResult: SensitiveDataRedactor.RedactJsonStringIfApplicable(resultContent));
+                    EmitToolResultOnce(callId, resultContent);
                 }
                 else
                 {
@@ -1542,11 +1556,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// negative duration; if it would, we fall back to observation-time (Dispose default).
     /// </para>
     /// </summary>
-    private void CompleteToolSpan(string callId, bool success, string? error, DateTimeOffset? endTime = null)
+    private void CompleteToolSpan(string callId, bool success, string? error, DateTimeOffset? endTime = null, string? toolResult = null)
     {
         if (!_activeToolSpans.TryRemove(callId, out var activity))
             return;
-        CompleteToolSpanCore(activity, success, error, endTime);
+        CompleteToolSpanCore(activity, success, error, endTime, toolResult);
     }
 
     /// <summary>
@@ -1559,12 +1573,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// timestamp is absent, default, or would go backwards, the span falls back to
     /// observation-time bounding (the <see cref="Activity.Dispose"/> default).
     /// </summary>
-    internal static void CompleteToolSpanCore(Activity activity, bool success, string? error, DateTimeOffset? endTime)
+    internal static void CompleteToolSpanCore(Activity activity, bool success, string? error, DateTimeOffset? endTime, string? toolResult = null)
     {
         activity.SetTag("gen_ai.tool.call.success", success);
         activity.SetStatus(success ? ActivityStatusCode.Ok : ActivityStatusCode.Error, error);
         if (!success && !string.IsNullOrWhiteSpace(error))
             activity.SetTag("error.message", error);
+        // toolResult is expected to already be passed through
+        // SensitiveDataRedactor.RedactJsonStringIfApplicable, which is a no-op for content that
+        // isn't a JSON object/array (it can't safely redact free-form text). Plain-text results
+        // (file contents, shell output, etc.) are therefore not emitted to telemetry at all —
+        // only structured JSON results are tagged, matching that helper's safety guarantee that
+        // unredacted content never reaches App Insights, which has a broader read audience than
+        // the application DB. We only need a cheap prefix check here since the full parse already
+        // happened inside RedactJsonStringIfApplicable.
+        if (toolResult is not null && IsJsonObjectOrArray(toolResult))
+            activity.SetTag("gen_ai.tool.call.result", toolResult);
         if (endTime is { } ts && ts != default)
         {
             var endUtc = ts.UtcDateTime;
@@ -1572,6 +1596,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 activity.SetEndTime(endUtc);
         }
         activity.Dispose();
+    }
+
+    /// <summary>
+    /// Cheap structural check for whether <paramref name="value"/> looks like a JSON object or
+    /// array (i.e. its trimmed content starts with <c>{</c> or <c>[</c>). Used to decide whether
+    /// a tool result is safe to attach to a span tag: only JSON-structured content has already
+    /// been through <see cref="SensitiveDataRedactor.RedactJsonStringIfApplicable"/>'s redaction
+    /// logic, so plain text is deliberately excluded. This intentionally does not re-parse the
+    /// JSON — the caller is expected to have already run the value through
+    /// <see cref="SensitiveDataRedactor.RedactJsonStringIfApplicable"/>, which performs the real
+    /// parse/redaction; this is just a lightweight gate on the result of that call.
+    /// </summary>
+    internal static bool IsJsonObjectOrArray(string value)
+    {
+        var trimmed = value.AsSpan().Trim();
+        return trimmed.Length > 0 && (trimmed[0] == '{' || trimmed[0] == '[');
     }
 
     /// <summary>
@@ -2035,7 +2075,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         Action<string, string> emitToolResultOnce,
         Action<string, string> emitToolErrorOnce,
         Action<string, string, DateTimeOffset?> startToolSpan,
-        Action<string, bool, string?, DateTimeOffset?> completeToolSpan) : AIFunction
+        Action<string, bool, string?, DateTimeOffset?, string?> completeToolSpan) : AIFunction
     {
         public override string Name => inner.Name;
         public override string Description => inner.Description;
@@ -2064,13 +2104,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     string s => s,
                     _ => JsonSerializer.Serialize(result),
                 };
-                completeToolSpan(callId, true, null, DateTimeOffset.UtcNow);
+                completeToolSpan(callId, true, null, DateTimeOffset.UtcNow, SensitiveDataRedactor.RedactJsonStringIfApplicable(content));
                 emitToolResultOnce(callId, content);
                 return result;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                completeToolSpan(callId, false, ex.Message, DateTimeOffset.UtcNow);
+                completeToolSpan(callId, false, ex.Message, DateTimeOffset.UtcNow, null);
                 emitToolErrorOnce(callId, ex.Message);
                 throw;
             }
