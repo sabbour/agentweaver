@@ -209,7 +209,7 @@ public sealed class StartPreviewToolTests
             emitToolResultOnce: (callId, content) => results.Add((callId, content)),
             emitToolErrorOnce: (_, _) => throw new InvalidOperationException("should not error on success"),
             startToolSpan: (callId, toolName, _) => spanStarts.Add((callId, toolName)),
-            completeToolSpan: (callId, success, error, _) => spanCompletes.Add((callId, success, error)));
+            completeToolSpan: (callId, success, error, _, _) => spanCompletes.Add((callId, success, error)));
 
         var result = (await wrapped.InvokeAsync(new AIFunctionArguments(
             new Dictionary<string, object?> { ["port"] = 3000, ["session_id"] = "preview-session-1" })))?.ToString() ?? "";
@@ -247,7 +247,7 @@ public sealed class StartPreviewToolTests
             emitToolResultOnce: (_, _) => throw new InvalidOperationException("should not succeed"),
             emitToolErrorOnce: (_, message) => errorMessage = message,
             startToolSpan: (_, _, _) => { },
-            completeToolSpan: (_, success, error, _) => spanCompletes.Add((success, error)));
+            completeToolSpan: (_, success, error, _, _) => spanCompletes.Add((success, error)));
 
         var act = async () => await wrapped.InvokeAsync(new AIFunctionArguments());
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("boom");

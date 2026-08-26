@@ -94,6 +94,14 @@ const useStyles = makeStyles({
     padding: 0,
     gap: 0,
   },
+  footer: {
+    flexShrink: 0,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
 });
 
 const focusableSelector = [
@@ -138,6 +146,9 @@ export interface SlidePanelProps {
   flushBody?: boolean;
   bodyClassName?: string;
   variant?: 'default' | 'copilotDock';
+  /** Optional content pinned below the scrollable body (e.g. action buttons that must stay
+   * visible without scrolling). Renders nothing when absent. */
+  footer?: ReactNode;
   children: ReactNode;
 }
 
@@ -152,6 +163,7 @@ export function SlidePanel({
   flushBody = false,
   bodyClassName,
   variant = 'default',
+  footer,
   children,
 }: SlidePanelProps) {
   const styles = useStyles();
@@ -261,6 +273,11 @@ export function SlidePanel({
         <div className={mergeClasses(styles.body, flushBody && styles.bodyFlush, bodyClassName)}>
           {open || keepMounted ? children : null}
         </div>
+        {footer != null && (
+          <div className={styles.footer}>
+            {footer}
+          </div>
+        )}
       </div>
     </>
   );

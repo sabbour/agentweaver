@@ -1,7 +1,13 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Metrics;
+using Agentweaver.SandboxExec;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Observability;
 
@@ -259,5 +265,125 @@ public sealed class TraceInstrumentationTests
     {
         AppInsightsMetricsService.ClassifySpanType(spanKind, toolName, operationName, model)
             .Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Regression test for the App Insights Gen AI trace view showing "No arguments recorded"
+    /// for every native SDK tool call. <see cref="CopilotAIAgent.ConfigureToolSpanTags"/> tags the
+    /// tool name/call id/agent name but never the call arguments; App Insights reads
+    /// <c>gen_ai.tool.call.arguments</c> directly off the span, so it always rendered empty even
+    /// though the Agentweaver UI's RunEvent-based trace panel (fixed by #850/#889) showed them
+    /// fine. <see cref="CopilotAIAgent.EmitToolCallOnce"/> must tag the still-open <c>execute_tool</c>
+    /// span with the (redacted) arguments in addition to emitting the <c>tool.call</c> RunEvent.
+    /// </summary>
+    [Fact]
+    public void EmitToolCallOnce_SetsGenAiToolCallArgumentsOnSpan()
+    {
+        Activity? capturedSpan = null;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Agentweaver",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStarted = activity =>
+            {
+                if (activity.OperationName == "execute_tool mock_search")
+                    capturedSpan = activity;
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var agent = BuildAgent();
+        agent.ObserveToolExecutionStarted(
+            "call-args-1",
+            "mock_search",
+            JsonSerializer.SerializeToElement(new { query = "hello world" }),
+            DateTimeOffset.UtcNow);
+
+        capturedSpan.Should().NotBeNull("StartToolSpan must have opened an execute_tool span before EmitToolCallOnce ran");
+        var argsTag = capturedSpan!.GetTagItem("gen_ai.tool.call.arguments") as string;
+        argsTag.Should().NotBeNullOrEmpty("App Insights reads gen_ai.tool.call.arguments directly off the span");
+        argsTag.Should().Contain("hello world");
+
+        capturedSpan.Stop();
+    }
+
+    /// <summary>
+    /// Regression test companion to <see cref="EmitToolCallOnce_SetsGenAiToolCallArgumentsOnSpan"/>:
+    /// verifies <see cref="CopilotAIAgent.CompleteToolSpanCore"/> tags
+    /// <c>gen_ai.tool.call.result</c> on the span (what App Insights reads for "Output") when a
+    /// result is supplied, mirroring the existing coverage for the success/error/duration tags.
+    /// </summary>
+    [Fact]
+    public void CompleteToolSpanCore_WithResult_SetsGenAiToolCallResultTag()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "create");
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(
+            activity!, success: true, error: null, endTime: null, toolResult: "{\"path\":\"file.txt\"}");
+
+        activity!.GetTagItem("gen_ai.tool.call.result").Should().Be("{\"path\":\"file.txt\"}");
+    }
+
+    [Fact]
+    public void CompleteToolSpanCore_NoResult_DoesNotSetGenAiToolCallResultTag()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "create");
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(activity!, success: true, error: null, endTime: null);
+
+        activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull();
+    }
+
+    /// <summary>
+    /// Security regression test for Seraph's REJECT of PR #933: plain-text tool results (file
+    /// contents, shell output, etc.) must never be attached to the <c>gen_ai.tool.call.result</c>
+    /// span tag, because <c>SensitiveDataRedactor.RedactJsonStringIfApplicable</c> is a no-op for
+    /// non-JSON content and App Insights has a broader read audience than the application DB.
+    /// Only JSON-structured results (objects/arrays) are safe to tag.
+    /// </summary>
+    [Fact]
+    public void CompleteToolSpanCore_WithPlainTextResult_DoesNotSetGenAiToolCallResultTag()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "read");
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(
+            activity!, success: true, error: null, endTime: null,
+            toolResult: "line one\nline two\nsome file contents, not JSON");
+
+        activity!.GetTagItem("gen_ai.tool.call.result").Should().BeNull(
+            "plain-text results are not redactable and must never reach App Insights telemetry");
+    }
+
+    [Fact]
+    public void CompleteToolSpanCore_WithJsonArrayResult_SetsGenAiToolCallResultTag()
+    {
+        using var listener = ListenToAgentweaverSource();
+
+        var activity = CopilotAIAgent.StartToolSpanCore(turnActivity: null, "list");
+        activity.Should().NotBeNull();
+
+        CopilotAIAgent.CompleteToolSpanCore(
+            activity!, success: true, error: null, endTime: null, toolResult: "[1,2,3]");
+
+        activity!.GetTagItem("gen_ai.tool.call.result").Should().Be("[1,2,3]");
+    }
+
+    private static CopilotAIAgent BuildAgent()
+    {
+        var factory = new GitHubCopilotClientFactory(
+            new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+        return new CopilotAIAgent(
+            factory, new FixedInstallationScopeStub(), SandboxExecutorFactory.CreatePassthrough(),
+            new StubPolicyStore(), new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(), NullLogger<CopilotAIAgent>.Instance);
     }
 }

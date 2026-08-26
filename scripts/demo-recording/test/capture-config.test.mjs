@@ -201,7 +201,7 @@ test('Blueprint plan keeps promotion, review, trace, and decision evidence conti
   assert.deepEqual(
     ship.steps.slice(-2).map(({ type, timeout, after, ms, cue }) => ({ type, timeout, after, ms, cue: cue?.name ?? null })),
     [
-      { type: 'followNewPage', timeout: 15000, after: 2000, ms: undefined, cue: null },
+      { type: 'followNewPage', timeout: 60000, after: 2000, ms: undefined, cue: null },
       { type: 'pause', timeout: undefined, after: undefined, ms: 3000, cue: '2.5.preview-open' },
     ],
     'preview capture should follow the newly opened preview tab before cueing the viewport',

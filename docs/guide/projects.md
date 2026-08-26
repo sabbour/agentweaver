@@ -69,7 +69,7 @@ If the repository list shows a "Connect GitHub" prompt, click it to authorize Ag
 
 Open a project, then navigate to **Settings** (accessible from the project's navigation) to configure it.
 
-Settings are organized into four sections, accessible from the left rail:
+Settings are organized into three sections, accessible from the left rail:
 
 ### General
 
@@ -86,20 +86,6 @@ Controls how agent commands execute and what they can reach. Options include:
 - **Preview approval timeout** — how long an agent-initiated live-preview request waits for
   approval. The default is 30 minutes; project owners can choose 1–1440 minutes. Existing
   projects inherit the 30-minute default.
-
-### Review policy
-
-Choose which review steps gate the project's work. Review policies are file-native YAML in `.agentweaver/review-policies/`; the shipped default is RAI plus human review.
-
-| Step kind | Description |
-|---|---|
-| `rai` | Responsible AI content-safety check (on by default) |
-| `human-review` | Your explicit approve / decline / request-changes gate (on by default) |
-| `rubberduck` | Optional request-changes-to-producer review loop (off by default) |
-
-::: warning Human review is always available
-You can always inspect and act on a run's output regardless of review policy settings. The platform guarantees a human approval gate before anything merges.
-:::
 
 ### Danger Zone
 
