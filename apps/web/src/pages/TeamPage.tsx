@@ -761,7 +761,7 @@ export function TeamPage() {
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    setTeam(null);
+    setTeam(null); // eslint-disable-line react-hooks/set-state-in-effect -- reset stale team/project state when projectId changes
     setProject(null);
     setScenarios([]);
     setLoading(true);
