@@ -7,9 +7,7 @@ namespace Agentweaver.Api.Auth;
 /// Missing caller identity is rejected so background/system work cannot silently
 /// fall back to a shared GitHub credential.
 /// </summary>
-public sealed class CallerTokenScopeProvider(
-    IHttpContextAccessor? httpContextAccessor = null,
-    IServiceScopeFactory? serviceScopeFactory = null) : IGitHubTokenScopeProvider
+public sealed class CallerTokenScopeProvider : IGitHubTokenScopeProvider
 {
     public GitHubTokenScope Resolve(string? userId)
     {
