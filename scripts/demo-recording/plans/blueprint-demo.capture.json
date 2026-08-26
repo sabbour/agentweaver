@@ -29,22 +29,6 @@
     "externalArtifacts": [
       {
         "beats": [
-          "3.2"
-        ],
-        "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL",
-        "host": "github.com",
-        "instruction": "A repository administrator must manually create the disposable demo issue, add agentweaver:triage, and verify the signed issues.labeled delivery before capture. The capture plan never creates issues, labels, or webhooks."
-      },
-      {
-        "beats": [
-          "3.2"
-        ],
-        "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_RUN_URL",
-        "origin": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
-        "instruction": "Set this to the resulting same-project github.issues.labeled run URL after a repository administrator has verified delivery."
-      },
-      {
-        "beats": [
           "2.5",
           "2.6",
           "2.7",
@@ -1357,20 +1341,19 @@
           "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
         }
       ],
-      "videoPath": "recordings/final-takes/2026-08-25/trailhead-travel-studio/3.1-schedule-sweep.webm",
+      "videoPath": "recordings/final-takes/2026-08-25/trailhead-travel-studio/3.1-dependency-run.webm",
       "viewport": {
         "width": 1920,
         "height": 1080
       },
       "outputBudgetMs": {
-        "minimum": 8000,
-        "preferred": 12000,
-        "maximum": 18000
+        "minimum": 6000,
+        "preferred": 10000,
+        "maximum": 15000
       },
       "expectedCues": [
         "3.1.workflow-list",
-        "3.1.weekly-schedule",
-        "3.1.schedule-saved"
+        "3.1.run-started"
       ],
       "cueWatchers": [
         {
@@ -1386,13 +1369,27 @@
             "mode": "first-matching",
             "selector": "[aria-label='Available workflows'], [aria-label='Active workflow']"
           }
+        },
+        {
+          "name": "3.1.run-started",
+          "stableForMs": 350,
+          "deadlineMs": 30000,
+          "source": {
+            "kind": "text",
+            "selector": "body",
+            "includes": "Queued a run for"
+          },
+          "rect": {
+            "mode": "element",
+            "selector": "main"
+          }
         }
       ],
       "steps": [
         {
           "type": "badge",
           "label": "Beat 3.1",
-          "title": "Schedule recurring dependency sweeps",
+          "title": "Run dependency sweep on demand",
           "duration": 1800
         },
         {
@@ -1404,47 +1401,20 @@
         {
           "type": "waitFor",
           "selector": "page.getByLabel('Available workflows').or(page.getByLabel('Active workflow'))",
-          "timeout": 30000,
-          "cue": {
-            "name": "3.1.weekly-schedule",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
+          "timeout": 30000
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Software Delivery' }).getByRole('button', { name: 'Add schedule', exact: true })",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Software Delivery' }).getByRole('button', { name: /Run now/i }).first()",
           "scale": 1.48,
           "after": 700
         },
         {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: /Schedule/i }).first()",
-          "scale": 1.45,
-          "after": 650
-        },
-        {
-          "type": "select",
-          "selector": "page.getByRole('combobox', { name: 'Cadence' })",
-          "option": {
-            "label": "Weekly"
-          },
-          "scale": 1.42,
-          "after": 450
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: /Save schedule|Schedule workflow/i }).first()",
-          "scale": 1.52,
-          "after": 1100
-        },
-        {
           "type": "waitText",
-          "text": "Schedule saved.",
+          "text": "Queued a run for",
           "timeout": 30000,
           "cue": {
-            "name": "3.1.schedule-saved",
+            "name": "3.1.run-started",
             "rect": {
               "mode": "element",
               "selector": "main"
@@ -1466,42 +1436,49 @@
           "environment": "AGENTWEAVER_DEMO_PROJECT_URL",
           "kind": "app-url",
           "message": "Set to the full project URL created during beat 1.1, e.g. https://agentweaver.../projects/{id}. Find the project ID in beat 1.3 cue logs."
-        },
-        {
-          "environment": "AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL",
-          "kind": "github-issue-url",
-          "message": "Set it to the canonical dry-capture source issue: https://github.com/sabbour/agentweaver-demo-dryrun/issues/4."
         }
       ],
-      "videoPath": "recordings/final-takes/2026-08-25/trailhead-travel-studio/3.2-github-triage.webm",
+      "videoPath": "recordings/final-takes/2026-08-25/trailhead-travel-studio/3.2-manual-triage.webm",
       "viewport": {
         "width": 1920,
         "height": 1080
       },
       "outputBudgetMs": {
-        "minimum": 13500,
-        "preferred": 20500,
-        "maximum": 32000
+        "minimum": 6000,
+        "preferred": 10000,
+        "maximum": 15000
       },
       "expectedCues": [
-        "3.2.event-trigger",
-        "3.2.event-config",
-        "3.2.webhook-config",
-        "3.2.triage-run"
+        "3.2.workflow-list",
+        "3.2.triage-run-started"
       ],
       "cueWatchers": [
         {
-          "name": "3.2.event-trigger",
+          "name": "3.2.workflow-list",
           "stableForMs": 350,
-          "deadlineMs": 60000,
+          "deadlineMs": 30000,
+          "source": {
+            "kind": "selector",
+            "selector": "[aria-label='Available workflows'], [aria-label='Active workflow']",
+            "state": "visible"
+          },
+          "rect": {
+            "mode": "first-matching",
+            "selector": "[aria-label='Available workflows'], [aria-label='Active workflow']"
+          }
+        },
+        {
+          "name": "3.2.triage-run-started",
+          "stableForMs": 350,
+          "deadlineMs": 30000,
           "source": {
             "kind": "text",
             "selector": "body",
-            "includes": "Event trigger"
+            "includes": "Queued a run for"
           },
           "rect": {
             "mode": "element",
-            "selector": "[role=dialog]"
+            "selector": "main"
           }
         }
       ],
@@ -1509,7 +1486,7 @@
         {
           "type": "badge",
           "label": "Beat 3.2",
-          "title": "Trigger bug triage from GitHub",
+          "title": "Manually trigger bug triage",
           "duration": 1800
         },
         {
@@ -1525,104 +1502,25 @@
         },
         {
           "type": "click",
-          "selector": "page.getByRole('listitem').filter({ hasText: 'Bug Fix' }).first()",
+          "selector": "page.getByRole('listitem').filter({ hasText: 'Bug Fix' }).getByRole('button', { name: /Run now/i }).first()",
           "scale": 1.48,
           "after": 700
         },
         {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: /Add event|Edit event/i }).first()",
-          "scale": 1.48,
-          "after": 600
-        },
-        {
           "type": "waitText",
-          "text": "Event trigger",
-          "timeout": 60000,
-          "cue": {
-            "name": "3.2.event-config",
-            "rect": {
-              "mode": "element",
-              "selector": "[role=dialog]"
-            }
-          }
-        },
-        {
-          "type": "select",
-          "selector": "page.getByRole('combobox', { name: 'GitHub event' })",
-          "option": {
-            "label": "Issues"
-          },
-          "scale": 1.42,
-          "after": 500
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: /Add condition/i })",
-          "scale": 1.4,
-          "after": 450
-        },
-        {
-          "type": "select",
-          "selector": "page.getByRole('combobox', { name: 'Condition type' }).first()",
-          "option": {
-            "label": "Label"
-          },
-          "scale": 1.38,
-          "after": 350
-        },
-        {
-          "type": "type",
-          "selector": "page.getByRole('textbox', { name: /Label/i }).first()",
-          "text": "agentweaver:triage",
-          "scale": 1.45,
-          "after": 450
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('button', { name: /Save event/i })",
-          "scale": 1.52,
-          "after": 1000
-        },
-        {
-          "type": "click",
-          "selector": "page.getByRole('link', { name: 'Settings', exact: true })",
-          "scale": 1.42,
-          "after": 800
-        },
-        {
-          "type": "waitFor",
-          "selector": "page.getByRole('button', { name: 'Create webhook automatically', exact: true })",
+          "text": "Queued a run for",
           "timeout": 30000,
           "cue": {
-            "name": "3.2.webhook-config",
-            "rect": {
-              "mode": "matched-element"
-            }
-          }
-        },
-        {
-          "type": "hover",
-          "selector": "page.getByRole('button', { name: 'Create webhook automatically', exact: true })",
-          "scale": 1.45,
-          "hold": 1600
-        },
-        {
-          "type": "goto",
-          "url": "{{AGENTWEAVER_DEMO_GITHUB_TRIAGE_ISSUE_URL}}",
-          "after": 900
-        },
-        {
-          "type": "waitText",
-          "text": "agentweaver:triage",
-          "timeout": 60000,
-          "cue": {
-            "name": "3.2.triage-run",
+            "name": "3.2.triage-run-started",
             "rect": {
               "mode": "element",
               "selector": "main"
             }
           }
+        },
+        {
+          "type": "pause",
+          "ms": 2500
         }
       ]
     },
