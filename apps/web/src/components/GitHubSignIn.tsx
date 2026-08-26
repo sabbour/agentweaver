@@ -27,7 +27,7 @@ import {
   WarningRegular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { AuthMode, AuthSessionResponse, LinkedGitHubAccount, ProjectGitHubIdentity } from '../api/types';
+import type { AuthMode, AuthSessionResponse, LinkedGitHubAccount } from '../api/types';
 
 const useStyles = makeStyles({
   trigger: {
@@ -154,14 +154,13 @@ export interface GitHubSignInProps {
   collapsed?: boolean;
 }
 
-export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
+export function GitHubSignIn({ collapsed }: GitHubSignInProps) {
   const styles = useStyles();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [linkedAccounts, setLinkedAccounts] = useState<LinkedGitHubAccount[]>([]);
-  const [projectIdentity, setProjectIdentity] = useState<ProjectGitHubIdentity | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -171,27 +170,16 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
       setSession(authSession);
       if (!authSession.authenticated) {
         setLinkedAccounts([]);
-        setProjectIdentity(null);
         return;
       }
 
       if (authSession.auth_mode === 'entra') {
-        const [accounts, identity] = await Promise.all([
-          apiClient.listLinkedGitHubAccounts().catch((err) => {
-            if (err instanceof ApiError && err.status === 404) return [] as LinkedGitHubAccount[];
-            throw err;
-          }),
-          projectId
-            ? apiClient.getProjectGitHubIdentity(projectId).catch((err) => {
-              if (err instanceof ApiError && err.status === 404) return null;
-              throw err;
-            })
-            : Promise.resolve(null),
-        ]);
+        const accounts = await apiClient.listLinkedGitHubAccounts().catch((err) => {
+          if (err instanceof ApiError && err.status === 404) return [] as LinkedGitHubAccount[];
+          throw err;
+        });
         setLinkedAccounts(accounts);
-        setProjectIdentity(identity);
       } else {
-        setProjectIdentity(null);
         setLinkedAccounts([]);
       }
     } catch (err) {
@@ -199,7 +187,7 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -215,7 +203,7 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
 
   const currentAccount = useMemo(() => {
     if (authMode === 'entra') {
-      const login = projectIdentity?.effective_login ?? linkedAccounts.find((account) => account.is_default)?.login ?? null;
+      const login = linkedAccounts.find((account) => account.is_default)?.login ?? null;
       return login ? linkedAccounts.find((account) => account.login === login) ?? null : null;
     }
     return session?.login
@@ -228,7 +216,7 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
         copilot_entitled: null,
       }
       : null;
-  }, [authMode, linkedAccounts, projectIdentity?.effective_login, session]);
+  }, [authMode, linkedAccounts, session]);
 
   const otherAccounts = useMemo(
     () => linkedAccounts.filter((account) => account.login !== currentAccount?.login),
@@ -239,11 +227,7 @@ export function GitHubSignIn({ projectId, collapsed }: GitHubSignInProps) {
     setSaving(login);
     setError(null);
     try {
-      if (authMode === 'entra' && projectId) {
-        await apiClient.setProjectGitHubIdentityOverride(projectId, login);
-      } else {
-        await apiClient.setDefaultLinkedGitHubAccount(login);
-      }
+      await apiClient.setDefaultLinkedGitHubAccount(login);
       await load();
     } catch (err) {
       setError(apiErrorMessage(err));

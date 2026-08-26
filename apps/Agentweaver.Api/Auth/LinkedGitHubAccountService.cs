@@ -26,7 +26,6 @@ public sealed class LinkedGitHubAccountService(
     GitHubOAuthRedirectService oauthService,
     IGitHubTokenStore tokenStore,
     IGitHubAccessTokenProvider accessTokenProvider,
-    ProjectGitHubIdentityOverrideStore overrideStore,
     IGitHubCopilotEntitlementProbe entitlementProbe,
     IHttpClientFactory httpClientFactory,
     ILogger<LinkedGitHubAccountService> logger)
@@ -126,7 +125,6 @@ public sealed class LinkedGitHubAccountService(
         if (!removed)
             return (false, null);
 
-        await overrideStore.RemoveOverridesForLinkedLoginAsync(entraUserId, githubLogin, ct).ConfigureAwait(false);
         var newDefault = await multi.GetDefaultLinkedIdentityAsync(entraUserId, ct).ConfigureAwait(false);
         return (true, newDefault?.GitHubLogin);
     }

@@ -258,8 +258,6 @@ builder.Services.AddSingleton<Agentweaver.Domain.IGitHubRepositoryClient, Agentw
 builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
-builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
-builder.Services.AddScoped<ProjectGitHubIdentityService>();
 builder.Services.AddScoped<LinkedGitHubAccountService>();
 builder.Services.AddSingleton<Agentweaver.Api.Webhooks.IGitHubWebhookProvisioningService,
     Agentweaver.Api.Webhooks.GitHubWebhookProvisioningService>();
@@ -1072,7 +1070,6 @@ else
 
     app.MapRunEndpoints();
     app.MapProjectEndpoints();
-    app.MapProjectGitHubIdentityEndpoints();
     app.MapProjectWorkspaceEndpoints();
     app.MapSkillEndpoints();
     app.MapBacklogEndpoints();

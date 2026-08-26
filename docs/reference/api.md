@@ -99,8 +99,6 @@ Assistant endpoints back the **Sessions** feature (see [The Assistant and Sessio
 | `GET` | `/api/projects/{id}` | Get a project by id |
 | `PATCH` | `/api/projects/{id}` | Rename a project |
 | `PUT` | `/api/projects/{id}/provider-settings` | Update provider and model defaults |
-| `GET` | `/api/projects/{id}/github-identity` | Get the effective linked GitHub identity for the caller in this project |
-| `PUT` | `/api/projects/{id}/github-identity` | Set or clear the caller's per-project linked GitHub identity override |
 | `DELETE` | `/api/projects/{id}` | Delete a project (record only; cancels active runs) |
 | `GET` | `/api/projects/{id}/runs` | List runs for a project |
 | `POST` | `/api/projects/{id}/runs` | Deprecated direct run submission; returns `410 Gone` |
@@ -184,7 +182,7 @@ Agent loopback writes authenticate with the normal internal API key plus a run-s
 | `GET` | `/api/github/repos` | List repositories for the signed-in GitHub user or selected account |
 | `POST` | `/api/auth/github/sign-out` | Sign out and delete the stored token |
 
-The linked-account and per-project GitHub-identity endpoints are available only in Entra auth mode and require an authenticated caller with an Entra object id. `GET /api/projects/{id}/github-identity` requires project `Viewer` or higher; `PUT /api/projects/{id}/github-identity` requires project `Contributor` or higher. These endpoints surface the real GitHub permissions reported by each linked identity; Agentweaver project roles do not simulate or override GitHub repo rights.
+The linked-account endpoints are available only in Entra auth mode and require an authenticated caller with an Entra object id. These endpoints surface the real GitHub permissions reported by each linked identity; Agentweaver project roles do not simulate or override GitHub repo rights.
 
 ### Team casting
 

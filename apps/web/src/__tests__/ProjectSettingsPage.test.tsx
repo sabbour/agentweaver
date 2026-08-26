@@ -19,10 +19,8 @@ vi.mock('../api/apiClient', () => ({
     getServerInfo: vi.fn(),
     getSandboxPolicy: vi.fn(),
     getProjectAccessOverview: vi.fn(),
-    listLinkedGitHubAccounts: vi.fn(),
     createProjectRoleAssignment: vi.fn(),
     deleteProjectRoleAssignment: vi.fn(),
-    setProjectGitHubIdentityOverride: vi.fn(),
     autoCreateProjectWebhook: vi.fn(),
     rotateProjectWebhookSecret: vi.fn(),
     updateProjectProviderSettings: vi.fn(),
@@ -99,35 +97,9 @@ beforeEach(() => {
         scope: 'Project:proj-1',
       },
     ],
-    github_identity_override_login: null,
-    effective_github_login: 'octocat',
-    effective_github_permission: 'Write',
-    github_identity_permissions: [
-      { login: 'octocat', permission: 'Write', is_default: true },
-      { login: 'altcat', permission: 'Read', is_default: false },
-    ],
   } as never);
-  vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([
-    {
-      login: 'octocat',
-      name: 'Octocat',
-      avatar_url: 'https://example.com/octocat.png',
-      type: 'user',
-      is_default: true,
-      copilot_entitled: true,
-    },
-    {
-      login: 'altcat',
-      name: 'Alt Cat',
-      avatar_url: 'https://example.com/altcat.png',
-      type: 'user',
-      is_default: false,
-      copilot_entitled: false,
-    },
-  ] as never);
   vi.mocked(apiClient.createProjectRoleAssignment).mockResolvedValue(undefined as never);
   vi.mocked(apiClient.deleteProjectRoleAssignment).mockResolvedValue(undefined as never);
-  vi.mocked(apiClient.setProjectGitHubIdentityOverride).mockResolvedValue(undefined as never);
 });
 
 afterEach(() => {
@@ -236,7 +208,7 @@ describe('ProjectSettingsPage', () => {
     expect(outcome.value).toBe('');
   });
 
-  it('shows project members and linked GitHub identity controls on the Access section', async () => {
+  it('shows project members on the Access section', async () => {
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
@@ -244,8 +216,6 @@ describe('ProjectSettingsPage', () => {
 
     expect(await screen.findByText('Platform access')).toBeDefined();
     expect(screen.getByText('Ada Lovelace')).toBeDefined();
-    expect(screen.getByText('Currently effective: @octocat')).toBeDefined();
-    expect(screen.getByText(/octocat — Write/)).toBeDefined();
   });
 
   it('adds a project member through Tank role-assignment contract', async () => {
@@ -265,18 +235,6 @@ describe('ProjectSettingsPage', () => {
       email: 'grace@contoso.com',
       role: 'Contributor',
     }));
-  });
-
-  it('saves a per-project GitHub identity override', async () => {
-    renderPage('proj-1');
-
-    await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
-
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Use GitHub identity' }), { target: { value: 'altcat' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save GitHub identity' }));
-
-    await waitFor(() => expect(apiClient.setProjectGitHubIdentityOverride).toHaveBeenCalledWith('proj-1', 'altcat'));
   });
 
   it('saves generation model overrides using Tank backend payload shape', async () => {

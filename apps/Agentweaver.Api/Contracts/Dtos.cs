@@ -765,23 +765,6 @@ public sealed record AccessibleGitHubRepositoryResponse
     [JsonPropertyName("permission")] public required string Permission { get; init; }
 }
 
-public sealed record UpdateProjectGitHubIdentityRequest
-{
-    [JsonPropertyName("github_login")] public string? GitHubLogin { get; init; }
-}
-
-public sealed record ProjectGitHubIdentityResponse
-{
-    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
-    [JsonPropertyName("project_override_login")] public string? ProjectOverrideLogin { get; init; }
-    [JsonPropertyName("effective_login")] public string? EffectiveLogin { get; init; }
-    [JsonPropertyName("effective_avatar_url")] public string? EffectiveAvatarUrl { get; init; }
-    [JsonPropertyName("copilot_entitled")] public bool? CopilotEntitled { get; init; }
-    [JsonPropertyName("is_default")] public bool? IsDefault { get; init; }
-    [JsonPropertyName("linked_at")] public DateTimeOffset? LinkedAt { get; init; }
-    [JsonPropertyName("resolution_source")] public required string ResolutionSource { get; init; }
-}
-
 // -----------------------------------------------------------------------
 // Casting
 // -----------------------------------------------------------------------

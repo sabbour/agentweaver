@@ -8,9 +8,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getAuthSession: vi.fn(),
     listLinkedGitHubAccounts: vi.fn(),
-    getProjectGitHubIdentity: vi.fn(),
     setDefaultLinkedGitHubAccount: vi.fn(),
-    setProjectGitHubIdentityOverride: vi.fn(),
     signOutSession: vi.fn(),
     beginLinkGitHubAccount: vi.fn(),
   },
@@ -48,45 +46,51 @@ beforeEach(() => {
       copilot_entitled: false,
     },
   ] as never);
-  vi.mocked(apiClient.getProjectGitHubIdentity).mockResolvedValue({
-    project_id: 'proj-1',
-    project_override_login: null,
-    effective_login: 'octocat',
-    effective_avatar_url: 'https://example.com/octocat.png',
-    copilot_entitled: true,
-    is_default: true,
-    linked_at: '2026-08-10T00:00:00Z',
-    resolution_source: 'default',
-  } as never);
-  vi.mocked(apiClient.setProjectGitHubIdentityOverride).mockResolvedValue(undefined as never);
+  vi.mocked(apiClient.setDefaultLinkedGitHubAccount).mockResolvedValue(undefined as never);
   vi.mocked(apiClient.beginLinkGitHubAccount).mockResolvedValue({
     authorize_url: 'https://github.com/login/oauth/authorize?state=abc',
   } as never);
 });
 
 describe('GitHubSignIn', () => {
-  it('shows current account and lets the user switch the current project account', async () => {
-    vi.mocked(apiClient.getProjectGitHubIdentity)
-      .mockResolvedValueOnce({
-        project_id: 'proj-1',
-        project_override_login: null,
-        effective_login: 'octocat',
-        effective_avatar_url: 'https://example.com/octocat.png',
-        copilot_entitled: true,
-        is_default: true,
-        linked_at: '2026-08-10T00:00:00Z',
-        resolution_source: 'default',
-      } as never)
-      .mockResolvedValueOnce({
-        project_id: 'proj-1',
-        project_override_login: 'altcat',
-        effective_login: 'altcat',
-        effective_avatar_url: 'https://example.com/altcat.png',
-        copilot_entitled: false,
-        is_default: false,
-        linked_at: '2026-08-10T00:00:00Z',
-        resolution_source: 'project_override',
-      } as never);
+  it('shows current account and lets the user switch the current linked account', async () => {
+    vi.mocked(apiClient.listLinkedGitHubAccounts)
+      .mockResolvedValueOnce([
+        {
+          login: 'octocat',
+          name: 'Octocat',
+          avatar_url: 'https://example.com/octocat.png',
+          type: 'user',
+          is_default: true,
+          copilot_entitled: true,
+        },
+        {
+          login: 'altcat',
+          name: 'Alt Cat',
+          avatar_url: 'https://example.com/altcat.png',
+          type: 'user',
+          is_default: false,
+          copilot_entitled: false,
+        },
+      ] as never)
+      .mockResolvedValueOnce([
+        {
+          login: 'octocat',
+          name: 'Octocat',
+          avatar_url: 'https://example.com/octocat.png',
+          type: 'user',
+          is_default: false,
+          copilot_entitled: true,
+        },
+        {
+          login: 'altcat',
+          name: 'Alt Cat',
+          avatar_url: 'https://example.com/altcat.png',
+          type: 'user',
+          is_default: true,
+          copilot_entitled: false,
+        },
+      ] as never);
 
     render(
       <AzureFluentProvider density="compact">
@@ -101,9 +105,9 @@ describe('GitHubSignIn', () => {
     expect(screen.getByText('@octocat')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: /Alt Cat/ }));
 
-    await waitFor(() => expect(apiClient.setProjectGitHubIdentityOverride).toHaveBeenCalledWith('proj-1', 'altcat'));
+    await waitFor(() => expect(apiClient.setDefaultLinkedGitHubAccount).toHaveBeenCalledWith('altcat'));
     expect(await screen.findByText('@altcat')).toBeDefined();
-    expect(apiClient.getProjectGitHubIdentity).toHaveBeenCalledTimes(2);
+    expect(apiClient.listLinkedGitHubAccounts).toHaveBeenCalledTimes(2);
   });
 
   it('starts the real link flow via beginLinkGitHubAccount when "Add account" is clicked', async () => {

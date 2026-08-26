@@ -582,17 +582,6 @@ export interface ProjectAccessOverview {
   github_identity_permissions?: ProjectGitHubIdentityPermission[] | null;
 }
 
-export interface ProjectGitHubIdentity {
-  project_id: string;
-  project_override_login: string | null;
-  effective_login: string | null;
-  effective_avatar_url: string | null;
-  copilot_entitled: boolean | null;
-  is_default: boolean | null;
-  linked_at: string | null;
-  resolution_source: string;
-}
-
 
 // --- Casting / Team types ---
 
