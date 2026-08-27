@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Api.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260827112924_AddTwoAppPersistence")]
+    partial class AddTwoAppPersistence
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -510,8 +513,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnName("status");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("InstallationId", "RepositoryId");
 
                     b.HasIndex("ProjectId", "InstallationId", "RepositoryId", "AutomationKey")
                         .IsUnique();
@@ -2668,13 +2669,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("FK_automation_activations_projects_project_id");
-
-                    b.HasOne("Agentweaver.Api.Memory.GitHubRepositoryGrantRecord", null)
-                        .WithMany()
-                        .HasForeignKey("InstallationId", "RepositoryId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.AutomationInvocationRecord", b =>
@@ -2728,13 +2722,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubRepositoryGrantRecord", b =>
                 {
-                    b.HasOne("Agentweaver.Api.Memory.GitHubInstallationRecord", null)
-                        .WithMany()
-                        .HasForeignKey("InstallationId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("FK_github_repository_grants_installations_installation_id");
-
                     b.HasOne("Agentweaver.Api.Memory.ProjectRecord", null)
                         .WithMany()
                         .HasForeignKey("ProjectId")

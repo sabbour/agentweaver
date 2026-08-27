@@ -210,7 +210,7 @@ if (string.Equals(tokenStoreProvider, "keyvault", StringComparison.OrdinalIgnore
     var secretClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
     var kvSecretStore = new KeyVaultSecretStore(secretClient);
     var diskFs = new FileSystemGitHubTokenStore(); // migration source only
-    var kvTokenStore = new KeyVaultGitHubTokenStore(kvSecretStore, diskFallback: diskFs, diskMirror: null);
+    var kvTokenStore = new KeyVaultGitHubTokenStore(kvSecretStore, diskFallback: diskFs);
     var cachedTokenStore = new CachingGitHubTokenStore(kvTokenStore);
     // Outermost decorator: rewrite legacy per-user scopes onto the caller's ACTIVE linked GitHub
     // identity so Entra-signed-in users (whose credentials live under user-link:{oid}:{login})
@@ -259,6 +259,7 @@ builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
 builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
+builder.Services.AddScoped<TwoAppPersistenceStore>();
 builder.Services.AddScoped<ProjectGitHubIdentityService>();
 builder.Services.AddScoped<LinkedGitHubAccountService>();
 builder.Services.AddSingleton<Agentweaver.Api.Webhooks.IGitHubWebhookProvisioningService,
