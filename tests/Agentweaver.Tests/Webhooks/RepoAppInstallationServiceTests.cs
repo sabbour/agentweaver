@@ -40,9 +40,9 @@ public sealed class RepoAppInstallationServiceTests
         await db.SaveChangesAsync();
         var handler = new RecordingHandler(
             """{"id":72,"repository_selection":"selected","account":{"login":"owner"},"permissions":{"contents":"READ","pull_requests":"write","administration":"write"}}""",
-            """{"token":"ghs_metadata_token"}""",
+            """{"token":"ghs_metadata_token","expires_at":"2030-01-01T00:00:00Z"}""",
             """{"id":99,"full_name":"renamed/repository"}""",
-            """{"token":"ghs_installation_token_should_not_persist"}""");
+            """{"token":"ghs_installation_token_should_not_persist","expires_at":"2030-01-01T00:00:00Z"}""");
         var service = new RepoAppInstallationTokenService(Config(), db, secrets, new StubHttpClientFactory(handler));
         string? consumed = null;
 
@@ -65,6 +65,42 @@ public sealed class RepoAppInstallationServiceTests
         handler.Bodies[1].Should().Contain("\"repository_ids\":[99]").And.Contain("\"metadata\":\"read\"");
         (await db.GitHubInstallations.SingleAsync()).ToString().Should().NotContain("ghs_");
         (await db.GitHubRepositoryGrants.SingleAsync()).PermissionDigest.Should().NotContain("ghs_");
+    }
+
+    [Fact]
+    public async Task Mint_UsesProviderExpiryInsteadOfSynthesizingAnExpiry()
+    {
+        await using var db = await OpenDbAsync();
+        var secrets = new InMemorySecretStore();
+        using var rsa = RSA.Create(2048);
+        await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
+        var permissions = new Dictionary<string, string> { ["contents"] = "read" };
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = 72, AppKind = GitHubAppKind.Repo, ProjectId = "project-id", CreatedAt = DateTimeOffset.UtcNow,
+        });
+        db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = 72, RepositoryId = 99, ProjectId = "project-id", FullNameDisplay = "owner/repository",
+            PermissionDigest = RepoAppInstallationTokenService.CreatePermissionDigest(permissions), GrantedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var expectedExpiry = DateTimeOffset.UtcNow.AddMinutes(17);
+        var service = new RepoAppInstallationTokenService(
+            Config(), db, secrets, new StubHttpClientFactory(new RecordingHandler(
+                """{"id":72,"repository_selection":"selected","account":{"login":"owner"},"permissions":{"contents":"read"}}""",
+                """{"token":"ghs_metadata","expires_at":"2030-01-01T00:00:00Z"}""",
+                """{"id":99,"full_name":"owner/repository"}""",
+                $$"""{"token":"ghs_transient","expires_at":"{{expectedExpiry:O}}"}""")));
+        DateTimeOffset? receivedExpiry = null;
+
+        (await service.MintForRepositoryAsync(72, 99, (_, expiry) =>
+        {
+            receivedExpiry = expiry;
+            return Task.CompletedTask;
+        })).Should().Be(RepoAppInstallationOutcome.Success);
+
+        receivedExpiry.Should().BeCloseTo(expectedExpiry, TimeSpan.FromSeconds(1));
     }
 
     [Fact]

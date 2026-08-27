@@ -430,9 +430,10 @@ public sealed class ProjectCopilotBindingService(
         {
             EntraObjectId = entraObjectId, ActorKind = GitHubAuditActorKind.HumanEntraSubject,
             Action = GitHubAuditAction.BindingChanged, ResourceId = projectId.ToString(),
-            AppKind = GitHubAppKind.Copilot, Purpose = GitHubAuthorizationPurpose.InteractiveCopilot,
+            AppKind = GitHubAppKind.Copilot, CapabilityPurpose = GitHubCapabilityPurpose.UnattendedCopilot,
             Outcome = outcome, ReasonCode = reason, CorrelationId = Guid.NewGuid().ToString("N"),
-            OccurredAt = DateTimeOffset.UtcNow, CredentialVersionOrDigest = version,
+            OccurredAt = DateTimeOffset.UtcNow,
+            GrantDigest = version is null ? null : CreateGrantDigest(projectId, version),
         };
     private static async Task<string> ReadBoundedAsync(HttpContent content, CancellationToken ct)
     {

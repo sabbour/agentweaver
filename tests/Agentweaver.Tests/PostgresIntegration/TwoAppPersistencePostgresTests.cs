@@ -63,6 +63,49 @@ public sealed class TwoAppPersistencePostgresTests(PostgresFixture postgres)
             .Should().Be(InvocationClaimResult.Duplicate);
     }
 
+    [PostgresFact]
+    public async Task CapabilitySnapshots_AllowPurposeCoexistenceAndRejectRunPurposeRaces()
+    {
+        var projectId = $"capability-snapshots-{Guid.NewGuid():N}";
+        await using (var setup = await postgres.CreateDbContextAsync())
+        {
+            setup.Projects.Add(new ProjectRecord
+            {
+                ProjectId = projectId,
+                Name = "Snapshot project",
+                OriginKind = "blank",
+                WorkingDirectory = "snapshot-worktree",
+                Owner = "owner",
+                DefaultProvider = "github_copilot",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            setup.RunGitHubCapabilitySnapshots.AddRange(
+                InteractiveSnapshot(projectId, "run", GitHubCapabilityPurpose.InteractiveRepository),
+                InteractiveSnapshot(projectId, "run", GitHubCapabilityPurpose.InteractiveCopilot));
+            await setup.SaveChangesAsync();
+        }
+
+        await using (var first = await postgres.CreateDbContextAsync())
+        await using (var second = await postgres.CreateDbContextAsync())
+        {
+            first.RunGitHubCapabilitySnapshots.Add(InteractiveSnapshot(
+                projectId, "race", GitHubCapabilityPurpose.InteractiveRepository));
+            second.RunGitHubCapabilitySnapshots.Add(InteractiveSnapshot(
+                projectId, "race", GitHubCapabilityPurpose.InteractiveRepository));
+            await first.SaveChangesAsync();
+            var save = () => second.SaveChangesAsync();
+            await save.Should().ThrowAsync<DbUpdateException>();
+        }
+
+        await using var verify = await postgres.CreateDbContextAsync();
+        (await verify.RunGitHubCapabilitySnapshots.CountAsync(x => x.ProjectId == projectId)).Should().Be(3);
+        (await verify.RunGitHubCapabilitySnapshots
+            .Where(x => x.RunId == "run")
+            .Select(x => x.SnapshotRef)
+            .ToListAsync()).Should().OnlyHaveUniqueItems();
+    }
+
     private static GitHubLifecycleDeliveryRecord LifecycleDelivery(string deliveryId) => new()
     {
         DeliveryId = deliveryId,
@@ -81,5 +124,25 @@ public sealed class TwoAppPersistencePostgresTests(PostgresFixture postgres)
         GrantDigest = "digest",
         Status = GitHubBindingStatus.Active,
         BoundAt = DateTimeOffset.UtcNow,
+    };
+
+    private static RunGitHubCapabilitySnapshotRecord InteractiveSnapshot(
+        string projectId,
+        string runId,
+        GitHubCapabilityPurpose purpose) => new()
+    {
+        SnapshotRef = SnapshotRef.Create().Value,
+        RunId = runId,
+        Purpose = purpose,
+        AppKind = GitHubAppKind.Repo,
+        SourceKind = GitHubCapabilitySnapshotSourceKind.UserAuthorization,
+        ProjectId = projectId,
+        EntraObjectId = "entra",
+        SourceAuthorizationId = $"authorization-{runId}-{purpose}",
+        RepositoryId = purpose == GitHubCapabilityPurpose.InteractiveRepository ? 202 : null,
+        CredentialReference = "repo-app-user-credential-version",
+        CredentialVersion = "version",
+        GrantDigest = "grant-digest",
+        CapturedAt = DateTimeOffset.UtcNow,
     };
 }

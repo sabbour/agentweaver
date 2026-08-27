@@ -127,6 +127,26 @@ public sealed class SensitiveDataRedactorTests
         redacted.Should().Be(content);
     }
 
+    [Theory]
+    [InlineData("ghu_token")]
+    [InlineData("ghs_token")]
+    [InlineData("ghp_token")]
+    [InlineData("gho_token")]
+    [InlineData("ghr_token")]
+    [InlineData("-----BEGIN PRIVATE KEY-----")]
+    [InlineData("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature")]
+    public void Redaction_RecursivelyRemovesCredentialShapesFromValues(string secret)
+    {
+        var value = JsonSerializer.Serialize(new
+        {
+            nested = new[] { new Dictionary<string, object?> { ["message"] = $"provider failure: {secret}" } },
+        });
+
+        var redacted = SensitiveDataRedactor.RedactJsonStringIfApplicable(value);
+
+        redacted.Should().NotContain(secret).And.Contain(SensitiveDataRedactor.RedactedPlaceholder);
+    }
+
     [Fact]
     public void RedactJsonStringIfApplicable_HandlesNullAndEmpty()
     {

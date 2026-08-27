@@ -19,6 +19,7 @@ internal sealed record RepoAppInstallationAuthority(
     long RepositoryId,
     string FullNameDisplay,
     IReadOnlyDictionary<string, string> Permissions);
+internal sealed record RepoAppInstallationToken(string Value, DateTimeOffset ExpiresAt);
 
 /// <summary>
 /// API-only boundary for a short-lived Repo App JWT and the single-repository installation
@@ -87,7 +88,7 @@ public sealed class RepoAppInstallationTokenService(
             if (installationToken is null)
                 return RepoAppInstallationOutcome.ProviderUnavailable;
 
-            await useToken(installationToken, DateTimeOffset.UtcNow.AddMinutes(55)).ConfigureAwait(false);
+            await useToken(installationToken.Value, installationToken.ExpiresAt).ConfigureAwait(false);
             return RepoAppInstallationOutcome.Success;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -152,7 +153,7 @@ public sealed class RepoAppInstallationTokenService(
             if (metadataToken is null)
                 return null;
             using var repositoryRequest = CreateGitHubRequest(
-                HttpMethod.Get, $"/repositories/{repositoryId}", metadataToken);
+                HttpMethod.Get, $"/repositories/{repositoryId}", metadataToken.Value);
             using var repositoryResponse = await client.SendAsync(repositoryRequest, timeout.Token).ConfigureAwait(false);
             if (!repositoryResponse.IsSuccessStatusCode)
                 return null;
@@ -213,7 +214,7 @@ public sealed class RepoAppInstallationTokenService(
         return request;
     }
 
-    private async Task<string?> GetInstallationTokenAsync(
+    private async Task<RepoAppInstallationToken?> GetInstallationTokenAsync(
         string appJwt,
         long installationId,
         long repositoryId,
@@ -231,10 +232,13 @@ public sealed class RepoAppInstallationTokenService(
             return null;
         using var document = JsonDocument.Parse(
             await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false));
-        return document.RootElement.TryGetProperty("token", out var token) &&
-               !string.IsNullOrWhiteSpace(token.GetString())
-            ? token.GetString()
-            : null;
+        if (!document.RootElement.TryGetProperty("token", out var token) ||
+            string.IsNullOrWhiteSpace(token.GetString()) ||
+            !document.RootElement.TryGetProperty("expires_at", out var expiresAtElement) ||
+            !DateTimeOffset.TryParse(expiresAtElement.GetString(), out var expiresAt) ||
+            expiresAt <= DateTimeOffset.UtcNow)
+            return null;
+        return new(token.GetString()!, expiresAt);
     }
 
     private static bool TryGetNormalizedPermissions(
