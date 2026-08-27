@@ -3,6 +3,7 @@ using Agentweaver.Api.Memory;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -18,6 +19,7 @@ public sealed class TwoAppPersistenceStoreTests
             await new TwoAppPersistenceStore(setup).AddAuthorizationAsync(new GitHubAuthorizationRecord
             {
                 State = "state",
+                ExternalTransactionId = TwoAppPersistenceStore.CreateExternalTransactionId(),
                 AppKind = GitHubAppKind.Copilot,
                 Purpose = GitHubAuthorizationPurpose.InteractiveCopilot,
                 EntraObjectId = "entra",
@@ -36,6 +38,88 @@ public sealed class TwoAppPersistenceStoreTests
             .Should().Be(AuthorizationClaimResult.Claimed);
         (await new TwoAppPersistenceStore(second).ClaimAuthorizationAsync("state", "entra", DateTimeOffset.UtcNow))
             .Should().Be(AuthorizationClaimResult.Consumed);
+    }
+
+    [Fact]
+    public async Task ExternalTransactionHandle_IsDistinctSafeAndBoundToAppAndSubject()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var transactionId = TwoAppPersistenceStore.CreateExternalTransactionId();
+        transactionId.Should().HaveLength(43);
+
+        await using (var setup = new MemoryDbContext(options))
+        {
+            await new TwoAppPersistenceStore(setup).AddAuthorizationAsync(new GitHubAuthorizationRecord
+            {
+                State = "oauth-state-that-must-not-leak",
+                ExternalTransactionId = transactionId,
+                AppKind = GitHubAppKind.Repo,
+                Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
+                EntraObjectId = "entra-one",
+                ExpiresAtUnixMilliseconds = DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds(),
+                ReturnRouteKey = "projects",
+                PkceVerifierProtected = "protected",
+                CallbackCookieHash = "hash",
+                Status = GitHubAuthorizationStatus.Pending,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await using var db = new MemoryDbContext(options);
+        var store = new TwoAppPersistenceStore(db);
+        (await store.GetAuthorizationTransactionAsync(transactionId, GitHubAppKind.Repo, "entra-one"))
+            .Should().Be(new GitHubAuthorizationTransactionHandle(
+                transactionId,
+                GitHubAppKind.Repo,
+                DateTimeOffset.FromUnixTimeMilliseconds(
+                    (await db.GitHubAuthorizations.SingleAsync()).ExpiresAtUnixMilliseconds),
+                GitHubAuthorizationStatus.Pending));
+        (await store.ClaimAuthorizationByTransactionIdAsync(
+            transactionId, GitHubAppKind.Copilot, "entra-one", DateTimeOffset.UtcNow))
+            .Should().Be(AuthorizationClaimResult.Invalid);
+        (await store.ClaimAuthorizationByTransactionIdAsync(
+            transactionId, GitHubAppKind.Repo, "entra-two", DateTimeOffset.UtcNow))
+            .Should().Be(AuthorizationClaimResult.Invalid);
+        (await store.ClaimAuthorizationByTransactionIdAsync(
+            transactionId, GitHubAppKind.Repo, "entra-one", DateTimeOffset.UtcNow))
+            .Should().Be(AuthorizationClaimResult.Claimed);
+
+        var serialized = JsonSerializer.Serialize(await db.GitHubAuthorizations.SingleAsync());
+        serialized.Should().NotContain("oauth-state-that-must-not-leak")
+            .And.NotContain("protected")
+            .And.NotContain("hash");
+        JsonSerializer.Serialize((await store.GetAuthorizationTransactionAsync(
+            transactionId, GitHubAppKind.Repo, "entra-one"))!).Should().Contain(transactionId);
+    }
+
+    [Fact]
+    public async Task ExternalTransactionHandle_ReportsExpiredInsteadOfPending()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var transactionId = TwoAppPersistenceStore.CreateExternalTransactionId();
+        await using (var setup = new MemoryDbContext(options))
+        {
+            await new TwoAppPersistenceStore(setup).AddAuthorizationAsync(new GitHubAuthorizationRecord
+            {
+                State = "expired-state",
+                ExternalTransactionId = transactionId,
+                AppKind = GitHubAppKind.Copilot,
+                Purpose = GitHubAuthorizationPurpose.InteractiveCopilot,
+                EntraObjectId = "entra",
+                ExpiresAtUnixMilliseconds = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds(),
+                ReturnRouteKey = "projects",
+                PkceVerifierProtected = "protected",
+                CallbackCookieHash = "hash",
+                Status = GitHubAuthorizationStatus.Pending,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+
+        await using var db = new MemoryDbContext(options);
+        (await new TwoAppPersistenceStore(db).GetAuthorizationTransactionAsync(
+            transactionId, GitHubAppKind.Copilot, "entra"))!.Status.Should().Be(GitHubAuthorizationStatus.Expired);
     }
 
     [Fact]
@@ -125,12 +209,36 @@ public sealed class TwoAppPersistenceStoreTests
 
         await using var first = new MemoryDbContext(options);
         await using var second = new MemoryDbContext(options);
-        (await new TwoAppPersistenceStore(first).ClaimInvocationAsync(Invocation("one"))).Should().Be(InvocationClaimResult.Claimed);
-        (await new TwoAppPersistenceStore(second).ClaimInvocationAsync(Invocation("two"))).Should().Be(InvocationClaimResult.Duplicate);
+        (await new TwoAppPersistenceStore(first).ClaimInvocationAsync(Invocation("one", "delivery", "push"))).Should().Be(InvocationClaimResult.Claimed);
+        (await new TwoAppPersistenceStore(second).ClaimInvocationAsync(Invocation("two", "delivery", "workflow_dispatch"))).Should().Be(InvocationClaimResult.Duplicate);
     }
 
     [Fact]
-    public async Task SnapshotIsWriteOnceAndFailsClosedOnCredentialRotation()
+    public async Task LifecycleDeliveryClaim_RacesUseProviderUniqueDeliveryId()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var first = new MemoryDbContext(options);
+        await using var second = new MemoryDbContext(options);
+
+        (await new TwoAppPersistenceStore(first).ClaimLifecycleDeliveryAsync(LifecycleDelivery("delivery"))).Should()
+            .Be(InvocationClaimResult.Claimed);
+        (await new TwoAppPersistenceStore(second).ClaimLifecycleDeliveryAsync(LifecycleDelivery("delivery"))).Should()
+            .Be(InvocationClaimResult.Duplicate);
+    }
+
+    [Fact]
+    public async Task LifecycleDeliveryClaim_RequiresDeliveryId()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+
+        var action = () => new TwoAppPersistenceStore(db).ClaimLifecycleDeliveryAsync(LifecycleDelivery(""));
+        await action.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task SnapshotPinsStableGrantIdentityNotRotatingCredentialReference()
     {
         await using var connection = await OpenDatabaseAsync();
         var options = Options(connection);
@@ -142,16 +250,16 @@ public sealed class TwoAppPersistenceStoreTests
             ProjectId = "project",
             AppKind = GitHubAppKind.Copilot,
             Purpose = GitHubAuthorizationPurpose.UnattendedCopilot,
-            CredentialReference = "kv-copilot-project",
-            CredentialVersion = "etag-1",
+            CredentialReference = "kv-copilot-grant-revision-a",
+            CredentialVersion = "grant-identity-1",
             GrantDigest = "digest",
             CapturedAt = DateTimeOffset.UtcNow,
         };
 
         (await store.AddRunIdentitySnapshotAsync(snapshot)).Should().BeTrue();
         (await store.AddRunIdentitySnapshotAsync(snapshot)).Should().BeFalse();
-        (await store.HasPinnedSnapshotVersionAsync("run", "etag-1")).Should().BeTrue();
-        (await store.HasPinnedSnapshotVersionAsync("run", "etag-2")).Should().BeFalse();
+        (await store.HasPinnedSnapshotVersionAsync("run", "grant-identity-1")).Should().BeTrue();
+        (await store.HasPinnedSnapshotVersionAsync("run", "grant-identity-2")).Should().BeFalse();
     }
 
     [Theory]
@@ -203,17 +311,25 @@ public sealed class TwoAppPersistenceStoreTests
         BoundAt = DateTimeOffset.UtcNow,
     };
 
-    private static AutomationInvocationRecord Invocation(string id) => new()
+    private static AutomationInvocationRecord Invocation(string id, string deliveryId, string eventName) => new()
     {
         Id = id,
         ProjectId = "project",
         ActivationId = "activation",
-        OccurrenceKey = "occurrence",
-        DeliveryId = "delivery",
-        EventName = "schedule",
+        OccurrenceKey = $"occurrence-{id}",
+        DeliveryId = deliveryId,
+        EventName = eventName,
         InstallationId = 101,
         RepositoryId = 202,
         Outcome = AutomationInvocationOutcome.Claimed,
+        ReceivedAt = DateTimeOffset.UtcNow,
+    };
+
+    private static GitHubLifecycleDeliveryRecord LifecycleDelivery(string deliveryId) => new()
+    {
+        DeliveryId = deliveryId,
+        EventName = "installation",
+        InstallationId = 101,
         ReceivedAt = DateTimeOffset.UtcNow,
     };
 

@@ -79,7 +79,11 @@ are server-side opaque keys selected from an allowlist at transaction creation; 
 never provide a URL or path. Cross-origin and protocol-relative candidates are rejected
 at storage time.
 
-MCP browser handoff returns a non-enumerable transaction ID, browser URL, and expiry.
+MCP browser handoff returns a distinct, non-enumerable transaction ID, browser URL, and expiry.
+The transaction ID is cryptographically random and is never derived from or equal to OAuth
+state. It is bound to its stored App kind and initiating Entra subject. OAuth state, PKCE
+material, and callback-cookie material are persistence-only values and are never externally
+serialized.
 Polling is authorized only for the initiating Entra subject and exposes only
 `pending`, `completed`, `failed`, or `expired`; it exposes no code, credential metadata,
 other user's GitHub identity, or raw provider error.
@@ -90,6 +94,9 @@ other user's GitHub identity, or raw provider error.
   has exactly one active binding. A single GitHub account may back more than one project
   only through distinct explicit project bindings; no project may inherit another
   project's binding.
+- `CredentialVersion` identifies the durable authorization grant pinned by a binding,
+  authorization, or run snapshot. It is stable across access-token refresh and rotation;
+  it is never an access-token value, token version, or credential-reference version.
 - The Repo App's reviewed permissions are dynamically verified. The Copilot App must
   assert zero repository permissions at registration validation time and fail
   startup/diagnostics when that assertion is false.
@@ -153,8 +160,10 @@ parsing. Signature failure returns `401` without body detail and logs only the d
 and a reason category.
 
 Verification accepts current and previous webhook secrets in constant time for a bounded
-rotation interval. Persisted `X-GitHub-Delivery` uniqueness and a delivery-age limit apply
-to lifecycle and automation deliveries alike. Routing is an authorization decision: a
+rotation interval. GitHub does not provide a signed delivery timestamp, so Agentweaver does
+not assert an unenforceable delivery-age test. Persisted, non-null `X-GitHub-Delivery`
+uniqueness is claimed before processing for lifecycle and automation deliveries alike; HMAC
+validation remains mandatory. Routing is an authorization decision: a
 delivery affects only a project with both the persisted installation ID and canonical
 `repository.id`; `full_name` is display data only.
 

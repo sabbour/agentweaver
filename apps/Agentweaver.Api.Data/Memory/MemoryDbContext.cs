@@ -40,6 +40,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<ProjectCopilotBindingRecord> ProjectCopilotBindings => Set<ProjectCopilotBindingRecord>();
     public DbSet<AutomationActivationRecord> AutomationActivations => Set<AutomationActivationRecord>();
     public DbSet<AutomationInvocationRecord> AutomationInvocations => Set<AutomationInvocationRecord>();
+    public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
     public DbSet<RunGitHubIdentitySnapshotRecord> RunGitHubIdentitySnapshots => Set<RunGitHubIdentitySnapshotRecord>();
     public DbSet<GitHubAuditRecord> GitHubAuditRecords => Set<GitHubAuditRecord>();
 
@@ -580,6 +581,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         {
             e.ToTable("github_authorizations").HasKey(x => x.State);
             e.Property(x => x.State).HasColumnName("state");
+            e.Property(x => x.ExternalTransactionId).HasColumnName("external_transaction_id");
             e.Property(x => x.AppKind).HasColumnName("app_kind");
             e.Property(x => x.Purpose).HasColumnName("purpose");
             e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
@@ -592,6 +594,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.CompletedAt).HasColumnName("completed_at");
             e.HasIndex(x => new { x.EntraObjectId, x.State }).IsUnique();
+            e.HasIndex(x => x.ExternalTransactionId).IsUnique();
             e.HasIndex(x => x.ExpiresAtUnixMilliseconds);
             ConfigureProjectForeignKey(e, "FK_github_authorizations_projects_project_id");
         });
@@ -689,10 +692,21 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ReceivedAt).HasColumnName("received_at");
             e.Property(x => x.CompletedAt).HasColumnName("completed_at");
             e.HasIndex(x => new { x.ActivationId, x.OccurrenceKey }).IsUnique();
-            e.HasIndex(x => new { x.DeliveryId, x.EventName }).IsUnique();
+            e.HasIndex(x => x.DeliveryId).IsUnique().HasFilter("delivery_id IS NOT NULL")
+                .HasDatabaseName("UX_automation_invocations_delivery_id");
             e.HasOne<AutomationActivationRecord>().WithMany().HasForeignKey(x => x.ActivationId)
                 .OnDelete(DeleteBehavior.Cascade).HasConstraintName("FK_automation_invocations_activations_activation_id");
             ConfigureProjectForeignKey(e, "FK_automation_invocations_projects_project_id");
+        });
+
+        model.Entity<GitHubLifecycleDeliveryRecord>(e =>
+        {
+            e.ToTable("github_lifecycle_deliveries").HasKey(x => x.DeliveryId);
+            e.Property(x => x.DeliveryId).HasColumnName("delivery_id");
+            e.Property(x => x.EventName).HasColumnName("event_name");
+            e.Property(x => x.InstallationId).HasColumnName("installation_id");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.ReceivedAt).HasColumnName("received_at");
         });
 
         model.Entity<RunGitHubIdentitySnapshotRecord>(e =>
