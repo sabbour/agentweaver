@@ -56,7 +56,7 @@ public sealed class TwoAppCredentialArchitectureTests
     {
         for (var directory = new DirectoryInfo(Directory.GetCurrentDirectory()); directory is not null; directory = directory.Parent)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "Agentweaver.sln")))
+            if (File.Exists(Path.Combine(directory.FullName, "agentweaver.sln")))
                 return directory.FullName;
         }
         throw new DirectoryNotFoundException("Repository root was not found.");
