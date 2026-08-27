@@ -611,14 +611,14 @@ public sealed class RepoAppUserAuthorizationService(
             EntraObjectId = entraObjectId,
             ActorKind = GitHubAuditActorKind.HumanEntraSubject,
             Action = GitHubAuditAction.AuthorizationCompleted,
-            ResourceId = credentialVersion ?? "repo-app-authorization",
+            ResourceId = "repo-app-authorization",
             AppKind = GitHubAppKind.Repo,
-            Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
+            CapabilityPurpose = GitHubCapabilityPurpose.InteractiveRepository,
             Outcome = outcome,
             ReasonCode = reason,
             CorrelationId = Guid.NewGuid().ToString("N"),
             OccurredAt = DateTimeOffset.UtcNow,
-            CredentialVersionOrDigest = credentialVersion,
+            GrantDigest = credentialVersion is null ? null : CreateGrantDigest(credentialVersion),
         };
 
     private static bool TryConsumeRateLimit(string entraObjectId)

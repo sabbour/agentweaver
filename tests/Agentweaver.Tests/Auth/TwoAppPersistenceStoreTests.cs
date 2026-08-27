@@ -262,6 +262,126 @@ public sealed class TwoAppPersistenceStoreTests
         (await store.HasPinnedSnapshotVersionAsync("run", "grant-identity-2")).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task CapabilitySnapshots_KeepDistinctOpaqueReferencesForEveryPurpose()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        await SeedCapabilitySourcesAsync(db);
+        var store = new TwoAppPersistenceStore(db);
+        var snapshots = Enum.GetValues<GitHubCapabilityPurpose>()
+        .Select(CapabilitySnapshot)
+        .ToArray();
+
+        foreach (var snapshot in snapshots)
+        (await store.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
+
+        snapshots.Select(x => x.SnapshotRef).Should().OnlyHaveUniqueItems();
+        for (var requested = 0; requested < snapshots.Length; requested++)
+        for (var stored = 0; stored < snapshots.Length; stored++)
+        {
+        var fence = await store.TryFenceLiveSnapshotAsync(
+            (GitHubCapabilityPurpose)requested,
+            new SnapshotRef(snapshots[stored].SnapshotRef),
+            DateTimeOffset.UtcNow);
+        if (requested == stored)
+            fence.Should().NotBeNull();
+        else
+            fence.Should().BeNull();
+        }
+
+        var serialized = JsonSerializer.Serialize(await store.TryFenceLiveSnapshotAsync(
+            GitHubCapabilityPurpose.InteractiveRepository,
+            new SnapshotRef(snapshots[0].SnapshotRef),
+            DateTimeOffset.UtcNow));
+        serialized.Should().NotContain("repo-app-user-credential-version")
+        .And.NotContain("copilot-app-project-project-version");
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotFence_FailsClosedForExpiredRevokedAndRotatedSources()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        await SeedCapabilitySourcesAsync(db);
+        var store = new TwoAppPersistenceStore(db);
+        var snapshot = CapabilitySnapshot(GitHubCapabilityPurpose.InteractiveRepository);
+        (await store.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
+        var reference = new SnapshotRef(snapshot.SnapshotRef);
+
+        (await store.TryFenceLiveSnapshotAsync(snapshot.Purpose, reference, DateTimeOffset.UtcNow)).Should().NotBeNull();
+        await db.GitHubAppAuthorizations
+        .Where(x => x.Id == "authorization")
+        .ExecuteUpdateAsync(x => x.SetProperty(y => y.CredentialVersion, "rotated-version"));
+        (await store.TryFenceLiveSnapshotAsync(snapshot.Purpose, reference, DateTimeOffset.UtcNow)).Should().BeNull();
+
+        db.ChangeTracker.Clear();
+        db.GitHubAppAuthorizations.Single(x => x.Id == "authorization").CredentialVersion = "version";
+        db.GitHubAppAuthorizations.Single(x => x.Id == "authorization").RevokedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+        (await store.TryFenceLiveSnapshotAsync(snapshot.Purpose, reference, DateTimeOffset.UtcNow)).Should().BeNull();
+
+        var expired = CapabilitySnapshot(GitHubCapabilityPurpose.UnattendedCopilot);
+        expired.SnapshotRef = SnapshotRef.Create().Value;
+        expired.SnapshotExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1);
+        (await store.TryInsertCapabilitySnapshotAsync(expired)).Should().BeTrue();
+        (await store.TryFenceLiveSnapshotAsync(expired.Purpose, new SnapshotRef(expired.SnapshotRef), DateTimeOffset.UtcNow))
+        .Should().BeNull();
+    }
+
+    [Fact]
+    public async Task InteractiveRepositorySnapshotFence_FailsWhenCanonicalRepositoryScopeIsRevoked()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        await SeedCapabilitySourcesAsync(db);
+        var store = new TwoAppPersistenceStore(db);
+        var snapshot = CapabilitySnapshot(GitHubCapabilityPurpose.InteractiveRepository);
+        (await store.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
+        var reference = new SnapshotRef(snapshot.SnapshotRef);
+
+        (await store.TryFenceLiveSnapshotAsync(snapshot.Purpose, reference, DateTimeOffset.UtcNow)).Should().NotBeNull();
+        var revokedAt = DateTimeOffset.UtcNow;
+        await db.GitHubRepositoryGrants
+        .Where(x => x.InstallationId == 101 && x.RepositoryId == 202)
+        .ExecuteUpdateAsync(x => x.SetProperty(y => y.RevokedAt, revokedAt));
+
+        (await store.TryFenceLiveSnapshotAsync(snapshot.Purpose, reference, DateTimeOffset.UtcNow)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotInsertAndBackfill_RejectDuplicatesAndNeverResolveReplacementSources()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        await SeedCapabilitySourcesAsync(db);
+        var store = new TwoAppPersistenceStore(db);
+        var snapshot = CapabilitySnapshot(GitHubCapabilityPurpose.UnattendedCopilot);
+
+        (await store.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
+        (await store.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeFalse();
+
+        db.RunGitHubIdentitySnapshots.Add(new RunGitHubIdentitySnapshotRecord
+        {
+        RunId = "legacy-run",
+        ProjectId = "project",
+        AppKind = GitHubAppKind.Copilot,
+        Purpose = GitHubAuthorizationPurpose.UnattendedCopilot,
+        CredentialReference = "copilot-app-project-project-replaced",
+        CredentialVersion = "replaced",
+        GrantDigest = "replaced-digest",
+        CapturedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        (await store.BackfillCapabilitySnapshotsAsync()).Should().Be(new CapabilitySnapshotBackfillResult(0, 1));
+        (await db.RunGitHubCapabilitySnapshots.CountAsync(x => x.RunId == "legacy-run")).Should().Be(0);
+    }
+
     [Theory]
     [InlineData("ghu_sensitive")]
     [InlineData("github_pat_sensitive")]
@@ -344,4 +464,82 @@ public sealed class TwoAppPersistenceStoreTests
         CreatedAt = DateTimeOffset.UtcNow,
         UpdatedAt = DateTimeOffset.UtcNow,
     };
+
+    private static async Task SeedCapabilitySourcesAsync(MemoryDbContext db)
+    {
+        db.GitHubAppAuthorizations.Add(new GitHubAppAuthorizationRecord
+        {
+            Id = "authorization",
+            EntraObjectId = "entra",
+            AppKind = GitHubAppKind.Repo,
+            Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
+            CredentialReference = "repo-app-user-credential-version",
+            CredentialVersion = "version",
+            GrantDigest = "user-digest",
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = 101,
+            AppKind = GitHubAppKind.Repo,
+            ProjectId = "project",
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = 101,
+            RepositoryId = 202,
+            ProjectId = "project",
+            FullNameDisplay = "owner/repository",
+            PermissionDigest = "repository-digest",
+            GrantedAt = DateTimeOffset.UtcNow,
+        });
+        db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+        {
+            Id = "binding",
+            ProjectId = "project",
+            EntraObjectId = "entra",
+            CredentialReference = "copilot-app-project-project-version",
+            CredentialVersion = "version",
+            GrantDigest = "copilot-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private static RunGitHubCapabilitySnapshotRecord CapabilitySnapshot(GitHubCapabilityPurpose purpose) =>
+        purpose switch
+        {
+            GitHubCapabilityPurpose.InteractiveRepository => new()
+            {
+                SnapshotRef = SnapshotRef.Create().Value, RunId = "run", Purpose = purpose, AppKind = GitHubAppKind.Repo,
+                SourceKind = GitHubCapabilitySnapshotSourceKind.UserAuthorization, ProjectId = "project",
+                EntraObjectId = "entra", SourceAuthorizationId = "authorization", RepositoryId = 202,
+                CredentialReference = "repo-app-user-credential-version", CredentialVersion = "version",
+                GrantDigest = "user-digest", CapturedAt = DateTimeOffset.UtcNow,
+            },
+            GitHubCapabilityPurpose.InteractiveCopilot => new()
+            {
+                SnapshotRef = SnapshotRef.Create().Value, RunId = "run", Purpose = purpose, AppKind = GitHubAppKind.Repo,
+                SourceKind = GitHubCapabilitySnapshotSourceKind.UserAuthorization, ProjectId = "project",
+                EntraObjectId = "entra", SourceAuthorizationId = "authorization",
+                CredentialReference = "repo-app-user-credential-version", CredentialVersion = "version",
+                GrantDigest = "user-digest", CapturedAt = DateTimeOffset.UtcNow,
+            },
+            GitHubCapabilityPurpose.UnattendedRepository => new()
+            {
+                SnapshotRef = SnapshotRef.Create().Value, RunId = "run", Purpose = purpose, AppKind = GitHubAppKind.Repo,
+                SourceKind = GitHubCapabilitySnapshotSourceKind.RepositoryGrant, ProjectId = "project",
+                InstallationId = 101, RepositoryId = 202, GrantDigest = "repository-digest", CapturedAt = DateTimeOffset.UtcNow,
+            },
+            GitHubCapabilityPurpose.UnattendedCopilot => new()
+            {
+                SnapshotRef = SnapshotRef.Create().Value, RunId = "run", Purpose = purpose, AppKind = GitHubAppKind.Copilot,
+                SourceKind = GitHubCapabilitySnapshotSourceKind.CopilotBinding, ProjectId = "project",
+                SourceBindingId = "binding", CredentialReference = "copilot-app-project-project-version",
+                CredentialVersion = "version", GrantDigest = "copilot-digest", CapturedAt = DateTimeOffset.UtcNow,
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(purpose)),
+        };
 }

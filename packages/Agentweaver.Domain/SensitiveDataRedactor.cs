@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Agentweaver.Domain;
 
@@ -23,6 +24,9 @@ namespace Agentweaver.Domain;
 public static class SensitiveDataRedactor
 {
     public const string RedactedPlaceholder = "***REDACTED***";
+    private static readonly Regex SensitiveValuePattern = new(
+        @"(?:\bgh[uspor]_[A-Za-z0-9_-]+\b|\bgithub_pat_[A-Za-z0-9_]+\b|-----BEGIN [A-Z0-9 ]+-----|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)?)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     /// <summary>
     /// Substring fragments (matched case-insensitively against a normalized property name with
@@ -60,6 +64,10 @@ public static class SensitiveDataRedactor
         return false;
     }
 
+    /// <summary>Returns whether a value contains token, PEM, or JWT-shaped credential material.</summary>
+    public static bool ContainsSensitiveValue(string? value) =>
+        !string.IsNullOrEmpty(value) && SensitiveValuePattern.IsMatch(value);
+
     /// <summary>
     /// Recursively redacts sensitive object keys within a JSON node tree. Returns a new tree; the
     /// input is not mutated (so callers can safely redact a node still referenced elsewhere).
@@ -86,6 +94,8 @@ public static class SensitiveDataRedactor
                     result.Add(RedactNode(item));
                 return result;
             }
+            case JsonValue value when value.TryGetValue<string>(out var text) && ContainsSensitiveValue(text):
+                return JsonValue.Create(RedactedPlaceholder);
             default:
                 return node?.DeepClone();
         }
@@ -109,7 +119,7 @@ public static class SensitiveDataRedactor
         };
         JsonNode? parsed;
         try { parsed = JsonNode.Parse(json); }
-        catch (JsonException) { return null; }
+        catch (JsonException) { return JsonValue.Create(RedactText(json)); }
         return RedactNode(parsed);
     }
 
@@ -137,9 +147,15 @@ public static class SensitiveDataRedactor
         if (string.IsNullOrEmpty(content)) return content ?? string.Empty;
         JsonNode? node;
         try { node = JsonNode.Parse(content); }
-        catch (JsonException) { return content; }
-        if (node is not (JsonObject or JsonArray)) return content;
+        catch (JsonException) { return RedactText(content); }
+        if (node is not (JsonObject or JsonArray))
+            return node is JsonValue value && value.TryGetValue<string>(out var text)
+                ? JsonSerializer.Serialize(RedactText(text))
+                : content;
         var redacted = RedactNode(node);
         return redacted?.ToJsonString() ?? content;
     }
+
+    private static string RedactText(string content) =>
+        ContainsSensitiveValue(content) ? RedactedPlaceholder : content;
 }

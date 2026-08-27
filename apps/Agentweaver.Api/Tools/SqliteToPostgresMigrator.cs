@@ -72,6 +72,7 @@ public sealed class SqliteToPostgresMigrator
         List<AutomationInvocationRecord> invocations;
         List<GitHubLifecycleDeliveryRecord> lifecycleDeliveries;
         List<RunGitHubIdentitySnapshotRecord> snapshots;
+        List<RunGitHubCapabilitySnapshotRecord> capabilitySnapshots;
         List<GitHubAppAuthorizationRecord> appAuthorizations;
         List<GitHubAuditRecord> audits;
         try
@@ -84,6 +85,9 @@ public sealed class SqliteToPostgresMigrator
             invocations = await source.AutomationInvocations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             lifecycleDeliveries = await source.GitHubLifecycleDeliveries.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             snapshots = await source.RunGitHubIdentitySnapshots.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            capabilitySnapshots = await HasTableAsync(source, "run_github_capability_snapshots", ct).ConfigureAwait(false)
+                ? await source.RunGitHubCapabilitySnapshots.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
+                : [];
             appAuthorizations = await source.GitHubAppAuthorizations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             audits = await source.GitHubAuditRecords.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
         }
@@ -95,7 +99,8 @@ public sealed class SqliteToPostgresMigrator
         }
 
         if (authorizations.Count + installations.Count + grants.Count + bindings.Count + activations.Count +
-            invocations.Count + lifecycleDeliveries.Count + snapshots.Count + appAuthorizations.Count + audits.Count == 0)
+            invocations.Count + lifecycleDeliveries.Count + snapshots.Count + capabilitySnapshots.Count +
+            appAuthorizations.Count + audits.Count == 0)
             return;
 
         var projectIds = authorizations.Where(x => x.ProjectId is not null).Select(x => x.ProjectId!)
@@ -105,6 +110,7 @@ public sealed class SqliteToPostgresMigrator
             .Concat(activations.Select(x => x.ProjectId))
             .Concat(invocations.Select(x => x.ProjectId))
             .Concat(snapshots.Select(x => x.ProjectId))
+            .Concat(capabilitySnapshots.Select(x => x.ProjectId))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var targetProjectIds = await destination.Projects.AsNoTracking()
@@ -143,6 +149,21 @@ public sealed class SqliteToPostgresMigrator
             foreach (var item in snapshots)
                 if (!await destination.RunGitHubIdentitySnapshots.AnyAsync(x => x.RunId == item.RunId, ct).ConfigureAwait(false))
                     destination.RunGitHubIdentitySnapshots.Add(item);
+            foreach (var item in capabilitySnapshots)
+            {
+                var byReference = await destination.RunGitHubCapabilitySnapshots.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.SnapshotRef == item.SnapshotRef, ct).ConfigureAwait(false);
+                var byRunPurpose = await destination.RunGitHubCapabilitySnapshots.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.RunId == item.RunId && x.Purpose == item.Purpose, ct).ConfigureAwait(false);
+                if (byReference is null && byRunPurpose is null)
+                {
+                    destination.RunGitHubCapabilitySnapshots.Add(item);
+                    continue;
+                }
+                if (!CapabilitySnapshotsMatch(item, byReference) || !CapabilitySnapshotsMatch(item, byRunPurpose))
+                    throw new InvalidOperationException(
+                        "Two-App persistence transfer aborted: immutable capability snapshot conflict.");
+            }
             foreach (var item in appAuthorizations)
                 if (!await destination.GitHubAppAuthorizations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
                     destination.GitHubAppAuthorizations.Add(item);
@@ -158,6 +179,7 @@ public sealed class SqliteToPostgresMigrator
                     "(SELECT COALESCE(MAX(id), 1) FROM github_audit_records), true);", ct)
                     .ConfigureAwait(false);
             }
+
             if (_beforeTwoAppCommit is not null)
                 await _beforeTwoAppCommit(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
@@ -169,6 +191,27 @@ public sealed class SqliteToPostgresMigrator
         }
     }
 
+    private static bool CapabilitySnapshotsMatch(
+        RunGitHubCapabilitySnapshotRecord source,
+        RunGitHubCapabilitySnapshotRecord? destination) =>
+        destination is not null &&
+        source.SnapshotRef == destination.SnapshotRef &&
+        source.RunId == destination.RunId &&
+        source.Purpose == destination.Purpose &&
+        source.AppKind == destination.AppKind &&
+        source.SourceKind == destination.SourceKind &&
+        source.ProjectId == destination.ProjectId &&
+        source.EntraObjectId == destination.EntraObjectId &&
+        source.SourceAuthorizationId == destination.SourceAuthorizationId &&
+        source.SourceBindingId == destination.SourceBindingId &&
+        source.InstallationId == destination.InstallationId &&
+        source.RepositoryId == destination.RepositoryId &&
+        source.CredentialReference == destination.CredentialReference &&
+        source.CredentialVersion == destination.CredentialVersion &&
+        source.GrantDigest == destination.GrantDigest &&
+        source.CapturedAt == destination.CapturedAt &&
+        source.SnapshotExpiresAt == destination.SnapshotExpiresAt;
+
     private static async Task PrepareTwoAppSourceSchemaAsync(MemoryDbContext source, CancellationToken ct)
     {
         if (await HasMigrationHistoryAsync(source, ct).ConfigureAwait(false))
@@ -177,23 +220,36 @@ public sealed class SqliteToPostgresMigrator
             return;
         }
 
-        if (!await HasTableAsync(source, "github_authorizations", ct).ConfigureAwait(false) ||
-            await HasColumnAsync(source, "github_authorizations", "external_transaction_id", ct).ConfigureAwait(false))
+        if (!await HasTableAsync(source, "github_authorizations", ct).ConfigureAwait(false))
             return;
 
         // EnsureCreated sources have no migration history. Upgrade only the missing #955
-        // projection fields so the existing two-App records can be read and transferred.
+        // and #962 projection fields so the existing two-App records can be read and transferred.
+        if (!await HasColumnAsync(source, "github_authorizations", "external_transaction_id", ct).ConfigureAwait(false))
+        {
+            await source.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE github_authorizations ADD COLUMN external_transaction_id TEXT NOT NULL DEFAULT '';",
+                ct).ConfigureAwait(false);
+            await source.Database.ExecuteSqlRawAsync(
+                "UPDATE github_authorizations SET external_transaction_id = lower(hex(randomblob(32))) WHERE external_transaction_id = '';",
+                ct).ConfigureAwait(false);
+        }
+        if (await HasTableAsync(source, "github_audit_records", ct).ConfigureAwait(false))
+        {
+            if (!await HasColumnAsync(source, "github_audit_records", "capability_purpose", ct).ConfigureAwait(false))
+                await source.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE github_audit_records ADD COLUMN capability_purpose INTEGER NULL;",
+                    ct).ConfigureAwait(false);
+            if (!await HasColumnAsync(source, "github_audit_records", "grant_digest", ct).ConfigureAwait(false))
+                await source.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE github_audit_records ADD COLUMN grant_digest TEXT NULL;",
+                    ct).ConfigureAwait(false);
+        }
         await source.Database.ExecuteSqlRawAsync(
-            "ALTER TABLE github_authorizations ADD COLUMN external_transaction_id TEXT NOT NULL DEFAULT '';",
-            ct).ConfigureAwait(false);
-        await source.Database.ExecuteSqlRawAsync(
-            "UPDATE github_authorizations SET external_transaction_id = lower(hex(randomblob(32))) WHERE external_transaction_id = '';",
-            ct).ConfigureAwait(false);
-        await source.Database.ExecuteSqlRawAsync(
-            "CREATE UNIQUE INDEX IX_github_authorizations_external_transaction_id ON github_authorizations(external_transaction_id);",
+            "CREATE UNIQUE INDEX IF NOT EXISTS IX_github_authorizations_external_transaction_id ON github_authorizations(external_transaction_id);",
             ct).ConfigureAwait(false);
         await source.Database.ExecuteSqlRawAsync("""
-            CREATE TABLE github_lifecycle_deliveries (
+            CREATE TABLE IF NOT EXISTS github_lifecycle_deliveries (
                 delivery_id TEXT NOT NULL CONSTRAINT PK_github_lifecycle_deliveries PRIMARY KEY,
                 event_name TEXT NOT NULL,
                 installation_id INTEGER NULL,

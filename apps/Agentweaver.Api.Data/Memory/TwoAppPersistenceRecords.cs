@@ -2,14 +2,16 @@ namespace Agentweaver.Api.Memory;
 
 public enum GitHubAppKind { Repo, Copilot }
 public enum GitHubAuthorizationPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot }
+public enum GitHubCapabilityPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot }
+public enum GitHubCapabilitySnapshotSourceKind { UserAuthorization, RepositoryGrant, CopilotBinding }
 public enum GitHubAuthorizationStatus { Pending, Redeeming, Completed, Failed, Expired }
 public enum GitHubBindingStatus { Active, Inactive, Revoked }
 public enum AutomationActivationStatus { Active, Inactive, Invalidated }
 public enum AutomationInvocationOutcome { Claimed, Duplicate, Completed, Failed }
 public enum GitHubAuditActorKind { HumanEntraSubject, GitHubWebhook }
-public enum GitHubAuditAction { AuthorizationCompleted, BindingChanged, InstallationChanged, GrantChanged, AutomationActivated, AutomationInvoked, RunSnapshotValidated }
+public enum GitHubAuditAction { AuthorizationCompleted, BindingChanged, InstallationChanged, GrantChanged, AutomationActivated, AutomationInvoked, RunSnapshotValidated, CapabilitySnapshotMigrated }
 public enum GitHubAuditOutcome { Succeeded, Denied, Failed }
-public enum GitHubAuditReasonCode { None, BindingUnavailable, InstallationUnavailable, TransactionInvalid, TransactionConsumed, RotationMismatch, DuplicateDelivery }
+public enum GitHubAuditReasonCode { None, BindingUnavailable, InstallationUnavailable, TransactionInvalid, TransactionConsumed, RotationMismatch, DuplicateDelivery, SnapshotMigrationUnavailable }
 
 public sealed class GitHubAuthorizationRecord
 {
@@ -148,6 +150,30 @@ public sealed class RunGitHubIdentitySnapshotRecord
     public DateTimeOffset CapturedAt { get; set; }
 }
 
+/// <summary>
+/// Immutable, purpose-specific identity selected for one run. Snapshot references are opaque
+/// identifiers, not credential locators or bearer capabilities.
+/// </summary>
+public sealed class RunGitHubCapabilitySnapshotRecord
+{
+    public string SnapshotRef { get; set; } = "";
+    public string RunId { get; set; } = "";
+    public GitHubCapabilityPurpose Purpose { get; set; }
+    public GitHubAppKind AppKind { get; set; }
+    public GitHubCapabilitySnapshotSourceKind SourceKind { get; set; }
+    public string ProjectId { get; set; } = "";
+    public string? EntraObjectId { get; set; }
+    public string? SourceAuthorizationId { get; set; }
+    public string? SourceBindingId { get; set; }
+    public long? InstallationId { get; set; }
+    public long? RepositoryId { get; set; }
+    public string? CredentialReference { get; set; }
+    public string? CredentialVersion { get; set; }
+    public string GrantDigest { get; set; } = "";
+    public DateTimeOffset CapturedAt { get; set; }
+    public DateTimeOffset? SnapshotExpiresAt { get; set; }
+}
+
 public sealed class GitHubAuditRecord
 {
     public long Id { get; set; }
@@ -156,10 +182,11 @@ public sealed class GitHubAuditRecord
     public GitHubAuditAction Action { get; set; }
     public string ResourceId { get; set; } = "";
     public GitHubAppKind? AppKind { get; set; }
-    public GitHubAuthorizationPurpose? Purpose { get; set; }
+    public GitHubCapabilityPurpose? CapabilityPurpose { get; set; }
     public GitHubAuditOutcome Outcome { get; set; }
     public GitHubAuditReasonCode ReasonCode { get; set; }
     public string CorrelationId { get; set; } = "";
     public DateTimeOffset OccurredAt { get; set; }
-    public string? CredentialVersionOrDigest { get; set; }
+    /// <summary>Non-reversible grant digest. Credential versions and references are never audited.</summary>
+    public string? GrantDigest { get; set; }
 }
