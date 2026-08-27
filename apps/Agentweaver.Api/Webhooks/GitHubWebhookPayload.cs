@@ -16,6 +16,12 @@ public sealed record GitHubWebhookPayload
     [JsonPropertyName("repository")]
     public GitHubWebhookRepository? Repository { get; init; }
 
+    [JsonPropertyName("installation")]
+    public GitHubWebhookInstallation? Installation { get; init; }
+
+    [JsonPropertyName("repositories_removed")]
+    public IReadOnlyList<GitHubWebhookRepository>? RepositoriesRemoved { get; init; }
+
     [JsonPropertyName("issue")]
     public GitHubWebhookIssueLike? Issue { get; init; }
 
@@ -42,8 +48,17 @@ public sealed record GitHubWebhookPayload
 
 public sealed record GitHubWebhookRepository
 {
+    [JsonPropertyName("id")]
+    public long Id { get; init; }
+
     [JsonPropertyName("full_name")]
     public string? FullName { get; init; }
+}
+
+public sealed record GitHubWebhookInstallation
+{
+    [JsonPropertyName("id")]
+    public long Id { get; init; }
 }
 
 public sealed record GitHubWebhookIssueLike

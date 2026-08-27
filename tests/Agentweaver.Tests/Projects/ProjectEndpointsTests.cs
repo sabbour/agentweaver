@@ -120,25 +120,13 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     [Fact]
-    public async Task RotateWebhookSecret_ReturnsSecretOnceAndStoresItOutsideProjectMetadata()
+    public async Task LegacyProjectWebhookSecretRoute_IsNotAvailable()
     {
         var id = await CreateBlankProjectAsync("Webhook Project");
 
         var response = await _client.PostAsJsonAsync($"/api/projects/{id}/webhook-secret/rotate", new { });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<WebhookSecretRotationResponse>();
-        body!.Secret.Should().NotBeNullOrWhiteSpace();
-
-        var detail = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{id}");
-        detail.TryGetProperty("webhook_secret", out _).Should().BeFalse();
-
-        using var scope = _factory.Services.CreateScope();
-        var store = scope.ServiceProvider.GetRequiredService<IProjectStore>();
-        var secretStore = scope.ServiceProvider.GetRequiredService<ISecretStore>();
-        var project = await store.GetAsync(ProjectId.Parse(id));
-        project!.WebhookSecret.Should().NotBeNullOrWhiteSpace();
-        (await secretStore.GetSecretAsync(project.WebhookSecret!)).Value.Should().Be(body.Secret);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // =========================================================================

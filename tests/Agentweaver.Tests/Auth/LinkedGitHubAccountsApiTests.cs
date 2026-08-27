@@ -304,7 +304,7 @@ public sealed class LinkedGitHubAccountsApiTests
     }
 
     [Fact]
-    public async Task ProvisionWebhook_IgnoresProjectOverride_AndUsesCallerOwnPerUserScope()
+    public async Task LegacyPerProjectWebhookProvisioning_IsUnavailable()
     {
         const string entraUserId = "00000000-0000-0000-0000-00000000aa11";
         var seenAuthorizations = new List<string?>();
@@ -358,9 +358,8 @@ public sealed class LinkedGitHubAccountsApiTests
             $"/api/projects/{project.ProjectId}/webhooks/github/provision",
             new { });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        seenAuthorizations.Should().NotBeEmpty();
-        seenAuthorizations.Should().OnlyContain(token => token == "tok-alice");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        seenAuthorizations.Should().BeEmpty();
     }
 
     [Fact]

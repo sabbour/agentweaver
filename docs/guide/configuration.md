@@ -66,6 +66,28 @@ accepts an arbitrary URL or path. Refresh and disconnect use the corresponding
 `DELETE /api/auth/github/repo-app/authorization` endpoints. Both require the same
 human Entra subject as authorization begin.
 
+#### Repo App installation and webhook
+
+The API identity reads the Repo App PEM and webhook secrets through its configured secret
+store; in hosted deployments those names resolve only through the API's Key Vault access.
+The PEM, App JWT, and installation access token are never configuration values, persisted
+records, logs, or API responses. Configure GitHub's single Repo App webhook to the
+App-level receiver implemented by the API; do not configure per-project webhook URLs.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Auth:RepoApp:AppId` | none | Numeric Repo App ID used as the App-JWT issuer |
+| `Auth:RepoApp:PrivateKeySecretName` | none | Secret-store name of the Repo App PEM, readable only by the API |
+| `Auth:RepoApp:WebhookSecretName` | none | Secret-store name of the active webhook HMAC secret |
+| `Auth:RepoApp:PreviousWebhookSecretName` | none | Secret-store name of the prior HMAC secret during a rotation |
+| `Auth:RepoApp:PreviousWebhookSecretExpiresAt` | none | UTC expiration after which the previous secret is rejected |
+| `Auth:RepoApp:WebhookMaxBodyBytes` | `1048576` | Maximum unauthenticated raw request-body size |
+| `Auth:RepoApp:WebhookVerificationTimeoutSeconds` | `5` | Body-read and signature-verification timeout (maximum `10`) |
+| `Auth:RepoApp:ApiUrl` | `https://api.github.com` | GitHub API origin for App installation-token minting |
+
+Project App grants are pinned with the GitHub numeric installation and repository IDs.
+Repository names are display-only and are never authorization inputs.
+
 When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
 GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)
 uses the Microsoft identity platform v2.0 authorization-code-with-PKCE flow. Agentweaver

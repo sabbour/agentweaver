@@ -90,8 +90,7 @@ public sealed class PlatformRoleAuthorizationMiddleware
 
     private static bool IsExempt(PathString path)
     {
-        if (path.StartsWithSegments("/api/projects", StringComparison.OrdinalIgnoreCase)
-            && path.Value?.EndsWith("/webhooks/github", StringComparison.OrdinalIgnoreCase) == true)
+        if (path.Equals("/api/github/webhooks/repo-app", StringComparison.OrdinalIgnoreCase))
             return true;
 
         foreach (var prefix in ExemptPrefixes)
