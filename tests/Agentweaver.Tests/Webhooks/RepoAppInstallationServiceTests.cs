@@ -62,6 +62,7 @@ public sealed class RepoAppInstallationServiceTests
         handler.Body.Should().Contain("\"repository_ids\":[99]")
             .And.Contain("\"contents\":\"read\"").And.Contain("\"pull_requests\":\"write\"")
             .And.NotContain("administration");
+        handler.Bodies[1].Should().Contain("\"repository_ids\":[99]").And.Contain("\"metadata\":\"read\"");
         (await db.GitHubInstallations.SingleAsync()).ToString().Should().NotContain("ghs_");
         (await db.GitHubRepositoryGrants.SingleAsync()).PermissionDigest.Should().NotContain("ghs_");
     }
@@ -309,12 +310,14 @@ public sealed class RepoAppInstallationServiceTests
         public int RequestCount { get; private set; }
         public string? Authorization { get; private set; }
         public string? Body { get; private set; }
+        public List<string?> Bodies { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             RequestCount++;
             Authorization = request.Headers.Authorization?.ToString();
             Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
+            Bodies.Add(Body);
             return new HttpResponseMessage(HttpStatusCode.Created)
             {
                 Content = new StringContent(_payloads.Dequeue(), Encoding.UTF8, "application/json"),

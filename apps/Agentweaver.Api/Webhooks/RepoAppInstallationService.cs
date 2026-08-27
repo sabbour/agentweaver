@@ -37,6 +37,11 @@ public sealed class RepoAppInstallationTokenService(
             ["contents"] = "write",
             ["pull_requests"] = "write",
         };
+    private static readonly IReadOnlyDictionary<string, string> RepositoryMetadataPermissionScope =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["metadata"] = "read",
+        };
 
     public async Task<RepoAppInstallationOutcome> MintForRepositoryAsync(
         long installationId,
@@ -142,7 +147,8 @@ public sealed class RepoAppInstallationTokenService(
                 return null;
 
             var metadataToken = await GetInstallationTokenAsync(
-                appJwt, installationId, repositoryId, permissions: null, timeout.Token).ConfigureAwait(false);
+                appJwt, installationId, repositoryId, RepositoryMetadataPermissionScope, timeout.Token)
+                .ConfigureAwait(false);
             if (metadataToken is null)
                 return null;
             using var repositoryRequest = CreateGitHubRequest(
@@ -211,14 +217,12 @@ public sealed class RepoAppInstallationTokenService(
         string appJwt,
         long installationId,
         long repositoryId,
-        IReadOnlyDictionary<string, string>? permissions,
+        IReadOnlyDictionary<string, string> permissions,
         CancellationToken ct)
     {
         using var request = CreateGitHubRequest(
             HttpMethod.Post, $"/app/installations/{installationId}/access_tokens", appJwt);
-        request.Content = permissions is null
-            ? JsonContent.Create(new { repository_ids = new[] { repositoryId } })
-            : JsonContent.Create(new { repository_ids = new[] { repositoryId }, permissions });
+        request.Content = JsonContent.Create(new { repository_ids = new[] { repositoryId }, permissions });
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         using var response = await httpClientFactory.CreateClient("github").SendAsync(request, timeout.Token)
