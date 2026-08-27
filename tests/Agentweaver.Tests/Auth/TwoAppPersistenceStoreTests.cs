@@ -450,16 +450,18 @@ public sealed class TwoAppPersistenceStoreTests
     }
 
     [Fact]
-    public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeSucceedWithZeroSnapshotsWhenProjectNeverConfiguredGitHub()
+    public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeSucceedWithZeroSnapshotsForBlankOriginProject()
     {
-        // A project that has never recorded any GitHub App installation, repository grant, or
-        // Copilot binding legitimately requires zero capability snapshots: launches must not be
-        // denied for projects that simply don't use GitHub.
+        // A project whose persisted origin is explicitly blank legitimately requires zero
+        // capability snapshots: launches must not be denied for projects that simply don't use
+        // GitHub. This is decided purely by the persisted origin, not by absence of history rows.
         await using var connection = await OpenDatabaseAsync();
         await using var db = new MemoryDbContext(Options(connection));
-        var persistence = new TwoAppPersistenceStore(db);
-        var lifecycle = CreateLifecycle(db, persistence);
         var projectId = ProjectId.New();
+        var projectStore = new FakeProjectStore();
+        projectStore.Seed(BlankDomainProject(projectId));
+        var persistence = new TwoAppPersistenceStore(db, projectStore);
+        var lifecycle = CreateLifecycle(db, persistence);
         var root = RunForSnapshotLifecycle(projectId);
 
         (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
@@ -473,21 +475,55 @@ public sealed class TwoAppPersistenceStoreTests
         (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeTrue();
         (await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString())).Should().BeEmpty();
 
-        // Recovery/resume of the same never-configured root re-attempts root construction and
-        // still legitimately succeeds with zero snapshots.
+        // Recovery/resume of the same blank-origin root re-attempts root construction and still
+        // legitimately succeeds with zero snapshots.
         (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
     }
 
     [Fact]
-    public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenProjectHasGitHubHistoryButNoLiveSource()
+    public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenGitHubOriginProjectHasNoHistoryAtAll()
     {
-        // The project has recorded GitHub App history (a now-revoked installation) but currently
-        // resolves none of the four purposes: this must fail closed, not silently launch with zero
-        // capability protection.
+        // Smith's proven defect: a GitHub-origin project that has never recorded ANY GitHub App
+        // installation, repository grant, or Copilot binding row must still fail closed rather than
+        // be classified as blank. History-record absence is not an authoritative "intentionally
+        // non-GitHub" signal; only the persisted project origin is.
         await using var connection = await OpenDatabaseAsync();
         await using var db = new MemoryDbContext(Options(connection));
-        var persistence = new TwoAppPersistenceStore(db);
         var projectId = ProjectId.New();
+        var projectStore = new FakeProjectStore();
+        projectStore.Seed(GitHubOriginDomainProject(projectId));
+        var persistence = new TwoAppPersistenceStore(db, projectStore);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var root = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Should().BeEmpty();
+
+        var child = RunForSnapshotLifecycle(projectId) with { ParentRunId = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeFalse();
+
+        var retry = RunForSnapshotLifecycle(projectId) with { RetriedFrom = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeFalse();
+
+        // Recovery/resume of the same denied root re-attempts root construction and still denies.
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenGitHubOriginProjectHasHistoryButNoLiveSource()
+    {
+        // The GitHub-origin project has recorded GitHub App history (a now-revoked installation)
+        // but currently resolves none of the four purposes: this must fail closed, not silently
+        // launch with zero capability protection.
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        var projectStore = new FakeProjectStore();
+        projectStore.Seed(GitHubOriginDomainProject(projectId));
+        var persistence = new TwoAppPersistenceStore(db, projectStore);
+        // github_installations has an EF FK to the companion "projects" table (referential
+        // integrity only; see the remarks on TwoAppPersistenceStore) — seed it too, or the insert
+        // below fails a FK check. Origin classification itself reads only projectStore above.
         db.Projects.Add(Project(projectId.ToString()));
         db.GitHubInstallations.Add(new GitHubInstallationRecord
         {
@@ -515,6 +551,22 @@ public sealed class TwoAppPersistenceStoreTests
 
         // Recovery/resume of the same denied root re-attempts root construction and still denies.
         (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_RootDeniesWhenProjectRecordIsMissing()
+    {
+        // A run's project cannot be found at all: origin cannot be proven, so the project must not
+        // be treated as blank. Fail closed rather than silently launch with zero snapshots.
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var persistence = new TwoAppPersistenceStore(db, new FakeProjectStore());
+        var lifecycle = CreateLifecycle(db, persistence);
+        var projectId = ProjectId.New();
+        var root = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Should().BeEmpty();
     }
 
     private static RunGitHubCapabilitySnapshotLifecycle CreateLifecycle(MemoryDbContext db, TwoAppPersistenceStore persistence)
@@ -655,6 +707,118 @@ public sealed class TwoAppPersistenceStoreTests
         CreatedAt = DateTimeOffset.UtcNow,
         UpdatedAt = DateTimeOffset.UtcNow,
     };
+
+    /// <summary>
+    /// A blank-origin domain <see cref="Project"/> for seeding <see cref="FakeProjectStore"/>.
+    /// Capability-snapshot classification reads project origin through <see cref="IProjectStore"/>
+    /// (not the EF <c>db.Projects</c> set used above), so tests that exercise the zero-snapshot
+    /// classification path must seed this instead.
+    /// </summary>
+    private static Project BlankDomainProject(ProjectId id) => new()
+    {
+        Id = id,
+        Name = "Project",
+        Origin = ProjectOrigin.Blank(),
+        WorkingDirectory = "C:\\project",
+        DefaultBranch = "main",
+        Owner = "owner",
+        ProviderSettings = new ProjectProviderSettings { DefaultProvider = ModelSource.GitHubCopilot },
+        State = ProjectState.Active,
+        CreatedAt = DateTimeOffset.UtcNow,
+        UpdatedAt = DateTimeOffset.UtcNow,
+    };
+
+    /// <summary>
+    /// A GitHub-origin domain <see cref="Project"/> for seeding <see cref="FakeProjectStore"/>. Used
+    /// to prove that the zero-snapshot classification is decided by persisted origin, not by GitHub
+    /// App history rows: a GitHub-origin project must never be treated as blank, regardless of how
+    /// many (or how few) installation/grant/binding rows it has ever recorded.
+    /// </summary>
+    private static Project GitHubOriginDomainProject(ProjectId id, string sourceRepository = "owner/repository") => new()
+    {
+        Id = id,
+        Name = "Project",
+        Origin = ProjectOrigin.FromGitHub(sourceRepository),
+        WorkingDirectory = "C:\\project",
+        DefaultBranch = "main",
+        Owner = "owner",
+        ProviderSettings = new ProjectProviderSettings { DefaultProvider = ModelSource.GitHubCopilot },
+        State = ProjectState.Active,
+        CreatedAt = DateTimeOffset.UtcNow,
+        UpdatedAt = DateTimeOffset.UtcNow,
+    };
+
+    /// <summary>
+    /// Minimal in-memory <see cref="IProjectStore"/> double for capability-snapshot lifecycle tests
+    /// that need to prove classification is driven by persisted project origin
+    /// (<see cref="TwoAppPersistenceStore.IsIntentionallyBlankOriginProjectAsync"/>). Only
+    /// <see cref="GetAsync"/>/<see cref="InsertAsync"/> are implemented; the snapshot lifecycle under
+    /// test never calls any other member.
+    /// </summary>
+    private sealed class FakeProjectStore : IProjectStore
+    {
+        private readonly Dictionary<ProjectId, Project> _projects = new();
+
+        public void Seed(Project project) => _projects[project.Id] = project;
+
+        public Task InsertAsync(Project project, CancellationToken ct = default)
+        {
+            _projects[project.Id] = project;
+            return Task.CompletedTask;
+        }
+
+        public Task<Project?> GetAsync(ProjectId id, CancellationToken ct = default) =>
+            Task.FromResult(_projects.TryGetValue(id, out var project) ? project : null);
+
+        public Task<IReadOnlyList<Project>> ListAsync(CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateNameAsync(ProjectId id, string name, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateProviderSettingsAsync(ProjectId id, ProjectProviderSettings settings, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateOriginAsync(ProjectId id, ProjectOrigin origin, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateGenerationModelSettingsAsync(
+            ProjectId id,
+            string? blueprintGenerationModel,
+            string? workflowGenerationModel,
+            string? outcomeSpecGenerationModel,
+            DateTimeOffset updatedAt,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DeleteAsync(ProjectId id, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdatePickupSettingsAsync(
+            ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateDefaultWorkflowAsync(ProjectId id, string? workflowId, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateActiveReviewPolicyAsync(ProjectId id, string? policyName, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateSandboxProfileAsync(ProjectId id, string? sandboxProfile, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task UpdateAllowedWorkflowIdsAsync(ProjectId id, IReadOnlyList<string>? allowedWorkflowIds, DateTimeOffset updatedAt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IProjectTeamMutationLease?> TryBeginTeamMutationAsync(ProjectId id, long expectedRevision, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
 
     private static async Task SeedCapabilitySourcesAsync(
         MemoryDbContext db,

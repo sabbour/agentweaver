@@ -89,7 +89,19 @@ internal sealed class RepoAppCredentialLease(
 /// Persistence boundary for the two GitHub App model. It accepts only opaque credential
 /// references and exposes guarded state transitions rather than mutable entity access.
 /// </summary>
-public sealed class TwoAppPersistenceStore(MemoryDbContext db)
+/// <remarks>
+/// <paramref name="projectStore"/> is the authoritative source for a project's persisted origin
+/// (<see cref="IsIntentionallyBlankOriginProjectAsync"/>). It is intentionally NOT the EF
+/// <c>db.Projects</c> set: under the default SQLite provider, <see cref="MemoryDbContext"/> lives
+/// in a separate companion database file (<c>memory.db</c>) from the main operational database
+/// that <c>SqliteProjectStore</c> writes real project rows to (see
+/// <c>SqliteMemoryDbPathResolver</c>), so <c>db.Projects</c> is structurally always empty for real
+/// projects under SQLite. <paramref name="projectStore"/> is optional only so unit tests exercising
+/// unrelated persistence methods (authorization claims, Copilot bindings, invocation/lifecycle
+/// delivery idempotency, etc.) do not need to wire one; any code path that actually needs to
+/// classify a project's origin requires it and fails closed if it is absent.
+/// </remarks>
+public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? projectStore = null)
 {
     private static readonly Regex CredentialPattern = new(
         @"(?:gh[ups]_|github_pat_|-----BEGIN [A-Z ]+-----|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.)",
@@ -676,9 +688,10 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
     /// <summary>
     /// Atomically creates fresh opaque references for a child or retry from the exact immutable
     /// parent snapshot rows. Existing target snapshots are never replaced. An empty parent set is
-    /// only accepted when <paramref name="projectId"/> has never recorded any GitHub App history;
-    /// otherwise a run that should have inherited real capability protection is denied rather than
-    /// silently launched with none.
+    /// only accepted when <paramref name="projectId"/> is absent (no project at all) or the
+    /// project's persisted origin is explicitly <see cref="ProjectOriginKind.Blank"/>; otherwise a
+    /// run that should have inherited real capability protection is denied rather than silently
+    /// launched with none.
     /// </summary>
     internal async Task<bool> TryInheritCapabilitySnapshotsAsync(
         string sourceRunId,
@@ -690,7 +703,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
         if (source.Count == 0)
         {
             return string.IsNullOrWhiteSpace(projectId) ||
-                !await HasProjectEverConfiguredGitHubCapabilityAsync(projectId, ct).ConfigureAwait(false);
+                await IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false);
         }
 
         var target = await GetCapabilitySnapshotsAsync(targetRunId, ct).ConfigureAwait(false);
@@ -777,28 +790,39 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
     }
 
     /// <summary>
-    /// True when <paramref name="projectId"/> has ever recorded a GitHub App installation,
-    /// repository grant, or Copilot binding, including now-revoked or deactivated rows. This is
-    /// the sole signal distinguishing a project that legitimately never uses GitHub capability
-    /// (zero required snapshots) from one that does but currently resolves nothing live.
+    /// True when <paramref name="projectId"/>'s persisted origin is explicitly
+    /// <see cref="ProjectOriginKind.Blank"/>. This is the sole authoritative signal for a project
+    /// that legitimately requires zero capability snapshots. History records (installations,
+    /// grants, bindings) are NOT used here: a <see cref="ProjectOriginKind.FromGitHub"/> project
+    /// that has never completed onboarding, or whose history rows were all removed/never written,
+    /// must still fail closed rather than be classified as blank. A project that cannot be found,
+    /// or whose id is not a well-formed <see cref="ProjectId"/>, is treated as not blank (fail
+    /// closed), since origin cannot be proven. Reads through <see cref="IProjectStore"/> (not the EF
+    /// <c>db.Projects</c> set) so the check is correct for both the SQLite and Postgres providers;
+    /// see the remarks on <see cref="TwoAppPersistenceStore"/> for why the EF set cannot be used here.
     /// </summary>
-    internal async Task<bool> HasProjectEverConfiguredGitHubCapabilityAsync(
+    internal async Task<bool> IsIntentionallyBlankOriginProjectAsync(
         string projectId,
-        CancellationToken ct = default) =>
-        await db.GitHubInstallations.AsNoTracking().AnyAsync(x => x.ProjectId == projectId, ct)
-            .ConfigureAwait(false) ||
-        await db.GitHubRepositoryGrants.AsNoTracking().AnyAsync(x => x.ProjectId == projectId, ct)
-            .ConfigureAwait(false) ||
-        await db.ProjectCopilotBindings.AsNoTracking().AnyAsync(x => x.ProjectId == projectId, ct)
-            .ConfigureAwait(false);
+        CancellationToken ct = default)
+    {
+        if (projectStore is null)
+            throw new InvalidOperationException(
+                "TwoAppPersistenceStore requires an IProjectStore to classify project origin; none was supplied.");
+        if (!ProjectId.TryParse(projectId, out var id))
+            return false;
+
+        var project = await projectStore.GetAsync(id, ct).ConfigureAwait(false);
+        return project is not null && project.Origin.Kind == ProjectOriginKind.Blank;
+    }
 
     /// <summary>
     /// Trusted production root-capture seam. Selects and insert-only creates every currently live
     /// v2 capability snapshot directly from authoritative sources for a brand-new root run; it
-    /// never reads the finite v1 legacy table. A project with no GitHub App history captures zero
-    /// snapshots by design. A project that has ever recorded GitHub App history but currently
-    /// resolves none of the four purposes is reported unavailable so the caller fails the launch
-    /// closed instead of silently proceeding with no capability protection.
+    /// never reads the finite v1 legacy table. A project whose persisted origin is explicitly
+    /// blank captures zero snapshots by design. A <see cref="ProjectOriginKind.FromGitHub"/>
+    /// project that currently resolves none of the four purposes is reported unavailable so the
+    /// caller fails the launch closed instead of silently proceeding with no capability
+    /// protection.
     /// </summary>
     public async Task<CapabilitySnapshotBackfillResult> CaptureRootCapabilitySnapshotsAsync(
         string runId,
@@ -826,9 +850,9 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
 
         if (resolved.Count == 0)
         {
-            return await HasProjectEverConfiguredGitHubCapabilityAsync(projectId, ct).ConfigureAwait(false)
-                ? new CapabilitySnapshotBackfillResult(0, 1)
-                : new CapabilitySnapshotBackfillResult(0, 0);
+            return await IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false)
+                ? new CapabilitySnapshotBackfillResult(0, 0)
+                : new CapabilitySnapshotBackfillResult(0, 1);
         }
 
         // All-or-nothing: a partial commit would leave GetCapabilitySnapshotsAsync(runId) non-empty
