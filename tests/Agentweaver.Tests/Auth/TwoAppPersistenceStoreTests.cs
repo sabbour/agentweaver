@@ -389,8 +389,136 @@ public sealed class TwoAppPersistenceStoreTests
         await using var connection = await OpenDatabaseAsync();
         var options = Options(connection);
         await using var db = new MemoryDbContext(options);
-        await SeedCapabilitySourcesAsync(db);
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        // Only live v2-authoritative sources are seeded here: no v1 RunGitHubIdentitySnapshotRecord
+        // is ever inserted. Production never populates that legacy table, so a test that relies on
+        // it does not exercise the real trusted root-construction seam.
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
         var persistence = new TwoAppPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var root = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+        var rootSnapshots = await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString());
+        rootSnapshots.Select(snapshot => snapshot.Purpose).Should().BeEquivalentTo(
+        [
+            GitHubCapabilityPurpose.InteractiveRepository,
+            GitHubCapabilityPurpose.InteractiveCopilot,
+            GitHubCapabilityPurpose.UnattendedRepository,
+            GitHubCapabilityPurpose.UnattendedCopilot,
+        ]);
+
+        var child = RunForSnapshotLifecycle(projectId) with { ParentRunId = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeTrue();
+        var childSnapshots = await persistence.GetCapabilitySnapshotsAsync(child.Id.ToString());
+        childSnapshots.Should().HaveCount(rootSnapshots.Count);
+        foreach (var rootSnapshot in rootSnapshots)
+        {
+            var childSnapshot = childSnapshots.Single(snapshot => snapshot.Purpose == rootSnapshot.Purpose);
+            childSnapshot.SnapshotRef.Should().NotBe(rootSnapshot.SnapshotRef);
+            childSnapshot.SourceAuthorizationId.Should().Be(rootSnapshot.SourceAuthorizationId);
+            childSnapshot.GrantDigest.Should().Be(rootSnapshot.GrantDigest);
+        }
+
+        var retry = RunForSnapshotLifecycle(projectId) with { RetriedFrom = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeTrue();
+        var retrySnapshots = await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString());
+        retrySnapshots.Should().HaveCount(rootSnapshots.Count);
+        foreach (var rootSnapshot in rootSnapshots)
+        {
+            var retrySnapshot = retrySnapshots.Single(snapshot => snapshot.Purpose == rootSnapshot.Purpose);
+            retrySnapshot.SnapshotRef.Should().NotBe(rootSnapshot.SnapshotRef);
+            retrySnapshot.GrantDigest.Should().Be(rootSnapshot.GrantDigest);
+        }
+
+        // Recovery (resume) revisits the SAME run: already-captured snapshots are re-fenced, not
+        // recaptured or duplicated.
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+        var rootSnapshotsAfterResume = await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString());
+        rootSnapshotsAfterResume.Select(snapshot => snapshot.SnapshotRef).Should().BeEquivalentTo(
+            rootSnapshots.Select(snapshot => snapshot.SnapshotRef));
+
+        var revokedAt = DateTimeOffset.UtcNow;
+        await db.GitHubAppAuthorizations
+            .Where(authorization => authorization.Id == "authorization")
+            .ExecuteUpdateAsync(update => update.SetProperty(authorization => authorization.RevokedAt, revokedAt));
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeFalse();
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeSucceedWithZeroSnapshotsWhenProjectNeverConfiguredGitHub()
+    {
+        // A project that has never recorded any GitHub App installation, repository grant, or
+        // Copilot binding legitimately requires zero capability snapshots: launches must not be
+        // denied for projects that simply don't use GitHub.
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var persistence = new TwoAppPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var projectId = ProjectId.New();
+        var root = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Should().BeEmpty();
+
+        var child = RunForSnapshotLifecycle(projectId) with { ParentRunId = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeTrue();
+        (await persistence.GetCapabilitySnapshotsAsync(child.Id.ToString())).Should().BeEmpty();
+
+        var retry = RunForSnapshotLifecycle(projectId) with { RetriedFrom = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeTrue();
+        (await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString())).Should().BeEmpty();
+
+        // Recovery/resume of the same never-configured root re-attempts root construction and
+        // still legitimately succeeds with zero snapshots.
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenProjectHasGitHubHistoryButNoLiveSource()
+    {
+        // The project has recorded GitHub App history (a now-revoked installation) but currently
+        // resolves none of the four purposes: this must fail closed, not silently launch with zero
+        // capability protection.
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var persistence = new TwoAppPersistenceStore(db);
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = 909,
+            AppKind = GitHubAppKind.Repo,
+            ProjectId = projectId.ToString(),
+            CreatedAt = DateTimeOffset.UtcNow,
+            RevokedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var lifecycle = CreateLifecycle(db, persistence);
+        var root = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Should().BeEmpty();
+
+        // A run whose parent/retry source never captured anything (the root above was denied, but
+        // an inherit call can also be reached directly, e.g. from data that predates this fix) must
+        // also deny rather than silently launch with no capability protection.
+        var child = RunForSnapshotLifecycle(projectId) with { ParentRunId = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeFalse();
+
+        var retry = RunForSnapshotLifecycle(projectId) with { RetriedFrom = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeFalse();
+
+        // Recovery/resume of the same denied root re-attempts root construction and still denies.
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+    }
+
+    private static RunGitHubCapabilitySnapshotLifecycle CreateLifecycle(MemoryDbContext db, TwoAppPersistenceStore persistence)
+    {
         var secrets = new InMemorySecretStore();
         var broker = new GitHubCapabilityBroker(
             persistence,
@@ -400,57 +528,7 @@ public sealed class TwoAppPersistenceStoreTests
                 db,
                 secrets,
                 new NullHttpClientFactory()));
-        var lifecycle = new RunGitHubCapabilitySnapshotLifecycle(persistence, broker);
-        var root = RunForSnapshotLifecycle();
-        db.RunGitHubIdentitySnapshots.Add(new RunGitHubIdentitySnapshotRecord
-        {
-            RunId = root.Id.ToString(),
-            ProjectId = "project",
-            AppKind = GitHubAppKind.Repo,
-            Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
-            CredentialReference = "repo-app-user-credential-version",
-            CredentialVersion = "version",
-            GrantDigest = "user-digest",
-            RepositoryId = 202,
-            EntraObjectId = "entra",
-            CapturedAt = DateTimeOffset.UtcNow,
-        });
-        await db.SaveChangesAsync();
-
-        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
-        var rootSnapshots = await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString());
-        rootSnapshots.Should().ContainSingle();
-        var rootSnapshot = rootSnapshots.Single();
-
-        var child = RunForSnapshotLifecycle() with { ParentRunId = root.Id.ToString() };
-        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeTrue();
-        var childSnapshots = await persistence.GetCapabilitySnapshotsAsync(child.Id.ToString());
-        childSnapshots.Should().ContainSingle();
-        var childSnapshot = childSnapshots.Single();
-        childSnapshot.SnapshotRef.Should().NotBe(rootSnapshot.SnapshotRef);
-        childSnapshot.SourceAuthorizationId.Should().Be(rootSnapshot.SourceAuthorizationId);
-        childSnapshot.CredentialVersion.Should().Be(rootSnapshot.CredentialVersion);
-
-        var retry = RunForSnapshotLifecycle() with { RetriedFrom = root.Id.ToString() };
-        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeTrue();
-        var retrySnapshots = await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString());
-        retrySnapshots.Should().ContainSingle();
-        var retrySnapshot = retrySnapshots.Single();
-        retrySnapshot.SnapshotRef.Should().NotBe(rootSnapshot.SnapshotRef);
-        retrySnapshot.GrantDigest.Should().Be(rootSnapshot.GrantDigest);
-
-        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
-        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Should().ContainSingle();
-        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Single().SnapshotRef
-            .Should().Be(rootSnapshot.SnapshotRef);
-
-        var revokedAt = DateTimeOffset.UtcNow;
-        await db.GitHubAppAuthorizations
-            .Where(authorization => authorization.Id == "authorization")
-            .ExecuteUpdateAsync(update => update.SetProperty(authorization => authorization.RevokedAt, revokedAt));
-        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
-        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeFalse();
-        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeFalse();
+        return new RunGitHubCapabilitySnapshotLifecycle(persistence, broker);
     }
 
     [Theory]
@@ -578,12 +656,17 @@ public sealed class TwoAppPersistenceStoreTests
         UpdatedAt = DateTimeOffset.UtcNow,
     };
 
-    private static async Task SeedCapabilitySourcesAsync(MemoryDbContext db)
+    private static async Task SeedCapabilitySourcesAsync(
+        MemoryDbContext db,
+        string projectId = "project",
+        string entraObjectId = "entra",
+        long installationId = 101,
+        long repositoryId = 202)
     {
         db.GitHubAppAuthorizations.Add(new GitHubAppAuthorizationRecord
         {
             Id = "authorization",
-            EntraObjectId = "entra",
+            EntraObjectId = entraObjectId,
             AppKind = GitHubAppKind.Repo,
             Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
             CredentialReference = "repo-app-user-credential-version",
@@ -593,16 +676,16 @@ public sealed class TwoAppPersistenceStoreTests
         });
         db.GitHubInstallations.Add(new GitHubInstallationRecord
         {
-            InstallationId = 101,
+            InstallationId = installationId,
             AppKind = GitHubAppKind.Repo,
-            ProjectId = "project",
+            ProjectId = projectId,
             CreatedAt = DateTimeOffset.UtcNow,
         });
         db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
         {
-            InstallationId = 101,
-            RepositoryId = 202,
-            ProjectId = "project",
+            InstallationId = installationId,
+            RepositoryId = repositoryId,
+            ProjectId = projectId,
             FullNameDisplay = "owner/repository",
             PermissionDigest = "repository-digest",
             GrantedAt = DateTimeOffset.UtcNow,
@@ -610,8 +693,8 @@ public sealed class TwoAppPersistenceStoreTests
         db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
         {
             Id = "binding",
-            ProjectId = "project",
-            EntraObjectId = "entra",
+            ProjectId = projectId,
+            EntraObjectId = entraObjectId,
             CredentialReference = "copilot-app-project-project-version",
             CredentialVersion = "version",
             GrantDigest = "copilot-digest",
@@ -656,7 +739,7 @@ public sealed class TwoAppPersistenceStoreTests
             _ => throw new ArgumentOutOfRangeException(nameof(purpose)),
         };
 
-    private static Run RunForSnapshotLifecycle() => new()
+    private static Run RunForSnapshotLifecycle(ProjectId? projectId = null) => new()
     {
         Id = RunId.New(),
         RepositoryPath = "repository",
@@ -666,6 +749,7 @@ public sealed class TwoAppPersistenceStoreTests
         SubmittingUser = "entra",
         Status = RunStatus.Pending,
         StartedAt = DateTimeOffset.UtcNow,
+        ProjectId = projectId,
     };
 
     private sealed class NullHttpClientFactory : IHttpClientFactory

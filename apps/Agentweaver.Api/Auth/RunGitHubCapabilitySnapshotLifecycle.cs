@@ -30,23 +30,35 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
         var runId = run.Id.ToString();
 
+        var projectId = run.ProjectId?.ToString();
+
         var sourceRunId = run.RetriedFrom ?? run.ParentRunId;
 
         if (!string.IsNullOrWhiteSpace(sourceRunId))
 
         {
 
-            if (!await persistence.TryInheritCapabilitySnapshotsAsync(sourceRunId, runId, ct).ConfigureAwait(false))
+            if (!await persistence.TryInheritCapabilitySnapshotsAsync(sourceRunId, runId, projectId, ct).ConfigureAwait(false))
 
                 return false;
 
         }
 
-        else if ((await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false)).Count == 0)
+        else if ((await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false)).Count == 0 &&
+
+                  !string.IsNullOrWhiteSpace(projectId))
 
         {
 
-            var capture = await persistence.BackfillCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false);
+            // Trusted production root construction: select and insert-only create every currently
+
+            // live v2 snapshot directly from authoritative sources. The finite v1 legacy table is a
+
+            // one-time migration input only and is never consulted on this new-run capture path.
+
+            var capture = await persistence.CaptureRootCapabilitySnapshotsAsync(runId, projectId, run.SubmittingUser, ct)
+
+                .ConfigureAwait(false);
 
             if (capture.Unavailable != 0)
 
