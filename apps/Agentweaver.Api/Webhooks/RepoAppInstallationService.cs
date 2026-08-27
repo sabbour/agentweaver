@@ -19,7 +19,7 @@ internal sealed record RepoAppInstallationAuthority(
     long RepositoryId,
     string FullNameDisplay,
     IReadOnlyDictionary<string, string> Permissions);
-internal sealed record RepoAppInstallationToken(string Value, DateTimeOffset ExpiresAt);
+internal sealed record RepoAppInstallationToken(string Value, DateTimeOffset? ExpiresAt);
 
 /// <summary>
 /// API-only boundary for a short-lived Repo App JWT and the single-repository installation
@@ -88,7 +88,9 @@ public sealed class RepoAppInstallationTokenService(
             if (installationToken is null)
                 return RepoAppInstallationOutcome.ProviderUnavailable;
 
-            await useToken(installationToken.Value, installationToken.ExpiresAt).ConfigureAwait(false);
+            if (installationToken.ExpiresAt is null || installationToken.ExpiresAt <= DateTimeOffset.UtcNow)
+                return RepoAppInstallationOutcome.ProviderUnavailable;
+            await useToken(installationToken.Value, installationToken.ExpiresAt.Value).ConfigureAwait(false);
             return RepoAppInstallationOutcome.Success;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -233,11 +235,12 @@ public sealed class RepoAppInstallationTokenService(
         using var document = JsonDocument.Parse(
             await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false));
         if (!document.RootElement.TryGetProperty("token", out var token) ||
-            string.IsNullOrWhiteSpace(token.GetString()) ||
-            !document.RootElement.TryGetProperty("expires_at", out var expiresAtElement) ||
-            !DateTimeOffset.TryParse(expiresAtElement.GetString(), out var expiresAt) ||
-            expiresAt <= DateTimeOffset.UtcNow)
+            string.IsNullOrWhiteSpace(token.GetString()))
             return null;
+        DateTimeOffset? expiresAt = document.RootElement.TryGetProperty("expires_at", out var expiresAtElement) &&
+                                    DateTimeOffset.TryParse(expiresAtElement.GetString(), out var parsedExpiry)
+            ? parsedExpiry
+            : null;
         return new(token.GetString()!, expiresAt);
     }
 
