@@ -48,6 +48,29 @@ public sealed class TwoAppPersistencePostgresTests(PostgresFixture postgres)
         (await verify.ProjectCopilotBindings.CountAsync(x => x.ProjectId == projectId)).Should().Be(0);
     }
 
+    [PostgresFact]
+    public async Task LifecycleDeliveryClaim_UsesSameUniqueDeliveryContractAsSqlite()
+    {
+        var deliveryId = $"delivery-{Guid.NewGuid():N}";
+        await using (var first = await postgres.CreateDbContextAsync())
+        {
+            (await new TwoAppPersistenceStore(first).ClaimLifecycleDeliveryAsync(LifecycleDelivery(deliveryId)))
+                .Should().Be(InvocationClaimResult.Claimed);
+        }
+
+        await using var second = await postgres.CreateDbContextAsync();
+        (await new TwoAppPersistenceStore(second).ClaimLifecycleDeliveryAsync(LifecycleDelivery(deliveryId)))
+            .Should().Be(InvocationClaimResult.Duplicate);
+    }
+
+    private static GitHubLifecycleDeliveryRecord LifecycleDelivery(string deliveryId) => new()
+    {
+        DeliveryId = deliveryId,
+        EventName = "installation",
+        InstallationId = 101,
+        ReceivedAt = DateTimeOffset.UtcNow,
+    };
+
     private static ProjectCopilotBindingRecord Binding(string id, string projectId) => new()
     {
         Id = id,

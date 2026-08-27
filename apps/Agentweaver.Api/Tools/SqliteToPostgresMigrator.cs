@@ -57,9 +57,12 @@ public sealed class SqliteToPostgresMigrator
             return;
 
         var sourceOptions = new DbContextOptionsBuilder<MemoryDbContext>()
-            .UseSqlite($"Data Source={memoryDbPath}")
+            .UseSqlite(
+                $"Data Source={memoryDbPath}",
+                sqlite => sqlite.MigrationsAssembly(typeof(SqliteToPostgresMigrator).Assembly.GetName().Name))
             .Options;
         await using var source = new MemoryDbContext(sourceOptions);
+        await PrepareTwoAppSourceSchemaAsync(source, ct).ConfigureAwait(false);
 
         List<GitHubAuthorizationRecord> authorizations;
         List<GitHubInstallationRecord> installations;
@@ -67,6 +70,7 @@ public sealed class SqliteToPostgresMigrator
         List<ProjectCopilotBindingRecord> bindings;
         List<AutomationActivationRecord> activations;
         List<AutomationInvocationRecord> invocations;
+        List<GitHubLifecycleDeliveryRecord> lifecycleDeliveries;
         List<RunGitHubIdentitySnapshotRecord> snapshots;
         List<GitHubAppAuthorizationRecord> appAuthorizations;
         List<GitHubAuditRecord> audits;
@@ -78,6 +82,7 @@ public sealed class SqliteToPostgresMigrator
             bindings = await source.ProjectCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             activations = await source.AutomationActivations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             invocations = await source.AutomationInvocations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            lifecycleDeliveries = await source.GitHubLifecycleDeliveries.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             snapshots = await source.RunGitHubIdentitySnapshots.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             appAuthorizations = await source.GitHubAppAuthorizations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             audits = await source.GitHubAuditRecords.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
@@ -90,7 +95,7 @@ public sealed class SqliteToPostgresMigrator
         }
 
         if (authorizations.Count + installations.Count + grants.Count + bindings.Count + activations.Count +
-            invocations.Count + snapshots.Count + appAuthorizations.Count + audits.Count == 0)
+            invocations.Count + lifecycleDeliveries.Count + snapshots.Count + appAuthorizations.Count + audits.Count == 0)
             return;
 
         var projectIds = authorizations.Where(x => x.ProjectId is not null).Select(x => x.ProjectId!)
@@ -132,6 +137,9 @@ public sealed class SqliteToPostgresMigrator
             foreach (var item in invocations)
                 if (!await destination.AutomationInvocations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
                     destination.AutomationInvocations.Add(item);
+            foreach (var item in lifecycleDeliveries)
+                if (!await destination.GitHubLifecycleDeliveries.AnyAsync(x => x.DeliveryId == item.DeliveryId, ct).ConfigureAwait(false))
+                    destination.GitHubLifecycleDeliveries.Add(item);
             foreach (var item in snapshots)
                 if (!await destination.RunGitHubIdentitySnapshots.AnyAsync(x => x.RunId == item.RunId, ct).ConfigureAwait(false))
                     destination.RunGitHubIdentitySnapshots.Add(item);
@@ -158,6 +166,91 @@ public sealed class SqliteToPostgresMigrator
         {
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
+        }
+    }
+
+    private static async Task PrepareTwoAppSourceSchemaAsync(MemoryDbContext source, CancellationToken ct)
+    {
+        if (await HasMigrationHistoryAsync(source, ct).ConfigureAwait(false))
+        {
+            await source.Database.MigrateAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (!await HasTableAsync(source, "github_authorizations", ct).ConfigureAwait(false) ||
+            await HasColumnAsync(source, "github_authorizations", "external_transaction_id", ct).ConfigureAwait(false))
+            return;
+
+        // EnsureCreated sources have no migration history. Upgrade only the missing #955
+        // projection fields so the existing two-App records can be read and transferred.
+        await source.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE github_authorizations ADD COLUMN external_transaction_id TEXT NOT NULL DEFAULT '';",
+            ct).ConfigureAwait(false);
+        await source.Database.ExecuteSqlRawAsync(
+            "UPDATE github_authorizations SET external_transaction_id = lower(hex(randomblob(32))) WHERE external_transaction_id = '';",
+            ct).ConfigureAwait(false);
+        await source.Database.ExecuteSqlRawAsync(
+            "CREATE UNIQUE INDEX IX_github_authorizations_external_transaction_id ON github_authorizations(external_transaction_id);",
+            ct).ConfigureAwait(false);
+        await source.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE github_lifecycle_deliveries (
+                delivery_id TEXT NOT NULL CONSTRAINT PK_github_lifecycle_deliveries PRIMARY KEY,
+                event_name TEXT NOT NULL,
+                installation_id INTEGER NULL,
+                repository_id INTEGER NULL,
+                received_at TEXT NOT NULL
+            );
+            """, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> HasMigrationHistoryAsync(MemoryDbContext source, CancellationToken ct) =>
+        await HasTableAsync(source, "__EFMigrationsHistory", ct).ConfigureAwait(false);
+
+    private static async Task<bool> HasTableAsync(MemoryDbContext source, string tableName, CancellationToken ct)
+    {
+        await source.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var command = source.Database.GetDbConnection().CreateCommand();
+            command.CommandText = """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = $tableName;
+                """;
+            var tableNameParameter = command.CreateParameter();
+            tableNameParameter.ParameterName = "$tableName";
+            tableNameParameter.Value = tableName;
+            command.Parameters.Add(tableNameParameter);
+            return await command.ExecuteScalarAsync(ct).ConfigureAwait(false) is not null;
+        }
+        finally
+        {
+            await source.Database.CloseConnectionAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<bool> HasColumnAsync(
+        MemoryDbContext source,
+        string tableName,
+        string columnName,
+        CancellationToken ct)
+    {
+        await source.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var command = source.Database.GetDbConnection().CreateCommand();
+            command.CommandText = $"PRAGMA table_info({tableName});";
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+        finally
+        {
+            await source.Database.CloseConnectionAsync().ConfigureAwait(false);
         }
     }
 

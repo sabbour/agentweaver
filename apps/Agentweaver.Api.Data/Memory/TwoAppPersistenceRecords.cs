@@ -2,7 +2,7 @@ namespace Agentweaver.Api.Memory;
 
 public enum GitHubAppKind { Repo, Copilot }
 public enum GitHubAuthorizationPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot }
-public enum GitHubAuthorizationStatus { Pending, Redeeming, Completed, Failed }
+public enum GitHubAuthorizationStatus { Pending, Redeeming, Completed, Failed, Expired }
 public enum GitHubBindingStatus { Active, Inactive, Revoked }
 public enum AutomationActivationStatus { Active, Inactive, Invalidated }
 public enum AutomationInvocationOutcome { Claimed, Duplicate, Completed, Failed }
@@ -13,19 +13,36 @@ public enum GitHubAuditReasonCode { None, BindingUnavailable, InstallationUnavai
 
 public sealed class GitHubAuthorizationRecord
 {
+    [System.Text.Json.Serialization.JsonIgnore]
     public string State { get; set; } = "";
+    /// <summary>
+    /// Opaque, externally safe transaction handle for MCP/browser handoff. It is distinct
+    /// from OAuth state and is bound to the App kind and initiating Entra subject.
+    /// </summary>
+    public string ExternalTransactionId { get; set; } = "";
     public GitHubAppKind AppKind { get; set; }
     public GitHubAuthorizationPurpose Purpose { get; set; }
     public string EntraObjectId { get; set; } = "";
     public string? ProjectId { get; set; }
     public long ExpiresAtUnixMilliseconds { get; set; }
     public string ReturnRouteKey { get; set; } = "";
+    [System.Text.Json.Serialization.JsonIgnore]
     public string PkceVerifierProtected { get; set; } = "";
+    [System.Text.Json.Serialization.JsonIgnore]
     public string CallbackCookieHash { get; set; } = "";
     public GitHubAuthorizationStatus Status { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
 }
+
+/// <summary>
+/// The safe, minimal authorization lifecycle view for an initiating MCP or browser client.
+/// </summary>
+public sealed record GitHubAuthorizationTransactionHandle(
+    string TransactionId,
+    GitHubAppKind AppKind,
+    DateTimeOffset ExpiresAt,
+    GitHubAuthorizationStatus Status);
 
 public sealed class GitHubAppAuthorizationRecord
 {
@@ -34,6 +51,7 @@ public sealed class GitHubAppAuthorizationRecord
     public GitHubAppKind AppKind { get; set; }
     public GitHubAuthorizationPurpose Purpose { get; set; }
     public string CredentialReference { get; set; } = "";
+    /// <summary>Stable identity of the authorization grant, not an access-token version.</summary>
     public string CredentialVersion { get; set; } = "";
     public string GrantDigest { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; }
@@ -66,6 +84,7 @@ public sealed class ProjectCopilotBindingRecord
     public string ProjectId { get; set; } = "";
     public string EntraObjectId { get; set; } = "";
     public string CredentialReference { get; set; } = "";
+    /// <summary>Stable identity of the authorization grant, not an access-token version.</summary>
     public string CredentialVersion { get; set; } = "";
     public string GrantDigest { get; set; } = "";
     public GitHubBindingStatus Status { get; set; }
@@ -100,6 +119,19 @@ public sealed class AutomationInvocationRecord
     public DateTimeOffset? CompletedAt { get; set; }
 }
 
+/// <summary>
+/// A durably claimed Repo App lifecycle delivery. This remains independent of any
+/// automation activation so installation and grant lifecycle events are replay-safe.
+/// </summary>
+public sealed class GitHubLifecycleDeliveryRecord
+{
+    public string DeliveryId { get; set; } = "";
+    public string EventName { get; set; } = "";
+    public long? InstallationId { get; set; }
+    public long? RepositoryId { get; set; }
+    public DateTimeOffset ReceivedAt { get; set; }
+}
+
 public sealed class RunGitHubIdentitySnapshotRecord
 {
     public string RunId { get; set; } = "";
@@ -107,6 +139,7 @@ public sealed class RunGitHubIdentitySnapshotRecord
     public GitHubAppKind AppKind { get; set; }
     public GitHubAuthorizationPurpose Purpose { get; set; }
     public string CredentialReference { get; set; } = "";
+    /// <summary>Stable identity of the authorization grant, not an access-token version.</summary>
     public string CredentialVersion { get; set; } = "";
     public string GrantDigest { get; set; } = "";
     public long? InstallationId { get; set; }

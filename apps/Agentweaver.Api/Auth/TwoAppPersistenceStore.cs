@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 
 namespace Agentweaver.Api.Auth;
@@ -24,9 +25,14 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
     public async Task AddAuthorizationAsync(GitHubAuthorizationRecord authorization, CancellationToken ct = default)
     {
         EnsureSafe(authorization);
+        EnsureAuthorizationTransaction(authorization);
         db.GitHubAuthorizations.Add(authorization);
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
     }
+
+    public static string CreateExternalTransactionId() =>
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     public async Task AddAppAuthorizationAsync(GitHubAppAuthorizationRecord authorization, CancellationToken ct = default)
     {
@@ -60,6 +66,60 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
         return status is GitHubAuthorizationStatus.Redeeming or GitHubAuthorizationStatus.Completed or GitHubAuthorizationStatus.Failed
             ? AuthorizationClaimResult.Consumed
             : AuthorizationClaimResult.Invalid;
+    }
+
+    public async Task<AuthorizationClaimResult> ClaimAuthorizationByTransactionIdAsync(
+        string transactionId,
+        GitHubAppKind appKind,
+        string entraObjectId,
+        DateTimeOffset now,
+        CancellationToken ct = default)
+    {
+        var changed = await db.GitHubAuthorizations
+            .Where(x => x.ExternalTransactionId == transactionId &&
+                        x.AppKind == appKind &&
+                        x.EntraObjectId == entraObjectId &&
+                        x.Status == GitHubAuthorizationStatus.Pending &&
+                        x.ExpiresAtUnixMilliseconds >= now.ToUnixTimeMilliseconds())
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, GitHubAuthorizationStatus.Redeeming), ct)
+            .ConfigureAwait(false);
+        if (changed == 1)
+            return AuthorizationClaimResult.Claimed;
+
+        var status = await db.GitHubAuthorizations.AsNoTracking()
+            .Where(x => x.ExternalTransactionId == transactionId &&
+                        x.AppKind == appKind &&
+                        x.EntraObjectId == entraObjectId)
+            .Select(x => (GitHubAuthorizationStatus?)x.Status)
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        return status is GitHubAuthorizationStatus.Redeeming or GitHubAuthorizationStatus.Completed or GitHubAuthorizationStatus.Failed
+            ? AuthorizationClaimResult.Consumed
+            : AuthorizationClaimResult.Invalid;
+    }
+
+    public async Task<GitHubAuthorizationTransactionHandle?> GetAuthorizationTransactionAsync(
+        string transactionId,
+        GitHubAppKind appKind,
+        string entraObjectId,
+        CancellationToken ct = default)
+    {
+        var transaction = await db.GitHubAuthorizations.AsNoTracking()
+            .Where(x => x.ExternalTransactionId == transactionId &&
+                        x.AppKind == appKind &&
+                        x.EntraObjectId == entraObjectId)
+            .Select(x => new GitHubAuthorizationTransactionHandle(
+                x.ExternalTransactionId,
+                x.AppKind,
+                DateTimeOffset.FromUnixTimeMilliseconds(x.ExpiresAtUnixMilliseconds),
+                x.Status))
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        return transaction is { Status: GitHubAuthorizationStatus.Pending } &&
+               transaction.ExpiresAt < DateTimeOffset.UtcNow
+            ? transaction with { Status = GitHubAuthorizationStatus.Expired }
+            : transaction;
     }
 
     public Task CompleteAuthorizationAsync(
@@ -120,6 +180,31 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
         }
     }
 
+    /// <summary>
+    /// Atomically claims one GitHub lifecycle delivery through its provider-enforced unique key.
+    /// Callers can perform lifecycle state updates in their surrounding database transaction.
+    /// </summary>
+    public async Task<InvocationClaimResult> ClaimLifecycleDeliveryAsync(
+        GitHubLifecycleDeliveryRecord delivery,
+        CancellationToken ct = default)
+    {
+        EnsureSafe(delivery);
+        if (string.IsNullOrWhiteSpace(delivery.DeliveryId))
+            throw new ArgumentException("Lifecycle delivery claims require an X-GitHub-Delivery value.", nameof(delivery));
+
+        db.GitHubLifecycleDeliveries.Add(delivery);
+        try
+        {
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            return InvocationClaimResult.Claimed;
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            db.ChangeTracker.Clear();
+            return InvocationClaimResult.Duplicate;
+        }
+    }
+
     public async Task<bool> AddRunIdentitySnapshotAsync(
         RunGitHubIdentitySnapshotRecord snapshot,
         CancellationToken ct = default)
@@ -165,6 +250,15 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             SqliteErrorCode: 19,
             SqliteExtendedErrorCode: 1555 or 2067
         };
+
+    private static void EnsureAuthorizationTransaction(GitHubAuthorizationRecord authorization)
+    {
+        if (string.IsNullOrWhiteSpace(authorization.ExternalTransactionId) ||
+            authorization.ExternalTransactionId == authorization.State)
+            throw new ArgumentException(
+                "Authorization transactions require an externally safe ID distinct from OAuth state.",
+                nameof(authorization));
+    }
 
     private static void EnsureSafe(object record)
     {
