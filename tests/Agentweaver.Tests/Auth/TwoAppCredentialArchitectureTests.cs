@@ -61,25 +61,40 @@ public sealed class TwoAppCredentialArchitectureTests
         GitHubCapabilityBroker.IsOperationAllowed(purpose, operation).Should().Be(expected);
 
     [Fact]
-    public void BrowseAuthority_HasNoHttpMcpOrSandboxSurface()
+    public void SnapshotLifecycleIsRunBoundAndDoesNotReachSandboxCredentialDelivery()
     {
         var root = FindRepositoryRoot();
-        var callers = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+        var lifecycle = File.ReadAllText(Path.Combine(
+            root, "apps", "Agentweaver.Api", "Auth", "RunGitHubCapabilitySnapshotLifecycle.cs"));
+
+        lifecycle.Should().Contain("GitHubCapabilityBroker")
+            .And.Contain("TryFenceAsync")
+            .And.NotContain("KubernetesSandboxExecutor")
+            .And.NotContain("AgentHost")
+            .And.NotContain("IGitHubTokenStore")
+            .And.NotContain("IGitHubAccessTokenProvider");
+
+        var orchestrator = File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Runs", "RunOrchestrator.cs"));
+        orchestrator
+            .Should().Contain("PrepareGitHubCapabilitySnapshotsAsync(run, ct)")
+            .And.Contain("PrepareGitHubCapabilitySnapshotsAsync(newAgentRun, ct)");
+        File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Coordinator", "CoordinatorRunService.cs"))
+            .Should().Contain("PrepareGitHubCapabilitySnapshotsAsync(run, _appStopping)");
+        File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Program.cs"))
+            .Should().Contain("AddScoped<RunGitHubCapabilitySnapshotLifecycle>");
+        File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Runs", "WorkflowRestartService.cs"))
+            .Should().Contain("PrepareForLaunchAsync(run, ct)");
+    }
+
+    [Fact]
+    public void BrowseAuthorityPersistenceRemainsOwnedByProjectCreationFlow()
+    {
+        var root = FindRepositoryRoot();
+        Directory.EnumerateFiles(Path.Combine(root, "apps"), "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") &&
                            !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
             .Where(path => File.ReadAllText(path).Contains("GitHubRepositoryBrowseAuthority", StringComparison.Ordinal))
-            .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToArray();
-
-        callers.Should().BeEquivalentTo(
-        [
-            "apps/Agentweaver.Api/Auth/GitHubRepositoryBrowseAuthority.cs",
-            "apps/Agentweaver.Api/Auth/TwoAppPersistenceStore.cs",
-            "apps/Agentweaver.Api/Program.cs",
-            "tests/Agentweaver.Tests/Auth/TwoAppCredentialArchitectureTests.cs",
-        ]);
-        GitHubRepositoryBrowseAuthority.Lifetime.Should().Be(TimeSpan.FromMinutes(5));
+            .Should().BeEmpty();
     }
 
     private static bool ContainsReservedCredentialPrefix(string source) =>

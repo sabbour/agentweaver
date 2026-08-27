@@ -1,6 +1,7 @@
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Webhooks;
+using Agentweaver.Domain;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -382,6 +383,76 @@ public sealed class TwoAppPersistenceStoreTests
         (await db.RunGitHubCapabilitySnapshots.CountAsync(x => x.RunId == "legacy-run")).Should().Be(0);
     }
 
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_CapturesRootAndInheritsChildRetryAndResumeWithoutFallback()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        await SeedCapabilitySourcesAsync(db);
+        var persistence = new TwoAppPersistenceStore(db);
+        var secrets = new InMemorySecretStore();
+        var broker = new GitHubCapabilityBroker(
+            persistence,
+            new TwoAppCredentialVault(secrets),
+            new RepoAppInstallationTokenService(
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                db,
+                secrets,
+                new NullHttpClientFactory()));
+        var lifecycle = new RunGitHubCapabilitySnapshotLifecycle(persistence, broker);
+        var root = RunForSnapshotLifecycle();
+        db.RunGitHubIdentitySnapshots.Add(new RunGitHubIdentitySnapshotRecord
+        {
+            RunId = root.Id.ToString(),
+            ProjectId = "project",
+            AppKind = GitHubAppKind.Repo,
+            Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
+            CredentialReference = "repo-app-user-credential-version",
+            CredentialVersion = "version",
+            GrantDigest = "user-digest",
+            RepositoryId = 202,
+            EntraObjectId = "entra",
+            CapturedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+        var rootSnapshots = await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString());
+        rootSnapshots.Should().ContainSingle();
+        var rootSnapshot = rootSnapshots.Single();
+
+        var child = RunForSnapshotLifecycle() with { ParentRunId = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeTrue();
+        var childSnapshots = await persistence.GetCapabilitySnapshotsAsync(child.Id.ToString());
+        childSnapshots.Should().ContainSingle();
+        var childSnapshot = childSnapshots.Single();
+        childSnapshot.SnapshotRef.Should().NotBe(rootSnapshot.SnapshotRef);
+        childSnapshot.SourceAuthorizationId.Should().Be(rootSnapshot.SourceAuthorizationId);
+        childSnapshot.CredentialVersion.Should().Be(rootSnapshot.CredentialVersion);
+
+        var retry = RunForSnapshotLifecycle() with { RetriedFrom = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeTrue();
+        var retrySnapshots = await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString());
+        retrySnapshots.Should().ContainSingle();
+        var retrySnapshot = retrySnapshots.Single();
+        retrySnapshot.SnapshotRef.Should().NotBe(rootSnapshot.SnapshotRef);
+        retrySnapshot.GrantDigest.Should().Be(rootSnapshot.GrantDigest);
+
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Should().ContainSingle();
+        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Single().SnapshotRef
+            .Should().Be(rootSnapshot.SnapshotRef);
+
+        var revokedAt = DateTimeOffset.UtcNow;
+        await db.GitHubAppAuthorizations
+            .Where(authorization => authorization.Id == "authorization")
+            .ExecuteUpdateAsync(update => update.SetProperty(authorization => authorization.RevokedAt, revokedAt));
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeFalse();
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeFalse();
+    }
+
     [Theory]
     [InlineData("ghu_sensitive")]
     [InlineData("github_pat_sensitive")]
@@ -403,69 +474,6 @@ public sealed class TwoAppPersistenceStoreTests
     {
         Enum.GetNames<GitHubAuditActorKind>().Should().BeEquivalentTo(
             [nameof(GitHubAuditActorKind.HumanEntraSubject), nameof(GitHubAuditActorKind.GitHubWebhook)]);
-    }
-
-    [Fact]
-    public async Task BrowseAuthority_IsSubjectBoundFiveMinuteAndSelectionIsSingleUse()
-    {
-        await using var connection = await OpenDatabaseAsync();
-        var options = Options(connection);
-        await using var db = new MemoryDbContext(options);
-        await SeedCapabilitySourcesAsync(db);
-        var store = new TwoAppPersistenceStore(db);
-        var now = DateTimeOffset.UtcNow;
-
-        var authority = await store.TryCreateBrowseAuthorityAsync("entra", "authorization", now);
-        authority.Should().NotBeNull();
-        authority!.AuthorityRef.Value.Should().HaveLength(43);
-        authority.ExpiresAt.Should().Be(now.AddMinutes(5));
-
-        var selection = await store.TryCreateBrowseSelectionAsync(
-            authority.AuthorityRef, "entra", new ServerDerivedBrowseSelection(202, "owner/repository"), now);
-        selection.Should().NotBeNull();
-        (await store.ConsumeBrowseSelectionAsync(authority.AuthorityRef, selection!, "other-subject", now))
-            .Should().BeNull();
-        (await store.ConsumeBrowseSelectionAsync(authority.AuthorityRef, selection!, "entra", now))
-            .Should().Be(new ConsumedBrowseSelection(202, "owner/repository"));
-        (await store.ConsumeBrowseSelectionAsync(authority.AuthorityRef, selection!, "entra", now))
-            .Should().BeNull();
-
-        var expired = await store.TryCreateBrowseAuthorityAsync("entra", "authorization", now);
-        expired.Should().NotBeNull();
-        (await store.TryCreateBrowseSelectionAsync(
-            expired!.AuthorityRef, "entra", new ServerDerivedBrowseSelection(203, "owner/other"), now.AddMinutes(5)))
-            .Should().BeNull();
-    }
-
-    [Fact]
-    public async Task BrowseSelectionConsume_AtomicallyAllowsExactlyOneConcurrentWinner()
-    {
-        var connectionString = "Data Source=file:github-browse-selection-race?mode=memory&cache=shared";
-        await using var anchor = new SqliteConnection(connectionString);
-        await anchor.OpenAsync();
-        var options = new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(connectionString).Options;
-        BrowseAuthorityRef authorityRef;
-        BrowseSelectionRef selectionRef;
-        var now = DateTimeOffset.UtcNow;
-        await using (var setup = new MemoryDbContext(options))
-        {
-            await setup.Database.EnsureCreatedAsync();
-            setup.Projects.Add(Project("project"));
-            await SeedCapabilitySourcesAsync(setup);
-            await setup.SaveChangesAsync();
-            var store = new TwoAppPersistenceStore(setup);
-            authorityRef = (await store.TryCreateBrowseAuthorityAsync("entra", "authorization", now))!.AuthorityRef;
-            selectionRef = (await store.TryCreateBrowseSelectionAsync(
-                authorityRef, "entra", new ServerDerivedBrowseSelection(202, "owner/repository"), now))!;
-        }
-
-        await using var first = new MemoryDbContext(options);
-        await using var second = new MemoryDbContext(options);
-        var results = await Task.WhenAll(
-            new TwoAppPersistenceStore(first).ConsumeBrowseSelectionAsync(authorityRef, selectionRef, "entra", now),
-            new TwoAppPersistenceStore(second).ConsumeBrowseSelectionAsync(authorityRef, selectionRef, "entra", now));
-
-        results.Count(result => result is not null).Should().Be(1);
     }
 
     [Fact]
@@ -647,6 +655,18 @@ public sealed class TwoAppPersistenceStoreTests
             },
             _ => throw new ArgumentOutOfRangeException(nameof(purpose)),
         };
+
+    private static Run RunForSnapshotLifecycle() => new()
+    {
+        Id = RunId.New(),
+        RepositoryPath = "repository",
+        OriginatingBranch = "main",
+        ModelSource = ModelSource.GitHubCopilot,
+        Task = "snapshot lifecycle",
+        SubmittingUser = "entra",
+        Status = RunStatus.Pending,
+        StartedAt = DateTimeOffset.UtcNow,
+    };
 
     private sealed class NullHttpClientFactory : IHttpClientFactory
     {

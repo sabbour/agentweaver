@@ -1292,47 +1292,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.ToTable("github_authorizations", (string)null);
                 });
 
-            modelBuilder.Entity("Agentweaver.Api.Memory.GitHubBrowseSelectionRecord", b =>
-                {
-                    b.Property<string>("SelectionRef")
-                        .HasColumnType("text")
-                        .HasColumnName("selection_ref");
-
-                    b.Property<string>("AuthorityRef")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("authority_ref");
-
-                    b.Property<DateTimeOffset?>("ConsumedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("consumed_at");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("FullNameDisplay")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("full_name_display");
-
-                    b.Property<long>("RepositoryId")
-                        .HasColumnType("bigint")
-                        .HasColumnName("repository_id");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer")
-                        .HasColumnName("status");
-
-                    b.HasKey("SelectionRef");
-
-                    b.HasIndex("AuthorityRef")
-                        .IsUnique()
-                        .HasDatabaseName("UX_github_browse_selections_authority_ref");
-
-                    b.ToTable("github_browse_selections", (string)null);
-                });
-
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubInstallationRecord", b =>
                 {
                     b.Property<long>("InstallationId")
@@ -1360,52 +1319,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasIndex("ProjectId");
 
                     b.ToTable("github_installations", (string)null);
-                });
-
-            modelBuilder.Entity("Agentweaver.Api.Memory.GitHubInteractiveBrowseAuthorityRecord", b =>
-                {
-                    b.Property<string>("AuthorityRef")
-                        .HasColumnType("text")
-                        .HasColumnName("authority_ref");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("CredentialReference")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("credential_reference");
-
-                    b.Property<string>("CredentialVersion")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("credential_version");
-
-                    b.Property<string>("EntraObjectId")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("entra_object_id");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("expires_at");
-
-                    b.Property<string>("GrantDigest")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("grant_digest");
-
-                    b.Property<string>("SourceAuthorizationId")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("source_authorization_id");
-
-                    b.HasKey("AuthorityRef");
-
-                    b.HasIndex("ExpiresAt");
-
-                    b.ToTable("github_interactive_browse_authorities", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubLifecycleDeliveryRecord", b =>
@@ -2923,16 +2836,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasForeignKey("ProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .HasConstraintName("FK_github_authorizations_projects_project_id");
-                });
-
-            modelBuilder.Entity("Agentweaver.Api.Memory.GitHubBrowseSelectionRecord", b =>
-                {
-                    b.HasOne("Agentweaver.Api.Memory.GitHubInteractiveBrowseAuthorityRecord", null)
-                        .WithMany()
-                        .HasForeignKey("AuthorityRef")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("FK_github_browse_selections_authorities_authority_ref");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubInstallationRecord", b =>

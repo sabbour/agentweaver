@@ -30,30 +30,6 @@ public sealed record SnapshotRef
             .TrimEnd('=').Replace('+', '-').Replace('/', '_'));
 }
 
-internal sealed record BrowseAuthorityRef
-{
-    public BrowseAuthorityRef(string value) => Value = Validate(value, nameof(value));
-    public string Value { get; }
-    public static BrowseAuthorityRef Create() => new(CreateOpaqueReference());
-    internal static string CreateOpaqueReference() =>
-        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
-            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    internal static string Validate(string value, string parameterName)
-    {
-        if (value.Length != 43 ||
-            value.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
-            throw new ArgumentException("Opaque references must be 32-byte base64url values.", parameterName);
-        return value;
-    }
-}
-
-internal sealed record BrowseSelectionRef
-{
-    public BrowseSelectionRef(string value) => Value = BrowseAuthorityRef.Validate(value, nameof(value));
-    public string Value { get; }
-    public static BrowseSelectionRef Create() => new(BrowseAuthorityRef.CreateOpaqueReference());
-}
-
 /// <summary>
 /// Safe, closed capability context. It intentionally excludes credential references and versions.
 /// </summary>
@@ -70,10 +46,6 @@ public sealed record FencedGitHubCapabilitySnapshot(
     // visible outside this assembly's credential boundary.
     internal TwoAppCredentialLocator? CredentialLocator { get; init; }
 }
-
-internal sealed record GitHubBrowseAuthorityHandle(BrowseAuthorityRef AuthorityRef, DateTimeOffset ExpiresAt);
-internal sealed record ServerDerivedBrowseSelection(long RepositoryId, string FullNameDisplay);
-internal sealed record ConsumedBrowseSelection(long RepositoryId, string FullNameDisplay);
 
 public sealed record CapabilitySnapshotBackfillResult(int Migrated, int Unavailable);
 internal sealed record RepoAppAuthorizationTransaction(
@@ -693,120 +665,69 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             };
     }
 
-    /// <summary>
-    /// Creates a five-minute authority from one exact active Repo-App authorization. It does not
-    /// select a newest, default, replacement, repository, project, run, or installation.
-    /// </summary>
-    internal async Task<GitHubBrowseAuthorityHandle?> TryCreateBrowseAuthorityAsync(
-        string entraObjectId,
-        string authorizationId,
-        DateTimeOffset now,
-        CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(entraObjectId) || string.IsNullOrWhiteSpace(authorizationId))
-            return null;
-
-        var authorization = await db.GitHubAppAuthorizations.AsNoTracking()
-            .SingleOrDefaultAsync(x => x.Id == authorizationId &&
-                                       x.EntraObjectId == entraObjectId &&
-                                       x.AppKind == GitHubAppKind.Repo &&
-                                       x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
-                                       x.RevokedAt == null, ct).ConfigureAwait(false);
-        if (authorization is null)
-            return null;
-
-        for (var attempt = 0; attempt != 3; attempt++)
-        {
-            var reference = BrowseAuthorityRef.Create();
-            db.GitHubInteractiveBrowseAuthorities.Add(new GitHubInteractiveBrowseAuthorityRecord
-            {
-                AuthorityRef = reference.Value,
-                EntraObjectId = entraObjectId,
-                SourceAuthorizationId = authorization.Id,
-                CredentialReference = authorization.CredentialReference,
-                CredentialVersion = authorization.CredentialVersion,
-                GrantDigest = authorization.GrantDigest,
-                CreatedAt = now,
-                ExpiresAt = now.Add(GitHubRepositoryBrowseAuthority.Lifetime),
-            });
-            try
-            {
-                await db.SaveChangesAsync(ct).ConfigureAwait(false);
-                return new(reference, now.Add(GitHubRepositoryBrowseAuthority.Lifetime));
-            }
-            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
-            {
-                db.ChangeTracker.Clear();
-            }
-        }
-        return null;
-    }
-
-    internal async Task<BrowseSelectionRef?> TryCreateBrowseSelectionAsync(
-        BrowseAuthorityRef authorityRef,
-        string entraObjectId,
-        ServerDerivedBrowseSelection selection,
-        DateTimeOffset now,
-        CancellationToken ct = default)
-    {
-        if (selection.RepositoryId <= 0 || !IsSafeRepositoryName(selection.FullNameDisplay) ||
-            !await IsBrowseAuthorityLiveAsync(authorityRef, entraObjectId, now, ct).ConfigureAwait(false))
-            return null;
-
-        for (var attempt = 0; attempt != 3; attempt++)
-        {
-            var selectionRef = BrowseSelectionRef.Create();
-            db.GitHubBrowseSelections.Add(new GitHubBrowseSelectionRecord
-            {
-                SelectionRef = selectionRef.Value,
-                AuthorityRef = authorityRef.Value,
-                RepositoryId = selection.RepositoryId,
-                FullNameDisplay = selection.FullNameDisplay,
-                Status = GitHubBrowseSelectionStatus.Available,
-                CreatedAt = now,
-            });
-            try
-            {
-                await db.SaveChangesAsync(ct).ConfigureAwait(false);
-                return selectionRef;
-            }
-            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
-            {
-                db.ChangeTracker.Clear();
-            }
-        }
-        return null;
-    }
+    internal Task<List<RunGitHubCapabilitySnapshotRecord>> GetCapabilitySnapshotsAsync(
+        string runId,
+        CancellationToken ct = default) =>
+        db.RunGitHubCapabilitySnapshots.AsNoTracking()
+            .Where(snapshot => snapshot.RunId == runId)
+            .OrderBy(snapshot => snapshot.Purpose)
+            .ToListAsync(ct);
 
     /// <summary>
-    /// Atomically consumes exactly one server-derived selection. The subject and complete
-    /// authorization tuple are checked both before and after the state transition so revocation
-    /// fails closed without holding a transaction over provider work.
+    /// Atomically creates fresh opaque references for a child or retry from the exact immutable
+    /// parent snapshot rows. Existing target snapshots are never replaced.
     /// </summary>
-    internal async Task<ConsumedBrowseSelection?> ConsumeBrowseSelectionAsync(
-        BrowseAuthorityRef authorityRef,
-        BrowseSelectionRef selectionRef,
-        string entraObjectId,
-        DateTimeOffset now,
+    internal async Task<bool> TryInheritCapabilitySnapshotsAsync(
+        string sourceRunId,
+        string targetRunId,
         CancellationToken ct = default)
     {
-        if (!await IsBrowseAuthorityLiveAsync(authorityRef, entraObjectId, now, ct).ConfigureAwait(false))
-            return null;
-        var claimed = await db.GitHubBrowseSelections
-            .Where(x => x.SelectionRef == selectionRef.Value &&
-                        x.AuthorityRef == authorityRef.Value &&
-                        x.Status == GitHubBrowseSelectionStatus.Available)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(x => x.Status, GitHubBrowseSelectionStatus.Consumed)
-                .SetProperty(x => x.ConsumedAt, now), ct).ConfigureAwait(false);
-        if (claimed != 1 ||
-            !await IsBrowseAuthorityLiveAsync(authorityRef, entraObjectId, now, ct).ConfigureAwait(false))
-            return null;
+        var source = await GetCapabilitySnapshotsAsync(sourceRunId, ct).ConfigureAwait(false);
+        if (source.Count == 0)
+            return true;
 
-        return await db.GitHubBrowseSelections.AsNoTracking()
-            .Where(x => x.SelectionRef == selectionRef.Value && x.AuthorityRef == authorityRef.Value)
-            .Select(x => new ConsumedBrowseSelection(x.RepositoryId, x.FullNameDisplay))
-            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+        var target = await GetCapabilitySnapshotsAsync(targetRunId, ct).ConfigureAwait(false);
+        if (target.Count != 0)
+            return target.Count == source.Count &&
+                target.Select(snapshot => snapshot.Purpose).SequenceEqual(source.Select(snapshot => snapshot.Purpose));
+
+        var inherited = source.Select(snapshot => new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value,
+            RunId = targetRunId,
+            Purpose = snapshot.Purpose,
+            AppKind = snapshot.AppKind,
+            SourceKind = snapshot.SourceKind,
+            ProjectId = snapshot.ProjectId,
+            EntraObjectId = snapshot.EntraObjectId,
+            SourceAuthorizationId = snapshot.SourceAuthorizationId,
+            SourceBindingId = snapshot.SourceBindingId,
+            InstallationId = snapshot.InstallationId,
+            RepositoryId = snapshot.RepositoryId,
+            CredentialReference = snapshot.CredentialReference,
+            CredentialVersion = snapshot.CredentialVersion,
+            GrantDigest = snapshot.GrantDigest,
+            CapturedAt = snapshot.CapturedAt,
+            SnapshotExpiresAt = snapshot.SnapshotExpiresAt,
+        }).ToList();
+
+        foreach (var snapshot in inherited)
+            EnsureCapabilitySnapshot(snapshot);
+
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            db.RunGitHubCapabilitySnapshots.AddRange(inherited);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            return false;
+        }
     }
 
     /// <summary>
@@ -815,11 +736,14 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
     /// from a replacement authorization or binding.
     /// </summary>
     public async Task<CapabilitySnapshotBackfillResult> BackfillCapabilitySnapshotsAsync(
+        string? runId = null,
         CancellationToken ct = default)
     {
         var migrated = 0;
         var unavailable = 0;
-        var legacySnapshots = await db.RunGitHubIdentitySnapshots.AsNoTracking().ToListAsync(ct)
+        var legacySnapshots = await db.RunGitHubIdentitySnapshots.AsNoTracking()
+            .Where(snapshot => runId == null || snapshot.RunId == runId)
+            .ToListAsync(ct)
             .ConfigureAwait(false);
         foreach (var legacy in legacySnapshots)
         {
@@ -1010,30 +934,4 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
         };
     }
 
-    private async Task<bool> IsBrowseAuthorityLiveAsync(
-        BrowseAuthorityRef authorityRef,
-        string entraObjectId,
-        DateTimeOffset now,
-        CancellationToken ct)
-    {
-        var authority = await db.GitHubInteractiveBrowseAuthorities.AsNoTracking()
-            .SingleOrDefaultAsync(x => x.AuthorityRef == authorityRef.Value &&
-                                       x.EntraObjectId == entraObjectId, ct).ConfigureAwait(false);
-        return authority is not null && authority.ExpiresAt > now && await db.GitHubAppAuthorizations.AsNoTracking()
-            .AnyAsync(authorization =>
-                authorization.Id == authority.SourceAuthorizationId &&
-                authorization.EntraObjectId == authority.EntraObjectId &&
-                authorization.AppKind == GitHubAppKind.Repo &&
-                authorization.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
-                authorization.CredentialReference == authority.CredentialReference &&
-                authorization.CredentialVersion == authority.CredentialVersion &&
-                authorization.GrantDigest == authority.GrantDigest &&
-                authorization.RevokedAt == null, ct).ConfigureAwait(false);
-    }
-
-    private static bool IsSafeRepositoryName(string fullName) =>
-        !string.IsNullOrWhiteSpace(fullName) &&
-        fullName.Length <= 512 &&
-        Regex.IsMatch(fullName, @"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z",
-            RegexOptions.CultureInvariant);
 }

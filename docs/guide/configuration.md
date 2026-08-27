@@ -94,19 +94,15 @@ after GitHub permissions are corrected.
 Installation tokens are scoped to Agentweaver's server-declared unattended repository
 permissions and never inherit unrelated installation permissions.
 
-#### Purpose-bound broker and repository browse authority
+#### Purpose-bound broker
 
-Run execution resolves GitHub access only through an immutable, purpose-specific snapshot.
-Interactive repository snapshots are bound to the initiating Entra subject and the exact live
-Repo App user authorization; they do **not** require an installation or repository grant.
-Unattended repository snapshots remain bound to an active installation, canonical repository
-grant, and unchanged permission digest. No API, MCP, or sandbox route exposes the broker.
-
-Before a run exists, the internal repository-browse authority is bound to one exact Repo App
-user authorization and the initiating Entra subject. It expires after five minutes. That fixed
-five-minute lifetime is the accepted revocation-lag window for browsing; creation, selection,
-and consume attempts are audited. A repository choice is server-derived, opaque, and consumed
-atomically once, so it can authorize only one project-creation clone.
+The trusted run lifecycle captures and revalidates immutable, purpose-specific snapshots for
+root launches, child launches, retries, and resumes. Interactive repository snapshots are bound
+to the initiating Entra subject and exact live Repo App user authorization; they do **not**
+require an installation or repository grant. Unattended repository snapshots remain bound to an
+active installation, canonical repository grant, and unchanged permission digest. No API, MCP,
+or sandbox route exposes the broker. Repository and Copilot adapter delivery is owned by #947;
+this broker layer never configures a sandbox or model process.
 
 Two-App credential reads use current secret versions only. Revocation writes a tombstone before
 deleting the current value. Azure Key Vault soft-delete and purge protection can retain older

@@ -73,8 +73,6 @@ public sealed class SqliteToPostgresMigrator
         List<GitHubLifecycleDeliveryRecord> lifecycleDeliveries;
         List<RunGitHubIdentitySnapshotRecord> snapshots;
         List<RunGitHubCapabilitySnapshotRecord> capabilitySnapshots;
-        List<GitHubInteractiveBrowseAuthorityRecord> browseAuthorities;
-        List<GitHubBrowseSelectionRecord> browseSelections;
         List<GitHubAppAuthorizationRecord> appAuthorizations;
         List<GitHubAuditRecord> audits;
         try
@@ -90,12 +88,6 @@ public sealed class SqliteToPostgresMigrator
             capabilitySnapshots = await HasTableAsync(source, "run_github_capability_snapshots", ct).ConfigureAwait(false)
                 ? await source.RunGitHubCapabilitySnapshots.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
                 : [];
-            browseAuthorities = await HasTableAsync(source, "github_interactive_browse_authorities", ct).ConfigureAwait(false)
-                ? await source.GitHubInteractiveBrowseAuthorities.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
-                : [];
-            browseSelections = await HasTableAsync(source, "github_browse_selections", ct).ConfigureAwait(false)
-                ? await source.GitHubBrowseSelections.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
-                : [];
             appAuthorizations = await source.GitHubAppAuthorizations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             audits = await source.GitHubAuditRecords.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
         }
@@ -108,7 +100,7 @@ public sealed class SqliteToPostgresMigrator
 
         if (authorizations.Count + installations.Count + grants.Count + bindings.Count + activations.Count +
             invocations.Count + lifecycleDeliveries.Count + snapshots.Count + capabilitySnapshots.Count +
-            browseAuthorities.Count + browseSelections.Count + appAuthorizations.Count + audits.Count == 0)
+            appAuthorizations.Count + audits.Count == 0)
             return;
 
         var projectIds = authorizations.Where(x => x.ProjectId is not null).Select(x => x.ProjectId!)
@@ -172,26 +164,6 @@ public sealed class SqliteToPostgresMigrator
                     throw new InvalidOperationException(
                         "Two-App persistence transfer aborted: immutable capability snapshot conflict.");
             }
-            foreach (var item in browseAuthorities)
-            {
-                var existing = await destination.GitHubInteractiveBrowseAuthorities.AsNoTracking()
-                    .SingleOrDefaultAsync(x => x.AuthorityRef == item.AuthorityRef, ct).ConfigureAwait(false);
-                if (existing is null)
-                    destination.GitHubInteractiveBrowseAuthorities.Add(item);
-                else if (!BrowseAuthoritiesMatch(item, existing))
-                    throw new InvalidOperationException(
-                        "Two-App persistence transfer aborted: browse-authority conflict.");
-            }
-            foreach (var item in browseSelections)
-            {
-                var existing = await destination.GitHubBrowseSelections.AsNoTracking()
-                    .SingleOrDefaultAsync(x => x.SelectionRef == item.SelectionRef, ct).ConfigureAwait(false);
-                if (existing is null)
-                    destination.GitHubBrowseSelections.Add(item);
-                else if (!BrowseSelectionsMatch(item, existing))
-                    throw new InvalidOperationException(
-                        "Two-App persistence transfer aborted: browse-selection conflict.");
-            }
             foreach (var item in appAuthorizations)
                 if (!await destination.GitHubAppAuthorizations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
                     destination.GitHubAppAuthorizations.Add(item);
@@ -239,29 +211,6 @@ public sealed class SqliteToPostgresMigrator
         source.GrantDigest == destination.GrantDigest &&
         source.CapturedAt == destination.CapturedAt &&
         source.SnapshotExpiresAt == destination.SnapshotExpiresAt;
-
-    private static bool BrowseAuthoritiesMatch(
-        GitHubInteractiveBrowseAuthorityRecord source,
-        GitHubInteractiveBrowseAuthorityRecord destination) =>
-        source.AuthorityRef == destination.AuthorityRef &&
-        source.EntraObjectId == destination.EntraObjectId &&
-        source.SourceAuthorizationId == destination.SourceAuthorizationId &&
-        source.CredentialReference == destination.CredentialReference &&
-        source.CredentialVersion == destination.CredentialVersion &&
-        source.GrantDigest == destination.GrantDigest &&
-        source.CreatedAt == destination.CreatedAt &&
-        source.ExpiresAt == destination.ExpiresAt;
-
-    private static bool BrowseSelectionsMatch(
-        GitHubBrowseSelectionRecord source,
-        GitHubBrowseSelectionRecord destination) =>
-        source.SelectionRef == destination.SelectionRef &&
-        source.AuthorityRef == destination.AuthorityRef &&
-        source.RepositoryId == destination.RepositoryId &&
-        source.FullNameDisplay == destination.FullNameDisplay &&
-        source.Status == destination.Status &&
-        source.CreatedAt == destination.CreatedAt &&
-        source.ConsumedAt == destination.ConsumedAt;
 
     private static async Task PrepareTwoAppSourceSchemaAsync(MemoryDbContext source, CancellationToken ct)
     {

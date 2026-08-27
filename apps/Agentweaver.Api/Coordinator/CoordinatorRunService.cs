@@ -8,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -265,6 +266,8 @@ public sealed class CoordinatorRunService
         Run run, RunOptions options, string? workflowOverrideId = null, bool direct = false,
         string? submittingUserDisplayName = null)
     {
+        await PrepareGitHubCapabilitySnapshotsAsync(run, _appStopping).ConfigureAwait(false);
+
         var runId = run.Id.ToString();
         _runOptions.Set(runId, options);
 
@@ -296,6 +299,7 @@ public sealed class CoordinatorRunService
             ctsRegistered = true;
             StartWatching(runId, streamingRun, entry, run.SubmittingUser, runCt);
         }
+
         catch
         {
             if (ctsRegistered)
@@ -304,6 +308,18 @@ public sealed class CoordinatorRunService
                 runCts.Dispose();
             throw;
         }
+    }
+
+    private async Task PrepareGitHubCapabilitySnapshotsAsync(Run run, CancellationToken ct)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var lifecycle = scope.ServiceProvider.GetService<RunGitHubCapabilitySnapshotLifecycle>();
+        if (lifecycle is null)
+            return;
+
+        if (!await lifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
     }
 
     private async Task<string?> ResolveOutcomeSpecGenerationModelAsync(ProjectId projectId, CancellationToken ct)
