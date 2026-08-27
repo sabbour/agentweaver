@@ -18,15 +18,18 @@ public sealed class SqliteToPostgresMigrator
     private readonly IDbContextFactory<MemoryDbContext> _factory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<SqliteToPostgresMigrator> _logger;
+    private readonly Func<CancellationToken, Task>? _beforeTwoAppCommit;
 
     public SqliteToPostgresMigrator(
         IDbContextFactory<MemoryDbContext> factory,
         IConfiguration configuration,
-        ILogger<SqliteToPostgresMigrator> logger)
+        ILogger<SqliteToPostgresMigrator> logger,
+        Func<CancellationToken, Task>? beforeTwoAppCommit = null)
     {
         _factory = factory;
         _configuration = configuration;
         _logger = logger;
+        _beforeTwoAppCommit = beforeTwoAppCommit;
     }
 
     public async Task RunAsync(CancellationToken ct = default)
@@ -43,11 +46,119 @@ public sealed class SqliteToPostgresMigrator
         // Migrate agentweaver.db tables
         await MigrateAgentweaverDbAsync(agentweaverDbPath, db, ct);
 
-        // Note: memory.db EF entities (AgentMemory, Decisions, etc.) are managed by EF migrations
-        // and don't need data migration for fresh Postgres deployments. If existing memory.db data
-        // must be preserved, extend this migrator with table-by-table reads from memory.db.
+        await MigrateTwoAppRecordsAsync(memoryDbPath, db, ct);
 
         _logger.LogInformation("Migration complete.");
+    }
+
+    private async Task MigrateTwoAppRecordsAsync(string memoryDbPath, MemoryDbContext destination, CancellationToken ct)
+    {
+        if (!File.Exists(memoryDbPath))
+            return;
+
+        var sourceOptions = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite($"Data Source={memoryDbPath}")
+            .Options;
+        await using var source = new MemoryDbContext(sourceOptions);
+
+        List<GitHubAuthorizationRecord> authorizations;
+        List<GitHubInstallationRecord> installations;
+        List<GitHubRepositoryGrantRecord> grants;
+        List<ProjectCopilotBindingRecord> bindings;
+        List<AutomationActivationRecord> activations;
+        List<AutomationInvocationRecord> invocations;
+        List<RunGitHubIdentitySnapshotRecord> snapshots;
+        List<GitHubAppAuthorizationRecord> appAuthorizations;
+        List<GitHubAuditRecord> audits;
+        try
+        {
+            authorizations = await source.GitHubAuthorizations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            installations = await source.GitHubInstallations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            grants = await source.GitHubRepositoryGrants.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            bindings = await source.ProjectCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            activations = await source.AutomationActivations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            invocations = await source.AutomationInvocations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            snapshots = await source.RunGitHubIdentitySnapshots.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            appAuthorizations = await source.GitHubAppAuthorizations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            audits = await source.GitHubAuditRecords.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
+                                        ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("SQLite source predates two-App persistence; no two-App records to migrate.");
+            return;
+        }
+
+        if (authorizations.Count + installations.Count + grants.Count + bindings.Count + activations.Count +
+            invocations.Count + snapshots.Count + appAuthorizations.Count + audits.Count == 0)
+            return;
+
+        var projectIds = authorizations.Where(x => x.ProjectId is not null).Select(x => x.ProjectId!)
+            .Concat(installations.Where(x => x.ProjectId is not null).Select(x => x.ProjectId!))
+            .Concat(grants.Select(x => x.ProjectId))
+            .Concat(bindings.Select(x => x.ProjectId))
+            .Concat(activations.Select(x => x.ProjectId))
+            .Concat(invocations.Select(x => x.ProjectId))
+            .Concat(snapshots.Select(x => x.ProjectId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var targetProjectIds = await destination.Projects.AsNoTracking()
+            .Where(x => projectIds.Contains(x.ProjectId))
+            .Select(x => x.ProjectId)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        if (targetProjectIds.Count != projectIds.Length)
+            throw new InvalidOperationException(
+                "Two-App persistence transfer aborted: a project is missing from the destination, so no binding can become usable partially.");
+
+        await using var transaction = await destination.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            foreach (var item in authorizations)
+                if (!await destination.GitHubAuthorizations.AnyAsync(x => x.State == item.State, ct).ConfigureAwait(false))
+                    destination.GitHubAuthorizations.Add(item);
+            foreach (var item in installations)
+                if (!await destination.GitHubInstallations.AnyAsync(x => x.InstallationId == item.InstallationId, ct).ConfigureAwait(false))
+                    destination.GitHubInstallations.Add(item);
+            foreach (var item in grants)
+                if (!await destination.GitHubRepositoryGrants.AnyAsync(x => x.InstallationId == item.InstallationId && x.RepositoryId == item.RepositoryId, ct).ConfigureAwait(false))
+                    destination.GitHubRepositoryGrants.Add(item);
+            foreach (var item in bindings)
+                if (!await destination.ProjectCopilotBindings.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
+                    destination.ProjectCopilotBindings.Add(item);
+            foreach (var item in activations)
+                if (!await destination.AutomationActivations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
+                    destination.AutomationActivations.Add(item);
+            foreach (var item in invocations)
+                if (!await destination.AutomationInvocations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
+                    destination.AutomationInvocations.Add(item);
+            foreach (var item in snapshots)
+                if (!await destination.RunGitHubIdentitySnapshots.AnyAsync(x => x.RunId == item.RunId, ct).ConfigureAwait(false))
+                    destination.RunGitHubIdentitySnapshots.Add(item);
+            foreach (var item in appAuthorizations)
+                if (!await destination.GitHubAppAuthorizations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
+                    destination.GitHubAppAuthorizations.Add(item);
+            foreach (var item in audits)
+                if (!await destination.GitHubAuditRecords.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
+                    destination.GitHubAuditRecords.Add(item);
+
+            await destination.SaveChangesAsync(ct).ConfigureAwait(false);
+            if (destination.Database.IsNpgsql() && audits.Count > 0)
+            {
+                await destination.Database.ExecuteSqlRawAsync(
+                    "SELECT setval(pg_get_serial_sequence('github_audit_records', 'id'), " +
+                    "(SELECT COALESCE(MAX(id), 1) FROM github_audit_records), true);", ct)
+                    .ConfigureAwait(false);
+            }
+            if (_beforeTwoAppCommit is not null)
+                await _beforeTwoAppCommit(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
     }
 
     private async Task MigrateAgentweaverDbAsync(string dbPath, MemoryDbContext db, CancellationToken ct)

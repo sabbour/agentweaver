@@ -23,26 +23,20 @@ namespace Agentweaver.Api.Auth;
 /// is provided, the on-disk token is lazily read and written through to KV.
 /// A KV tombstone (signed-out) always wins over any disk value.
 ///
-/// Disk mirror: after every successful SetAsync, the token is also written to
-/// <paramref name="diskMirror"/> so pods that read the shared filesystem file remain
-/// functional in phase-1 (before they are updated to call the API).
 /// </summary>
 public sealed class KeyVaultGitHubTokenStore : IMultiIdentityGitHubTokenStore, IDistributedGitHubTokenRefreshLeaseStore, IGitHubTokenScopeEnumerable
 {
     private readonly ISecretStore _secretStore;
     private readonly FileSystemGitHubTokenStore? _diskFallback; // lazy migration source
-    private readonly FileSystemGitHubTokenStore? _diskMirror;   // post-write mirror
 
     private static readonly JsonSerializerOptions _json = new() { WriteIndented = false };
 
     public KeyVaultGitHubTokenStore(
         ISecretStore secretStore,
-        FileSystemGitHubTokenStore? diskFallback = null,
-        FileSystemGitHubTokenStore? diskMirror = null)
+        FileSystemGitHubTokenStore? diskFallback = null)
     {
         _secretStore = secretStore;
         _diskFallback = diskFallback;
-        _diskMirror = diskMirror;
     }
 
     // ── IGitHubTokenStore ────────────────────────────────────────────────────
@@ -116,12 +110,6 @@ public sealed class KeyVaultGitHubTokenStore : IMultiIdentityGitHubTokenStore, I
             return;
         }
 
-        // Mirror to disk so pods reading the shared filesystem file still work.
-        if (_diskMirror is not null)
-        {
-            try { await _diskMirror.SetAsync(scope, token, ct).ConfigureAwait(false); }
-            catch (Exception) { /* best effort */ }
-        }
     }
 
     public async Task<GitHubIdentity?> GetIdentityAsync(GitHubTokenScope scope, CancellationToken ct = default)
@@ -149,11 +137,6 @@ public sealed class KeyVaultGitHubTokenStore : IMultiIdentityGitHubTokenStore, I
         // No ETag check for sign-out: the tombstone must always win.
         await _secretStore.SetSecretAsync(scope.Key, json, etag: null, ct).ConfigureAwait(false);
 
-        if (_diskMirror is not null)
-        {
-            try { await _diskMirror.SignOutAsync(scope, ct).ConfigureAwait(false); }
-            catch (Exception) { /* best effort */ }
-        }
     }
 
     public async Task<IReadOnlyList<GitHubIdentityLink>> ListLinkedIdentitiesAsync(

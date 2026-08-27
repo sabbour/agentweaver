@@ -14,11 +14,10 @@ public sealed class KeyVaultGitHubTokenStoreTests
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static (InMemorySecretStore secrets, KeyVaultGitHubTokenStore store) MakeStore(
-        FileSystemGitHubTokenStore? diskFallback = null,
-        FileSystemGitHubTokenStore? diskMirror = null)
+        FileSystemGitHubTokenStore? diskFallback = null)
     {
         var secrets = new InMemorySecretStore();
-        var store = new KeyVaultGitHubTokenStore(secrets, diskFallback, diskMirror);
+        var store = new KeyVaultGitHubTokenStore(secrets, diskFallback);
         return (secrets, store);
     }
 
@@ -442,37 +441,6 @@ public sealed class KeyVaultGitHubTokenStoreTests
         var kvResult = await secrets.GetSecretAsync("installation");
         kvResult.Found.Should().BeTrue("disk token must be written through to KV on first read");
         kvResult.Value.Should().Contain("disk_access");
-    }
-
-    [Fact]
-    public async Task SetAsync_MirrorsTokenToDisk()
-    {
-        using var dir = new TempDir();
-        var diskStore = new FileSystemGitHubTokenStore(dir.Path);
-        var (_, store) = MakeStore(diskMirror: diskStore);
-
-        var token = SampleToken(access: "kv_access");
-        await store.SetAsync(GitHubTokenScope.Installation, token);
-
-        // Disk must also have the token.
-        var diskEntry = await diskStore.GetAsync(GitHubTokenScope.Installation);
-        diskEntry.Status.Should().Be(GitHubTokenStatus.SignedIn);
-        diskEntry.AccessToken.Should().Be("kv_access", "SetAsync must mirror signed-in tokens to disk");
-    }
-
-    [Fact]
-    public async Task SignOutAsync_MirrorsTombstoneToDisk()
-    {
-        using var dir = new TempDir();
-        var diskStore = new FileSystemGitHubTokenStore(dir.Path);
-        var (_, store) = MakeStore(diskMirror: diskStore);
-
-        await store.SetAsync(GitHubTokenScope.Installation, SampleToken());
-        await store.SignOutAsync(GitHubTokenScope.Installation);
-
-        var diskEntry = await diskStore.GetAsync(GitHubTokenScope.Installation);
-        diskEntry.Status.Should().Be(GitHubTokenStatus.SignedOut,
-            "SignOut must mirror tombstone to disk");
     }
 
     // ── Per-user scope ────────────────────────────────────────────────────────
