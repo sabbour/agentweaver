@@ -459,7 +459,6 @@ public sealed class RepoAppInstallationLifecycleService(MemoryDbContext db)
                     Encoding.UTF8.GetBytes(grant.PermissionDigest), Encoding.UTF8.GetBytes(permissionDigest)))
             {
                 grant.FullNameDisplay = authority.FullNameDisplay;
-                grant.PermissionDigest = permissionDigest;
                 grant.RevokedAt = now;
                 await InvalidateForPermissionChangeAsync(authority.InstallationId, authority.RepositoryId, ct)
                     .ConfigureAwait(false);

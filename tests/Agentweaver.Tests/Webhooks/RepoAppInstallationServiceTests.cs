@@ -240,11 +240,12 @@ public sealed class RepoAppInstallationServiceTests
             Permissions = new Dictionary<string, string> { ["contents"] = currentPermission },
         };
         (await lifecycle.BindAsync("project-id", current)).Should().Be(RepoAppInstallationBindingOutcome.PermissionChanged);
+        (await lifecycle.BindAsync("project-id", current)).Should().Be(RepoAppInstallationBindingOutcome.PermissionChanged);
 
         db.ChangeTracker.Clear();
         var grant = await db.GitHubRepositoryGrants.SingleAsync();
         grant.RevokedAt.Should().NotBeNull();
-        grant.PermissionDigest.Should().Be(RepoAppInstallationTokenService.CreatePermissionDigest(current.Permissions));
+        grant.PermissionDigest.Should().Be(RepoAppInstallationTokenService.CreatePermissionDigest(prior.Permissions));
         var activation = await db.AutomationActivations.SingleAsync();
         activation.Status.Should().Be(AutomationActivationStatus.Invalidated);
         activation.InvalidatedAt.Should().NotBeNull();
