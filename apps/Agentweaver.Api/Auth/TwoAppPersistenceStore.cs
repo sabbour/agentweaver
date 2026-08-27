@@ -831,14 +831,29 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
                 : new CapabilitySnapshotBackfillResult(0, 0);
         }
 
-        var migrated = 0;
+        // All-or-nothing: a partial commit would leave GetCapabilitySnapshotsAsync(runId) non-empty
+        // after a failed attempt, which would make a later resume/retry of this exact run skip
+        // capture entirely and silently fence only the partial set. Roll back completely instead,
+        // so a subsequent attempt re-resolves the full live-source set from scratch.
         foreach (var snapshot in resolved)
         {
-            if (!await TryInsertCapabilitySnapshotAsync(snapshot, ct).ConfigureAwait(false))
-                return new CapabilitySnapshotBackfillResult(migrated, 1);
-            migrated++;
+            EnsureSafe(snapshot);
+            EnsureCapabilitySnapshot(snapshot);
         }
-        return new CapabilitySnapshotBackfillResult(migrated, 0);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            db.RunGitHubCapabilitySnapshots.AddRange(resolved);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return new CapabilitySnapshotBackfillResult(resolved.Count, 0);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            return new CapabilitySnapshotBackfillResult(0, 1);
+        }
     }
 
     private Task<GitHubAppAuthorizationRecord?> FindLiveRepoUserAuthorizationAsync(
