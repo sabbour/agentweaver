@@ -42,6 +42,30 @@ cd apps/Agentweaver.Api
 dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
 ```
 
+#### Repo App user authorization
+
+Interactive repository access is authorized separately from product sign-in and from the
+legacy GitHub OAuth configuration. An Entra-authenticated human starts
+`POST /api/auth/github/repo-app/authorizations`; the browser completes the App callback at
+`GET /auth/github/repo-app/callback`. The API persists only opaque transaction and credential
+references. It uses PKCE S256 and a one-time `__Host-` callback cookie; do not register the
+legacy `/auth/github/callback` URL for this App.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Auth:RepoApp:ClientId` | none | Repo GitHub App OAuth client ID |
+| `Auth:RepoApp:ClientSecret` | none | Repo GitHub App OAuth client secret; set through user-secrets or Key Vault |
+| `Auth:RepoApp:CallbackUrl` | none | Exact registered callback URL, ending in `/auth/github/repo-app/callback` |
+| `Auth:RepoApp:BaseUrl` | `https://github.com` | GitHub authorization origin |
+| `Auth:RepoApp:Scopes` | `repo read:user` | Explicit user-authorization scopes |
+| `Auth:RepoApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for fixed post-callback routes |
+
+The begin request accepts only `settings` or `projects` as `return_route_key`; it never
+accepts an arbitrary URL or path. Refresh and disconnect use the corresponding
+`POST /api/auth/github/repo-app/authorization/refresh` and
+`DELETE /api/auth/github/repo-app/authorization` endpoints. Both require the same
+human Entra subject as authorization begin.
+
 When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
 GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)
 uses the Microsoft identity platform v2.0 authorization-code-with-PKCE flow. Agentweaver

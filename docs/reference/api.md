@@ -178,6 +178,11 @@ Agent loopback writes authenticate with the normal internal API key plus a run-s
 | `GET` | `/api/auth/github-accounts` | List the caller's linked GitHub accounts (default flag, avatar, Copilot status, linked time) |
 | `POST` | `/api/auth/github-accounts/link` | Start a second GitHub OAuth round-trip that links another GitHub account to the current Entra user |
 | `DELETE` | `/api/auth/github-accounts/{login}` | Unlink one linked GitHub account; if it was default, the store promotes the next remaining linked account |
+| `POST` | `/api/auth/github/repo-app/authorizations` | Begin an Entra-user-bound Repo App authorization; returns an authorization URL and opaque transaction ID |
+| `GET` | `/auth/github/repo-app/callback` | Complete the Repo App browser callback with its one-time callback cookie |
+| `GET` | `/api/auth/github/repo-app/authorizations/{transactionId}` | Return only the initiating subject's safe transaction status |
+| `POST` | `/api/auth/github/repo-app/authorization/refresh` | Refresh the caller's Repo App authorization without changing its grant identity |
+| `DELETE` | `/api/auth/github/repo-app/authorization` | Revoke the caller's Repo App authorization and write a credential tombstone |
 | `PUT` | `/api/auth/github-accounts/{login}/default` | Make a linked GitHub account the caller's default account |
 | `GET` | `/api/auth/github-accounts/accessible-repos` | Enumerate repositories reachable across all linked GitHub accounts, tagged with the login and GitHub-reported permission level |
 | `GET` | `/api/github/accounts` | List the signed-in user's personal account followed by organizations |
