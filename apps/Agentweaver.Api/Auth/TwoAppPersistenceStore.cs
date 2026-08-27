@@ -20,6 +20,7 @@ internal sealed record RepoAppAuthorizationTransaction(
     string ReturnRouteKey,
     string PkceVerifierProtected,
     string CallbackCookieHash);
+internal sealed record CopilotAuthorizationTransaction(string State, string EntraObjectId, string ProjectId, long ExpiresAtUnixMilliseconds, string ReturnRouteKey, string PkceVerifierProtected, string CallbackCookieHash);
 internal sealed record RepoAppCredentialReference(
     string Id,
     string CredentialReference,
@@ -118,6 +119,12 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
                 x.PkceVerifierProtected,
                 x.CallbackCookieHash))
             .SingleOrDefaultAsync(ct);
+    internal Task<CopilotAuthorizationTransaction?> GetCopilotAuthorizationTransactionAsync(string state, CancellationToken ct = default) =>
+        db.GitHubAuthorizations.AsNoTracking().Where(x => x.State == state && x.AppKind == GitHubAppKind.Copilot && x.Purpose == GitHubAuthorizationPurpose.InteractiveCopilot && x.ProjectId != null)
+            .Select(x => new CopilotAuthorizationTransaction(x.State, x.EntraObjectId, x.ProjectId!, x.ExpiresAtUnixMilliseconds, x.ReturnRouteKey, x.PkceVerifierProtected, x.CallbackCookieHash)).SingleOrDefaultAsync(ct);
+    internal Task<CopilotAuthorizationTransaction?> GetCopilotAuthorizationTransactionByIdAsync(string id, string subject, CancellationToken ct = default) =>
+        db.GitHubAuthorizations.AsNoTracking().Where(x => x.ExternalTransactionId == id && x.EntraObjectId == subject && x.AppKind == GitHubAppKind.Copilot && x.Purpose == GitHubAuthorizationPurpose.InteractiveCopilot && x.ProjectId != null)
+            .Select(x => new CopilotAuthorizationTransaction(x.State, x.EntraObjectId, x.ProjectId!, x.ExpiresAtUnixMilliseconds, x.ReturnRouteKey, x.PkceVerifierProtected, x.CallbackCookieHash)).SingleOrDefaultAsync(ct);
 
     public async Task<AuthorizationClaimResult> ClaimAuthorizationByTransactionIdAsync(
         string transactionId,
@@ -422,6 +429,48 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             return BindingWriteResult.Unavailable;
         }
     }
+
+    internal async Task<bool> CompleteCopilotAuthorizationAsync(string state, ProjectCopilotBindingRecord binding, GitHubAuditRecord audit, CancellationToken ct = default)
+        {
+            EnsureSafe(binding); EnsureSafe(audit);
+            await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+            var now = DateTimeOffset.UtcNow;
+            await db.ProjectCopilotBindings.Where(x => x.ProjectId == binding.ProjectId && x.Status == GitHubBindingStatus.Active)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, GitHubBindingStatus.Inactive).SetProperty(x => x.DeactivatedAt, now), ct).ConfigureAwait(false);
+            db.ChangeTracker.Clear(); db.ProjectCopilotBindings.Add(binding); db.GitHubAuditRecords.Add(audit);
+            try
+            {
+                var claimed = await db.GitHubAuthorizations.Where(x => x.State == state && x.Status == GitHubAuthorizationStatus.Redeeming)
+                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, GitHubAuthorizationStatus.Completed).SetProperty(x => x.CompletedAt, now), ct).ConfigureAwait(false);
+                if (claimed != 1) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); db.ChangeTracker.Clear(); return false; }
+                await db.SaveChangesAsync(ct).ConfigureAwait(false); await tx.CommitAsync(ct).ConfigureAwait(false); return true;
+            }
+            catch (DbUpdateException) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); db.ChangeTracker.Clear(); return false; }
+        }
+
+    internal async Task CompleteCopilotAuthorizationFailureAsync(string state, GitHubAuditRecord audit, CancellationToken ct = default)
+        {
+            EnsureSafe(audit); await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+            var completedAt = DateTimeOffset.UtcNow;
+            db.GitHubAuditRecords.Add(audit);
+            await db.GitHubAuthorizations.Where(x => x.State == state && x.Status == GitHubAuthorizationStatus.Redeeming)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, GitHubAuthorizationStatus.Failed).SetProperty(x => x.CompletedAt, completedAt), ct).ConfigureAwait(false);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false); await tx.CommitAsync(ct).ConfigureAwait(false);
+        }
+
+    internal async Task<RepoAppCredentialReference?> RevokeCopilotBindingAsync(string projectId, GitHubAuditRecord audit, CancellationToken ct = default)
+        {
+            EnsureSafe(audit); await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+            var binding = await db.ProjectCopilotBindings.Where(x => x.ProjectId == projectId && x.Status == GitHubBindingStatus.Active)
+                .Select(x => new RepoAppCredentialReference(x.Id, x.CredentialReference, x.CredentialVersion, x.BoundAt)).SingleOrDefaultAsync(ct).ConfigureAwait(false);
+            if (binding is null) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); return null; }
+            var now = DateTimeOffset.UtcNow; db.GitHubAuditRecords.Add(audit);
+            await db.ProjectCopilotBindings.Where(x => x.Id == binding.Id && x.Status == GitHubBindingStatus.Active)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, GitHubBindingStatus.Revoked).SetProperty(x => x.DeactivatedAt, now), ct).ConfigureAwait(false);
+            await db.AutomationActivations.Where(x => x.ProjectId == projectId && x.Status == AutomationActivationStatus.Active)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, AutomationActivationStatus.Invalidated).SetProperty(x => x.InvalidatedAt, now), ct).ConfigureAwait(false);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false); await tx.CommitAsync(ct).ConfigureAwait(false); return binding;
+        }
 
     public async Task<InvocationClaimResult> ClaimInvocationAsync(
         AutomationInvocationRecord invocation,
