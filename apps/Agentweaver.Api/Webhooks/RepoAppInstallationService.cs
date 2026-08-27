@@ -191,6 +191,7 @@ public sealed class RepoAppInstallationTokenService(
 public sealed class RepoAppInstallationLifecycleService(MemoryDbContext db)
 {
     private const string CompletedEventPrefix = "completed/";
+    private static readonly TimeSpan ProcessingLease = TimeSpan.FromMinutes(10);
 
     public async Task<(bool Claimed, IReadOnlyList<string> ProjectIds)> ProcessAsync(
         string deliveryId,
@@ -217,8 +218,20 @@ public sealed class RepoAppInstallationLifecycleService(MemoryDbContext db)
         }
         catch (DbUpdateException)
         {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             db.ChangeTracker.Clear();
-            return (false, []);
+            var leaseExpiresBefore = DateTimeOffset.UtcNow.Subtract(ProcessingLease);
+            var abandoned = await db.GitHubLifecycleDeliveries.FindAsync([deliveryId], ct).ConfigureAwait(false);
+            if (abandoned is null || abandoned.EventName != eventName || abandoned.ReceivedAt >= leaseExpiresBefore)
+                return (false, []);
+            var reclaimed = await db.GitHubLifecycleDeliveries
+                .Where(x => x.DeliveryId == deliveryId &&
+                            x.EventName == abandoned.EventName &&
+                            x.ReceivedAt == abandoned.ReceivedAt)
+                .ExecuteDeleteAsync(ct).ConfigureAwait(false);
+            if (reclaimed != 1)
+                return (false, []);
+            return await ProcessAsync(deliveryId, eventName, payload, ct).ConfigureAwait(false);
         }
 
         var installationId = (payload.Installation?.Id).GetValueOrDefault();
