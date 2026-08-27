@@ -87,6 +87,115 @@ app.MapGet("/api/auth/session", (HttpContext httpContext, IConfiguration configu
     });
 });
 
+// Repo App authorization is isolated from the legacy GitHub OAuth and device-flow lanes. Its
+// transaction handle is safe to expose for polling; OAuth state, PKCE verifier, and cookie secret
+// remain server-side.
+app.MapPost("/api/auth/github/repo-app/authorizations", async (
+    HttpContext httpContext,
+    RepoAppAuthorizationBeginRequest? request,
+    IConfiguration configuration,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var repoAppAuthorization = new RepoAppUserAuthorizationService(
+        configuration, persistence, secretStore, httpClientFactory);
+    var result = await repoAppAuthorization.BeginAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext),
+        httpContext.User,
+        request?.ReturnRouteKey,
+        ct).ConfigureAwait(false);
+    if (result.Outcome != RepoAppAuthorizationOutcome.Success)
+        return Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
+
+    RepoAppUserAuthorizationService.SetCallbackCookie(httpContext, result.CallbackCookie!);
+    return Results.Ok(new
+    {
+        authorization_url = result.AuthorizationUrl,
+        transaction_id = result.TransactionId,
+        expires_at = result.ExpiresAt,
+    });
+});
+
+// This callback is deliberately outside /api: GitHub navigates the browser here and cannot send
+// its bearer header. The one-time, HttpOnly callback cookie is bound to a server-side Entra subject
+// established at the authenticated begin endpoint; callback input cannot select a subject.
+app.MapGet("/auth/github/repo-app/callback", async (
+    HttpContext httpContext,
+    string? code,
+    string? state,
+    string? error,
+    IConfiguration configuration,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var repoAppAuthorization = new RepoAppUserAuthorizationService(
+        configuration, persistence, secretStore, httpClientFactory);
+    var callbackCookie = RepoAppUserAuthorizationService.ReadCallbackCookie(httpContext);
+    RepoAppUserAuthorizationService.ClearCallbackCookie(httpContext);
+    var result = await repoAppAuthorization.CompleteBrowserCallbackAsync(
+        state,
+        string.IsNullOrWhiteSpace(error) ? code : null,
+        callbackCookie,
+        ct).ConfigureAwait(false);
+    return Results.Redirect(repoAppAuthorization.GetCallbackRedirect(result.ReturnRouteKey, result.Outcome));
+}).AllowAnonymous();
+
+app.MapGet("/api/auth/github/repo-app/authorizations/{transactionId}", async (
+    HttpContext httpContext,
+    string transactionId,
+    IConfiguration configuration,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var repoAppAuthorization = new RepoAppUserAuthorizationService(
+        configuration, persistence, secretStore, httpClientFactory);
+    var result = await repoAppAuthorization.PollAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, transactionId, ct).ConfigureAwait(false);
+    return result.Outcome == RepoAppAuthorizationOutcome.Success
+        ? Results.Ok(new { status = result.Status })
+        : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
+});
+
+app.MapPost("/api/auth/github/repo-app/authorization/refresh", async (
+    HttpContext httpContext,
+    IConfiguration configuration,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var repoAppAuthorization = new RepoAppUserAuthorizationService(
+        configuration, persistence, secretStore, httpClientFactory);
+    var outcome = await repoAppAuthorization.RefreshAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+    return outcome == RepoAppAuthorizationOutcome.Success
+        ? Results.NoContent()
+        : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(outcome) });
+});
+
+app.MapDelete("/api/auth/github/repo-app/authorization", async (
+    HttpContext httpContext,
+    IConfiguration configuration,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var repoAppAuthorization = new RepoAppUserAuthorizationService(
+        configuration, persistence, secretStore, httpClientFactory);
+    var outcome = await repoAppAuthorization.RevokeAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+    return outcome == RepoAppAuthorizationOutcome.Success
+        ? Results.NoContent()
+        : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(outcome) });
+});
+
 // GET /auth/github/authorize — begin OAuth redirect flow
 app.MapGet("/auth/github/authorize", async (HttpContext httpContext, GitHubOAuthRedirectService oauthService, CancellationToken ct) =>
 {
@@ -871,4 +980,8 @@ file sealed record SessionExchangeRequest(
 file sealed record SessionExchangeResponse(
     [property: System.Text.Json.Serialization.JsonPropertyName("session_token")] string SessionToken,
     [property: System.Text.Json.Serialization.JsonPropertyName("login")]         string Login
+);
+
+file sealed record RepoAppAuthorizationBeginRequest(
+    [property: System.Text.Json.Serialization.JsonPropertyName("return_route_key")] string? ReturnRouteKey
 );

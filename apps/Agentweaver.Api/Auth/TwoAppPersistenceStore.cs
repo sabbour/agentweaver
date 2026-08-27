@@ -11,6 +11,41 @@ namespace Agentweaver.Api.Auth;
 public enum AuthorizationClaimResult { Claimed, Invalid, Consumed }
 public enum BindingWriteResult { Bound, Unavailable }
 public enum InvocationClaimResult { Claimed, Duplicate }
+internal sealed record RepoAppAuthorizationTransaction(
+    string State,
+    GitHubAppKind AppKind,
+    GitHubAuthorizationPurpose Purpose,
+    string EntraObjectId,
+    long ExpiresAtUnixMilliseconds,
+    string ReturnRouteKey,
+    string PkceVerifierProtected,
+    string CallbackCookieHash);
+internal sealed record RepoAppCredentialReference(
+    string Id,
+    string CredentialReference,
+    string CredentialVersion,
+    DateTimeOffset CreatedAt);
+internal sealed record RepoAppAuthorizationCompletion(
+    bool Completed,
+    IReadOnlyList<RepoAppCredentialReference> RevokedCredentials);
+internal sealed class RepoAppCredentialLease(
+    Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction) : IAsyncDisposable
+{
+    private bool _completed;
+
+    public async Task CommitAsync(CancellationToken ct)
+    {
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        _completed = true;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (!_completed)
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+        await transaction.DisposeAsync().ConfigureAwait(false);
+    }
+}
 
 /// <summary>
 /// Persistence boundary for the two GitHub App model. It accepts only opaque credential
@@ -68,6 +103,22 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             : AuthorizationClaimResult.Invalid;
     }
 
+    internal Task<RepoAppAuthorizationTransaction?> GetRepoAppAuthorizationTransactionAsync(
+        string state,
+        CancellationToken ct = default) =>
+        db.GitHubAuthorizations.AsNoTracking()
+            .Where(x => x.State == state)
+            .Select(x => new RepoAppAuthorizationTransaction(
+                x.State,
+                x.AppKind,
+                x.Purpose,
+                x.EntraObjectId,
+                x.ExpiresAtUnixMilliseconds,
+                x.ReturnRouteKey,
+                x.PkceVerifierProtected,
+                x.CallbackCookieHash))
+            .SingleOrDefaultAsync(ct);
+
     public async Task<AuthorizationClaimResult> ClaimAuthorizationByTransactionIdAsync(
         string transactionId,
         GitHubAppKind appKind,
@@ -116,10 +167,22 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
                 x.Status))
             .SingleOrDefaultAsync(ct)
             .ConfigureAwait(false);
-        return transaction is { Status: GitHubAuthorizationStatus.Pending } &&
-               transaction.ExpiresAt < DateTimeOffset.UtcNow
-            ? transaction with { Status = GitHubAuthorizationStatus.Expired }
-            : transaction;
+        if (transaction is null || transaction.ExpiresAt >= DateTimeOffset.UtcNow ||
+            transaction.Status is not (GitHubAuthorizationStatus.Pending or GitHubAuthorizationStatus.Redeeming))
+            return transaction;
+
+        var completedAt = DateTimeOffset.UtcNow;
+        await db.GitHubAuthorizations
+            .Where(x => x.ExternalTransactionId == transactionId &&
+                        x.AppKind == appKind &&
+                        x.EntraObjectId == entraObjectId &&
+                        (x.Status == GitHubAuthorizationStatus.Pending || x.Status == GitHubAuthorizationStatus.Redeeming) &&
+                        x.ExpiresAtUnixMilliseconds < completedAt.ToUnixTimeMilliseconds())
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, GitHubAuthorizationStatus.Expired)
+                .SetProperty(x => x.CompletedAt, completedAt), ct)
+            .ConfigureAwait(false);
+        return transaction with { Status = GitHubAuthorizationStatus.Expired };
     }
 
     public Task CompleteAuthorizationAsync(
@@ -131,6 +194,204 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.Status, succeeded ? GitHubAuthorizationStatus.Completed : GitHubAuthorizationStatus.Failed)
                 .SetProperty(x => x.CompletedAt, DateTimeOffset.UtcNow), ct);
+
+    internal async Task<RepoAppAuthorizationCompletion> CompleteRepoAppAuthorizationAsync(
+        string state,
+        GitHubAppAuthorizationRecord authorization,
+        GitHubAuditRecord audit,
+        CancellationToken ct = default)
+    {
+        EnsureSafe(authorization);
+        EnsureSafe(audit);
+        var completedAt = DateTimeOffset.UtcNow;
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        db.GitHubAppAuthorizations.Add(authorization);
+        db.GitHubAuditRecords.Add(audit);
+        var revokedCredentials = await GetActiveRepoAppCredentialsAsync(authorization.EntraObjectId, ct)
+            .ConfigureAwait(false);
+        await db.GitHubAppAuthorizations
+            .Where(x => x.EntraObjectId == authorization.EntraObjectId &&
+                        x.AppKind == GitHubAppKind.Repo &&
+                        x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                        x.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.RevokedAt, completedAt), ct)
+            .ConfigureAwait(false);
+        var changed = await db.GitHubAuthorizations
+            .Where(x => x.State == state && x.Status == GitHubAuthorizationStatus.Redeeming)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, GitHubAuthorizationStatus.Completed)
+                .SetProperty(x => x.CompletedAt, completedAt), ct)
+            .ConfigureAwait(false);
+        if (changed != 1)
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            return new(false, []);
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        return new(true, revokedCredentials);
+    }
+
+    internal async Task CompleteRepoAppAuthorizationFailureAsync(
+        string state,
+        GitHubAuditRecord audit,
+        CancellationToken ct = default)
+    {
+        EnsureSafe(audit);
+        var completedAt = DateTimeOffset.UtcNow;
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        db.GitHubAuditRecords.Add(audit);
+        await db.GitHubAuthorizations
+            .Where(x => x.State == state && x.Status == GitHubAuthorizationStatus.Redeeming)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, GitHubAuthorizationStatus.Failed)
+                .SetProperty(x => x.CompletedAt, completedAt), ct)
+            .ConfigureAwait(false);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    internal async Task<RepoAppCredentialReference?> GetActiveRepoAppCredentialAsync(
+        string entraObjectId,
+        CancellationToken ct = default)
+    {
+        var candidates = await db.GitHubAppAuthorizations.AsNoTracking()
+            .Where(x => x.EntraObjectId == entraObjectId &&
+                        x.AppKind == GitHubAppKind.Repo &&
+                        x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                        x.RevokedAt == null)
+            .Select(x => new RepoAppCredentialReference(
+                x.Id, x.CredentialReference, x.CredentialVersion, x.CreatedAt))
+            .ToListAsync(ct).ConfigureAwait(false);
+        return candidates.OrderByDescending(x => x.CreatedAt).FirstOrDefault();
+    }
+
+    internal async Task<IReadOnlyList<RepoAppCredentialReference>> GetActiveRepoAppCredentialsAsync(
+        string entraObjectId,
+        CancellationToken ct = default) =>
+        await db.GitHubAppAuthorizations.AsNoTracking()
+            .Where(x => x.EntraObjectId == entraObjectId &&
+                        x.AppKind == GitHubAppKind.Repo &&
+                        x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                        x.RevokedAt == null)
+            .Select(x => new RepoAppCredentialReference(
+                x.Id, x.CredentialReference, x.CredentialVersion, x.CreatedAt))
+            .ToListAsync(ct).ConfigureAwait(false);
+
+    internal async Task<IReadOnlyList<RepoAppCredentialReference>> RevokeRepoAppCredentialsAsync(
+        string entraObjectId,
+        GitHubAuditRecord audit,
+        CancellationToken ct = default)
+    {
+        EnsureSafe(audit);
+        var revokedAt = DateTimeOffset.UtcNow;
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        db.GitHubAuditRecords.Add(audit);
+        var revokedCredentials = await GetActiveRepoAppCredentialsAsync(entraObjectId, ct).ConfigureAwait(false);
+        var changed = await db.GitHubAppAuthorizations
+            .Where(x => x.EntraObjectId == entraObjectId &&
+                        x.AppKind == GitHubAppKind.Repo &&
+                        x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                        x.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.RevokedAt, revokedAt), ct)
+            .ConfigureAwait(false);
+        await db.GitHubAuthorizations
+            .Where(x => x.EntraObjectId == entraObjectId &&
+                        x.AppKind == GitHubAppKind.Repo &&
+                        x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                        (x.Status == GitHubAuthorizationStatus.Pending || x.Status == GitHubAuthorizationStatus.Redeeming))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, GitHubAuthorizationStatus.Failed)
+                .SetProperty(x => x.CompletedAt, revokedAt), ct)
+            .ConfigureAwait(false);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        return changed == 0 ? [] : revokedCredentials;
+    }
+
+    internal async Task<bool> RevokeRepoAppCredentialIfCurrentAsync(
+        RepoAppCredentialReference credential,
+        GitHubAuditRecord audit,
+        CancellationToken ct = default)
+    {
+        EnsureSafe(audit);
+        var revokedAt = DateTimeOffset.UtcNow;
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        db.GitHubAuditRecords.Add(audit);
+        var changed = await db.GitHubAppAuthorizations
+            .Where(x => x.Id == credential.Id &&
+                        x.CredentialReference == credential.CredentialReference &&
+                        x.CredentialVersion == credential.CredentialVersion &&
+                        x.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.RevokedAt, revokedAt), ct)
+            .ConfigureAwait(false);
+        if (changed == 0)
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            return false;
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
+    internal async Task<RepoAppCredentialLease?> TryAcquireRepoAppCredentialLeaseAsync(
+        RepoAppCredentialReference credential,
+        CancellationToken ct = default)
+    {
+        var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        try
+        {
+            var changed = await db.GitHubAppAuthorizations
+                .Where(x => x.Id == credential.Id &&
+                            x.CredentialReference == credential.CredentialReference &&
+                            x.CredentialVersion == credential.CredentialVersion &&
+                            x.RevokedAt == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.CredentialReference, x => x.CredentialReference), ct)
+                .ConfigureAwait(false);
+            if (changed == 1)
+                return new RepoAppCredentialLease(transaction);
+
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            await transaction.DisposeAsync().ConfigureAwait(false);
+            return null;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            await transaction.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    internal async Task<bool> RevokeRepoAppCredentialUnderLeaseAsync(
+        RepoAppCredentialReference credential,
+        GitHubAuditRecord audit,
+        CancellationToken ct = default)
+    {
+        EnsureSafe(audit);
+        db.GitHubAuditRecords.Add(audit);
+        var revokedAt = DateTimeOffset.UtcNow;
+        var changed = await db.GitHubAppAuthorizations
+            .Where(x => x.Id == credential.Id &&
+                        x.CredentialReference == credential.CredentialReference &&
+                        x.CredentialVersion == credential.CredentialVersion &&
+                        x.RevokedAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.RevokedAt, revokedAt), ct)
+            .ConfigureAwait(false);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return changed == 1;
+    }
+
+    internal void ClearPendingChanges() => db.ChangeTracker.Clear();
 
     public async Task<BindingWriteResult> ReplaceCopilotBindingAsync(
         ProjectCopilotBindingRecord binding,
