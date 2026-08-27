@@ -1,153 +1,189 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Webhooks;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Endpoints;
 
-/// <summary>
-/// Inbound GitHub webhook receiver. Each project has its own endpoint and HMAC secret, so the
-/// project and secret are resolved before the untrusted body is parsed. Trigger names are
-/// <c>github.&lt;event&gt;</c> and, when present, <c>github.&lt;event&gt;.&lt;action&gt;</c>.
-/// </summary>
+/// <summary>Receives Repo App deliveries authenticated before JSON parsing or any routing.</summary>
 public static class GitHubWebhookEndpoints
 {
+    public const string RepoAppWebhookPath = "/api/github/webhooks/repo-app";
     public const string EventNamePrefix = "github.";
+    private const int DefaultBodyLimitBytes = 1_048_576;
 
     public static void MapGitHubWebhookEndpoints(this WebApplication app)
     {
-        // This route is deliberately anonymous: GitHub cannot supply an Agentweaver bearer token.
-        // GitHubTokenAuthMiddleware and GitHubOrgAuthorizationMiddleware exempt only this exact
-        // project-scoped webhook shape; HMAC verification below is the route's authentication.
-        app.MapPost("/api/projects/{id}/webhooks/github", async (
+        app.MapPost(RepoAppWebhookPath, async (
             HttpContext httpContext,
-            string id,
-            IProjectStore projectStore,
+            IConfiguration configuration,
             ISecretStore secretStore,
+            MemoryDbContext db,
+            IProjectStore projectStore,
             WorkflowEventTriggerService triggerService,
-            ILogger<GitHubWebhookPayload> logger,
+            ILogger<Program> logger,
             CancellationToken ct) =>
         {
-            if (!ProjectId.TryParse(id, out var projectId))
-                return Results.BadRequest(new { error = "Invalid project id." });
+            var bodyLimit = Math.Clamp(
+                configuration.GetValue<int?>("Auth:RepoApp:WebhookMaxBodyBytes") ?? DefaultBodyLimitBytes,
+                1, DefaultBodyLimitBytes);
+            if (httpContext.Request.ContentLength is long contentLength && contentLength > bodyLimit)
+                return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
 
-            var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
-            if (project is null)
-                return Results.NotFound();
-
-            if (string.IsNullOrWhiteSpace(project.WebhookSecret))
+            var timeoutSeconds = Math.Clamp(
+                configuration.GetValue<int?>("Auth:RepoApp:WebhookVerificationTimeoutSeconds") ?? 5, 1, 10);
+            byte[] rawBody;
+            IReadOnlyList<string> secrets;
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            try
             {
-                logger.LogError("GitHub webhook received for project {ProjectId} without a configured secret.", projectId);
-                return Results.StatusCode(StatusCodes.Status500InternalServerError);
+                rawBody = await ReadBoundedBodyAsync(httpContext.Request.Body, bodyLimit, timeout.Token).ConfigureAwait(false);
+                secrets = await ReadWebhookSecretsAsync(configuration, secretStore, timeout.Token).ConfigureAwait(false);
+            }
+            catch (WebhookBodyLimitExceededException)
+            {
+                return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return Results.StatusCode(StatusCodes.Status408RequestTimeout);
             }
 
-            var secretResult = await secretStore.GetSecretAsync(project.WebhookSecret, ct).ConfigureAwait(false);
-            if (!secretResult.Found || string.IsNullOrWhiteSpace(secretResult.Value))
+            var deliveryId = httpContext.Request.Headers["X-GitHub-Delivery"].ToString();
+            var signature = httpContext.Request.Headers["X-Hub-Signature-256"].ToString();
+            // Verify both configured keys before deciding so rotation does not create a key-selection oracle.
+            var signatureValid = secrets.Count != 0 &&
+                secrets.Aggregate(false, (matched, secret) =>
+                {
+                    var thisSecretMatches = GitHubWebhookSignatureVerifier.Verify(secret, rawBody, signature);
+                    return matched | thisSecretMatches;
+                });
+            if (!signatureValid)
             {
-                logger.LogError("GitHub webhook secret is unavailable for project {ProjectId}.", projectId);
-                return Results.StatusCode(StatusCodes.Status500InternalServerError);
-            }
-
-            using var bodyStream = new MemoryStream();
-            await httpContext.Request.Body.CopyToAsync(bodyStream, ct).ConfigureAwait(false);
-            var rawBody = bodyStream.ToArray();
-            var signatureHeader = httpContext.Request.Headers["X-Hub-Signature-256"].ToString();
-            if (!GitHubWebhookSignatureVerifier.Verify(secretResult.Value, rawBody, signatureHeader))
-            {
-                logger.LogWarning("GitHub webhook signature verification failed for project {ProjectId}.", projectId);
+                logger.LogWarning("Repo App webhook signature rejected for delivery {DeliveryId}; category={ReasonCategory}",
+                    SafeDeliveryId(deliveryId), "signature_invalid");
                 return Results.StatusCode(StatusCodes.Status401Unauthorized);
             }
 
-            if (project.State != ProjectState.Active)
-                return Results.NoContent();
-
             var eventType = httpContext.Request.Headers["X-GitHub-Event"].ToString();
-            if (string.IsNullOrWhiteSpace(eventType))
-                return Results.BadRequest(new { error = "X-GitHub-Event header is required." });
+            if (string.IsNullOrWhiteSpace(deliveryId) || string.IsNullOrWhiteSpace(eventType))
+                return Results.BadRequest(new { error = "Required GitHub delivery headers are missing." });
 
             GitHubWebhookPayload? payload;
             try
             {
                 payload = JsonSerializer.Deserialize<GitHubWebhookPayload>(rawBody);
             }
-            catch (JsonException ex)
+            catch (JsonException)
             {
-                logger.LogWarning(ex, "GitHub webhook payload for event {EventType} was not valid JSON.", eventType);
-                return Results.BadRequest(new { error = "Payload is not valid JSON." });
+                return Results.BadRequest(new { error = "Webhook payload is invalid." });
             }
+            if (payload is null)
+                return Results.BadRequest(new { error = "Webhook payload is invalid." });
 
-            // GitHub always sends the canonical "owner/repo" in repository.full_name, but
-            // Project.Origin.SourceRepository is stored inconsistently depending on how the project
-            // was created: the "import from GitHub" path (ProjectService.CreateFromGitHubAsync) stores
-            // the full HTTPS clone URL, while the "create a new repo" connect path stores "owner/repo".
-            // Normalise BOTH sides to canonical "owner/repo" before comparing so a real delivery is
-            // matched regardless of which creation path produced the project (issue: event-triggered
-            // workflows never fired for URL-form projects).
-            var repoFullName = NormalizeRepoFullName(payload?.Repository?.FullName);
-            var projectRepo = NormalizeRepoFullName(project.Origin.SourceRepository);
-            if (repoFullName is null
-                || project.Origin.Kind != ProjectOriginKind.FromGitHub
-                || projectRepo is null
-                || !string.Equals(projectRepo, repoFullName, StringComparison.Ordinal))
+            var lifecycle = new RepoAppInstallationLifecycleService(db);
+            var result = await lifecycle.ProcessAsync(deliveryId, eventType, payload, ct).ConfigureAwait(false);
+            if (!result.Claimed)
+                return await lifecycle.IsCompletedAsync(deliveryId, ct).ConfigureAwait(false)
+                    ? Results.NoContent()
+                    : Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+
+            if (payload.Installation?.Id is not > 0 || payload.Repository?.Id is not > 0)
+            {
+                if (!await CompleteDeliveryAsync(lifecycle, deliveryId, ct).ConfigureAwait(false))
+                    return Results.StatusCode(StatusCodes.Status500InternalServerError);
                 return Results.NoContent();
+            }
 
             var eventNames = new List<string> { $"{EventNamePrefix}{eventType}" };
-            if (!string.IsNullOrWhiteSpace(payload!.Action))
+            if (!string.IsNullOrWhiteSpace(payload.Action))
                 eventNames.Add($"{EventNamePrefix}{eventType}.{payload.Action}");
 
-            var deliveryId = httpContext.Request.Headers["X-GitHub-Delivery"].ToString();
             var firedWorkflowIds = new List<string>();
-            foreach (var eventName in eventNames)
+            try
             {
-                var dedupeKey = string.IsNullOrWhiteSpace(deliveryId) ? null : $"{deliveryId}:{eventName}";
-                var fired = await triggerService.FireEventAsync(project, eventName, dedupeKey, payload, ct).ConfigureAwait(false);
-                firedWorkflowIds.AddRange(fired);
+                foreach (var projectIdText in result.ProjectIds.Distinct(StringComparer.Ordinal))
+                {
+                    if (!ProjectId.TryParse(projectIdText, out var projectId))
+                        continue;
+                    var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+                    if (project is null || project.State != ProjectState.Active)
+                        continue;
+                    foreach (var eventName in eventNames)
+                    {
+                        var fired = await triggerService.FireEventAsync(project, eventName, $"{deliveryId}:{eventName}", payload, ct)
+                            .ConfigureAwait(false);
+                        firedWorkflowIds.AddRange(fired);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                await lifecycle.ReleaseAsync(deliveryId, CancellationToken.None).ConfigureAwait(false);
+                logger.LogWarning("Repo App webhook processing failed for delivery {DeliveryId}; category={ReasonCategory}",
+                    SafeDeliveryId(deliveryId), "processing_failed");
+                return Results.StatusCode(StatusCodes.Status500InternalServerError);
             }
 
-            return Results.Ok(new GitHubWebhookResponse
-            {
-                ProjectId = project.Id.ToString(),
-                FiredWorkflowIds = firedWorkflowIds,
-            });
-        });
+            if (!await CompleteDeliveryAsync(lifecycle, deliveryId, ct).ConfigureAwait(false))
+                return Results.StatusCode(StatusCodes.Status500InternalServerError);
+            return Results.Ok(new GitHubWebhookResponse { Duplicate = false, FiredWorkflowIds = firedWorkflowIds });
+        }).AllowAnonymous();
     }
 
-    /// <summary>
-    /// Reduces a repository reference to canonical lowercase <c>owner/repo</c>. Accepts either the
-    /// contract form (<c>owner/repo</c>) or a full HTTPS clone URL
-    /// (e.g. <c>https://github.com/owner/repo(.git)</c>): the "import from GitHub" project-creation
-    /// path stores the URL form in <see cref="ProjectOrigin.SourceRepository"/>, while GitHub webhook
-    /// payloads always send <c>owner/repo</c>. Returns <c>null</c> when a usable owner/repo pair
-    /// cannot be extracted, so an unparseable value never accidentally matches.
-    /// </summary>
-    internal static string? NormalizeRepoFullName(string? repo)
+    private static async Task<bool> CompleteDeliveryAsync(
+        RepoAppInstallationLifecycleService lifecycle, string deliveryId, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(repo)) return null;
-        var value = repo.Trim();
-
-        // Strip scheme + host when a URL form is supplied, keeping just the path.
-        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
-            value = uri.AbsolutePath;
-
-        value = value.Trim('/');
-        if (value.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
-            value = value[..^4];
-
-        var segments = value.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (segments.Length < 2) return null;
-
-        // The last two path segments are always owner/repo (covers both "owner/repo" and a URL path).
-        var owner = segments[^2];
-        var name = segments[^1];
-        if (owner.Length == 0 || name.Length == 0) return null;
-        return $"{owner}/{name}".ToLowerInvariant();
+        try
+        {
+            return await lifecycle.CompleteAsync(deliveryId, ct).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            await lifecycle.ReleaseAsync(deliveryId, CancellationToken.None).ConfigureAwait(false);
+            return false;
+        }
     }
+
+    private static async Task<IReadOnlyList<string>> ReadWebhookSecretsAsync(
+        IConfiguration configuration, ISecretStore secretStore, CancellationToken ct)
+    {
+        var currentName = configuration["Auth:RepoApp:WebhookSecretName"];
+        var previousName = configuration["Auth:RepoApp:PreviousWebhookSecretName"];
+        var previousExpires = DateTimeOffset.TryParse(configuration["Auth:RepoApp:PreviousWebhookSecretExpiresAt"],
+            out var parsedExpiry) && parsedExpiry > DateTimeOffset.UtcNow;
+        var names = new[] { currentName, previousExpires ? previousName : null }
+            .Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
+        var values = await Task.WhenAll(names.Select(async name => await secretStore.GetSecretAsync(name, ct).ConfigureAwait(false)));
+        return values.Where(x => x.Found && !string.IsNullOrWhiteSpace(x.Value)).Select(x => x.Value!).ToArray();
+    }
+
+    private static async Task<byte[]> ReadBoundedBodyAsync(Stream stream, int limit, CancellationToken ct)
+    {
+        await using var memory = new MemoryStream(Math.Min(limit, 81920));
+        var buffer = new byte[81920];
+        int read;
+        while ((read = await stream.ReadAsync(buffer.AsMemory(), ct).ConfigureAwait(false)) != 0)
+        {
+            if (memory.Length + read > limit)
+                throw new WebhookBodyLimitExceededException();
+            await memory.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+        }
+        return memory.ToArray();
+    }
+
+    private static string SafeDeliveryId(string deliveryId) =>
+        Guid.TryParse(deliveryId, out var parsed) ? parsed.ToString("D") : "invalid";
+
+    private sealed class WebhookBodyLimitExceededException : Exception;
 }
 
 public sealed record GitHubWebhookResponse
 {
-    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
+    [JsonPropertyName("duplicate")] public required bool Duplicate { get; init; }
     [JsonPropertyName("fired_workflow_ids")] public required IReadOnlyList<string> FiredWorkflowIds { get; init; }
 }

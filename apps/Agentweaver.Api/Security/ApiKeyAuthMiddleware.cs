@@ -126,8 +126,7 @@ public sealed class GitHubTokenAuthMiddleware
             || context.Request.Path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase)
             || context.Request.Path.Equals("/api/auth/config", StringComparison.OrdinalIgnoreCase)
             || context.Request.Path.Equals("/api/server/info", StringComparison.OrdinalIgnoreCase)
-            || (context.Request.Path.StartsWithSegments("/api/projects", StringComparison.OrdinalIgnoreCase)
-                && context.Request.Path.Value?.EndsWith("/webhooks/github", StringComparison.OrdinalIgnoreCase) == true))
+            || context.Request.Path.Equals("/api/github/webhooks/repo-app", StringComparison.OrdinalIgnoreCase))
         {
             await _next(context).ConfigureAwait(false);
             return;

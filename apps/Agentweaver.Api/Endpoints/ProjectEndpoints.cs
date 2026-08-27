@@ -277,78 +277,41 @@ app.MapPut("/api/projects/{id}/preview-settings", async (
     .WithName("UpdateProjectPreviewSettings")
     .WithTags("Projects");
 
-// POST /api/projects/{id}/webhook-secret/rotate — generate and reveal a GitHub webhook secret once.
-app.MapPost("/api/projects/{id}/webhook-secret/rotate", async (
+// PUT /api/projects/{id}/github/repo-app-installation — verify and pin numeric App installation/repository IDs.
+app.MapPut("/api/projects/{id}/github/repo-app-installation", async (
     HttpContext httpContext,
     string id,
+    RepoAppInstallationBindingRequest request,
     IProjectStore projectStore,
+    MemoryDbContext db,
+    IConfiguration configuration,
     ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
-
-    var project = await projectStore.GetAsync(projectId, ct);
+    var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
     if (project is null) return Results.NotFound();
     if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
+    if (HumanEntraSubjectAuthorization.Evaluate(ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User)
+        != HumanEntraSubjectState.Allowed)
+        return Results.Conflict(new { error = "human_entra_subject_required" });
+    if (request.InstallationId <= 0 || request.RepositoryId <= 0 || request.Permissions.Count == 0)
+        return Results.BadRequest(new { error = "Numeric installation, repository, and permissions are required." });
 
-    var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-    var secretKey = project.WebhookSecret ?? $"github-webhook:{projectId}";
-    await secretStore.SetSecretAsync(secretKey, secret, ct: ct);
-    await projectStore.UpdateWebhookSecretAsync(projectId, secretKey, DateTimeOffset.UtcNow, ct);
-
-    return Results.Ok(new WebhookSecretRotationResponse(secret));
+    var tokenService = new RepoAppInstallationTokenService(configuration, db, secretStore, httpClientFactory);
+    if (!await tokenService.VerifyRepositoryInstallationAsync(request.InstallationId, request.RepositoryId, ct).ConfigureAwait(false))
+        return Results.Conflict(new { error = "github_installation_unavailable" });
+    var bound = await new RepoAppInstallationLifecycleService(db).BindAsync(
+        project.Id.ToString(), request.InstallationId, request.RepositoryId,
+        request.FullNameDisplay ?? string.Empty, request.Permissions, ct).ConfigureAwait(false);
+    return bound
+        ? Results.NoContent()
+        : Results.Conflict(new { error = "github_installation_unavailable" });
 })
-    .WithName("RotateProjectWebhookSecret")
+    .WithName("ConfigureProjectRepoAppInstallation")
     .WithTags("Projects");
-
-// POST /api/projects/{id}/webhooks/github/provision — create or update the repository webhook.
-app.MapPost("/api/projects/{id}/webhooks/github/provision", async (
-    HttpContext httpContext,
-    string id,
-    IProjectStore projectStore,
-    IGitHubTokenScopeProvider scopeProvider,
-    IGitHubWebhookProvisioningService provisioningService,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    var project = await projectStore.GetAsync(projectId, ct);
-    if (project is null) return Results.NotFound();
-    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    var tokenScope = scopeProvider.Resolve(caller.User);
-
-    var payloadUrl = new Uri(
-        $"{httpContext.Request.Scheme}://{httpContext.Request.Host}{httpContext.Request.PathBase}" +
-        $"/api/projects/{projectId}/webhooks/github");
-
-    try
-    {
-        var result = await provisioningService
-            .ProvisionAsync(project, tokenScope, payloadUrl, ct)
-            .ConfigureAwait(false);
-        return Results.Ok(new GitHubWebhookProvisioningResponse(
-            result.HookId,
-            result.Created,
-            result.Repository,
-            result.PayloadUrl));
-    }
-    catch (GitHubWebhookProvisioningException ex)
-    {
-        return Results.Json(new { error = ex.Message }, statusCode: ex.StatusCode);
-    }
-})
-    .WithName("ProvisionProjectGitHubWebhook")
-    .WithTags("Projects")
-    .AddOpenApiOperationTransformer((operation, _, _) =>
-    {
-        operation.Description =
-            "Creates or updates the connected repository's GitHub webhook using the caller's own GitHub identity.";
-        return Task.CompletedTask;
-    });
 
 // GET /api/projects/{id}/github/repository-owners — accounts a new repo could be created under
 app.MapGet("/api/projects/{id}/github/repository-owners", async (
@@ -978,6 +941,12 @@ static ProjectResponse MapProject(Project p, bool available, ProjectRole? effect
 
 private static readonly Regex AgentNameSlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
 private static readonly Regex AllowedModelRegex = new("^(gpt|claude|o)[a-z0-9._-]*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+private sealed record RepoAppInstallationBindingRequest(
+    long InstallationId,
+    long RepositoryId,
+    IReadOnlyDictionary<string, string> Permissions,
+    string? FullNameDisplay);
 
 private static bool IsProjectOwner(HttpContext httpContext, Agentweaver.Domain.Project project)
 {
