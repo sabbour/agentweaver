@@ -1,6 +1,7 @@
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
 using FluentAssertions;
+using System.Reflection;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -47,13 +48,32 @@ public sealed class TwoAppCredentialArchitectureTests
             .Should().NotContain("IGitHubTokenScopeProvider").And.NotContain(".Resolve");
     }
 
+    [Fact]
+    public void InternalBrokerAuthorization_RequiresPurposeAndOpaqueSnapshot()
+    {
+        var authorize = typeof(GitHubCapabilityBroker).GetMethod(
+            "TryAuthorizeAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+
+        authorize.Should().NotBeNull();
+        authorize!.GetParameters().Take(2).Select(parameter => parameter.ParameterType)
+            .Should().Equal(typeof(GitHubCapabilityPurpose), typeof(SnapshotRef));
+        authorize.GetParameters().Should().NotContain(parameter => parameter.IsOptional);
+    }
+
     [Theory]
     [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.RepositoryRead, true)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.RepositoryWrite, true)]
     [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.CopilotInference, false)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveCopilot, GitHubCapabilityOperation.RepositoryRead, false)]
     [InlineData(GitHubCapabilityPurpose.InteractiveCopilot, GitHubCapabilityOperation.RepositoryWrite, false)]
     [InlineData(GitHubCapabilityPurpose.InteractiveCopilot, GitHubCapabilityOperation.CopilotInference, true)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedRepository, GitHubCapabilityOperation.RepositoryRead, true)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedRepository, GitHubCapabilityOperation.RepositoryWrite, true)]
     [InlineData(GitHubCapabilityPurpose.UnattendedRepository, GitHubCapabilityOperation.CopilotInference, false)]
     [InlineData(GitHubCapabilityPurpose.UnattendedCopilot, GitHubCapabilityOperation.RepositoryRead, false)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedCopilot, GitHubCapabilityOperation.RepositoryWrite, false)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedCopilot, GitHubCapabilityOperation.CopilotInference, true)]
     public void PurposeToOperationMapping_IsClosed(
         GitHubCapabilityPurpose purpose,
         GitHubCapabilityOperation operation,
