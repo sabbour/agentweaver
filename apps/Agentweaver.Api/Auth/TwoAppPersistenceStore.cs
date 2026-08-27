@@ -451,9 +451,10 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
     internal async Task CompleteCopilotAuthorizationFailureAsync(string state, GitHubAuditRecord audit, CancellationToken ct = default)
         {
             EnsureSafe(audit); await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+            var completedAt = DateTimeOffset.UtcNow;
             db.GitHubAuditRecords.Add(audit);
             await db.GitHubAuthorizations.Where(x => x.State == state && x.Status == GitHubAuthorizationStatus.Redeeming)
-                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, GitHubAuthorizationStatus.Failed).SetProperty(x => x.CompletedAt, DateTimeOffset.UtcNow), ct).ConfigureAwait(false);
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, GitHubAuthorizationStatus.Failed).SetProperty(x => x.CompletedAt, completedAt), ct).ConfigureAwait(false);
             await db.SaveChangesAsync(ct).ConfigureAwait(false); await tx.CommitAsync(ct).ConfigureAwait(false);
         }
 
