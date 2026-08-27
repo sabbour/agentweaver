@@ -422,8 +422,15 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return BindingWriteResult.Bound;
         }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            return BindingWriteResult.Unavailable;
+        }
+    }
 
-        internal async Task<bool> CompleteCopilotAuthorizationAsync(string state, ProjectCopilotBindingRecord binding, GitHubAuditRecord audit, CancellationToken ct = default)
+    internal async Task<bool> CompleteCopilotAuthorizationAsync(string state, ProjectCopilotBindingRecord binding, GitHubAuditRecord audit, CancellationToken ct = default)
         {
             EnsureSafe(binding); EnsureSafe(audit);
             await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
@@ -441,7 +448,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             catch (DbUpdateException) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); db.ChangeTracker.Clear(); return false; }
         }
 
-        internal async Task CompleteCopilotAuthorizationFailureAsync(string state, GitHubAuditRecord audit, CancellationToken ct = default)
+    internal async Task CompleteCopilotAuthorizationFailureAsync(string state, GitHubAuditRecord audit, CancellationToken ct = default)
         {
             EnsureSafe(audit); await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
             db.GitHubAuditRecords.Add(audit);
@@ -450,7 +457,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             await db.SaveChangesAsync(ct).ConfigureAwait(false); await tx.CommitAsync(ct).ConfigureAwait(false);
         }
 
-        internal async Task<RepoAppCredentialReference?> RevokeCopilotBindingAsync(string projectId, GitHubAuditRecord audit, CancellationToken ct = default)
+    internal async Task<RepoAppCredentialReference?> RevokeCopilotBindingAsync(string projectId, GitHubAuditRecord audit, CancellationToken ct = default)
         {
             EnsureSafe(audit); await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
             var binding = await db.ProjectCopilotBindings.Where(x => x.ProjectId == projectId && x.Status == GitHubBindingStatus.Active)
@@ -463,13 +470,6 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, AutomationActivationStatus.Invalidated).SetProperty(x => x.InvalidatedAt, now), ct).ConfigureAwait(false);
             await db.SaveChangesAsync(ct).ConfigureAwait(false); await tx.CommitAsync(ct).ConfigureAwait(false); return binding;
         }
-        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
-        {
-            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-            db.ChangeTracker.Clear();
-            return BindingWriteResult.Unavailable;
-        }
-    }
 
     public async Task<InvocationClaimResult> ClaimInvocationAsync(
         AutomationInvocationRecord invocation,
