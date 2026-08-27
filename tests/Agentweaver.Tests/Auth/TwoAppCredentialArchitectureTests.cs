@@ -8,10 +8,10 @@ public sealed class TwoAppCredentialArchitectureTests
 {
     private static readonly string[] AllowedReservedCredentialOwners =
     [
-        "Auth\\ProjectCopilotBindingService.cs",
-        "Auth\\RepoAppUserAuthorizationService.cs",
-        "Auth\\TwoAppCredentialVault.cs",
-        "Webhooks\\RepoAppInstallationService.cs",
+        "Auth/ProjectCopilotBindingService.cs",
+        "Auth/RepoAppUserAuthorizationService.cs",
+        "Auth/TwoAppCredentialVault.cs",
+        "Webhooks/RepoAppInstallationService.cs",
     ];
 
     [Fact]
@@ -25,7 +25,7 @@ public sealed class TwoAppCredentialArchitectureTests
         var apiRoot = Path.Combine(FindRepositoryRoot(), "apps", "Agentweaver.Api");
         var owners = Directory.EnumerateFiles(apiRoot, "*.cs", SearchOption.AllDirectories)
             .Where(path => ContainsReservedCredentialPrefix(File.ReadAllText(path)))
-            .Select(path => Path.GetRelativePath(apiRoot, path))
+            .Select(path => Path.GetRelativePath(apiRoot, path).Replace('\\', '/'))
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
 
