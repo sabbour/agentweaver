@@ -88,6 +88,33 @@ App-level receiver implemented by the API; do not configure per-project webhook 
 Project App grants are pinned with the GitHub numeric installation and repository IDs.
 Repository names are display-only and are never authorization inputs.
 
+#### Project Copilot App binding
+
+An Entra-authenticated **explicit Project Owner** starts a project-specific Copilot App
+binding with `POST /api/projects/{id}/github/copilot/authorizations`. The callback is
+`GET /auth/github/copilot-app/callback`; it is pinned to the project and rechecks the
+same Owner assignment before completing. Poll
+`GET /api/projects/{id}/github/copilot/authorizations/{transactionId}` only exposes
+`pending`, `completed`, `failed`, or `expired` to the initiating Entra subject. A
+human Project Owner or human Platform Admin can disconnect with
+`DELETE /api/projects/{id}/github/copilot/binding`.
+
+The Copilot App has no repository permissions, installation, PEM, or repository
+operations. Its client ID, client secret, and optional Key Vault secret path must differ
+from the Repo App's values. Registration validation rejects a Copilot private key or
+repository permission, a shared App credential, or a Repo App configured to request user
+authorization during installation.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Auth:CopilotApp:ClientId` | none | Copilot GitHub App OAuth client ID; must differ from `Auth:RepoApp:ClientId` |
+| `Auth:CopilotApp:ClientSecret` | none | Copilot App OAuth client secret; store in user-secrets or Key Vault |
+| `Auth:CopilotApp:CallbackUrl` | none | Exact callback URL ending in `/auth/github/copilot-app/callback` |
+| `Auth:CopilotApp:BaseUrl` | `https://github.com` | GitHub authorization origin |
+| `Auth:CopilotApp:Scopes` | `read:user` | Explicit non-repository user-authorization scopes |
+| `Auth:CopilotApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for the fixed callback route |
+| `Auth:CopilotApp:SecretPath` | none | Optional Key Vault path; must not equal the Repo App secret path |
+
 When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
 GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)
 uses the Microsoft identity platform v2.0 authorization-code-with-PKCE flow. Agentweaver

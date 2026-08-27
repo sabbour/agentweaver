@@ -33,6 +33,126 @@ public static class ProjectEndpoints
 {
     public static void MapProjectEndpoints(this WebApplication app)
     {
+// POST /api/projects/{id}/github/copilot/authorizations — begin a project-pinned Copilot App bind.
+app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    if (await projectStore.GetAsync(projectId, ct).ConfigureAwait(false) is null)
+        return Results.NotFound();
+
+    var service = new ProjectCopilotBindingService(
+        httpContext.RequestServices.GetRequiredService<IConfiguration>(),
+        persistence, secretStore, httpClientFactory, roleAssignments);
+    var result = await service.BeginAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+    if (result.Outcome != CopilotBindingOutcome.Success)
+        return CopilotBindingFailure(result.Outcome);
+
+    ProjectCopilotBindingService.SetCallbackCookie(httpContext, result.CallbackCookie!);
+    return Results.Ok(new
+    {
+        authorization_url = result.AuthorizationUrl,
+        transaction_id = result.TransactionId,
+        expires_at = result.ExpiresAt,
+    });
+})
+    .WithName("BeginProjectCopilotAuthorization")
+    .WithTags("Projects", "GitHub Copilot")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description = "Begins an Owner-authorized, project-pinned Copilot App binding. The request has no caller-selected redirect URL.";
+        return Task.CompletedTask;
+    });
+
+// This callback uses only the one-time cookie issued at the authenticated begin endpoint. It never
+// accepts a project id or Entra subject from GitHub; both remain pinned in the transaction.
+app.MapGet("/auth/github/copilot-app/callback", async (
+    HttpContext httpContext,
+    string? code,
+    string? state,
+    string? error,
+    IConfiguration configuration,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CancellationToken ct) =>
+{
+    var service = new ProjectCopilotBindingService(
+        configuration, persistence, secretStore, httpClientFactory, roleAssignments);
+    var cookie = ProjectCopilotBindingService.ReadCallbackCookie(httpContext);
+    ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
+    var outcome = await service.CompleteBrowserCallbackAsync(
+        state, string.IsNullOrWhiteSpace(error) ? code : null, cookie, ct).ConfigureAwait(false);
+    return Results.Redirect(service.GetCallbackRedirect(outcome));
+}).AllowAnonymous();
+
+// GET /api/projects/{id}/github/copilot/authorizations/{transactionId} — initiating-human-only poll.
+app.MapGet("/api/projects/{id}/github/copilot/authorizations/{transactionId}", async (
+    HttpContext httpContext,
+    string id,
+    string transactionId,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    var service = new ProjectCopilotBindingService(
+        httpContext.RequestServices.GetRequiredService<IConfiguration>(),
+        persistence, secretStore, httpClientFactory, roleAssignments);
+    var result = await service.PollAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, transactionId, ct).ConfigureAwait(false);
+    return result.Outcome == CopilotBindingOutcome.Success
+        ? Results.Ok(new { status = result.Status })
+        : CopilotBindingFailure(result.Outcome);
+})
+    .WithName("PollProjectCopilotAuthorization")
+    .WithTags("Projects", "GitHub Copilot");
+
+// DELETE /api/projects/{id}/github/copilot/binding — Owner or human platform-admin de-privileging path.
+app.MapDelete("/api/projects/{id}/github/copilot/binding", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    if (await projectStore.GetAsync(projectId, ct).ConfigureAwait(false) is null)
+        return Results.NotFound();
+    var service = new ProjectCopilotBindingService(
+        httpContext.RequestServices.GetRequiredService<IConfiguration>(),
+        persistence, secretStore, httpClientFactory, roleAssignments);
+    var outcome = await service.DisconnectAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+    return outcome == CopilotBindingOutcome.Success
+        ? Results.NoContent()
+        : CopilotBindingFailure(outcome);
+})
+    .WithName("DisconnectProjectCopilotBinding")
+    .WithTags("Projects", "GitHub Copilot")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description = "Revokes the active project Copilot binding. A human project Owner or human platform administrator may disconnect it.";
+        return Task.CompletedTask;
+    });
+
 // POST /api/projects — create blank or from GitHub
 app.MapPost("/api/projects", CreateProjectAsync)
     .WithName("CreateProject")
@@ -993,4 +1113,12 @@ private static ProjectRoleAssignmentResponse MapProjectRoleAssignment(ProjectRol
 
 private static bool IsAllowedModelId(string? modelId) =>
     string.IsNullOrWhiteSpace(modelId) || AllowedModelRegex.IsMatch(modelId.Trim());
+
+private static IResult CopilotBindingFailure(CopilotBindingOutcome outcome)
+{
+    var statusCode = outcome is CopilotBindingOutcome.HumanEntraSubjectRequired or CopilotBindingOutcome.ProjectOwnerRequired
+        ? StatusCodes.Status403Forbidden
+        : StatusCodes.Status409Conflict;
+    return Results.Json(new { error = ProjectCopilotBindingService.ToStateCode(outcome) }, statusCode: statusCode);
+}
 }
