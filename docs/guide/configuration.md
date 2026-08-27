@@ -85,8 +85,14 @@ App-level receiver implemented by the API; do not configure per-project webhook 
 | `Auth:RepoApp:WebhookVerificationTimeoutSeconds` | `5` | Body-read and signature-verification timeout (maximum `10`) |
 | `Auth:RepoApp:ApiUrl` | `https://api.github.com` | GitHub API origin for App installation-token minting |
 
-Project App grants are pinned with the GitHub numeric installation and repository IDs.
-Repository names are display-only and are never authorization inputs.
+Project App grants are pinned with the GitHub numeric installation and repository IDs. The
+configuration request accepts only those identifiers: the API resolves the matching
+installation's permission map and repository full name from GitHub. Repository names remain
+display-only and are never authorization inputs. A provider permission expansion or reduction
+invalidates the affected unattended grant and activation; reconfigure and explicitly reactivate
+after GitHub permissions are corrected.
+Installation tokens are scoped to Agentweaver's server-declared unattended repository
+permissions and never inherit unrelated installation permissions.
 
 #### Project Copilot App binding
 

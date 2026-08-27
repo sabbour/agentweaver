@@ -222,6 +222,26 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Fact]
+    public async Task PutRepoAppInstallation_RejectsCallerDeclaredPermissionScope()
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/github/repo-app-installation",
+            new
+            {
+                installationId = 72,
+                repositoryId = 99,
+                permissions = new { contents = "write" },
+                fullNameDisplay = "forged/repository",
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("Caller-provided authorization scope is not allowed.");
+    }
+
     // =========================================================================
     // PE-07: DELETE /api/projects/{id}?confirm=true returns 204
     // =========================================================================
