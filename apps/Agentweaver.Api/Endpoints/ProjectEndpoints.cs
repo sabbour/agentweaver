@@ -414,19 +414,22 @@ app.MapPut("/api/projects/{id}/github/repo-app-installation", async (
     var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
     if (project is null) return Results.NotFound();
     if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
+    if (request.RejectedFields is { Count: > 0 })
+        return Results.BadRequest(new { error = "Caller-provided authorization scope is not allowed." });
     if (HumanEntraSubjectAuthorization.Evaluate(ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User)
         != HumanEntraSubjectState.Allowed)
         return Results.Conflict(new { error = "human_entra_subject_required" });
-    if (request.InstallationId <= 0 || request.RepositoryId <= 0 || request.Permissions.Count == 0)
-        return Results.BadRequest(new { error = "Numeric installation, repository, and permissions are required." });
+    if (request.InstallationId <= 0 || request.RepositoryId <= 0)
+        return Results.BadRequest(new { error = "Numeric installation and repository IDs are required." });
 
     var tokenService = new RepoAppInstallationTokenService(configuration, db, secretStore, httpClientFactory);
-    if (!await tokenService.VerifyRepositoryInstallationAsync(request.InstallationId, request.RepositoryId, ct).ConfigureAwait(false))
+    var authority = await tokenService.GetRepositoryAuthorityAsync(
+        request.InstallationId, request.RepositoryId, ct).ConfigureAwait(false);
+    if (authority is null)
         return Results.Conflict(new { error = "github_installation_unavailable" });
     var bound = await new RepoAppInstallationLifecycleService(db).BindAsync(
-        project.Id.ToString(), request.InstallationId, request.RepositoryId,
-        request.FullNameDisplay ?? string.Empty, request.Permissions, ct).ConfigureAwait(false);
-    return bound
+        project.Id.ToString(), authority, ct).ConfigureAwait(false);
+    return bound is RepoAppInstallationBindingOutcome.Bound
         ? Results.NoContent()
         : Results.Conflict(new { error = "github_installation_unavailable" });
 })
@@ -1064,9 +1067,11 @@ private static readonly Regex AllowedModelRegex = new("^(gpt|claude|o)[a-z0-9._-
 
 private sealed record RepoAppInstallationBindingRequest(
     long InstallationId,
-    long RepositoryId,
-    IReadOnlyDictionary<string, string> Permissions,
-    string? FullNameDisplay);
+    long RepositoryId)
+{
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? RejectedFields { get; init; }
+}
 
 private static bool IsProjectOwner(HttpContext httpContext, Agentweaver.Domain.Project project)
 {

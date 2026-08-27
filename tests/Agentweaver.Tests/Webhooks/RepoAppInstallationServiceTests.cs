@@ -22,7 +22,12 @@ public sealed class RepoAppInstallationServiceTests
         var secrets = new InMemorySecretStore();
         using var rsa = RSA.Create(2048);
         await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
-        var permissions = new Dictionary<string, string> { ["contents"] = "read", ["pull_requests"] = "write" };
+        var permissions = new Dictionary<string, string>
+        {
+            ["contents"] = "read",
+            ["pull_requests"] = "write",
+            ["administration"] = "write",
+        };
         db.GitHubInstallations.Add(new GitHubInstallationRecord
         {
             InstallationId = 72, AppKind = GitHubAppKind.Repo, ProjectId = null, CreatedAt = DateTimeOffset.UtcNow,
@@ -33,11 +38,15 @@ public sealed class RepoAppInstallationServiceTests
             PermissionDigest = RepoAppInstallationTokenService.CreatePermissionDigest(permissions), GrantedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
-        var handler = new RecordingHandler("""{"token":"ghs_installation_token_should_not_persist"}""");
+        var handler = new RecordingHandler(
+            """{"id":72,"repository_selection":"selected","account":{"login":"owner"},"permissions":{"contents":"READ","pull_requests":"write","administration":"write"}}""",
+            """{"token":"ghs_metadata_token"}""",
+            """{"id":99,"full_name":"renamed/repository"}""",
+            """{"token":"ghs_installation_token_should_not_persist"}""");
         var service = new RepoAppInstallationTokenService(Config(), db, secrets, new StubHttpClientFactory(handler));
         string? consumed = null;
 
-        var result = await service.MintForRepositoryAsync(72, 99, permissions, (token, _) =>
+        var result = await service.MintForRepositoryAsync(72, 99, (token, _) =>
         {
             consumed = token;
             return Task.CompletedTask;
@@ -51,7 +60,8 @@ public sealed class RepoAppInstallationServiceTests
         appJwt.Alg.Should().Be(SecurityAlgorithms.RsaSha256);
         appJwt.ValidTo.Should().BeCloseTo(DateTime.UtcNow.AddMinutes(9), TimeSpan.FromMinutes(1));
         handler.Body.Should().Contain("\"repository_ids\":[99]")
-            .And.Contain("\"contents\":\"read\"").And.Contain("\"pull_requests\":\"write\"");
+            .And.Contain("\"contents\":\"read\"").And.Contain("\"pull_requests\":\"write\"")
+            .And.NotContain("administration");
         (await db.GitHubInstallations.SingleAsync()).ToString().Should().NotContain("ghs_");
         (await db.GitHubRepositoryGrants.SingleAsync()).PermissionDigest.Should().NotContain("ghs_");
     }
@@ -71,9 +81,7 @@ public sealed class RepoAppInstallationServiceTests
         var handler = new RecordingHandler("""{"token":"ghs_unused"}""");
         var service = new RepoAppInstallationTokenService(Config(), db, new InMemorySecretStore(), new StubHttpClientFactory(handler));
 
-        (await service.MintForRepositoryAsync(8, 10, permissions, (_, _) => Task.CompletedTask))
-            .Should().Be(RepoAppInstallationOutcome.InstallationUnavailable);
-        (await service.MintForRepositoryAsync(8, 9, new Dictionary<string, string> { ["contents"] = "write" }, (_, _) => Task.CompletedTask))
+        (await service.MintForRepositoryAsync(8, 10, (_, _) => Task.CompletedTask))
             .Should().Be(RepoAppInstallationOutcome.InstallationUnavailable);
         handler.RequestCount.Should().Be(0);
     }
@@ -142,7 +150,11 @@ public sealed class RepoAppInstallationServiceTests
         using var rsa = RSA.Create(2048);
         await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
         var service = new RepoAppInstallationTokenService(
-            Config(), db, secrets, new StubHttpClientFactory(new RecordingHandler("""{"id":72}""")));
+            Config(), db, secrets, new StubHttpClientFactory(new RecordingHandler(
+                """{"id":72,"repository_selection":"selected","account":{"login":"owner"},"permissions":{"contents":"read"}}""",
+                """{"token":"ghs_metadata_token"}""",
+                """{"id":99,"full_name":"owner/repository"}""",
+                """{"id":72,"repository_selection":"selected","account":{"login":"owner"},"permissions":{"contents":"read"}}""")));
 
         (await service.VerifyRepositoryInstallationAsync(72, 99)).Should().BeTrue();
         (await service.VerifyRepositoryInstallationAsync(73, 99)).Should().BeFalse();
@@ -152,12 +164,89 @@ public sealed class RepoAppInstallationServiceTests
     public async Task Bind_RejectsCrossProjectReplacement()
     {
         await using var db = await OpenDbAsync();
-        var permissions = new Dictionary<string, string> { ["contents"] = "read" };
         var lifecycle = new RepoAppInstallationLifecycleService(db);
 
-        (await lifecycle.BindAsync("project-id", 7, 8, "owner/repo", permissions)).Should().BeTrue();
-        (await lifecycle.BindAsync("project-a", 7, 8, "other/repo", permissions)).Should().BeFalse();
+        var authority = new RepoAppInstallationAuthority(
+            7, 8, "owner/repo", new Dictionary<string, string> { ["contents"] = "read" });
+        (await lifecycle.BindAsync("project-id", authority)).Should().Be(RepoAppInstallationBindingOutcome.Bound);
+        (await lifecycle.BindAsync("project-a", authority)).Should().Be(RepoAppInstallationBindingOutcome.Conflict);
         (await db.GitHubRepositoryGrants.SingleAsync()).ProjectId.Should().Be("project-id");
+    }
+
+    [Fact]
+    public async Task Authority_IsProviderDerivedAndRequiresTheCanonicalNumericRepository()
+    {
+        await using var db = await OpenDbAsync();
+        var secrets = new InMemorySecretStore();
+        using var rsa = RSA.Create(2048);
+        await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
+        var service = new RepoAppInstallationTokenService(
+            Config(), db, secrets, new StubHttpClientFactory(new RecordingHandler(
+                """{"id":72,"repository_selection":"selected","account":{"login":"owner"},"permissions":{"CONTENTS":" READ ","pull_requests":"WRITE"}}""",
+                """{"token":"ghs_metadata_token"}""",
+                """{"id":99,"full_name":"provider/repository"}""")));
+
+        var authority = await service.GetRepositoryAuthorityAsync(72, 99);
+
+        authority.Should().NotBeNull();
+        authority!.InstallationId.Should().Be(72);
+        authority.RepositoryId.Should().Be(99);
+        authority.FullNameDisplay.Should().Be("provider/repository");
+        authority.Permissions.Should().Equal(new Dictionary<string, string>
+        {
+            ["contents"] = "read",
+            ["pull_requests"] = "write",
+        });
+    }
+
+    [Fact]
+    public async Task Authority_RejectsProviderRepositoryWithDifferentNumericIdentity()
+    {
+        await using var db = await OpenDbAsync();
+        var secrets = new InMemorySecretStore();
+        using var rsa = RSA.Create(2048);
+        await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
+        var service = new RepoAppInstallationTokenService(
+            Config(), db, secrets, new StubHttpClientFactory(new RecordingHandler(
+                """{"id":72,"repository_selection":"selected","account":{"login":"owner"},"permissions":{"contents":"read"}}""",
+                """{"token":"ghs_metadata_token"}""",
+                """{"id":100,"full_name":"provider/repository"}""")));
+
+        (await service.GetRepositoryAuthorityAsync(72, 99)).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("read", "write")]
+    [InlineData("write", "read")]
+    public async Task Bind_InvalidatesUnattendedReadinessForAnyProviderPermissionChange(
+        string priorPermission,
+        string currentPermission)
+    {
+        await using var db = await OpenDbAsync();
+        var lifecycle = new RepoAppInstallationLifecycleService(db);
+        var prior = new RepoAppInstallationAuthority(
+            72, 99, "provider/repository", new Dictionary<string, string> { ["contents"] = priorPermission });
+        (await lifecycle.BindAsync("project-id", prior)).Should().Be(RepoAppInstallationBindingOutcome.Bound);
+        db.AutomationActivations.Add(new AutomationActivationRecord
+        {
+            Id = Guid.NewGuid().ToString("N"), ProjectId = "project-id", InstallationId = 72, RepositoryId = 99,
+            AutomationKey = "nightly", Status = AutomationActivationStatus.Active, ActivatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var current = prior with
+        {
+            Permissions = new Dictionary<string, string> { ["contents"] = currentPermission },
+        };
+        (await lifecycle.BindAsync("project-id", current)).Should().Be(RepoAppInstallationBindingOutcome.PermissionChanged);
+
+        db.ChangeTracker.Clear();
+        var grant = await db.GitHubRepositoryGrants.SingleAsync();
+        grant.RevokedAt.Should().NotBeNull();
+        grant.PermissionDigest.Should().Be(RepoAppInstallationTokenService.CreatePermissionDigest(current.Permissions));
+        var activation = await db.AutomationActivations.SingleAsync();
+        activation.Status.Should().Be(AutomationActivationStatus.Invalidated);
+        activation.InvalidatedAt.Should().NotBeNull();
     }
 
     [Fact]
@@ -214,8 +303,9 @@ public sealed class RepoAppInstallationServiceTests
         public HttpClient CreateClient(string name) => new(handler);
     }
 
-    private sealed class RecordingHandler(string payload) : HttpMessageHandler
+    private sealed class RecordingHandler(params string[] payloads) : HttpMessageHandler
     {
+        private readonly Queue<string> _payloads = new(payloads);
         public int RequestCount { get; private set; }
         public string? Authorization { get; private set; }
         public string? Body { get; private set; }
@@ -225,7 +315,10 @@ public sealed class RepoAppInstallationServiceTests
             RequestCount++;
             Authorization = request.Headers.Authorization?.ToString();
             Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
-            return new HttpResponseMessage(HttpStatusCode.Created) { Content = new StringContent(payload, Encoding.UTF8, "application/json") };
+            return new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new StringContent(_payloads.Dequeue(), Encoding.UTF8, "application/json"),
+            };
         }
     }
 }
