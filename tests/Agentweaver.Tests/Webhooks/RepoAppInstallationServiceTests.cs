@@ -160,6 +160,23 @@ public sealed class RepoAppInstallationServiceTests
         (await db.GitHubRepositoryGrants.SingleAsync()).ProjectId.Should().Be("project-id");
     }
 
+    [Fact]
+    public async Task Lifecycle_ReclaimsAnAbandonedDeliveryLease()
+    {
+        await using var db = await OpenDbAsync();
+        db.GitHubLifecycleDeliveries.Add(new GitHubLifecycleDeliveryRecord
+        {
+            DeliveryId = "abandoned", EventName = "push", ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-11),
+        });
+        await db.SaveChangesAsync();
+
+        var result = await new RepoAppInstallationLifecycleService(db).ProcessAsync(
+            "abandoned", "push", new GitHubWebhookPayload());
+
+        result.Claimed.Should().BeTrue();
+        (await db.GitHubLifecycleDeliveries.SingleAsync()).ReceivedAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1));
+    }
+
     private static IConfiguration Config() => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
     {
         ["Auth:RepoApp:AppId"] = "123",
