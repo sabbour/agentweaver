@@ -47,6 +47,41 @@ public sealed class TwoAppCredentialArchitectureTests
             .Should().NotContain("IGitHubTokenScopeProvider").And.NotContain(".Resolve");
     }
 
+    [Theory]
+    [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.RepositoryRead, true)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.CopilotInference, false)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveCopilot, GitHubCapabilityOperation.RepositoryWrite, false)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveCopilot, GitHubCapabilityOperation.CopilotInference, true)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedRepository, GitHubCapabilityOperation.CopilotInference, false)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedCopilot, GitHubCapabilityOperation.RepositoryRead, false)]
+    public void PurposeToOperationMapping_IsClosed(
+        GitHubCapabilityPurpose purpose,
+        GitHubCapabilityOperation operation,
+        bool expected) =>
+        GitHubCapabilityBroker.IsOperationAllowed(purpose, operation).Should().Be(expected);
+
+    [Fact]
+    public void BrowseAuthority_HasNoHttpMcpOrSandboxSurface()
+    {
+        var root = FindRepositoryRoot();
+        var callers = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") &&
+                           !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+            .Where(path => File.ReadAllText(path).Contains("GitHubRepositoryBrowseAuthority", StringComparison.Ordinal))
+            .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        callers.Should().BeEquivalentTo(
+        [
+            "apps/Agentweaver.Api/Auth/GitHubRepositoryBrowseAuthority.cs",
+            "apps/Agentweaver.Api/Auth/TwoAppPersistenceStore.cs",
+            "apps/Agentweaver.Api/Program.cs",
+            "tests/Agentweaver.Tests/Auth/TwoAppCredentialArchitectureTests.cs",
+        ]);
+        GitHubRepositoryBrowseAuthority.Lifetime.Should().Be(TimeSpan.FromMinutes(5));
+    }
+
     private static bool ContainsReservedCredentialPrefix(string source) =>
         source.Contains("repo-app-user-credential", StringComparison.Ordinal) ||
         source.Contains("copilot-app-project", StringComparison.Ordinal) ||

@@ -1,8 +1,10 @@
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Webhooks;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using System.Text.Json;
 
 namespace Agentweaver.Tests.Auth;
@@ -332,7 +334,7 @@ public sealed class TwoAppPersistenceStoreTests
     }
 
     [Fact]
-    public async Task InteractiveRepositorySnapshotFence_FailsWhenCanonicalRepositoryScopeIsRevoked()
+    public async Task InteractiveRepositorySnapshotFence_DoesNotRequireAnInstallationOrRepositoryGrant()
     {
         await using var connection = await OpenDatabaseAsync();
         var options = Options(connection);
@@ -344,12 +346,10 @@ public sealed class TwoAppPersistenceStoreTests
         var reference = new SnapshotRef(snapshot.SnapshotRef);
 
         (await store.TryFenceLiveSnapshotAsync(snapshot.Purpose, reference, DateTimeOffset.UtcNow)).Should().NotBeNull();
-        var revokedAt = DateTimeOffset.UtcNow;
-        await db.GitHubRepositoryGrants
-        .Where(x => x.InstallationId == 101 && x.RepositoryId == 202)
-        .ExecuteUpdateAsync(x => x.SetProperty(y => y.RevokedAt, revokedAt));
+        await db.GitHubRepositoryGrants.ExecuteDeleteAsync();
+        await db.GitHubInstallations.ExecuteDeleteAsync();
 
-        (await store.TryFenceLiveSnapshotAsync(snapshot.Purpose, reference, DateTimeOffset.UtcNow)).Should().BeNull();
+        (await store.TryFenceLiveSnapshotAsync(snapshot.Purpose, reference, DateTimeOffset.UtcNow)).Should().NotBeNull();
     }
 
     [Fact]
@@ -403,6 +403,111 @@ public sealed class TwoAppPersistenceStoreTests
     {
         Enum.GetNames<GitHubAuditActorKind>().Should().BeEquivalentTo(
             [nameof(GitHubAuditActorKind.HumanEntraSubject), nameof(GitHubAuditActorKind.GitHubWebhook)]);
+    }
+
+    [Fact]
+    public async Task BrowseAuthority_IsSubjectBoundFiveMinuteAndSelectionIsSingleUse()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        await SeedCapabilitySourcesAsync(db);
+        var store = new TwoAppPersistenceStore(db);
+        var now = DateTimeOffset.UtcNow;
+
+        var authority = await store.TryCreateBrowseAuthorityAsync("entra", "authorization", now);
+        authority.Should().NotBeNull();
+        authority!.AuthorityRef.Value.Should().HaveLength(43);
+        authority.ExpiresAt.Should().Be(now.AddMinutes(5));
+
+        var selection = await store.TryCreateBrowseSelectionAsync(
+            authority.AuthorityRef, "entra", new ServerDerivedBrowseSelection(202, "owner/repository"), now);
+        selection.Should().NotBeNull();
+        (await store.ConsumeBrowseSelectionAsync(authority.AuthorityRef, selection!, "other-subject", now))
+            .Should().BeNull();
+        (await store.ConsumeBrowseSelectionAsync(authority.AuthorityRef, selection!, "entra", now))
+            .Should().Be(new ConsumedBrowseSelection(202, "owner/repository"));
+        (await store.ConsumeBrowseSelectionAsync(authority.AuthorityRef, selection!, "entra", now))
+            .Should().BeNull();
+
+        var expired = await store.TryCreateBrowseAuthorityAsync("entra", "authorization", now);
+        expired.Should().NotBeNull();
+        (await store.TryCreateBrowseSelectionAsync(
+            expired!.AuthorityRef, "entra", new ServerDerivedBrowseSelection(203, "owner/other"), now.AddMinutes(5)))
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BrowseSelectionConsume_AtomicallyAllowsExactlyOneConcurrentWinner()
+    {
+        var connectionString = "Data Source=file:github-browse-selection-race?mode=memory&cache=shared";
+        await using var anchor = new SqliteConnection(connectionString);
+        await anchor.OpenAsync();
+        var options = new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(connectionString).Options;
+        BrowseAuthorityRef authorityRef;
+        BrowseSelectionRef selectionRef;
+        var now = DateTimeOffset.UtcNow;
+        await using (var setup = new MemoryDbContext(options))
+        {
+            await setup.Database.EnsureCreatedAsync();
+            setup.Projects.Add(Project("project"));
+            await SeedCapabilitySourcesAsync(setup);
+            await setup.SaveChangesAsync();
+            var store = new TwoAppPersistenceStore(setup);
+            authorityRef = (await store.TryCreateBrowseAuthorityAsync("entra", "authorization", now))!.AuthorityRef;
+            selectionRef = (await store.TryCreateBrowseSelectionAsync(
+                authorityRef, "entra", new ServerDerivedBrowseSelection(202, "owner/repository"), now))!;
+        }
+
+        await using var first = new MemoryDbContext(options);
+        await using var second = new MemoryDbContext(options);
+        var results = await Task.WhenAll(
+            new TwoAppPersistenceStore(first).ConsumeBrowseSelectionAsync(authorityRef, selectionRef, "entra", now),
+            new TwoAppPersistenceStore(second).ConsumeBrowseSelectionAsync(authorityRef, selectionRef, "entra", now));
+
+        results.Count(result => result is not null).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Broker_UsesOnlyFencedSnapshotAndReturnsNoCredentialMaterial()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        await SeedCapabilitySourcesAsync(db);
+        var persistence = new TwoAppPersistenceStore(db);
+        var snapshot = CapabilitySnapshot(GitHubCapabilityPurpose.InteractiveRepository);
+        (await persistence.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
+        var secrets = new InMemorySecretStore();
+        var vault = new TwoAppCredentialVault(secrets);
+        var token = "g" + "hu_broker_test";
+        await vault.WriteAsync(
+            TwoAppCredentialLocator.ForRepoAppUser("repo-app-user-credential-version"),
+            $"{{\"status\":\"signed-in\",\"accessToken\":\"{token}\"}}");
+        var tokenService = new RepoAppInstallationTokenService(
+            new ConfigurationBuilder().AddInMemoryCollection().Build(),
+            db,
+            secrets,
+            new NullHttpClientFactory());
+        var broker = new GitHubCapabilityBroker(persistence, vault, tokenService);
+        var now = DateTimeOffset.UtcNow;
+
+        var result = await broker.TryAuthorizeAsync(
+            snapshot.Purpose,
+            new SnapshotRef(snapshot.SnapshotRef),
+            GitHubCapabilityOperation.RepositoryRead,
+            now,
+            CancellationToken.None);
+
+        result.Outcome.Should().Be(GitHubCapabilityBrokerOutcome.Issued);
+        result.Grant!.ExpiresAt.Should().Be(now.Add(GitHubCapabilityBroker.MaximumCapabilityLifetime));
+        JsonSerializer.Serialize(result.Grant).Should().NotContain(token);
+        (await broker.TryAuthorizeAsync(
+            snapshot.Purpose,
+            new SnapshotRef(snapshot.SnapshotRef),
+            GitHubCapabilityOperation.CopilotInference,
+            now,
+            CancellationToken.None)).Outcome.Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
     }
 
     private static async Task<SqliteConnection> OpenDatabaseAsync()
@@ -542,4 +647,9 @@ public sealed class TwoAppPersistenceStoreTests
             },
             _ => throw new ArgumentOutOfRangeException(nameof(purpose)),
         };
+
+    private sealed class NullHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new HttpClientHandler());
+    }
 }

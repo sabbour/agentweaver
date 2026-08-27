@@ -4,14 +4,15 @@ public enum GitHubAppKind { Repo, Copilot }
 public enum GitHubAuthorizationPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot }
 public enum GitHubCapabilityPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot }
 public enum GitHubCapabilitySnapshotSourceKind { UserAuthorization, RepositoryGrant, CopilotBinding }
+public enum GitHubBrowseSelectionStatus { Available, Consumed }
 public enum GitHubAuthorizationStatus { Pending, Redeeming, Completed, Failed, Expired }
 public enum GitHubBindingStatus { Active, Inactive, Revoked }
 public enum AutomationActivationStatus { Active, Inactive, Invalidated }
 public enum AutomationInvocationOutcome { Claimed, Duplicate, Completed, Failed }
 public enum GitHubAuditActorKind { HumanEntraSubject, GitHubWebhook }
-public enum GitHubAuditAction { AuthorizationCompleted, BindingChanged, InstallationChanged, GrantChanged, AutomationActivated, AutomationInvoked, RunSnapshotValidated, CapabilitySnapshotMigrated }
+public enum GitHubAuditAction { AuthorizationCompleted, BindingChanged, InstallationChanged, GrantChanged, AutomationActivated, AutomationInvoked, RunSnapshotValidated, CapabilitySnapshotMigrated, BrowseAuthorityCreated, BrowseSelectionRecorded, BrowseSelectionConsumed }
 public enum GitHubAuditOutcome { Succeeded, Denied, Failed }
-public enum GitHubAuditReasonCode { None, BindingUnavailable, InstallationUnavailable, TransactionInvalid, TransactionConsumed, RotationMismatch, DuplicateDelivery, SnapshotMigrationUnavailable }
+public enum GitHubAuditReasonCode { None, BindingUnavailable, InstallationUnavailable, TransactionInvalid, TransactionConsumed, RotationMismatch, DuplicateDelivery, SnapshotMigrationUnavailable, BrowseAuthorityUnavailable, BrowseSelectionUnavailable }
 
 public sealed class GitHubAuthorizationRecord
 {
@@ -172,6 +173,37 @@ public sealed class RunGitHubCapabilitySnapshotRecord
     public string GrantDigest { get; set; } = "";
     public DateTimeOffset CapturedAt { get; set; }
     public DateTimeOffset? SnapshotExpiresAt { get; set; }
+}
+
+/// <summary>
+/// A five-minute, subject-bound authority to browse repositories before a run exists. It is
+/// deliberately independent of projects, repositories, installations, runs, and snapshots.
+/// </summary>
+public sealed class GitHubInteractiveBrowseAuthorityRecord
+{
+    public string AuthorityRef { get; set; } = "";
+    public string EntraObjectId { get; set; } = "";
+    public string SourceAuthorizationId { get; set; } = "";
+    public string CredentialReference { get; set; } = "";
+    public string CredentialVersion { get; set; } = "";
+    public string GrantDigest { get; set; } = "";
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+}
+
+/// <summary>
+/// A server-derived repository choice. The opaque reference can be consumed once to authorize
+/// exactly one project-creation clone without exposing a GitHub credential.
+/// </summary>
+public sealed class GitHubBrowseSelectionRecord
+{
+    public string SelectionRef { get; set; } = "";
+    public string AuthorityRef { get; set; } = "";
+    public long RepositoryId { get; set; }
+    public string FullNameDisplay { get; set; } = "";
+    public GitHubBrowseSelectionStatus Status { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? ConsumedAt { get; set; }
 }
 
 public sealed class GitHubAuditRecord

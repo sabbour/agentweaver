@@ -43,6 +43,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
     public DbSet<RunGitHubIdentitySnapshotRecord> RunGitHubIdentitySnapshots => Set<RunGitHubIdentitySnapshotRecord>();
     public DbSet<RunGitHubCapabilitySnapshotRecord> RunGitHubCapabilitySnapshots => Set<RunGitHubCapabilitySnapshotRecord>();
+    public DbSet<GitHubInteractiveBrowseAuthorityRecord> GitHubInteractiveBrowseAuthorities => Set<GitHubInteractiveBrowseAuthorityRecord>();
+    public DbSet<GitHubBrowseSelectionRecord> GitHubBrowseSelections => Set<GitHubBrowseSelectionRecord>();
     public DbSet<GitHubAuditRecord> GitHubAuditRecords => Set<GitHubAuditRecord>();
 
     // Replica-safe per-pod / per-run singleton state moved out of process memory.
@@ -758,6 +760,38 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasIndex(x => new { x.RunId, x.Purpose }).IsUnique()
                 .HasDatabaseName("UX_run_github_capability_snapshots_run_purpose");
             ConfigureProjectForeignKey(e, "FK_run_github_capability_snapshots_projects_project_id");
+        });
+
+        model.Entity<GitHubInteractiveBrowseAuthorityRecord>(e =>
+        {
+            e.ToTable("github_interactive_browse_authorities").HasKey(x => x.AuthorityRef);
+            e.Property(x => x.AuthorityRef).HasColumnName("authority_ref");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.SourceAuthorizationId).HasColumnName("source_authorization_id");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+            e.HasIndex(x => x.ExpiresAt);
+        });
+
+        model.Entity<GitHubBrowseSelectionRecord>(e =>
+        {
+            e.ToTable("github_browse_selections").HasKey(x => x.SelectionRef);
+            e.Property(x => x.SelectionRef).HasColumnName("selection_ref");
+            e.Property(x => x.AuthorityRef).HasColumnName("authority_ref");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.FullNameDisplay).HasColumnName("full_name_display");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.ConsumedAt).HasColumnName("consumed_at");
+            e.HasIndex(x => x.AuthorityRef).IsUnique()
+                .HasDatabaseName("UX_github_browse_selections_authority_ref");
+            e.HasOne<GitHubInteractiveBrowseAuthorityRecord>().WithMany()
+                .HasForeignKey(x => x.AuthorityRef)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_github_browse_selections_authorities_authority_ref");
         });
 
         model.Entity<GitHubAuditRecord>(e =>
