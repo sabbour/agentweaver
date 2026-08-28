@@ -580,6 +580,59 @@ public sealed class ToolApprovalEndpointTests
     }
 
     [Fact]
+    public async Task PodPerRun_AppliedScopeWithDroppedResponse_IsRolledBackBeforeTransportFailure()
+    {
+        var source = RunId.New();
+        const string requestId = "pod-dropped-scoped-response";
+        var agentHost = new CurrentHostBridgeAgentHostClient(
+            source.ToString(),
+            requestId,
+            CoordinatorWebApplicationFactory.OwnerUser)
+        {
+            DropScopedGrantResponse = true,
+        };
+        using var baseFactory = new CoordinatorWebApplicationFactory();
+        using var factory = baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:AgentExecutionMode"] = "pod-per-run",
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAgentHostApprovalHttpClient>();
+                services.AddSingleton<IAgentHostApprovalHttpClient>(agentHost);
+            });
+        });
+        using var ownerClient = CreateOwnerClient(factory, CoordinatorWebApplicationFactory.OwnerApiKey);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var secretStore = factory.Services.GetRequiredService<ISecretStore>();
+        await InsertRunAsync(
+            runStore,
+            source,
+            RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+        await secretStore.SetSecretAsync(
+            PreviewRunnerCredential.SecretKey(source.ToString()),
+            "pod-approval-credential");
+
+        var response = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{source}/tool-approvals",
+            new { request_id = requestId, scope = "run" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await agentHost.InitialTool.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue(
+            "the pod applied the scoped approval before its response was dropped");
+        agentHost.RollbackCalls.Should().Be(1);
+        agentHost.IsAutoApproved("web_fetch", "https://following.test").Should().BeFalse(
+            "an ambiguous transport outcome must not leave the pod-local scope usable");
+        approvalGate.IsAutoApproved(source.ToString(), "web_fetch", "https://following.test")
+            .Should().BeFalse("no durable scope is persisted without an applied response proof");
+    }
+
+    [Fact]
     public async Task PodPerRun_TerminalizedPodOwnedScope_DoesNotForwardAfterPendingContextLookup()
     {
         var agentHost = new TerminalizingPendingContextAgentHostClient();
@@ -1052,6 +1105,19 @@ public sealed class ToolApprovalEndpointTests
             });
         }
 
+        public Task<AgentHostApprovalOutcome> GrantScopedAsync(
+            string childRunId,
+            string requestId,
+            string scope,
+            string scopeGrantId,
+            DateTimeOffset scopeExpiresAt,
+            string? bearer,
+            CancellationToken ct)
+        {
+            LastScope = scope;
+            return Task.FromResult(outcome with { ScopeGrantId = scopeGrantId });
+        }
+
         public Task<AgentHostApprovalOutcome> RollbackScopeAsync(
             string childRunId,
             string requestId,
@@ -1254,6 +1320,7 @@ public sealed class ToolApprovalEndpointTests
         public string? LastScope { get; private set; }
         public int RollbackCalls { get; private set; }
         public Task<bool> InitialTool { get; }
+        public bool DropScopedGrantResponse { get; set; }
 
         public bool IsAutoApproved(string toolName, string? url) =>
             _gate.IsAutoApproved(_runId, toolName, url);
@@ -1274,24 +1341,52 @@ public sealed class ToolApprovalEndpointTests
                 Url: context?.Url));
         }
 
-        public async Task<AgentHostApprovalOutcome> GrantAsync(
+        public Task<AgentHostApprovalOutcome> GrantAsync(
             string childRunId,
             string requestId,
             string scope,
             string? bearer,
-            CancellationToken ct)
+            CancellationToken ct) =>
+            GrantAsyncCore(scope, scopeGrantId: null, scopeExpiresAt: null);
+
+        public Task<AgentHostApprovalOutcome> GrantScopedAsync(
+            string childRunId,
+            string requestId,
+            string scope,
+            string scopeGrantId,
+            DateTimeOffset scopeExpiresAt,
+            string? bearer,
+            CancellationToken ct) =>
+            GrantAsyncCore(scope, scopeGrantId, scopeExpiresAt);
+
+        private async Task<AgentHostApprovalOutcome> GrantAsyncCore(
+            string scope,
+            string? scopeGrantId,
+            DateTimeOffset? scopeExpiresAt)
         {
             LastScope = scope;
-            var applied = await _gate.GrantAsync(
-                _runId,
-                _requestId,
-                scope switch
-                {
-                    "run" => ApprovalScope.Run,
-                    "always" => ApprovalScope.Always,
-                    "tool" => ApprovalScope.Tool,
-                    _ => ApprovalScope.Once,
-                });
+            var approvalScope = scope switch
+            {
+                "run" => ApprovalScope.Run,
+                "always" => ApprovalScope.Always,
+                "tool" => ApprovalScope.Tool,
+                _ => ApprovalScope.Once,
+            };
+            var applied = scopeGrantId is not null && scopeExpiresAt is not null
+                ? await _gate.GrantProvisionalScopeAsync(
+                    _runId,
+                    _requestId,
+                    approvalScope,
+                    scopeGrantId,
+                    scopeExpiresAt.Value)
+                : await _gate.GrantAsync(_runId, _requestId, approvalScope);
+            if (DropScopedGrantResponse)
+                return new AgentHostApprovalOutcome(
+                    Resolved: false,
+                    State: "unreachable",
+                    Unreachable: true,
+                    StatusCode: null);
+
             return new AgentHostApprovalOutcome(
                 Resolved: _gate.GetRequestState(_runId, _requestId) == ToolApprovalRequestState.Approved,
                 State: "approved",

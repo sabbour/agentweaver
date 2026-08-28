@@ -153,3 +153,24 @@ public interface IToolApprovalScopeRollback
     /// </summary>
     bool FinalizeScopeGrant(string runId, string requestId, string scopeGrantId);
 }
+
+/// <summary>
+/// Extends scope rollback with a lease-bound grant operation for an AgentHost pod.
+/// Until the API finalizes it, the local policy must expire independently so a dropped
+/// response cannot leave a pod-local scope usable indefinitely.
+/// </summary>
+public interface IProvisionalToolApprovalGate : IToolApprovalScopeRollback
+{
+    Task<bool> GrantProvisionalScopeAsync(
+        string runId,
+        string requestId,
+        ApprovalScope scope,
+        string scopeGrantId,
+        DateTimeOffset expiresAt);
+}
+
+/// <summary>Shared lease protocol for locally applied AgentHost approval scopes.</summary>
+public static class ToolApprovalScopeProtocol
+{
+    public static readonly TimeSpan ProvisionalScopeLifetime = TimeSpan.FromSeconds(15);
+}

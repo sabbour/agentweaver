@@ -27,6 +27,28 @@ public sealed class AgentHostApprovalHttpClientTests
     }
 
     [Fact]
+    public async Task GrantScoped_SendsApiCreatedGrantIdAndExpiry()
+    {
+        var handler = new CapturingHandler(
+            """{"resolved":true,"applied":true,"state":"approved","scopeGrantId":"provisional-grant"}""");
+        var client = CreateClient(handler, Origin);
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var result = await client.GrantScopedAsync(
+            "child-run",
+            "request-1",
+            "run",
+            "provisional-grant",
+            expiresAt,
+            "pod-bearer",
+            CancellationToken.None);
+
+        result.ScopeGrantId.Should().Be("provisional-grant");
+        handler.Body.Should().Contain("\"scopeGrantId\":\"provisional-grant\"");
+        handler.Body.Should().Contain("\"scopeExpiresAt\"");
+    }
+
+    [Fact]
     public async Task NullOrigin_ReturnsUnreachable()
     {
         var handler = new CapturingHandler("""{"resolved":true,"state":"approved"}""");

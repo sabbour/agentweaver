@@ -8,7 +8,7 @@ namespace Agentweaver.AgentRuntime;
 /// to suspend the permission handler until the operator grants or denies the request.
 /// The gate is keyed by <c>(runId, requestId)</c>; each requestId may only be resolved once.
 /// </summary>
-public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalScopeRollback
+public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalToolApprovalGate
 {
     // Two-level dictionary: runId → requestId → TCS
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, PendingApproval>> _pending = new();
@@ -100,11 +100,40 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalS
     }
 
     /// <inheritdoc />
+    public Task<bool> GrantProvisionalScopeAsync(
+        string runId,
+        string requestId,
+        ApprovalScope scope,
+        string scopeGrantId,
+        DateTimeOffset expiresAt)
+    {
+        if (scope == ApprovalScope.Once
+            || string.IsNullOrWhiteSpace(scopeGrantId)
+            || expiresAt <= DateTimeOffset.UtcNow)
+        {
+            return Task.FromResult(false);
+        }
+
+        var resolved = Resolve(
+            runId,
+            requestId,
+            result: true,
+            beforeCompletion: () => ApplyScopePolicy(
+                runId,
+                requestId,
+                scope,
+                scopeGrantId,
+                expiresAt));
+        return Task.FromResult(resolved);
+    }
+
+    /// <inheritdoc />
     public bool Deny(string runId, string requestId) => Resolve(runId, requestId, result: false);
 
     /// <inheritdoc />
     public bool IsAutoApproved(string runId, string toolName, string? url)
     {
+        ExpireProvisionalScopeGrants();
         if (string.IsNullOrWhiteSpace(toolName) || OwnerOf(runId) is not { } owner)
             return false;
 
@@ -150,10 +179,13 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalS
         _pending.TryGetValue(runId, out var runPending) && !runPending.IsEmpty;
 
     /// <inheritdoc />
-    public string? GetScopeGrantId(string runId, string requestId) =>
-        _scopeGrants.TryGetValue(new ScopeGrantKey(runId, requestId), out var grant)
+    public string? GetScopeGrantId(string runId, string requestId)
+    {
+        ExpireProvisionalScopeGrants();
+        return _scopeGrants.TryGetValue(new ScopeGrantKey(runId, requestId), out var grant)
             ? grant.Id
             : null;
+    }
 
     /// <inheritdoc />
     public bool RollbackScopeGrant(string runId, string requestId, string scopeGrantId)
@@ -178,6 +210,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalS
     /// <inheritdoc />
     public bool FinalizeScopeGrant(string runId, string requestId, string scopeGrantId)
     {
+        ExpireProvisionalScopeGrants();
         if (string.IsNullOrWhiteSpace(scopeGrantId))
             return false;
 
@@ -239,7 +272,12 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalS
             beforeCompletion);
     }
 
-    private void ApplyScopePolicy(string runId, string requestId, ApprovalScope scope)
+    private void ApplyScopePolicy(
+        string runId,
+        string requestId,
+        ApprovalScope scope,
+        string? provisionalScopeGrantId = null,
+        DateTimeOffset? provisionalExpiresAt = null)
     {
         if (scope == ApprovalScope.Once ||
             !_requestContext.TryGetValue(runId, out var runCtx) ||
@@ -259,22 +297,29 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalS
             string.Equals(parentOwner, owner, StringComparison.Ordinal)
             ? parentId
             : null;
-        var scopeGrant = new ScopeGrant(Guid.NewGuid().ToString("N"), parentRunId);
-        var scopeGrantKey = new ScopeGrantKey(runId, requestId);
-        if (_scopeGrants.TryRemove(scopeGrantKey, out var priorGrant))
-            RemoveScopePolicies(runId, priorGrant);
-        _scopeGrants[scopeGrantKey] = scopeGrant;
+        ScopeGrant? scopeGrant = null;
+        if (!string.IsNullOrWhiteSpace(provisionalScopeGrantId))
+        {
+            scopeGrant = new ScopeGrant(
+                provisionalScopeGrantId,
+                parentRunId,
+                provisionalExpiresAt ?? DateTimeOffset.UtcNow + ToolApprovalScopeProtocol.ProvisionalScopeLifetime);
+            var scopeGrantKey = new ScopeGrantKey(runId, requestId);
+            if (_scopeGrants.TryRemove(scopeGrantKey, out var priorGrant))
+                RemoveScopePolicies(runId, priorGrant);
+            _scopeGrants[scopeGrantKey] = scopeGrant;
+        }
 
         if (scope is ApprovalScope.Run or ApprovalScope.Tool)
         {
-            AddRunPolicy(runId, scopeGrant.Id, policy);
+            AddRunPolicy(runId, scopeGrant?.Id, policy);
             if (parentRunId is not null)
-                AddRunPolicy(parentRunId, scopeGrant.Id, policy);
+                AddRunPolicy(parentRunId, scopeGrant?.Id, policy);
         }
         else if (scope == ApprovalScope.Always &&
                  ToolApprovalPolicySemantics.IsAlwaysEligible(context.ToolName))
         {
-            lock (_alwaysLock) _alwaysAllowedPolicies.Add(new ScopedApprovalPolicy(scopeGrant.Id, policy));
+            lock (_alwaysLock) _alwaysAllowedPolicies.Add(new ScopedApprovalPolicy(scopeGrant?.Id, policy));
         }
     }
 
@@ -292,7 +337,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalS
         runResolved[requestId] = state;
     }
 
-    private void AddRunPolicy(string runId, string scopeGrantId, ApprovalPolicy policy)
+    private void AddRunPolicy(string runId, string? scopeGrantId, ApprovalPolicy policy)
     {
         var allowlist = _runScopedAllowlist.GetOrAdd(runId, _ => []);
         lock (allowlist) allowlist.Add(new ScopedApprovalPolicy(scopeGrantId, policy));
@@ -326,6 +371,21 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalS
             RemoveRunPolicies(grant.ParentRunId, grant.Id);
         lock (_alwaysLock)
             _alwaysAllowedPolicies.RemoveWhere(policy => policy.ScopeGrantId == grant.Id);
+    }
+
+    private void ExpireProvisionalScopeGrants()
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var pair in _scopeGrants)
+        {
+            if (pair.Value.ExpiresAt > now
+                || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)_scopeGrants).Remove(pair))
+            {
+                continue;
+            }
+
+            RemoveScopePolicies(pair.Key.RunId, pair.Value);
+        }
     }
 
     private string? OwnerOf(string runId)
@@ -392,7 +452,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalS
     }
 
     private sealed record ApprovalPolicy(string Owner, string ToolId, string RiskSemantics);
-    private sealed record ScopedApprovalPolicy(string ScopeGrantId, ApprovalPolicy Policy);
-    private sealed record ScopeGrant(string Id, string? ParentRunId);
+    private sealed record ScopedApprovalPolicy(string? ScopeGrantId, ApprovalPolicy Policy);
+    private sealed record ScopeGrant(string Id, string? ParentRunId, DateTimeOffset ExpiresAt);
     private sealed record ScopeGrantKey(string RunId, string RequestId);
 }

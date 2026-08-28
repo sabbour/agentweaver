@@ -183,12 +183,26 @@ public sealed class AgentHostToolApprovalEndpointTests
 
         var firstGrant = await ToolApprovalEndpointHandlers.GrantAsync(
             Context("pod-credential"),
-            new AgentHostToolApprovalRequest { RunId = "run-1", RequestId = "req-first", Scope = "run" },
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = "req-first",
+                Scope = "run",
+                ScopeGrantId = "scope-first",
+                ScopeExpiresAt = DateTimeOffset.UtcNow.AddMinutes(1),
+            },
             gate,
             state);
         var secondGrant = await ToolApprovalEndpointHandlers.GrantAsync(
             Context("pod-credential"),
-            new AgentHostToolApprovalRequest { RunId = "run-1", RequestId = "req-second", Scope = "run" },
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = "req-second",
+                Scope = "run",
+                ScopeGrantId = "scope-second",
+                ScopeExpiresAt = DateTimeOffset.UtcNow.AddMinutes(1),
+            },
             gate,
             state);
         (await first).Should().BeTrue();
@@ -196,8 +210,8 @@ public sealed class AgentHostToolApprovalEndpointTests
 
         var firstScopeGrantId = Json(firstGrant).GetProperty("scopeGrantId").GetString();
         var secondScopeGrantId = Json(secondGrant).GetProperty("scopeGrantId").GetString();
-        firstScopeGrantId.Should().NotBeNullOrWhiteSpace();
-        secondScopeGrantId.Should().NotBeNullOrWhiteSpace();
+        firstScopeGrantId.Should().Be("scope-first");
+        secondScopeGrantId.Should().Be("scope-second");
         gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeTrue();
 
         var rollback = await ToolApprovalEndpointHandlers.RollbackScopeAsync(
@@ -228,6 +242,39 @@ public sealed class AgentHostToolApprovalEndpointTests
 
         Status(secondRollback).Should().Be(StatusCodes.Status200OK);
         gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ProvisionalScopedGrant_ExpiresWithoutApiFinalization()
+    {
+        var state = ConfiguredState();
+        var gate = new AgentHostDurableToolApprovalGate(
+            state,
+            new RecordingPolicyClient(autoApproved: false));
+        var wait = gate.WaitForApprovalAsync(
+            "run-1", "req-expiring", "web_fetch", "https://first.test",
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+        await WaitForStateAsync(gate, "req-expiring", ToolApprovalRequestState.Pending);
+
+        var result = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = "req-expiring",
+                Scope = "run",
+                ScopeGrantId = "expiring-scope",
+                ScopeExpiresAt = DateTimeOffset.UtcNow.AddMilliseconds(250),
+            },
+            gate,
+            state);
+
+        Status(result).Should().Be(StatusCodes.Status200OK);
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeTrue();
+        await Task.Delay(400);
+        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeFalse(
+            "a response that cannot be finalized by the API must not leave a usable local scope");
     }
 
     [Fact]

@@ -720,6 +720,8 @@ internal sealed record AgentHostToolApprovalRequest
     public string? RunId { get; init; }
     public string? RequestId { get; init; }
     public string Scope { get; init; } = "once";
+    public string? ScopeGrantId { get; init; }
+    public DateTimeOffset? ScopeExpiresAt { get; init; }
 }
 
 internal sealed record AgentHostToolApprovalScopeRequest
@@ -753,7 +755,11 @@ internal static class ToolApprovalEndpointHandlers
                     toolName = context.ToolName,
                     url = context.Url,
                 })
-                : ResultFor(state));
+                : ResultFor(
+                    state,
+                    scopeGrantId: (gate as IToolApprovalScopeRollback)?.GetScopeGrantId(
+                        runtimeState.RunId,
+                        requestId)));
     }
 
     public static async Task<IResult> GrantAsync(
@@ -778,13 +784,33 @@ internal static class ToolApprovalEndpointHandlers
         };
 
         var context = gate.GetRequestContext(runtimeState.RunId, request.RequestId);
-        var applied = await gate.GrantAsync(runtimeState.RunId, request.RequestId, scope).ConfigureAwait(false);
+        if (scope != ApprovalScope.Once
+            && request.ScopeExpiresAt is { } expiresAt
+            && expiresAt <= DateTimeOffset.UtcNow)
+        {
+            gate.Deny(runtimeState.RunId, request.RequestId);
+            return ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId));
+        }
+
+        var provisionalGate = gate as IProvisionalToolApprovalGate;
+        var scopeGrantId = scope != ApprovalScope.Once && provisionalGate is not null
+            ? request.ScopeGrantId ?? Guid.NewGuid().ToString("N")
+            : null;
+        var applied = provisionalGate is not null && scopeGrantId is not null
+            ? await provisionalGate.GrantProvisionalScopeAsync(
+                runtimeState.RunId,
+                request.RequestId,
+                scope,
+                scopeGrantId,
+                request.ScopeExpiresAt ?? DateTimeOffset.UtcNow + ToolApprovalScopeProtocol.ProvisionalScopeLifetime)
+                .ConfigureAwait(false)
+            : await gate.GrantAsync(runtimeState.RunId, request.RequestId, scope).ConfigureAwait(false);
         return ResultFor(
             gate.GetRequestState(runtimeState.RunId, request.RequestId),
             applied,
             context?.ToolName,
             context?.Url,
-            applied && scope != ApprovalScope.Once
+            applied && scopeGrantId is not null
                 ? (gate as IToolApprovalScopeRollback)?.GetScopeGrantId(runtimeState.RunId, request.RequestId)
                 : null);
     }
