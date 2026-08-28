@@ -271,6 +271,8 @@ builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlem
 builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
 builder.Services.AddScoped<TwoAppPersistenceStore>();
 builder.Services.AddScoped<ITwoAppCredentialVault, TwoAppCredentialVault>();
+builder.Services.AddScoped<GitHubRepositorySelectionClient>();
+builder.Services.AddScoped<GitHubRepositorySelectionBroker>();
 builder.Services.AddScoped<Agentweaver.Api.Webhooks.RepoAppInstallationTokenService>();
 builder.Services.AddScoped<GitHubCapabilityBroker>();
 builder.Services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
@@ -1101,6 +1103,7 @@ else
     app.MapBlueprintEndpoints();
     app.MapTeamEndpoints();
     app.MapAuthEndpoints();
+    app.MapGitHubRepositorySelectionEndpoints();
     app.MapOAuthServerEndpoints();
     app.MapDecisionsEndpoints();
     app.MapMemoryEndpoints();

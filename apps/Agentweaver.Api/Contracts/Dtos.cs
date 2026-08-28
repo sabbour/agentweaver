@@ -588,6 +588,45 @@ public sealed record CreateProjectRequest
     [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
 }
 
+/// <summary>
+/// Metadata-only repository candidate returned by the pre-project Repo App browse endpoint.
+/// Visibility is display data, not evidence of clone or installation authority.
+/// </summary>
+public sealed record GitHubRepositorySelectionCandidateDto
+{
+    [JsonPropertyName("repository_id")] public required long RepositoryId { get; init; }
+    [JsonPropertyName("full_name")] public required string FullName { get; init; }
+    [JsonPropertyName("owner_login")] public required string OwnerLogin { get; init; }
+    [JsonPropertyName("private")] public required bool IsPrivate { get; init; }
+    [JsonPropertyName("default_branch")] public required string DefaultBranch { get; init; }
+    [JsonPropertyName("pushed_at")] public DateTimeOffset? PushedAt { get; init; }
+}
+
+/// <summary>Response for GET /api/github/repository-selections.</summary>
+public sealed record GitHubRepositorySelectionListResponse
+{
+    [JsonPropertyName("repositories")] public required IReadOnlyList<GitHubRepositorySelectionCandidateDto> Repositories { get; init; }
+}
+
+/// <summary>
+/// A requested repository choice. Its numeric ID is only a selection instruction; the server
+/// independently verifies it through the caller's active Repo App authorization before minting.
+/// </summary>
+public sealed record IssueGitHubRepositorySelectionRequest
+{
+    [JsonPropertyName("repository_id")] public long? RepositoryId { get; init; }
+}
+
+/// <summary>
+/// Short-lived opaque authority for the next GitHub project-create layer. No repository metadata,
+/// installation identity, credential reference, permission, or token is returned.
+/// </summary>
+public sealed record GitHubRepositorySelectionCodeResponse
+{
+    [JsonPropertyName("selection_code")] public required string SelectionCode { get; init; }
+    [JsonPropertyName("expires_at")] public required DateTimeOffset ExpiresAt { get; init; }
+}
+
 /// <summary>Request body for renaming a project.</summary>
 public sealed record UpdateProjectNameRequest
 {

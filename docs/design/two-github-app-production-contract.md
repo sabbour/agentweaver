@@ -122,6 +122,26 @@ the project Copilot App binding. Each purpose validates its matching App,
 project/repository scope, permission/grant digest, and snapshot reference before issuing a
 bounded capability.
 
+## Pre-project repository selection contract
+
+Before a project exists, a signed-in human Entra subject may browse a bounded,
+metadata-only list using its own active Repo App authorization and ask the server to mint a
+selection code for one canonical numeric repository ID. The server stores only a digest of
+the cryptographically random code, the Entra subject, repository ID, expiry, and consumed
+marker. It verifies the selected ID against the caller's browse result before minting.
+
+The code is caller-bound, expires after five minutes, and is atomically single-use. It is the
+only repository authority accepted by the later GitHub project-create operation. Repository
+ID, URL, owner/name, installation ID, token, permission map, clone URL, and display metadata
+are never client authority. On consumption, the server obtains the canonical ID from the
+stored scope and resolves clone metadata server-side; malformed, expired, consumed, revoked,
+or cross-subject codes are indistinguishable unavailable authority.
+
+The browse response contains only canonical ID, full name, owner login, private visibility,
+default branch, and pushed-at timestamp. It contains no provider permission object, derived
+access label, repository contents, clone URL, credential data, or raw provider response.
+Public/metadata visibility is not proof of operational access.
+
 ## Sandbox and private-key boundary
 
 All GitHub repository reads and writes for a run occur through backend capability adapters.

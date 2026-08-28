@@ -86,6 +86,22 @@ public sealed class GitHubRepositoryGrantRecord
     public DateTimeOffset? RevokedAt { get; set; }
 }
 
+/// <summary>
+/// One opaque, caller-bound authority to use exactly one repository during GitHub project creation.
+/// The browser-visible code is never persisted; only its SHA-256 digest is stored.
+/// </summary>
+public sealed class GitHubRepositorySelectionCodeRecord
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string CodeHash { get; set; } = "";
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string EntraObjectId { get; set; } = "";
+    public long RepositoryId { get; set; }
+    public long ExpiresAtUnixMilliseconds { get; set; }
+    public long? ConsumedAtUnixMilliseconds { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
 public sealed class ProjectCopilotBindingRecord
 {
     public string Id { get; set; } = "";
