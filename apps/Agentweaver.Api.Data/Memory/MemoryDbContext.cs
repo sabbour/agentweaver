@@ -21,15 +21,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<SubtaskDependency> SubtaskDependencies => Set<SubtaskDependency>();
     public DbSet<SteeringDirective> SteeringDirectives => Set<SteeringDirective>();
     public DbSet<SteeringRevisionExecution> SteeringRevisionExecutions => Set<SteeringRevisionExecution>();
-    public DbSet<McpRefreshToken> McpRefreshTokens => Set<McpRefreshToken>();
-    public DbSet<McpRevokedJti> McpRevokedJtis => Set<McpRevokedJti>();
-    public DbSet<McpClientRegistration> McpClientRegistrations => Set<McpClientRegistration>();
-    public DbSet<McpPendingAuthorization> McpPendingAuthorizations => Set<McpPendingAuthorization>();
-    public DbSet<McpAuthorizationCode> McpAuthorizationCodes => Set<McpAuthorizationCode>();
-    public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
     public DbSet<EntraOAuthState> EntraOAuthStates => Set<EntraOAuthState>();
-    public DbSet<AuthModeEpochRecord> AuthModeEpochs => Set<AuthModeEpochRecord>();
-    public DbSet<GitHubAccountLinkStateRecord> GitHubAccountLinkStates => Set<GitHubAccountLinkStateRecord>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
     public DbSet<BrowserEntraSession> BrowserEntraSessions => Set<BrowserEntraSession>();
     public DbSet<IntegrationBuildLockRecord> IntegrationBuildLocks => Set<IntegrationBuildLockRecord>();
@@ -61,7 +53,6 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<RunRecord> Runs => Set<RunRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
-    public DbSet<ProjectGitHubIdentityOverrideRecord> ProjectGitHubIdentityOverrides => Set<ProjectGitHubIdentityOverrideRecord>();
     public DbSet<ProjectRoleAssignmentRecord> ProjectRoleAssignments => Set<ProjectRoleAssignmentRecord>();
     public DbSet<BacklogTaskRecord> BacklogTasks => Set<BacklogTaskRecord>();
     public DbSet<BacklogTaskDependencyRecord> BacklogTaskDependencies => Set<BacklogTaskDependencyRecord>();
@@ -144,57 +135,13 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<SteeringDirective>().HasIndex(s => new { s.CoordinatorRunId, s.Status });
 
-        model.Entity<McpRefreshToken>().HasIndex(t => t.TokenHash).IsUnique();
-        model.Entity<McpRefreshToken>().HasIndex(t => t.ChainId);
-        model.Entity<McpRefreshToken>().HasIndex(t => new { t.Subject, t.ClientId });
-        model.Entity<McpRevokedJti>().HasIndex(j => j.Jti).IsUnique();
-        model.Entity<McpRevokedJti>().HasIndex(j => j.ExpiresAt);
-        model.Entity<McpClientRegistration>().HasIndex(c => c.ClientId).IsUnique();
-        model.Entity<McpPendingAuthorization>().HasIndex(p => p.State).IsUnique();
-        model.Entity<McpPendingAuthorization>().HasIndex(p => p.ExpiresAt);
-        model.Entity<McpAuthorizationCode>().HasIndex(c => c.Code).IsUnique();
-        model.Entity<McpAuthorizationCode>().HasIndex(c => c.ExpiresAt);
-
-        model.Entity<OAuthState>().HasKey(s => s.State);
-        model.Entity<OAuthState>().HasIndex(s => s.ExpiresAt);
-
         model.Entity<EntraOAuthState>().HasKey(s => s.State);
         model.Entity<EntraOAuthState>().HasIndex(s => s.ExpiresAt);
-
-        model.Entity<AuthModeEpochRecord>(e =>
-        {
-            e.ToTable("auth_mode_epochs");
-            e.HasKey(x => x.Key);
-            e.Property(x => x.Key).HasColumnName("key");
-            e.Property(x => x.AuthMode).HasColumnName("auth_mode");
-            e.Property(x => x.Epoch).HasColumnName("epoch");
-            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
-        });
-
-        model.Entity<GitHubAccountLinkStateRecord>(e =>
-        {
-            e.ToTable("github_account_link_states");
-            e.HasKey(s => s.State);
-            e.Property(s => s.State).HasColumnName("state");
-            e.Property(s => s.EntraUserId).HasColumnName("entra_user_id");
-            e.Property(s => s.ExpiresAt).HasColumnName("expires_at");
-            e.HasIndex(s => s.ExpiresAt);
-        });
 
         model.Entity<WebSessionExchangeCode>().HasKey(c => c.Code);
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
         model.Entity<BrowserEntraSession>().HasKey(s => s.Id);
         model.Entity<BrowserEntraSession>().HasIndex(s => s.ExpiresAt);
-
-        model.Entity<ProjectGitHubIdentityOverrideRecord>(e =>
-        {
-            e.ToTable("project_github_identity_overrides").HasKey(x => new { x.ProjectId, x.EntraUserId });
-            e.Property(x => x.ProjectId).HasColumnName("project_id");
-            e.Property(x => x.EntraUserId).HasColumnName("entra_user_id");
-            e.Property(x => x.GitHubLogin).HasColumnName("github_login");
-            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
-            e.HasIndex(x => new { x.EntraUserId, x.GitHubLogin }).HasDatabaseName("IX_project_github_identity_overrides_user_login");
-        });
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
         ConfigureTwoAppPersistence(model);
@@ -654,7 +601,6 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.CodeHash).HasColumnName("code_hash");
             e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
             e.Property(x => x.RepoAppAuthorizationId).HasColumnName("repo_app_authorization_id");
-            e.Property(x => x.CredentialKind).HasColumnName("credential_kind");
             e.Property(x => x.RepositoryId).HasColumnName("repository_id");
             e.Property(x => x.ExpiresAtUnixMilliseconds).HasColumnName("expires_at_unix_ms");
             e.Property(x => x.ConsumedAtUnixMilliseconds).HasColumnName("consumed_at_unix_ms");

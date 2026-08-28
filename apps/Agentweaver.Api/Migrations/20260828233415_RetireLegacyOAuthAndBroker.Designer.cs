@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Agentweaver.Api.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260828233415_RetireLegacyOAuthAndBroker")]
+    partial class RetireLegacyOAuthAndBroker
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.7");
@@ -810,6 +813,10 @@ namespace Agentweaver.Api.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT")
                         .HasColumnName("created_at");
+
+                    b.Property<int>("CredentialKind")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("credential_kind");
 
                     b.Property<string>("EntraObjectId")
                         .IsRequired()

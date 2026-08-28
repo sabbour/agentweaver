@@ -43,13 +43,9 @@ internal sealed record ResolvedGitHubRepositorySelection(
 internal sealed class GitHubRepositorySelectionBroker(
     TwoAppPersistenceStore persistence,
     ITwoAppCredentialVault vault,
-    GitHubRepositorySelectionClient repositories,
-    IGitHubAccessTokenProvider legacyAccessTokens,
-    IGitHubTokenScopeProvider legacyTokenScopes,
-    IConfiguration configuration)
+    GitHubRepositorySelectionClient repositories)
 {
     internal static readonly TimeSpan SelectionCodeLifetime = TimeSpan.FromMinutes(5);
-    private const string GitHubLegacyAuthorizationId = "github-legacy";
 
     internal async Task<(GitHubRepositorySelectionOutcome Outcome, IReadOnlyList<GitHubRepositorySelectionCandidate> Candidates)>
         ListAsync(CallerContext caller, CancellationToken ct)
@@ -77,9 +73,7 @@ internal sealed class GitHubRepositorySelectionBroker(
             return new(result.Outcome, null, null);
         var repository = result.Candidates.SingleOrDefault(candidate =>
             string.Equals(candidate.FullName, fullName.Trim(), StringComparison.OrdinalIgnoreCase));
-        if (repository is null ||
-            (GetCredentialKind() == GitHubRepositorySelectionCredentialKind.EntraRepoApp &&
-             result.Credential is null))
+        if (repository is null || result.Credential is null)
             return new(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, null, null);
 
         var now = DateTimeOffset.UtcNow;
@@ -91,8 +85,7 @@ internal sealed class GitHubRepositorySelectionBroker(
             {
                 CodeHash = HashCode(code),
                 EntraObjectId = GetCallerSubject(caller),
-                RepoAppAuthorizationId = result.Credential?.Id ?? GitHubLegacyAuthorizationId,
-                CredentialKind = GetCredentialKind(),
+                RepoAppAuthorizationId = result.Credential.Id,
                 RepositoryId = repository.RepositoryId,
                 CreatedAt = now,
                 ExpiresAtUnixMilliseconds = expiresAt.ToUnixTimeMilliseconds(),
@@ -126,7 +119,6 @@ internal sealed class GitHubRepositorySelectionBroker(
             : persistence.TryConsumeRepositorySelectionCodeAsync(
                 HashCode(code),
                 entraObjectId,
-                GitHubRepositorySelectionCredentialKind.EntraRepoApp,
                 DateTimeOffset.UtcNow,
                 ct);
 
@@ -140,42 +132,30 @@ internal sealed class GitHubRepositorySelectionBroker(
         CallerContext caller,
         CancellationToken ct)
     {
-        var credentialKind = GetCredentialKind();
         var callerSubject = GetCallerSubject(caller);
         var consumed = !IsCodeWellFormed(code)
             ? null
             : await persistence.TryConsumeRepositorySelectionCodeAsync(
-                HashCode(code), callerSubject, credentialKind, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+                HashCode(code), callerSubject, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         if (consumed is null)
             return null;
 
-        string? accessToken;
-        RepoAppCredentialReference? credential = null;
-        if (credentialKind == GitHubRepositorySelectionCredentialKind.EntraRepoApp)
+        var credential = await persistence.GetLiveRepoAppCredentialAsync(
+            callerSubject, consumed.RepoAppAuthorizationId, ct).ConfigureAwait(false);
+        if (credential is null)
+            return null;
+        SecretGetResult secret;
+        try
         {
-            credential = await persistence.GetLiveRepoAppCredentialAsync(
-                callerSubject, consumed.RepoAppAuthorizationId, ct).ConfigureAwait(false);
-            if (credential is null)
-                return null;
-
-            SecretGetResult secret;
-            try
-            {
-                secret = await vault.ReadCurrentAsync(
-                    TwoAppCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
-            }
-            catch (ArgumentException)
-            {
-                return null;
-            }
-
-            if (!secret.Found || !TryGetUsableAccessToken(secret.Value, out accessToken))
-                return null;
+            secret = await vault.ReadCurrentAsync(
+                TwoAppCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
         }
-        else
+        catch (ArgumentException)
         {
-            accessToken = await GetLegacyAccessTokenAsync(caller.User, ct).ConfigureAwait(false);
+            return null;
         }
+        if (!secret.Found || !TryGetUsableAccessToken(secret.Value, out var accessToken))
+            return null;
         if (string.IsNullOrWhiteSpace(accessToken))
             return null;
 
@@ -191,9 +171,7 @@ internal sealed class GitHubRepositorySelectionBroker(
         }
 
         var repository = candidates?.SingleOrDefault(candidate => candidate.RepositoryId == consumed.RepositoryId);
-        if (repository is null ||
-            (credential is not null &&
-             !await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false)))
+        if (repository is null || !await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false))
             return null;
 
         return new ResolvedGitHubRepositorySelection(
@@ -206,10 +184,8 @@ internal sealed class GitHubRepositorySelectionBroker(
         IReadOnlyList<GitHubRepositorySelectionCandidate>? Candidates,
         RepoAppCredentialReference? Credential)>
         GetCandidatesAsync(CallerContext caller, CancellationToken ct) =>
-        GetCredentialKind() == GitHubRepositorySelectionCredentialKind.GitHubLegacy
-            ? await WithLegacyCredentialAsync(caller.User, ct).ConfigureAwait(false)
-            : await WithCredentialAsync(GetCallerSubject(caller), token => repositories.ListAsync(token, ct), ct)
-                .ConfigureAwait(false);
+        await WithCredentialAsync(GetCallerSubject(caller), token => repositories.ListAsync(token, ct), ct)
+            .ConfigureAwait(false);
 
     private async Task<(
         GitHubRepositorySelectionOutcome Outcome,
@@ -255,54 +231,6 @@ internal sealed class GitHubRepositorySelectionBroker(
 
         return (GitHubRepositorySelectionOutcome.Issued, candidates, credential);
     }
-
-    private async Task<(
-        GitHubRepositorySelectionOutcome Outcome,
-        IReadOnlyList<GitHubRepositorySelectionCandidate>? Candidates,
-        RepoAppCredentialReference? Credential)>
-        WithLegacyCredentialAsync(string caller, CancellationToken ct)
-    {
-        var accessToken = await GetLegacyAccessTokenAsync(caller, ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(accessToken))
-            return (GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, null, null);
-
-        IReadOnlyList<GitHubRepositorySelectionCandidate>? candidates;
-        try
-        {
-            candidates = await repositories.ListAsync(accessToken, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (!ct.IsCancellationRequested &&
-                                   (ex is HttpRequestException || ex is JsonException || ex is TaskCanceledException))
-        {
-            return (GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, null, null);
-        }
-
-        return candidates is null
-            ? (GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, null, null)
-            : (GitHubRepositorySelectionOutcome.Issued, candidates, null);
-    }
-
-    private async Task<string?> GetLegacyAccessTokenAsync(string caller, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(caller) ||
-            string.Equals(caller, "agentweaver-internal", StringComparison.Ordinal))
-            return null;
-
-        try
-        {
-            return await legacyAccessTokens.GetValidAccessTokenAsync(
-                legacyTokenScopes.Resolve(caller), ct).ConfigureAwait(false);
-        }
-        catch (Exception) when (!ct.IsCancellationRequested)
-        {
-            return null;
-        }
-    }
-
-    private GitHubRepositorySelectionCredentialKind GetCredentialKind() =>
-        AuthModeResolver.Resolve(configuration) == AuthMode.GitHubLegacy
-            ? GitHubRepositorySelectionCredentialKind.GitHubLegacy
-            : GitHubRepositorySelectionCredentialKind.EntraRepoApp;
 
     private static string GetCallerSubject(CallerContext caller) =>
         caller.EntraObjectId ?? caller.User;

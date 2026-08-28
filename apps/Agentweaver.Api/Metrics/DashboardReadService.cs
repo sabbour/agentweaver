@@ -24,7 +24,6 @@ public sealed class DashboardReadService
     private readonly IProjectRoleAuthorizationService _projectRoles;
     private readonly HeartbeatStatusStore _heartbeatStore;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly AuthMode _authMode;
     private readonly bool _isPostgres;
 
     public DashboardReadService(
@@ -42,7 +41,6 @@ public sealed class DashboardReadService
         _scopeFactory = scopeFactory;
         var provider = configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
         _isPostgres = provider is "postgres" or "postgresql";
-        _authMode = AuthModeResolver.Resolve(configuration);
     }
 
     private readonly record struct RunRow(
@@ -134,9 +132,6 @@ public sealed class DashboardReadService
     private async Task<IReadOnlyList<Project>> ListVisibleProjectsAsync(CallerContext caller, CancellationToken ct)
     {
         var projects = await _projectStore.ListAsync(ct).ConfigureAwait(false);
-        if (_authMode == AuthMode.GitHubLegacy)
-            return projects.Where(project => caller.Owns(project.Owner)).ToList();
-
         if (_projectRoles.IsPlatformAdmin(caller))
             return projects;
 
