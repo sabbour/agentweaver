@@ -214,6 +214,19 @@ public sealed class DurableToolApprovalGate(
             lockIds,
             async (db, ct) =>
             {
+                // Persisting a scoped policy claims the same database row terminalization updates.
+                // On Postgres, FOR UPDATE gives the grant and any terminal transition a single
+                // winner; SQLite retries the enclosing transaction if a competing writer wins.
+                // This closes the interval between the endpoint's pre-forward active check and
+                // the durable policy write.
+                if (context is not null
+                    && scope != ApprovalScope.Once
+                    && runStore is not null
+                    && !await LockAndRequireActiveRunAsync(db, runId, ct).ConfigureAwait(false))
+                {
+                    return false;
+                }
+
                 var records = await db.RunEvents
                     .AsNoTracking()
                     .Where(e => e.RunId == runId
@@ -264,6 +277,28 @@ public sealed class DurableToolApprovalGate(
                 return true;
             },
             CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task<bool> LockAndRequireActiveRunAsync(
+        MemoryDbContext db,
+        string runId,
+        CancellationToken ct)
+    {
+        if (db.Database.IsNpgsql())
+        {
+            var lockedRun = await db.Runs
+                .FromSqlInterpolated($"SELECT * FROM runs WHERE run_id = {runId} FOR UPDATE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(ct)
+                .ConfigureAwait(false);
+            return lockedRun?.Status == RunStatus.InProgress.ToApiString();
+        }
+
+        if (runStore is null || !RunId.TryParse(runId, out var id))
+            return false;
+
+        var run = await runStore.GetAsync(id, ct).ConfigureAwait(false);
+        return run?.Status == RunStatus.InProgress;
     }
 
     private Task<bool> ResolveDenialAsync(string runId, string requestId, bool expired) =>

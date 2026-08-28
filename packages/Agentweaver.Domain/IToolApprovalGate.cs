@@ -130,3 +130,26 @@ public interface IToolApprovalGate
     /// </summary>
     void RegisterParentRun(string childRunId, string parentRunId);
 }
+
+/// <summary>
+/// Allows a pod-facing approval endpoint to withdraw a scoped policy that it provisionally
+/// applied before the API durably commits the matching policy. The opaque grant id prevents a
+/// delayed rollback from removing a separately granted equivalent policy.
+/// </summary>
+public interface IToolApprovalScopeRollback
+{
+    /// <summary>Returns the opaque id of a scoped policy applied by this exact approval.</summary>
+    string? GetScopeGrantId(string runId, string requestId);
+
+    /// <summary>
+    /// Removes only the policies created by <paramref name="scopeGrantId"/>.
+    /// Returns <see langword="false"/> when that provisional policy was already finalized,
+    /// rolled back, or does not belong to this request.
+    /// </summary>
+    bool RollbackScopeGrant(string runId, string requestId, string scopeGrantId);
+
+    /// <summary>
+    /// Marks a provisional policy as durably committed without altering its local coverage.
+    /// </summary>
+    bool FinalizeScopeGrant(string runId, string requestId, string scopeGrantId);
+}

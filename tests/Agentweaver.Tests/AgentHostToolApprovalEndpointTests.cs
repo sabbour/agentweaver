@@ -16,6 +16,7 @@ using AgentHostDurableToolApprovalGate = agenthost::Agentweaver.AgentHost.AgentH
 using IAgentHostToolApprovalPolicyClient = agenthost::Agentweaver.AgentHost.IAgentHostToolApprovalPolicyClient;
 using AgentHostToolApprovalPolicyClient = agenthost::Agentweaver.AgentHost.AgentHostToolApprovalPolicyClient;
 using AgentHostToolApprovalRequest = agenthost::AgentHostToolApprovalRequest;
+using AgentHostToolApprovalScopeRequest = agenthost::AgentHostToolApprovalScopeRequest;
 using ToolApprovalEndpointHandlers = agenthost::ToolApprovalEndpointHandlers;
 
 namespace Agentweaver.Tests;
@@ -162,6 +163,71 @@ public sealed class AgentHostToolApprovalEndpointTests
         gate.GetRequestState("run-1", "req-context").Should().Be(ToolApprovalRequestState.Pending);
         gate.Deny("run-1", "req-context").Should().BeTrue();
         (await wait).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RollbackScope_RemovesOnlyTheExactProvisionalScope()
+    {
+        var state = ConfiguredState();
+        var gate = new AgentHostDurableToolApprovalGate(
+            state,
+            new RecordingPolicyClient(autoApproved: false));
+        var first = gate.WaitForApprovalAsync(
+            "run-1", "req-first", "web_fetch", "https://first.test",
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+        var second = gate.WaitForApprovalAsync(
+            "run-1", "req-second", "web_fetch", "https://second.test",
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+        await WaitForStateAsync(gate, "req-first", ToolApprovalRequestState.Pending);
+        await WaitForStateAsync(gate, "req-second", ToolApprovalRequestState.Pending);
+
+        var firstGrant = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest { RunId = "run-1", RequestId = "req-first", Scope = "run" },
+            gate,
+            state);
+        var secondGrant = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest { RunId = "run-1", RequestId = "req-second", Scope = "run" },
+            gate,
+            state);
+        (await first).Should().BeTrue();
+        (await second).Should().BeTrue();
+
+        var firstScopeGrantId = Json(firstGrant).GetProperty("scopeGrantId").GetString();
+        var secondScopeGrantId = Json(secondGrant).GetProperty("scopeGrantId").GetString();
+        firstScopeGrantId.Should().NotBeNullOrWhiteSpace();
+        secondScopeGrantId.Should().NotBeNullOrWhiteSpace();
+        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeTrue();
+
+        var rollback = await ToolApprovalEndpointHandlers.RollbackScopeAsync(
+            Context("pod-credential"),
+            "req-first",
+            new AgentHostToolApprovalScopeRequest
+            {
+                RunId = "run-1",
+                ScopeGrantId = firstScopeGrantId,
+            },
+            gate,
+            state);
+
+        Status(rollback).Should().Be(StatusCodes.Status200OK);
+        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeTrue(
+            "a rollback must not revoke an equivalent scope granted by another approval");
+
+        var secondRollback = await ToolApprovalEndpointHandlers.RollbackScopeAsync(
+            Context("pod-credential"),
+            "req-second",
+            new AgentHostToolApprovalScopeRequest
+            {
+                RunId = "run-1",
+                ScopeGrantId = secondScopeGrantId,
+            },
+            gate,
+            state);
+
+        Status(secondRollback).Should().Be(StatusCodes.Status200OK);
+        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeFalse();
     }
 
     [Fact]

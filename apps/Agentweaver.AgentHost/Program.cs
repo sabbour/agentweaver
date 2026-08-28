@@ -423,6 +423,8 @@ app.MapGet("/healthz", (AgentHostStartupService startup) =>
 // ── Tool approval endpoints ───────────────────────────────────────────────────
 app.MapPost("/tool-approvals", ToolApprovalEndpointHandlers.GrantAsync);
 app.MapGet("/tool-approvals/{requestId}", ToolApprovalEndpointHandlers.GetPendingContextAsync);
+app.MapPost("/tool-approvals/{requestId}/rollback", ToolApprovalEndpointHandlers.RollbackScopeAsync);
+app.MapPost("/tool-approvals/{requestId}/finalize", ToolApprovalEndpointHandlers.FinalizeScopeAsync);
 app.MapPost("/tool-denials", ToolApprovalEndpointHandlers.DenyAsync);
 
 // ── PreviewRunner endpoints ───────────────────────────────────────────────────
@@ -720,6 +722,12 @@ internal sealed record AgentHostToolApprovalRequest
     public string Scope { get; init; } = "once";
 }
 
+internal sealed record AgentHostToolApprovalScopeRequest
+{
+    public string? RunId { get; init; }
+    public string? ScopeGrantId { get; init; }
+}
+
 internal static class ToolApprovalEndpointHandlers
 {
     public static Task<IResult> GetPendingContextAsync(
@@ -775,8 +783,27 @@ internal static class ToolApprovalEndpointHandlers
             gate.GetRequestState(runtimeState.RunId, request.RequestId),
             applied,
             context?.ToolName,
-            context?.Url);
+            context?.Url,
+            applied && scope != ApprovalScope.Once
+                ? (gate as IToolApprovalScopeRollback)?.GetScopeGrantId(runtimeState.RunId, request.RequestId)
+                : null);
     }
+
+    public static Task<IResult> RollbackScopeAsync(
+        HttpContext ctx,
+        string requestId,
+        AgentHostToolApprovalScopeRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState) =>
+        CompleteScopeAsync(ctx, requestId, request, gate, runtimeState, finalize: false);
+
+    public static Task<IResult> FinalizeScopeAsync(
+        HttpContext ctx,
+        string requestId,
+        AgentHostToolApprovalScopeRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState) =>
+        CompleteScopeAsync(ctx, requestId, request, gate, runtimeState, finalize: true);
 
     public static Task<IResult> DenyAsync(
         HttpContext ctx,
@@ -800,17 +827,56 @@ internal static class ToolApprovalEndpointHandlers
         && !string.IsNullOrWhiteSpace(runtimeRunId)
         && !string.Equals(requestedRunId, runtimeRunId, StringComparison.Ordinal);
 
+    private static Task<IResult> CompleteScopeAsync(
+        HttpContext ctx,
+        string requestId,
+        AgentHostToolApprovalScopeRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState,
+        bool finalize)
+    {
+        if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+            return Task.FromResult<IResult>(Results.Unauthorized());
+        if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(request.ScopeGrantId))
+            return Task.FromResult<IResult>(Results.BadRequest(new { error = "requestId and scopeGrantId are required" }));
+        if (IsRunMismatch(request.RunId, runtimeState.RunId))
+            return Task.FromResult<IResult>(Results.Conflict(new { error = "run mismatch", state = "run_mismatch" }));
+
+        var scopeGate = gate as IToolApprovalScopeRollback;
+        var completed = scopeGate is not null && (finalize
+            ? scopeGate.FinalizeScopeGrant(runtimeState.RunId, requestId, request.ScopeGrantId)
+            : scopeGate.RollbackScopeGrant(runtimeState.RunId, requestId, request.ScopeGrantId));
+        return Task.FromResult<IResult>(completed
+            ? Results.Ok(new
+            {
+                resolved = false,
+                applied = false,
+                state = finalize ? "finalized" : "rolled_back",
+                finalized = finalize,
+                rolledBack = !finalize,
+            })
+            : Results.Conflict(new
+            {
+                resolved = false,
+                applied = false,
+                state = "scope_not_found",
+                finalized = false,
+                rolledBack = false,
+            }));
+    }
+
     private static IResult ResultFor(
         ToolApprovalRequestState state,
         bool applied = false,
         string? toolName = null,
-        string? url = null) =>
+        string? url = null,
+        string? scopeGrantId = null) =>
         state switch
         {
             ToolApprovalRequestState.Approved or
             ToolApprovalRequestState.Denied or
             ToolApprovalRequestState.Expired =>
-                Results.Ok(new { resolved = true, applied, state = FormatState(state), toolName, url }),
+                Results.Ok(new { resolved = true, applied, state = FormatState(state), toolName, url, scopeGrantId }),
             ToolApprovalRequestState.Pending =>
                 Results.Conflict(new { resolved = false, applied = false, state = "pending" }),
             _ => Results.NotFound(new { resolved = false, applied = false, state = "unknown" }),

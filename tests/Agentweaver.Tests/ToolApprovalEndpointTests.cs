@@ -579,6 +579,56 @@ public sealed class ToolApprovalEndpointTests
             .Should().BeFalse("a failed AgentHost scope persistence must not widen future access");
     }
 
+    [Fact]
+    public async Task PodPerRun_TerminalizedPodOwnedScope_DoesNotForwardAfterPendingContextLookup()
+    {
+        var agentHost = new TerminalizingPendingContextAgentHostClient();
+        using var baseFactory = new CoordinatorWebApplicationFactory();
+        using var factory = baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:AgentExecutionMode"] = "pod-per-run",
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAgentHostApprovalHttpClient>();
+                services.AddSingleton<IAgentHostApprovalHttpClient>(agentHost);
+            });
+        });
+        using var ownerClient = CreateOwnerClient(factory, CoordinatorWebApplicationFactory.OwnerApiKey);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var secretStore = factory.Services.GetRequiredService<ISecretStore>();
+        var runId = RunId.New();
+        await InsertRunAsync(
+            runStore,
+            runId,
+            RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+        await secretStore.SetSecretAsync(
+            PreviewRunnerCredential.SecretKey(runId.ToString()),
+            "pod-approval-credential");
+        agentHost.Terminalize = () => runStore.TrySetTerminalStatusAsync(
+            runId,
+            RunStatus.Failed,
+            DateTimeOffset.UtcNow,
+            "terminal-race",
+            CancellationToken.None);
+
+        var response = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{runId}/tool-approvals",
+            new { request_id = "terminal-pod-owned", scope = "run" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        agentHost.PendingContextCalls.Should().Be(1);
+        agentHost.GrantCalls.Should().Be(0,
+            "a pod-owned pending approval cannot be released after its target run terminalizes");
+        approvalGate.IsAutoApproved(runId.ToString(), "web_fetch", "https://following.test")
+            .Should().BeFalse();
+    }
+
     [Theory]
     [InlineData("run", "unreachable", true, StatusCodes.Status503ServiceUnavailable)]
     [InlineData("tool", "unreachable", true, StatusCodes.Status503ServiceUnavailable)]
@@ -772,6 +822,111 @@ public sealed class ToolApprovalEndpointTests
     }
 
     [Fact]
+    public async Task PodPerRun_CurrentHostBridgeRollsBackBeforeReportingPersistenceException()
+    {
+        var source = RunId.New();
+        const string requestId = "pod-current-host-rollback";
+        var agentHost = new CurrentHostBridgeAgentHostClient(
+            source.ToString(),
+            requestId,
+            CoordinatorWebApplicationFactory.OwnerUser);
+        using var baseFactory = new CoordinatorWebApplicationFactory();
+        using var factory = baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:AgentExecutionMode"] = "pod-per-run",
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAgentHostApprovalHttpClient>();
+                services.AddSingleton<IAgentHostApprovalHttpClient>(agentHost);
+                services.RemoveAll<IAgentHostToolApprovalPersistence>();
+                services.AddSingleton<IAgentHostToolApprovalPersistence>(
+                    new FailingAgentHostApprovalPersistence(throwOnPersist: true));
+            });
+        });
+        using var ownerClient = CreateOwnerClient(factory, CoordinatorWebApplicationFactory.OwnerApiKey);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var secretStore = factory.Services.GetRequiredService<ISecretStore>();
+        await InsertRunAsync(
+            runStore,
+            source,
+            RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+        await secretStore.SetSecretAsync(
+            PreviewRunnerCredential.SecretKey(source.ToString()),
+            "pod-approval-credential");
+
+        var response = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{source}/tool-approvals",
+            new { request_id = requestId, scope = "run" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await agentHost.InitialTool.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+        agentHost.RollbackCalls.Should().Be(1);
+        agentHost.IsAutoApproved("web_fetch", "https://following.test").Should().BeFalse(
+            "the API must revoke the current pod's provisional bridge before reporting persistence failure");
+        approvalGate.IsAutoApproved(source.ToString(), "web_fetch", "https://following.test")
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PodPerRun_DurableScopeClaimLosesToTerminalizationAndRollsBackCurrentHostBridge()
+    {
+        var source = RunId.New();
+        const string requestId = "pod-terminal-durable-claim";
+        var agentHost = new CurrentHostBridgeAgentHostClient(
+            source.ToString(),
+            requestId,
+            CoordinatorWebApplicationFactory.OwnerUser);
+        using var baseFactory = new CoordinatorWebApplicationFactory();
+        using var factory = baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:AgentExecutionMode"] = "pod-per-run",
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAgentHostApprovalHttpClient>();
+                services.AddSingleton<IAgentHostApprovalHttpClient>(agentHost);
+                services.RemoveAll<IAgentHostToolApprovalPersistence>();
+                services.AddSingleton<IAgentHostToolApprovalPersistence>(sp =>
+                    new TerminalizingAgentHostApprovalPersistence(
+                        sp.GetRequiredService<DurableToolApprovalGate>(),
+                        sp.GetRequiredService<IRunStore>()));
+            });
+        });
+        using var ownerClient = CreateOwnerClient(factory, CoordinatorWebApplicationFactory.OwnerApiKey);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var secretStore = factory.Services.GetRequiredService<ISecretStore>();
+        await InsertRunAsync(
+            runStore,
+            source,
+            RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+        await secretStore.SetSecretAsync(
+            PreviewRunnerCredential.SecretKey(source.ToString()),
+            "pod-approval-credential");
+
+        var response = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{source}/tool-approvals",
+            new { request_id = requestId, scope = "run" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await agentHost.InitialTool.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+        agentHost.RollbackCalls.Should().Be(1);
+        agentHost.IsAutoApproved("web_fetch", "https://following.test").Should().BeFalse();
+        approvalGate.IsAutoApproved(source.ToString(), "web_fetch", "https://following.test")
+            .Should().BeFalse("a terminal winner cannot leave a durable scope behind");
+    }
+
+    [Fact]
     public async Task Approve_ParentOwnerCannotGrantApprovalOwnedByDifferentPersistedChildOwner()
     {
         using var factory = new CoordinatorWebApplicationFactory();
@@ -867,6 +1022,8 @@ public sealed class ToolApprovalEndpointTests
     {
         public string? LastScope { get; private set; }
         public int DenyCalls { get; private set; }
+        public int RollbackCalls { get; private set; }
+        public int FinalizeCalls { get; private set; }
 
         public Task<AgentHostApprovalOutcome> GetPendingContextAsync(
             string childRunId,
@@ -888,7 +1045,43 @@ public sealed class ToolApprovalEndpointTests
             CancellationToken ct)
         {
             LastScope = scope;
-            return Task.FromResult(outcome);
+            return Task.FromResult(outcome with
+            {
+                ScopeGrantId = outcome.ScopeGrantId
+                    ?? (outcome.Applied && scope != "once" ? "recorded-scope-grant" : null),
+            });
+        }
+
+        public Task<AgentHostApprovalOutcome> RollbackScopeAsync(
+            string childRunId,
+            string requestId,
+            string scopeGrantId,
+            string? bearer,
+            CancellationToken ct)
+        {
+            RollbackCalls++;
+            return Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: false,
+                State: "rolled_back",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                RolledBack: true));
+        }
+
+        public Task<AgentHostApprovalOutcome> FinalizeScopeAsync(
+            string childRunId,
+            string requestId,
+            string scopeGrantId,
+            string? bearer,
+            CancellationToken ct)
+        {
+            FinalizeCalls++;
+            return Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: false,
+                State: "finalized",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                Finalized: true));
         }
 
         public Task<AgentHostApprovalOutcome> DenyAsync(
@@ -907,15 +1100,72 @@ public sealed class ToolApprovalEndpointTests
         }
     }
 
-    private sealed class FailingAgentHostApprovalPersistence : IAgentHostToolApprovalPersistence
+    private sealed class FailingAgentHostApprovalPersistence(bool throwOnPersist = false) : IAgentHostToolApprovalPersistence
     {
         public Task<bool> PersistAgentHostApprovalAsync(
             string runId,
             string requestId,
             string toolName,
             string? url,
-            ApprovalScope scope) =>
-            Task.FromResult(false);
+            ApprovalScope scope)
+        {
+            if (throwOnPersist)
+                throw new InvalidOperationException("durable persistence failure");
+            return Task.FromResult(false);
+        }
+    }
+
+    private sealed class TerminalizingPendingContextAgentHostClient : IAgentHostApprovalHttpClient
+    {
+        public Func<Task<bool>>? Terminalize { get; set; }
+        public int PendingContextCalls { get; private set; }
+        public int GrantCalls { get; private set; }
+
+        public async Task<AgentHostApprovalOutcome> GetPendingContextAsync(
+            string childRunId,
+            string requestId,
+            string? bearer,
+            CancellationToken ct)
+        {
+            PendingContextCalls++;
+            if (Terminalize is not null)
+                await Terminalize().ConfigureAwait(false);
+            return new AgentHostApprovalOutcome(
+                Resolved: false,
+                State: "pending",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                ToolName: "web_fetch",
+                Url: "https://first.test");
+        }
+
+        public Task<AgentHostApprovalOutcome> GrantAsync(
+            string childRunId,
+            string requestId,
+            string scope,
+            string? bearer,
+            CancellationToken ct)
+        {
+            GrantCalls++;
+            return Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: true,
+                State: "approved",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                Applied: true,
+                ScopeGrantId: "terminal-scope-grant"));
+        }
+
+        public Task<AgentHostApprovalOutcome> DenyAsync(
+            string childRunId,
+            string requestId,
+            string? bearer,
+            CancellationToken ct) =>
+            Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: false,
+                State: "unknown",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status404NotFound));
     }
 
     private sealed class OnceWinsAgentHostClient : IAgentHostApprovalHttpClient
@@ -1002,6 +1252,7 @@ public sealed class ToolApprovalEndpointTests
         }
 
         public string? LastScope { get; private set; }
+        public int RollbackCalls { get; private set; }
         public Task<bool> InitialTool { get; }
 
         public bool IsAutoApproved(string toolName, string? url) =>
@@ -1048,7 +1299,43 @@ public sealed class ToolApprovalEndpointTests
                 StatusCode: StatusCodes.Status200OK,
                 Applied: applied,
                 ToolName: "web_fetch",
-                Url: "https://first.test");
+                Url: "https://first.test",
+                ScopeGrantId: applied && scope != "once"
+                    ? _gate.GetScopeGrantId(_runId, _requestId)
+                    : null);
+        }
+
+        public Task<AgentHostApprovalOutcome> RollbackScopeAsync(
+            string childRunId,
+            string requestId,
+            string scopeGrantId,
+            string? bearer,
+            CancellationToken ct)
+        {
+            RollbackCalls++;
+            var rolledBack = _gate.RollbackScopeGrant(childRunId, requestId, scopeGrantId);
+            return Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: false,
+                State: rolledBack ? "rolled_back" : "scope_not_found",
+                Unreachable: false,
+                StatusCode: rolledBack ? StatusCodes.Status200OK : StatusCodes.Status409Conflict,
+                RolledBack: rolledBack));
+        }
+
+        public Task<AgentHostApprovalOutcome> FinalizeScopeAsync(
+            string childRunId,
+            string requestId,
+            string scopeGrantId,
+            string? bearer,
+            CancellationToken ct)
+        {
+            var finalized = _gate.FinalizeScopeGrant(childRunId, requestId, scopeGrantId);
+            return Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: false,
+                State: finalized ? "finalized" : "scope_not_found",
+                Unreachable: false,
+                StatusCode: finalized ? StatusCodes.Status200OK : StatusCodes.Status409Conflict,
+                Finalized: finalized));
         }
 
         public Task<AgentHostApprovalOutcome> DenyAsync(
@@ -1083,6 +1370,28 @@ public sealed class ToolApprovalEndpointTests
         {
             Entered.TrySetResult();
             await _release.Task.ConfigureAwait(false);
+            return await inner.PersistAgentHostApprovalAsync(runId, requestId, toolName, url, scope)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private sealed class TerminalizingAgentHostApprovalPersistence(
+        DurableToolApprovalGate inner,
+        IRunStore runStore) : IAgentHostToolApprovalPersistence
+    {
+        public async Task<bool> PersistAgentHostApprovalAsync(
+            string runId,
+            string requestId,
+            string toolName,
+            string? url,
+            ApprovalScope scope)
+        {
+            await runStore.TrySetTerminalStatusAsync(
+                RunId.Parse(runId),
+                RunStatus.Failed,
+                DateTimeOffset.UtcNow,
+                "terminal-race",
+                CancellationToken.None);
             return await inner.PersistAgentHostApprovalAsync(runId, requestId, toolName, url, scope)
                 .ConfigureAwait(false);
         }

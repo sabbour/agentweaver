@@ -8,7 +8,7 @@ namespace Agentweaver.AgentRuntime;
 /// to suspend the permission handler until the operator grants or denies the request.
 /// The gate is keyed by <c>(runId, requestId)</c>; each requestId may only be resolved once.
 /// </summary>
-public sealed class InMemoryToolApprovalGate : IToolApprovalGate
+public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IToolApprovalScopeRollback
 {
     // Two-level dictionary: runId → requestId → TCS
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, PendingApproval>> _pending = new();
@@ -20,16 +20,20 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ToolApprovalRequestState>> _resolved = new();
 
     // Run-scoped allowlist: runId → server-derived owner/tool/risk policies.
-    private readonly ConcurrentDictionary<string, HashSet<ApprovalPolicy>> _runScopedAllowlist = new();
+    private readonly ConcurrentDictionary<string, HashSet<ScopedApprovalPolicy>> _runScopedAllowlist = new();
 
     // Always-allowed policies survive across runs, but only for the same resolved owner.
     // TODO: persist this to the database so always-allowed policies survive process restarts.
-    private readonly HashSet<ApprovalPolicy> _alwaysAllowedPolicies = [];
+    private readonly HashSet<ScopedApprovalPolicy> _alwaysAllowedPolicies = [];
     private readonly object _alwaysLock = new();
     private readonly IToolApprovalOwnerResolver? _ownerResolver;
 
     // childRunId → parentRunId — populated by RegisterParentRun
     private readonly ConcurrentDictionary<string, string> _parentRuns = new();
+
+    // Scoped policies are applied locally before the API commits their durable counterpart. Keep
+    // their exact destinations until the API either finalizes or rolls back the provisional grant.
+    private readonly ConcurrentDictionary<ScopeGrantKey, ScopeGrant> _scopeGrants = new();
 
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
 
@@ -109,7 +113,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         {
             lock (_alwaysLock)
             {
-                if (_alwaysAllowedPolicies.Any(p => PolicyMatches(p, owner, toolName, risk)))
+                if (_alwaysAllowedPolicies.Any(p => PolicyMatches(p.Policy, owner, toolName, risk)))
                     return true;
             }
         }
@@ -144,6 +148,45 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         // A pending entry exists only while a request is awaiting the operator's grant/deny decision;
         // it is removed in WaitForApprovalAsync's finally once resolved, denied, expired, or cancelled.
         _pending.TryGetValue(runId, out var runPending) && !runPending.IsEmpty;
+
+    /// <inheritdoc />
+    public string? GetScopeGrantId(string runId, string requestId) =>
+        _scopeGrants.TryGetValue(new ScopeGrantKey(runId, requestId), out var grant)
+            ? grant.Id
+            : null;
+
+    /// <inheritdoc />
+    public bool RollbackScopeGrant(string runId, string requestId, string scopeGrantId)
+    {
+        if (string.IsNullOrWhiteSpace(scopeGrantId))
+            return false;
+
+        var key = new ScopeGrantKey(runId, requestId);
+        if (!_scopeGrants.TryGetValue(key, out var grant)
+            || !string.Equals(grant.Id, scopeGrantId, StringComparison.Ordinal)
+            || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)_scopeGrants)
+                .Remove(new KeyValuePair<ScopeGrantKey, ScopeGrant>(key, grant)))
+        {
+            return false;
+        }
+
+        RemoveScopePolicies(runId, grant);
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public bool FinalizeScopeGrant(string runId, string requestId, string scopeGrantId)
+    {
+        if (string.IsNullOrWhiteSpace(scopeGrantId))
+            return false;
+
+        var key = new ScopeGrantKey(runId, requestId);
+        return _scopeGrants.TryGetValue(key, out var grant)
+            && string.Equals(grant.Id, scopeGrantId, StringComparison.Ordinal)
+            && ((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)_scopeGrants)
+                .Remove(new KeyValuePair<ScopeGrantKey, ScopeGrant>(key, grant));
+    }
 
     /// <inheritdoc />
     public ToolApprovalRequestState GetRequestState(string runId, string requestId)
@@ -211,21 +254,27 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
             owner,
             context.ToolName,
             ToolApprovalPolicySemantics.RiskFor(context.ToolName));
+        var parentRunId = _parentRuns.TryGetValue(runId, out var parentId) &&
+            OwnerOf(parentId) is { } parentOwner &&
+            string.Equals(parentOwner, owner, StringComparison.Ordinal)
+            ? parentId
+            : null;
+        var scopeGrant = new ScopeGrant(Guid.NewGuid().ToString("N"), parentRunId);
+        var scopeGrantKey = new ScopeGrantKey(runId, requestId);
+        if (_scopeGrants.TryRemove(scopeGrantKey, out var priorGrant))
+            RemoveScopePolicies(runId, priorGrant);
+        _scopeGrants[scopeGrantKey] = scopeGrant;
 
         if (scope is ApprovalScope.Run or ApprovalScope.Tool)
         {
-            AddRunPolicy(runId, policy);
-            if (_parentRuns.TryGetValue(runId, out var parentId) &&
-                OwnerOf(parentId) is { } parentOwner &&
-                string.Equals(parentOwner, owner, StringComparison.Ordinal))
-            {
-                AddRunPolicy(parentId, policy);
-            }
+            AddRunPolicy(runId, scopeGrant.Id, policy);
+            if (parentRunId is not null)
+                AddRunPolicy(parentRunId, scopeGrant.Id, policy);
         }
         else if (scope == ApprovalScope.Always &&
                  ToolApprovalPolicySemantics.IsAlwaysEligible(context.ToolName))
         {
-            lock (_alwaysLock) _alwaysAllowedPolicies.Add(policy);
+            lock (_alwaysLock) _alwaysAllowedPolicies.Add(new ScopedApprovalPolicy(scopeGrant.Id, policy));
         }
     }
 
@@ -243,17 +292,40 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         runResolved[requestId] = state;
     }
 
-    private void AddRunPolicy(string runId, ApprovalPolicy policy)
+    private void AddRunPolicy(string runId, string scopeGrantId, ApprovalPolicy policy)
     {
         var allowlist = _runScopedAllowlist.GetOrAdd(runId, _ => []);
-        lock (allowlist) allowlist.Add(policy);
+        lock (allowlist) allowlist.Add(new ScopedApprovalPolicy(scopeGrantId, policy));
     }
 
     private bool IsInRunAllowlist(string runId, string owner, string toolName, string risk)
     {
         if (!_runScopedAllowlist.TryGetValue(runId, out var allowlist)) return false;
         lock (allowlist)
-            return allowlist.Any(p => PolicyMatches(p, owner, toolName, risk));
+            return allowlist.Any(p => PolicyMatches(p.Policy, owner, toolName, risk));
+    }
+
+    private void RemoveRunPolicies(string runId, string scopeGrantId)
+    {
+        if (!_runScopedAllowlist.TryGetValue(runId, out var allowlist))
+            return;
+
+        lock (allowlist)
+        {
+            allowlist.RemoveWhere(policy => policy.ScopeGrantId == scopeGrantId);
+            if (allowlist.Count == 0)
+                _runScopedAllowlist.TryRemove(
+                    new KeyValuePair<string, HashSet<ScopedApprovalPolicy>>(runId, allowlist));
+        }
+    }
+
+    private void RemoveScopePolicies(string runId, ScopeGrant grant)
+    {
+        RemoveRunPolicies(runId, grant.Id);
+        if (grant.ParentRunId is not null)
+            RemoveRunPolicies(grant.ParentRunId, grant.Id);
+        lock (_alwaysLock)
+            _alwaysAllowedPolicies.RemoveWhere(policy => policy.ScopeGrantId == grant.Id);
     }
 
     private string? OwnerOf(string runId)
@@ -320,4 +392,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     }
 
     private sealed record ApprovalPolicy(string Owner, string ToolId, string RiskSemantics);
+    private sealed record ScopedApprovalPolicy(string ScopeGrantId, ApprovalPolicy Policy);
+    private sealed record ScopeGrant(string Id, string? ParentRunId);
+    private sealed record ScopeGrantKey(string RunId, string RequestId);
 }

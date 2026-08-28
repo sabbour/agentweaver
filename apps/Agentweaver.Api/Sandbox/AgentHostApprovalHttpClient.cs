@@ -10,7 +10,10 @@ public sealed record AgentHostApprovalOutcome(
     int? StatusCode,
     bool Applied = false,
     string? ToolName = null,
-    string? Url = null);
+    string? Url = null,
+    string? ScopeGrantId = null,
+    bool RolledBack = false,
+    bool Finalized = false);
 
 public interface IAgentHostApprovalHttpClient
 {
@@ -27,6 +30,22 @@ public interface IAgentHostApprovalHttpClient
         string scope,
         string? bearer,
         CancellationToken ct);
+
+    Task<AgentHostApprovalOutcome> RollbackScopeAsync(
+        string childRunId,
+        string requestId,
+        string scopeGrantId,
+        string? bearer,
+        CancellationToken ct) =>
+        Task.FromResult(new AgentHostApprovalOutcome(false, "unreachable", true, null));
+
+    Task<AgentHostApprovalOutcome> FinalizeScopeAsync(
+        string childRunId,
+        string requestId,
+        string scopeGrantId,
+        string? bearer,
+        CancellationToken ct) =>
+        Task.FromResult(new AgentHostApprovalOutcome(false, "unreachable", true, null));
 
     Task<AgentHostApprovalOutcome> DenyAsync(
         string childRunId,
@@ -48,7 +67,15 @@ public sealed class AgentHostApprovalHttpClient(
         string scope,
         string? bearer,
         CancellationToken ct) =>
-        SendAsync(childRunId, requestId, scope, bearer, "/tool-approvals", HttpMethod.Post, ct);
+        SendAsync(
+            childRunId,
+            requestId,
+            scope,
+            scopeGrantId: null,
+            bearer,
+            "/tool-approvals",
+            HttpMethod.Post,
+            ct);
 
     public Task<AgentHostApprovalOutcome> GetPendingContextAsync(
         string childRunId,
@@ -59,9 +86,42 @@ public sealed class AgentHostApprovalHttpClient(
             childRunId,
             requestId,
             scope: null,
+            scopeGrantId: null,
             bearer,
             "/tool-approvals/" + Uri.EscapeDataString(requestId),
             HttpMethod.Get,
+            ct);
+
+    public Task<AgentHostApprovalOutcome> RollbackScopeAsync(
+        string childRunId,
+        string requestId,
+        string scopeGrantId,
+        string? bearer,
+        CancellationToken ct) =>
+        SendAsync(
+            childRunId,
+            requestId,
+            scope: null,
+            scopeGrantId,
+            bearer,
+            "/tool-approvals/" + Uri.EscapeDataString(requestId) + "/rollback",
+            HttpMethod.Post,
+            ct);
+
+    public Task<AgentHostApprovalOutcome> FinalizeScopeAsync(
+        string childRunId,
+        string requestId,
+        string scopeGrantId,
+        string? bearer,
+        CancellationToken ct) =>
+        SendAsync(
+            childRunId,
+            requestId,
+            scope: null,
+            scopeGrantId,
+            bearer,
+            "/tool-approvals/" + Uri.EscapeDataString(requestId) + "/finalize",
+            HttpMethod.Post,
             ct);
 
     public Task<AgentHostApprovalOutcome> DenyAsync(
@@ -69,12 +129,13 @@ public sealed class AgentHostApprovalHttpClient(
         string requestId,
         string? bearer,
         CancellationToken ct) =>
-        SendAsync(childRunId, requestId, scope: null, bearer, "/tool-denials", HttpMethod.Post, ct);
+        SendAsync(childRunId, requestId, scope: null, scopeGrantId: null, bearer, "/tool-denials", HttpMethod.Post, ct);
 
     private async Task<AgentHostApprovalOutcome> SendAsync(
         string childRunId,
         string requestId,
         string? scope,
+        string? scopeGrantId,
         string? bearer,
         string path,
         HttpMethod method,
@@ -88,6 +149,8 @@ public sealed class AgentHostApprovalHttpClient(
         {
             Content = method == HttpMethod.Get
                 ? null
+                : scopeGrantId is not null
+                    ? JsonContent.Create(new { runId = childRunId, requestId, scopeGrantId })
                 : scope is null
                     ? JsonContent.Create(new { runId = childRunId, requestId })
                     : JsonContent.Create(new { runId = childRunId, requestId, scope }),
@@ -139,7 +202,10 @@ public sealed class AgentHostApprovalHttpClient(
                 StatusCode: (int)response.StatusCode,
                 Applied: body?.Applied ?? false,
                 ToolName: body?.ToolName,
-                Url: body?.Url);
+                Url: body?.Url,
+                ScopeGrantId: body?.ScopeGrantId,
+                RolledBack: body?.RolledBack ?? false,
+                Finalized: body?.Finalized ?? false);
         }
     }
 
@@ -150,5 +216,8 @@ public sealed class AgentHostApprovalHttpClient(
         [JsonPropertyName("state")] public string? State { get; init; }
         [JsonPropertyName("toolName")] public string? ToolName { get; init; }
         [JsonPropertyName("url")] public string? Url { get; init; }
+        [JsonPropertyName("scopeGrantId")] public string? ScopeGrantId { get; init; }
+        [JsonPropertyName("rolledBack")] public bool RolledBack { get; init; }
+        [JsonPropertyName("finalized")] public bool Finalized { get; init; }
     }
 }

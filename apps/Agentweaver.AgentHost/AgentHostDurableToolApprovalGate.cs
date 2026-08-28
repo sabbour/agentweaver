@@ -12,7 +12,7 @@ namespace Agentweaver.AgentHost;
 /// </summary>
 internal sealed class AgentHostDurableToolApprovalGate(
     AgentHostRuntimeState runtimeState,
-    IAgentHostToolApprovalPolicyClient policyClient) : IToolApprovalGate
+    IAgentHostToolApprovalPolicyClient policyClient) : IToolApprovalGate, IToolApprovalScopeRollback
 {
     private readonly InMemoryToolApprovalGate _local =
         new(new AgentHostToolApprovalOwnerResolver(runtimeState));
@@ -64,6 +64,15 @@ internal sealed class AgentHostDurableToolApprovalGate(
 
     public bool HasArmedApproval(string runId) =>
         _local.HasArmedApproval(runId);
+
+    public string? GetScopeGrantId(string runId, string requestId) =>
+        _local.GetScopeGrantId(runId, requestId);
+
+    public bool RollbackScopeGrant(string runId, string requestId, string scopeGrantId) =>
+        _local.RollbackScopeGrant(runId, requestId, scopeGrantId);
+
+    public bool FinalizeScopeGrant(string runId, string requestId, string scopeGrantId) =>
+        _local.FinalizeScopeGrant(runId, requestId, scopeGrantId);
 
     public void Clear(string runId) =>
         _local.Clear(runId);

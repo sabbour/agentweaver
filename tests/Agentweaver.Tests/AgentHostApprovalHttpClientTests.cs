@@ -76,6 +76,25 @@ public sealed class AgentHostApprovalHttpClientTests
         handler.Body.Should().BeNull();
     }
 
+    [Fact]
+    public async Task RollbackScope_TargetsRequestPathWithExactScopeGrantId()
+    {
+        var handler = new CapturingHandler(
+            """{"resolved":false,"state":"rolled_back","rolledBack":true}""");
+        var client = CreateClient(handler, Origin);
+
+        var result = await client.RollbackScopeAsync(
+            "child-run", "request/1", "provisional-grant", "pod-bearer", CancellationToken.None);
+
+        result.RolledBack.Should().BeTrue();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be($"{Origin}/tool-approvals/request%2F1/rollback");
+        handler.Body.Should().Contain("\"runId\":\"child-run\"");
+        handler.Body.Should().Contain("\"requestId\":\"request/1\"");
+        handler.Body.Should().Contain("\"scopeGrantId\":\"provisional-grant\"");
+    }
+
     private static AgentHostApprovalHttpClient CreateClient(HttpMessageHandler handler, string? origin) =>
         new(
             new StubHttpClientFactory(handler),
