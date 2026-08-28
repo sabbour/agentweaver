@@ -687,11 +687,15 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ProjectId).HasColumnName("project_id");
             e.Property(x => x.InstallationId).HasColumnName("installation_id");
             e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.RepositoryGrantDigest).HasColumnName("repository_grant_digest");
+            e.Property(x => x.CopilotBindingId).HasColumnName("copilot_binding_id");
+            e.Property(x => x.CopilotBindingGrantDigest).HasColumnName("copilot_binding_grant_digest");
             e.Property(x => x.AutomationKey).HasColumnName("automation_key");
             e.Property(x => x.Status).HasColumnName("status");
             e.Property(x => x.ActivatedAt).HasColumnName("activated_at");
             e.Property(x => x.InvalidatedAt).HasColumnName("invalidated_at");
-            e.HasIndex(x => new { x.ProjectId, x.InstallationId, x.RepositoryId, x.AutomationKey }).IsUnique();
+            e.HasIndex(x => x.ProjectId).IsUnique().HasFilter("status = 0")
+                .HasDatabaseName("UX_automation_activations_active_project");
             e.HasOne<GitHubRepositoryGrantRecord>().WithMany()
                 .HasForeignKey(x => new { x.InstallationId, x.RepositoryId })
                 .OnDelete(DeleteBehavior.Cascade)
