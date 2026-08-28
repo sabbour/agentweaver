@@ -103,6 +103,10 @@ Project Settings does not include per-project GitHub identity selection, webhook
 webhook-secret controls. Repository event delivery is configured through the Repo App's
 App-level webhook.
 
+After completing the Copilot App authorization in GitHub, Agentweaver returns to the Project
+Gallery and shows a safe completion message. The message contains only the outcome; it does not
+show authorization data, identities, repository or installation details, permissions, or credentials.
+
 ### Danger Zone
 
 Irreversible actions:
