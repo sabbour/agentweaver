@@ -77,6 +77,52 @@ public sealed class AutomationInvocationServiceTests
     }
 
     [Fact]
+    public async Task RetrievedClaim_RequiresExactProjectActivationAndOccurrenceIdentity()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var activation = await ActivateAsync(db);
+        var project = ProjectId.Parse(activation.ProjectId);
+        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        const string occurrenceKey = "workflow-event-trigger:on-issue-opened:issue.opened:delivery-1";
+
+        var claimed = await service.TryClaimForProjectAsync(
+            project, occurrenceKey, "delivery-1", "issue.opened");
+        claimed.Should().NotBeNull();
+        (await service.TryClaimForProjectAsync(project, occurrenceKey, "delivery-1", "issue.opened"))
+            .Should().BeNull("the duplicate delivery is rejected by the durable unique claim");
+
+        var recovered = await service.TryGetClaimedInvocationForProjectAsync(
+            project, occurrenceKey, "delivery-1", "issue.opened");
+        recovered.Should().BeEquivalentTo(claimed,
+            "only the original durable claim is eligible for recovery");
+        (await service.TryGetClaimedInvocationForProjectAsync(
+            ProjectId.New(), occurrenceKey, "delivery-1", "issue.opened")).Should().BeNull();
+        (await service.TryGetClaimedInvocationForProjectAsync(
+            project, occurrenceKey + ":other", "delivery-1", "issue.opened")).Should().BeNull();
+        (await service.TryGetClaimedInvocationForProjectAsync(
+            project, occurrenceKey, "other-delivery", "issue.opened")).Should().BeNull();
+
+        var invalidatedAt = DateTimeOffset.UtcNow;
+        await db.AutomationActivations
+            .Where(x => x.Id == activation.ActivationId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, AutomationActivationStatus.Invalidated)
+                .SetProperty(x => x.InvalidatedAt, invalidatedAt));
+        db.AutomationActivations.Add(new AutomationActivationRecord
+        {
+            Id = "replacement-activation", ProjectId = project.ToString(), InstallationId = 1, RepositoryId = 10,
+            RepositoryGrantDigest = "repo-digest", CopilotBindingId = "binding",
+            CopilotBindingGrantDigest = "copilot-digest", AutomationKey = "replacement-automation",
+            Status = AutomationActivationStatus.Active, ActivatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        (await service.TryGetClaimedInvocationForProjectAsync(
+            project, occurrenceKey, "delivery-1", "issue.opened")).Should().BeNull(
+            "recovery must reject an invocation whose activation identity differs from the current fenced activation");
+    }
+
+    [Fact]
     public async Task DiscardInvocationForDeletedTask_AllowsTriggerOccurrenceToBeClaimedAgain()
     {
         await using var db = await OpenDatabaseAsync();

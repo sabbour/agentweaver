@@ -98,10 +98,15 @@ public sealed class WorkflowEventTriggerService
                 project.Id, idempotencyKey, dedupeKey, eventName, ct).ConfigureAwait(false);
             if (invocation is null)
             {
-                _logger.LogWarning(
-                    "Workflow event trigger refused workflow {WorkflowId} for project {ProjectId}: automation activation unavailable",
-                    def.Id, project.Id);
-                continue;
+                invocation = await invocations.TryGetClaimedInvocationForProjectAsync(
+                    project.Id, idempotencyKey, dedupeKey, eventName, ct).ConfigureAwait(false);
+                if (invocation is null)
+                {
+                    _logger.LogWarning(
+                        "Workflow event trigger refused workflow {WorkflowId} for project {ProjectId}: automation activation unavailable",
+                        def.Id, project.Id);
+                    continue;
+                }
             }
 
             var task = await WorkflowTriggerBacklogFactory.RecoverAndPublishAutomationTaskAsync(
