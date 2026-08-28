@@ -49,9 +49,9 @@ public sealed class CopilotAppRegistrationService(
                 permissions.ValueKind != JsonValueKind.Object)
                 return CopilotAppRegistrationState.RegistrationUnavailable;
 
-            return permissions.EnumerateObject().Any()
-                ? CopilotAppRegistrationState.RepositoryPermissionsDetected
-                : CopilotAppRegistrationState.Ready;
+            return HasOnlyMandatoryMetadataReadPermission(permissions)
+                ? CopilotAppRegistrationState.Ready
+                : CopilotAppRegistrationState.RepositoryPermissionsDetected;
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException ||
                                    (ex is OperationCanceledException && !ct.IsCancellationRequested))
@@ -64,6 +64,15 @@ public sealed class CopilotAppRegistrationService(
         !string.IsNullOrWhiteSpace(configuration["Auth:CopilotApp:ClientId"]) &&
         !string.IsNullOrWhiteSpace(configuration["Auth:CopilotApp:ClientSecret"]) &&
         !string.IsNullOrWhiteSpace(configuration["Auth:CopilotApp:CallbackUrl"]);
+
+    private static bool HasOnlyMandatoryMetadataReadPermission(JsonElement permissions)
+    {
+        var properties = permissions.EnumerateObject().ToArray();
+        return properties.Length == 1 &&
+            properties[0].NameEquals("metadata") &&
+            properties[0].Value.ValueKind == JsonValueKind.String &&
+            string.Equals(properties[0].Value.GetString(), "read", StringComparison.Ordinal);
+    }
 
     private static async Task<byte[]> ReadBoundedAsync(HttpContent content, CancellationToken ct)
     {

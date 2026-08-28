@@ -9,9 +9,22 @@ namespace Agentweaver.Tests.Auth;
 public sealed class CopilotAppRegistrationServiceTests
 {
     [Fact]
-    public async Task ValidateAsync_FailsClosedWhenRegistrationHasPermissions()
+    public async Task ValidateAsync_ReturnsReadyWhenRegistrationHasOnlyMandatoryMetadataReadPermission()
     {
-        var registration = CreateRegistration("""{"permissions":{"contents":"read"}}""");
+        var registration = CreateRegistration("""{"permissions":{"metadata":"read"}}""");
+
+        var result = await registration.ValidateAsync();
+
+        result.Should().Be(CopilotAppRegistrationState.Ready);
+    }
+
+    [Theory]
+    [InlineData("""{"permissions":{}}""")]
+    [InlineData("""{"permissions":{"metadata":"write"}}""")]
+    [InlineData("""{"permissions":{"metadata":"read","contents":"read"}}""")]
+    public async Task ValidateAsync_FailsClosedWhenRegistrationHasUnexpectedOrAdditionalPermissions(string payload)
+    {
+        var registration = CreateRegistration(payload);
 
         var result = await registration.ValidateAsync();
 
@@ -19,9 +32,20 @@ public sealed class CopilotAppRegistrationServiceTests
     }
 
     [Fact]
-    public async Task Startup_RefusesToStartWhenRegistrationHasPermissions()
+    public async Task Startup_AllowsOnlyMandatoryMetadataReadPermission()
     {
-        var registration = CreateRegistration("""{"permissions":{"issues":"write"}}""");
+        var registration = CreateRegistration("""{"permissions":{"metadata":"read"}}""");
+        var startup = new CopilotAppRegistrationStartupService(
+            registration,
+            NullLogger<CopilotAppRegistrationStartupService>.Instance);
+
+        await startup.StartAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Startup_RefusesToStartWhenRegistrationHasAdditionalRepositoryPermissions()
+    {
+        var registration = CreateRegistration("""{"permissions":{"metadata":"read","issues":"write"}}""");
         var startup = new CopilotAppRegistrationStartupService(
             registration,
             NullLogger<CopilotAppRegistrationStartupService>.Instance);

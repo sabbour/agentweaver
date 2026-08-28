@@ -15,7 +15,7 @@ namespace Agentweaver.Tests.Auth;
 public sealed class ProjectCopilotBindingServiceTests
 {
     [Fact]
-    public async Task Begin_PinsProjectAndRejectsAdminWithoutExplicitOwnership()
+    public async Task Begin_PinsProjectAndAllowsOnlyMandatoryMetadataReadPermission()
     {
         await using var db = await OpenDatabaseAsync();
         var roles = new MutableRoles();
@@ -155,7 +155,7 @@ public sealed class ProjectCopilotBindingServiceTests
                 Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(request.RequestUri!.AbsolutePath.StartsWith("/apps/", StringComparison.Ordinal)
-                        ? """{"permissions":{}}"""
+                        ? """{"permissions":{"metadata":"read"}}"""
                         : body),
                 });
         }
