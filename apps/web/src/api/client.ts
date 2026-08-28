@@ -92,6 +92,7 @@ import type {
   WorkspaceNode,
   WorkspaceRefsResponse,
   LinkedGitHubAccount,
+  UnattendedReadiness,
 } from './types';
 /** A skill file paired with the folder-relative path it should keep on the server (folder drag-and-drop). */
 export interface SkillUploadItem {
@@ -413,6 +414,21 @@ export class AgentweaverApiClient {
       `/projects/${encodeURIComponent(projectId)}/preview-settings`,
       req,
     );
+  }
+
+  getUnattendedReadiness(projectId: string): Promise<UnattendedReadiness> {
+    return this.request<UnattendedReadiness>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/github/unattended-readiness`,
+    );
+  }
+
+  beginProjectCopilotAuthorization(projectId: string): Promise<{
+    authorization_url: string;
+    transaction_id: string;
+    expires_at: string;
+  }> {
+    return this.request('POST', `/projects/${encodeURIComponent(projectId)}/github/copilot/authorizations`, {});
   }
 
   rotateProjectWebhookSecret(projectId: string): Promise<import('./types').WebhookSecretRotationResponse> {

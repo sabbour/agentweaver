@@ -42,6 +42,7 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -51,7 +52,7 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
 
     var service = new ProjectCopilotBindingService(
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
-        persistence, secretStore, httpClientFactory, roleAssignments);
+        persistence, secretStore, httpClientFactory, roleAssignments, registration);
     var result = await service.BeginAsync(
         ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
     if (result.Outcome != CopilotBindingOutcome.Success)
@@ -85,10 +86,11 @@ app.MapGet("/auth/github/copilot-app/callback", async (
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
     CancellationToken ct) =>
 {
     var service = new ProjectCopilotBindingService(
-        configuration, persistence, secretStore, httpClientFactory, roleAssignments);
+        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration);
     var cookie = ProjectCopilotBindingService.ReadCallbackCookie(httpContext);
     ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
     var outcome = await service.CompleteBrowserCallbackAsync(
@@ -105,13 +107,14 @@ app.MapGet("/api/projects/{id}/github/copilot/authorizations/{transactionId}", a
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "authorization_transaction_invalid" });
     var service = new ProjectCopilotBindingService(
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
-        persistence, secretStore, httpClientFactory, roleAssignments);
+        persistence, secretStore, httpClientFactory, roleAssignments, registration);
     var result = await service.PollAsync(
         ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, transactionId, ct).ConfigureAwait(false);
     return result.Outcome == CopilotBindingOutcome.Success
@@ -130,6 +133,7 @@ app.MapDelete("/api/projects/{id}/github/copilot/binding", async (
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -138,7 +142,7 @@ app.MapDelete("/api/projects/{id}/github/copilot/binding", async (
         return Results.NotFound();
     var service = new ProjectCopilotBindingService(
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
-        persistence, secretStore, httpClientFactory, roleAssignments);
+        persistence, secretStore, httpClientFactory, roleAssignments, registration);
     var outcome = await service.DisconnectAsync(
         ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
     return outcome == CopilotBindingOutcome.Success
@@ -150,6 +154,49 @@ app.MapDelete("/api/projects/{id}/github/copilot/binding", async (
     .AddOpenApiOperationTransformer((operation, _, _) =>
     {
         operation.Description = "Revokes the active project Copilot binding. A human project Owner or human platform administrator may disconnect it.";
+        return Task.CompletedTask;
+    });
+
+// GET /api/projects/{id}/github/unattended-readiness — project-scoped, redacted status only.
+app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    MemoryDbContext db,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+    if (project is null)
+        return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid)
+        return forbid;
+
+    var projectKey = projectId.ToString();
+    var hasInstallation = await db.GitHubInstallations.AsNoTracking()
+        .AnyAsync(x => x.ProjectId == projectKey &&
+                       x.AppKind == GitHubAppKind.Repo &&
+                       x.RevokedAt == null, ct).ConfigureAwait(false);
+    var registrationState = await registration.ValidateAsync(ct).ConfigureAwait(false);
+    if (registrationState != CopilotAppRegistrationState.Ready)
+        return Results.Ok(CreateUnattendedReadiness(registrationState, hasInstallation));
+
+    var hasBinding = await db.ProjectCopilotBindings.AsNoTracking()
+        .AnyAsync(x => x.ProjectId == projectKey && x.Status == GitHubBindingStatus.Active, ct).ConfigureAwait(false);
+    var hasRepositoryGrant = await db.GitHubRepositoryGrants.AsNoTracking()
+        .AnyAsync(x => x.ProjectId == projectKey && x.RevokedAt == null, ct).ConfigureAwait(false);
+    return Results.Ok(CreateUnattendedReadiness(
+        hasBinding,
+        hasInstallation,
+        hasRepositoryGrant));
+})
+    .WithName("GetProjectUnattendedReadiness")
+    .WithTags("Projects", "GitHub")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description = "Returns a redacted, read-only unattended automation readiness status. It never returns GitHub identities, repository details, installation identifiers, permissions, or credentials.";
         return Task.CompletedTask;
     });
 
@@ -395,45 +442,6 @@ app.MapPut("/api/projects/{id}/preview-settings", async (
         : Results.NotFound();
 })
     .WithName("UpdateProjectPreviewSettings")
-    .WithTags("Projects");
-
-// PUT /api/projects/{id}/github/repo-app-installation — verify and pin numeric App installation/repository IDs.
-app.MapPut("/api/projects/{id}/github/repo-app-installation", async (
-    HttpContext httpContext,
-    string id,
-    RepoAppInstallationBindingRequest request,
-    IProjectStore projectStore,
-    MemoryDbContext db,
-    IConfiguration configuration,
-    ISecretStore secretStore,
-    IHttpClientFactory httpClientFactory,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-    var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
-    if (project is null) return Results.NotFound();
-    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
-    if (request.RejectedFields is { Count: > 0 })
-        return Results.BadRequest(new { error = "Caller-provided authorization scope is not allowed." });
-    if (HumanEntraSubjectAuthorization.Evaluate(ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User)
-        != HumanEntraSubjectState.Allowed)
-        return Results.Conflict(new { error = "human_entra_subject_required" });
-    if (request.InstallationId <= 0 || request.RepositoryId <= 0)
-        return Results.BadRequest(new { error = "Numeric installation and repository IDs are required." });
-
-    var tokenService = new RepoAppInstallationTokenService(configuration, db, secretStore, httpClientFactory);
-    var authority = await tokenService.GetRepositoryAuthorityAsync(
-        request.InstallationId, request.RepositoryId, ct).ConfigureAwait(false);
-    if (authority is null)
-        return Results.Conflict(new { error = "github_installation_unavailable" });
-    var bound = await new RepoAppInstallationLifecycleService(db).BindAsync(
-        project.Id.ToString(), authority, ct).ConfigureAwait(false);
-    return bound is RepoAppInstallationBindingOutcome.Bound
-        ? Results.NoContent()
-        : Results.Conflict(new { error = "github_installation_unavailable" });
-})
-    .WithName("ConfigureProjectRepoAppInstallation")
     .WithTags("Projects");
 
 // GET /api/projects/{id}/github/repository-owners — accounts a new repo could be created under
@@ -1065,14 +1073,6 @@ static ProjectResponse MapProject(Project p, bool available, ProjectRole? effect
 private static readonly Regex AgentNameSlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
 private static readonly Regex AllowedModelRegex = new("^(gpt|claude|o)[a-z0-9._-]*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-private sealed record RepoAppInstallationBindingRequest(
-    long InstallationId,
-    long RepositoryId)
-{
-    [System.Text.Json.Serialization.JsonExtensionData]
-    public Dictionary<string, System.Text.Json.JsonElement>? RejectedFields { get; init; }
-}
-
 private static bool IsProjectOwner(HttpContext httpContext, Agentweaver.Domain.Project project)
 {
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
@@ -1118,6 +1118,71 @@ private static ProjectRoleAssignmentResponse MapProjectRoleAssignment(ProjectRol
 
 private static bool IsAllowedModelId(string? modelId) =>
     string.IsNullOrWhiteSpace(modelId) || AllowedModelRegex.IsMatch(modelId.Trim());
+
+private static object CreateUnattendedReadiness(
+    CopilotAppRegistrationState registrationState,
+    bool repoAppInstallationConnected) => registrationState switch
+{
+    CopilotAppRegistrationState.ConfigurationUnavailable => new
+    {
+        status = "not_ready",
+        reason_code = "copilot_app_not_configured",
+        message = "The Copilot App is not configured.",
+        repo_app_installation_connected = repoAppInstallationConnected,
+    },
+    CopilotAppRegistrationState.RepositoryPermissionsDetected => new
+    {
+        status = "not_ready",
+        reason_code = "copilot_app_repository_permissions_detected",
+        message = "The Copilot App has repository permissions and cannot be used for unattended work.",
+        repo_app_installation_connected = repoAppInstallationConnected,
+    },
+    _ => new
+    {
+        status = "not_ready",
+        reason_code = "copilot_app_registration_unavailable",
+        message = "The Copilot App registration could not be verified.",
+        repo_app_installation_connected = repoAppInstallationConnected,
+    },
+};
+
+private static object CreateUnattendedReadiness(
+    bool hasCopilotBinding,
+    bool hasRepoAppInstallation,
+    bool hasRepositoryGrant)
+{
+    if (!hasCopilotBinding)
+        return new
+        {
+            status = "not_ready",
+            reason_code = "copilot_binding_required",
+            message = "Connect a project Copilot App identity before unattended work can run.",
+            repo_app_installation_connected = hasRepoAppInstallation,
+        };
+    if (!hasRepoAppInstallation)
+        return new
+        {
+            status = "not_ready",
+            reason_code = "repo_app_installation_required",
+            message = "Install the Repo App for this project before unattended work can run.",
+            repo_app_installation_connected = false,
+        };
+    if (!hasRepositoryGrant)
+        return new
+        {
+            status = "not_ready",
+            reason_code = "repo_app_repository_grant_required",
+            message = "The Repo App repository grant is unavailable for this project.",
+            repo_app_installation_connected = true,
+        };
+    return new
+    {
+        status = "ready",
+        reason_code = "ready",
+        message = "This project is ready for unattended automation when activation consent is granted.",
+        repo_app_installation_connected = true,
+    };
+}
 
 private static IResult CopilotBindingFailure(CopilotBindingOutcome outcome)
 {

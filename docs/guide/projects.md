@@ -69,12 +69,17 @@ If the repository list shows a "Connect GitHub" prompt, click it to authorize Ag
 
 Open a project, then navigate to **Settings** (accessible from the project's navigation) to configure it.
 
-Settings are organized into three sections, accessible from the left rail:
+Settings are organized in a left rail:
 
 ### General
 
 - **Project name** — rename the project.
 - **Default model** — set the AI model used by default for this project's runs.
+
+### Access
+
+Manage Agentweaver project members. Before a Repo App installation is connected, this section
+also contains a clearly marked legacy GitHub identity selector for interactive use only.
 
 ### Sandbox policy
 
@@ -86,6 +91,18 @@ Controls how agent commands execute and what they can reach. Options include:
 - **Preview approval timeout** — how long an agent-initiated live-preview request waits for
   approval. The default is 30 minutes; project owners can choose 1–1440 minutes. Existing
   projects inherit the 30-minute default.
+
+### Unattended
+
+The **Unattended** section reports a project-scoped, read-only automation readiness status and
+a fixed reason code. It never reveals GitHub identities, repository names, installation IDs,
+permission maps, or credentials. A Project Owner can start the separate Copilot App binding when
+that is the missing prerequisite, but this page has no automation enablement or activation
+control; activation consent is a separate step.
+
+After a Repo App installation is connected, Project Settings hides the older per-project GitHub
+identity and webhook controls. Before then, those legacy controls are limited to interactive use
+and marked as pending removal.
 
 ### Danger Zone
 

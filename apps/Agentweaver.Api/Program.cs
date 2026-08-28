@@ -243,6 +243,8 @@ builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddHttpClient("entra-oidc")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<CopilotAppRegistrationService>();
+builder.Services.AddHostedService<CopilotAppRegistrationStartupService>();
 builder.Services.AddSingleton<EntraAccessTokenValidator>();
 builder.Services.AddSingleton<AuthModeEpochService>();
 builder.Services.AddHostedService<AuthModeEpochStartupService>();

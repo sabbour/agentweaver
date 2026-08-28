@@ -593,6 +593,13 @@ export interface ProjectGitHubIdentity {
   resolution_source: string;
 }
 
+export interface UnattendedReadiness {
+  status: 'ready' | 'not_ready';
+  reason_code: string;
+  message: string;
+  repo_app_installation_connected: boolean;
+}
+
 
 // --- Casting / Team types ---
 

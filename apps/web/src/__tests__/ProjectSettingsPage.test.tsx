@@ -28,6 +28,8 @@ vi.mock('../api/apiClient', () => ({
     updateProjectProviderSettings: vi.fn(),
     updateProjectPreviewSettings: vi.fn(),
     updateSandboxPolicy: vi.fn(),
+    getUnattendedReadiness: vi.fn(),
+    beginProjectCopilotAuthorization: vi.fn(),
   },
 }));
 
@@ -128,6 +130,12 @@ beforeEach(() => {
   vi.mocked(apiClient.createProjectRoleAssignment).mockResolvedValue(undefined as never);
   vi.mocked(apiClient.deleteProjectRoleAssignment).mockResolvedValue(undefined as never);
   vi.mocked(apiClient.setProjectGitHubIdentityOverride).mockResolvedValue(undefined as never);
+  vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
+    status: 'not_ready',
+    reason_code: 'copilot_binding_required',
+    message: 'Connect a project Copilot App identity before unattended work can run.',
+    repo_app_installation_connected: false,
+  } as never);
 });
 
 afterEach(() => {
@@ -156,6 +164,34 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Sandbox policy/i }));
 
     await waitFor(() => expect(screen.getByText('Sandbox enabled')).toBeDefined());
+  });
+
+  it('shows read-only unattended readiness without an activation control', async () => {
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Unattended/i }));
+
+    expect(await screen.findByText('Automation readiness')).toBeDefined();
+    expect(screen.getByText('copilot_binding_required')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Connect Copilot App' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
+  });
+
+  it('hides legacy identity and webhook controls after a Repo App installation is connected', async () => {
+    vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
+      status: 'not_ready',
+      reason_code: 'copilot_binding_required',
+      message: 'Connect a project Copilot App identity before unattended work can run.',
+      repo_app_installation_connected: true,
+    } as never);
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Webhooks/i })).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
+
+    expect(screen.queryByText('GitHub identity for this project')).toBeNull();
   });
 
   it('reveals a rotated GitHub webhook secret once', async () => {

@@ -25,6 +25,7 @@ import type {
   Project,
   ProjectAccessOverview,
   SandboxPolicy,
+  UnattendedReadiness,
   UpdateProjectProviderSettingsRequest,
 } from '../api/types';
 import type { ReactElement } from 'react';
@@ -41,7 +42,7 @@ import {
 // right content pane. Only sections with a real Agentweaver backend are shipped
 // (Principle VII): General, Sandbox policy, Danger Zone. The rail is
 // data-driven so more sections can be appended as their backends land.
-type SectionId = 'general' | 'access' | 'repository' | 'webhooks' | 'sandbox' | 'danger';
+type SectionId = 'general' | 'access' | 'repository' | 'webhooks' | 'unattended' | 'sandbox' | 'danger';
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
 
@@ -98,6 +99,12 @@ const SECTIONS: SectionDef[] = [
     icon: <Settings24Regular />,
   },
   {
+    id: 'unattended',
+    label: 'Unattended',
+    description: 'Review safe automation prerequisites for this project.',
+    icon: <Shield24Regular />,
+  },
+  {
     id: 'sandbox',
     label: 'Sandbox policy',
     description: 'Control how agent commands execute and what they may reach.',
@@ -117,6 +124,7 @@ function isSectionId(value: string | null): value is SectionId {
     || value === 'access'
     || value === 'repository'
     || value === 'webhooks'
+    || value === 'unattended'
     || value === 'sandbox'
     || value === 'danger';
 }
@@ -366,6 +374,10 @@ export function ProjectSettingsPage() {
   const [savingOverride, setSavingOverride] = useState(false);
   const [overrideError, setOverrideError] = useState<string | null>(null);
   const [overrideSuccess, setOverrideSuccess] = useState(false);
+  const [unattendedReadiness, setUnattendedReadiness] = useState<UnattendedReadiness | null>(null);
+  const [unattendedLoading, setUnattendedLoading] = useState(true);
+  const [unattendedError, setUnattendedError] = useState<string | null>(null);
+  const [connectingCopilot, setConnectingCopilot] = useState(false);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -425,6 +437,25 @@ export function ProjectSettingsPage() {
     if (!projectId) return;
     queueMicrotask(() => { void refreshAccessOverview(); });
   }, [projectId, refreshAccessOverview]);
+
+  const refreshUnattendedReadiness = useCallback(async () => {
+    if (!projectId) return;
+    setUnattendedLoading(true);
+    setUnattendedError(null);
+    try {
+      setUnattendedReadiness(await apiClient.getUnattendedReadiness(projectId));
+    } catch {
+      setUnattendedReadiness(null);
+      setUnattendedError('Automation readiness is unavailable. Refresh the page and try again.');
+    } finally {
+      setUnattendedLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    queueMicrotask(() => { void refreshUnattendedReadiness(); });
+  }, [projectId, refreshUnattendedReadiness]);
 
   useEffect(() => {
     if (accessOverview?.auth_mode !== 'entra') return;
@@ -722,10 +753,29 @@ export function ProjectSettingsPage() {
     }
   };
 
+  const handleConnectCopilot = async () => {
+    if (!projectId) return;
+    setConnectingCopilot(true);
+    setUnattendedError(null);
+    try {
+      const result = await apiClient.beginProjectCopilotAuthorization(projectId);
+      window.location.assign(result.authorization_url);
+    } catch {
+      setUnattendedError('The Copilot App connection could not be started. Review the readiness status and try again.');
+      setConnectingCopilot(false);
+    }
+  };
+
   if (!projectId) return null;
 
-  const visibleSections = SECTIONS.filter((s) => s.id !== 'repository' || project?.origin === 'blank');
-  const activeDef = visibleSections.find((s) => s.id === activeSection) ?? visibleSections[0];
+  const hasRepoAppInstallation = unattendedReadiness?.repo_app_installation_connected === true;
+  const visibleSections = SECTIONS.filter((s) =>
+    (s.id !== 'repository' || project?.origin === 'blank') &&
+    (s.id !== 'webhooks' || !hasRepoAppInstallation));
+  const displayedSection = visibleSections.some((section) => section.id === activeSection)
+    ? activeSection
+    : 'unattended';
+  const activeDef = visibleSections.find((s) => s.id === displayedSection) ?? visibleSections[0];
   const authModeLabel = accessOverview ? AUTH_MODE_LABELS[accessOverview.auth_mode] : 'GitHub';
   const projectRoleSummary = accessOverview?.current_user_project_role ?? (project?.owner ? `Owner (${project.owner})` : 'Unspecified');
 
@@ -761,7 +811,7 @@ export function ProjectSettingsPage() {
                 key={section.id}
                 className={mergeClasses(
                   styles.railItem,
-                  activeSection === section.id && styles.railItemActive,
+                  displayedSection === section.id && styles.railItemActive,
                   section.danger ? styles.railItemDanger : undefined,
                 )}
                 onClick={() => selectSection(section.id)}
@@ -786,7 +836,7 @@ export function ProjectSettingsPage() {
               ]} />
             </PageSection>
 
-            {activeSection === 'general' && (
+            {displayedSection === 'general' && (
               <div className={styles.section}>
                 <div className={styles.subBlock}>
                   <TitleText>Rename project</TitleText>
@@ -917,7 +967,7 @@ export function ProjectSettingsPage() {
               </div>
             )}
 
-            {activeSection === 'access' && (
+            {displayedSection === 'access' && (
               <div className={styles.section}>
                 {accessLoading && <Spinner label="Loading access settings" size="extra-tiny" />}
                 {accessError && (
@@ -1046,8 +1096,15 @@ export function ProjectSettingsPage() {
                       )}
                     </div>
 
+                    {!hasRepoAppInstallation && (
                     <div className={styles.subBlock}>
                       <TitleText>GitHub identity for this project</TitleText>
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          This legacy identity selection is limited to interactive use and is pending removal.
+                          It is unavailable after the Repo App is connected to this project.
+                        </MessageBarBody>
+                      </MessageBar>
                       {accessOverview.auth_mode === 'entra' ? (
                         <>
                           <Body as="p" tone="muted">
@@ -1118,12 +1175,54 @@ export function ProjectSettingsPage() {
                         </Body>
                       )}
                     </div>
+                    )}
                   </>
                 )}
               </div>
             )}
 
-            {activeSection === 'repository' && (
+            {displayedSection === 'unattended' && (
+              <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>Automation readiness</TitleText>
+                  <Body as="p" tone="muted">
+                    This read-only status reports the server-verified prerequisites for unattended work.
+                    This page does not enable or activate automation.
+                  </Body>
+                  {unattendedLoading && <Spinner label="Checking automation readiness" size="extra-tiny" />}
+                  {unattendedReadiness && (
+                    <>
+                      <MetricRow items={[
+                        { label: 'Status', value: unattendedReadiness.status === 'ready' ? 'Ready' : 'Not ready' },
+                        { label: 'Reason code', value: unattendedReadiness.reason_code },
+                      ]} />
+                      <MessageBar intent={unattendedReadiness.status === 'ready' ? 'success' : 'warning'}>
+                        <MessageBarBody>{unattendedReadiness.message}</MessageBarBody>
+                      </MessageBar>
+                      {unattendedReadiness.reason_code === 'copilot_binding_required' && (
+                        <Button
+                          appearance="primary"
+                          disabled={connectingCopilot}
+                          onClick={() => void handleConnectCopilot()}
+                        >
+                          {connectingCopilot ? 'Opening GitHub' : 'Connect Copilot App'}
+                        </Button>
+                      )}
+                    </>
+                  )}
+                  <div className={styles.formActions}>
+                    <Button appearance="secondary" disabled={unattendedLoading} onClick={() => void refreshUnattendedReadiness()}>
+                      Refresh status
+                    </Button>
+                  </div>
+                  {unattendedError && (
+                    <MessageBar intent="error"><MessageBarBody>{unattendedError}</MessageBarBody></MessageBar>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {displayedSection === 'repository' && (
               <div className={styles.section}>
                 <div className={styles.subBlock}>
                   <TitleText>Connect a GitHub repository</TitleText>
@@ -1152,10 +1251,16 @@ export function ProjectSettingsPage() {
               </div>
             )}
 
-            {activeSection === 'webhooks' && (
+            {displayedSection === 'webhooks' && (
               <div className={styles.section}>
                 <div className={styles.subBlock}>
                   <TitleText>GitHub webhook</TitleText>
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      This legacy webhook control is limited to interactive use and is pending removal.
+                      It is unavailable after the Repo App is connected to this project.
+                    </MessageBarBody>
+                  </MessageBar>
                   <Body as="p" tone="muted">
                     In GitHub, open your repository’s Settings, then Webhooks, and add this payload URL.
                     Set the content type to <strong>application/json</strong>.
@@ -1212,7 +1317,7 @@ export function ProjectSettingsPage() {
               </div>
             )}
 
-            {activeSection === 'sandbox' && (
+            {displayedSection === 'sandbox' && (
               <div className={styles.section}>
                 <div className={styles.subBlock}>
                   <TitleText>Preview approval</TitleText>
@@ -1356,7 +1461,7 @@ export function ProjectSettingsPage() {
               </div>
             )}
 
-            {activeSection === 'danger' && (
+            {displayedSection === 'danger' && (
               <div className={styles.dangerSection}>
                 <TitleText>Delete project</TitleText>
                 <Body as="p">This action cannot be undone. The project and all its run history will be permanently removed.</Body>
