@@ -9,6 +9,34 @@ namespace Agentweaver.Mcp.Tools;
 public sealed class ProjectTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+
+    [McpServerTool(Name = "github_repository_selections_list"), Description("List the signed-in caller's authorized GitHub repositories as bounded, redacted metadata. Choose one full_name from this result, then call github_repository_selection_issue before project_create with origin 'github'.")]
+    public async Task<string> GitHubRepositorySelectionsListAsync(CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.GetAsync<JsonElement>("/api/github/repository-selections", ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    [McpServerTool(Name = "github_repository_selection_issue"), Description("Mint a short-lived, single-use repository selection code for one full_name returned by github_repository_selections_list. Pass only the returned code to project_create; never pass a repository URL or identifier.")]
+    public async Task<string> GitHubRepositorySelectionIssueAsync(
+        [Description("Repository full name selected from github_repository_selections_list.")] string full_name,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.PostAsync<JsonElement>(
+                "/api/github/repository-selections", new { full_name }, ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
     [McpServerTool(Name = "project_list"), Description("List all Agentweaver projects.")]
     public async Task<string> ProjectListAsync(CancellationToken ct)
     {
@@ -35,7 +63,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "project_create"), Description("Create a new Agentweaver project. When origin is 'github', repository_selection_code is required; obtain it from the repository-selection endpoints after the caller chooses an authorized repository. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive.")]
+    [McpServerTool(Name = "project_create"), Description("Create a new Agentweaver project. When origin is 'github', repository_selection_code is required; first use github_repository_selections_list and github_repository_selection_issue with the same caller. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive.")]
     public async Task<string> ProjectCreateAsync(
         [Description("Project name")] string name,
         [Description("Local working directory path")] string working_directory,

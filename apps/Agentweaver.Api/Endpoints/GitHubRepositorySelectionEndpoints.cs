@@ -15,10 +15,10 @@ public static class GitHubRepositorySelectionEndpoints
             CancellationToken ct) =>
         {
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            if (HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) != HumanEntraSubjectState.Allowed)
-                return Results.Conflict(new { error = "human_entra_subject_required" });
+            if (RejectUnauthorizedSelectionCaller(httpContext, caller) is { } forbidden)
+                return forbidden;
 
-            var result = await broker.ListAsync(caller.EntraObjectId!, ct).ConfigureAwait(false);
+            var result = await broker.ListAsync(caller, ct).ConfigureAwait(false);
             return result.Outcome switch
             {
                 GitHubRepositorySelectionOutcome.Issued => Results.Ok(new GitHubRepositorySelectionListResponse
@@ -41,7 +41,7 @@ public static class GitHubRepositorySelectionEndpoints
         .WithTags("GitHub", "Projects")
         .AddOpenApiOperationTransformer((operation, _, _) =>
         {
-            operation.Description = "Lists bounded metadata-only repositories from the signed-in human's Repo App authorization. The response is not repository authority.";
+            operation.Description = "Lists bounded metadata-only repositories from the signed-in caller's active GitHub authorization. In Entra mode this is the human's Repo App authorization; GitHubLegacy uses its caller-scoped legacy credential. The response is not repository authority.";
             return Task.CompletedTask;
         });
 
@@ -52,12 +52,12 @@ public static class GitHubRepositorySelectionEndpoints
             CancellationToken ct) =>
         {
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            if (HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) != HumanEntraSubjectState.Allowed)
-                return Results.Conflict(new { error = "human_entra_subject_required" });
+            if (RejectUnauthorizedSelectionCaller(httpContext, caller) is { } forbidden)
+                return forbidden;
             if (string.IsNullOrWhiteSpace(request?.FullName))
                 return Results.BadRequest(new { error = "full_name is required." });
 
-            var result = await broker.IssueAsync(caller.EntraObjectId!, request.FullName, ct)
+            var result = await broker.IssueAsync(caller, request.FullName, ct)
                 .ConfigureAwait(false);
             return result.Outcome switch
             {
@@ -75,8 +75,23 @@ public static class GitHubRepositorySelectionEndpoints
         .WithTags("GitHub", "Projects")
         .AddOpenApiOperationTransformer((operation, _, _) =>
         {
-            operation.Description = "Verifies one browse-result repository through the signed-in human's Repo App authorization and mints one short-lived, single-use opaque selection code. Repository and authorization identifiers are never returned. POST /api/projects accepts only this code as repository authority.";
+            operation.Description = "Verifies one browse-result repository through the signed-in caller's active GitHub authorization and mints one short-lived, single-use opaque selection code. Repository and authorization identifiers are never returned. POST /api/projects accepts only this code as repository authority.";
             return Task.CompletedTask;
         });
+    }
+
+    private static IResult? RejectUnauthorizedSelectionCaller(HttpContext httpContext, CallerContext caller)
+    {
+        if (AuthModeResolver.Resolve(httpContext.RequestServices.GetRequiredService<IConfiguration>()) == AuthMode.Entra)
+        {
+            return HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) == HumanEntraSubjectState.Allowed
+                ? null
+                : Results.Conflict(new { error = "human_entra_subject_required" });
+        }
+
+        return string.IsNullOrWhiteSpace(caller.User) ||
+               httpContext.User.HasClaim("agentweaver_internal", "true")
+            ? Results.StatusCode(StatusCodes.Status403Forbidden)
+            : null;
     }
 }

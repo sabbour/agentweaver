@@ -1078,6 +1078,10 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("created_at");
 
+                    b.Property<int>("CredentialKind")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("credential_kind");
+
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
                         .HasColumnType("TEXT")

@@ -778,10 +778,15 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         }
 
         if (request.Origin == "github" &&
+            AuthModeResolver.Resolve(configuration) == AuthMode.Entra &&
             HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) != HumanEntraSubjectState.Allowed)
         {
             return Results.Conflict(new { error = "human_entra_subject_required" });
         }
+        if (request.Origin == "github" &&
+            AuthModeResolver.Resolve(configuration) == AuthMode.GitHubLegacy &&
+            httpContext.User.HasClaim("agentweaver_internal", "true"))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
 
         // working_directory is only mandatory when the active workspace provider cannot auto-assign
         // one (e.g. LocalFilesystemWorkspaceProvider). Providers that report AutoAssignsPath == true
@@ -842,7 +847,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         if (request.Origin == "github")
         {
             resolvedRepository = await repositorySelections.TryConsumeAndResolveAsync(
-                request.RepositorySelectionCode!, caller.EntraObjectId!, ct).ConfigureAwait(false);
+                request.RepositorySelectionCode!, caller, ct).ConfigureAwait(false);
             if (resolvedRepository is null)
                 return Results.Conflict(new { error = "github_repository_selection_unavailable" });
         }

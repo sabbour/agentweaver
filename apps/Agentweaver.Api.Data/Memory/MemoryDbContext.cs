@@ -654,6 +654,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.CodeHash).HasColumnName("code_hash");
             e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
             e.Property(x => x.RepoAppAuthorizationId).HasColumnName("repo_app_authorization_id");
+            e.Property(x => x.CredentialKind).HasColumnName("credential_kind");
             e.Property(x => x.RepositoryId).HasColumnName("repository_id");
             e.Property(x => x.ExpiresAtUnixMilliseconds).HasColumnName("expires_at_unix_ms");
             e.Property(x => x.ConsumedAtUnixMilliseconds).HasColumnName("consumed_at_unix_ms");

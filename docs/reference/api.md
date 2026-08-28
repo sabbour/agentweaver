@@ -113,10 +113,11 @@ Run control state is durable. Shell approvals/denials, tool approval requests, r
 
 ### GitHub repository selection codes
 
-These endpoints are the pre-project, Repo App-only handoff for GitHub-backed project
-creation. They require an authenticated **human Entra subject** and use only that caller's
-current Repo App authorization. They never use linked-account aggregation, a platform
-credential, or the legacy token store.
+These endpoints are the pre-project handoff for GitHub-backed project creation. In Entra
+mode, they require an authenticated **human Entra subject** and use only that caller's
+current Repo App authorization. In documented `GitHubLegacy` mode, they require a
+non-internal authenticated GitHub caller and that caller's active legacy credential. They
+never use linked-account aggregation or a platform credential.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -149,19 +150,21 @@ rechecks that name against the caller's bounded Repo App browse result, then ret
 ```
 
 The code is cryptographically random, stored only as a digest, caller-bound, valid for five
-minutes, bound to the exact Repo App authorization used to issue it, and atomically single-use.
-A code is not a general GitHub credential. Missing, revoked, malformed, expired, reused, or
-cross-subject codes fail closed and do not disclose repository scope. Browser responses contain
-no GitHub repository IDs, installation or authorization IDs, tokens, secrets, or permission maps.
-These endpoints return `409` with one of
+minutes, credential-kind-bound, and atomically single-use. Entra codes are additionally bound
+to the exact Repo App authorization used to issue them. In `GitHubLegacy` mode, the server
+re-resolves the current caller-scoped credential when consuming a code, so sign-out or
+credential invalidation fails closed. A code is not a general GitHub credential. Missing,
+revoked, malformed, expired, reused, or cross-subject codes fail closed and do not disclose
+repository scope. Browser responses contain no GitHub repository IDs, installation or
+authorization IDs, tokens, secrets, or permission maps. These endpoints return `409` with one of
 `human_entra_subject_required`, `github_binding_unavailable`, or
 `github_capability_unavailable`; malformed selection input returns `400`.
 
 The GitHub branch of `POST /api/projects` accepts only `repository_selection_code` as repository
-authority. It atomically consumes the code for the authenticated human Entra subject, verifies
-that its issuing Repo App authorization is still live, then resolves clone metadata server-side.
-It rejects client-supplied repository URLs, identifiers, owner/name, installation IDs, tokens,
-and permission maps.
+authority. It atomically consumes the code for the authenticated caller, verifies the active
+Repo App authorization or caller-scoped legacy credential is still usable, then resolves clone
+metadata server-side. It rejects client-supplied repository URLs, identifiers, owner/name,
+installation IDs, tokens, and permission maps.
 
 ### Memory
 

@@ -3,9 +3,12 @@ using System.Text;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
+using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -136,7 +139,10 @@ public sealed class GitHubRepositorySelectionBrokerTests
         new(
             new TwoAppPersistenceStore(new MemoryDbContext(options)),
             new TwoAppCredentialVault(secrets),
-            new GitHubRepositorySelectionClient(new StubHttpClientFactory(handler)));
+            new GitHubRepositorySelectionClient(new StubHttpClientFactory(handler)),
+            new StubAccessTokenProvider(),
+            new FixedInstallationScopeStub(),
+            new ConfigurationBuilder().Build());
 
     private static async Task SeedLiveAuthorizationAsync(
         DbContextOptions<MemoryDbContext> options,
@@ -190,5 +196,11 @@ public sealed class GitHubRepositorySelectionBrokerTests
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             });
+    }
+
+    private sealed class StubAccessTokenProvider : IGitHubAccessTokenProvider
+    {
+        public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
+            Task.FromResult<string?>("test-token");
     }
 }

@@ -1409,6 +1409,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<int>("CredentialKind")
+                        .HasColumnType("integer")
+                        .HasColumnName("credential_kind");
+
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
                         .HasColumnType("text")

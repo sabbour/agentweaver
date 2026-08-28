@@ -61,7 +61,7 @@ The Agentweaver MCP server exposes **104 tools** across **14 categories**. Tool 
 - **Diagnostics:** `diagnostics_get`, `heartbeat_status`
 - **GitHub Auth:** `github_repo_app_authorization_status`, `github_repo_app_connect`, `github_repo_app_disconnect`, `project_copilot_app_authorization_status`, `project_copilot_app_connect`, `project_copilot_app_disconnect`, `project_github_capability_status`
 - **Memory:** `decision_create`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_inbox_submit`, `decision_list`, `decision_update`, `memory_export`, `memory_get`, `memory_import`, `memory_list`, `memory_record`, `memory_search`, `session_current`, `session_start`, `session_update`, `squad_decide`
-- **Project:** `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_rename`
+- **Project:** `github_repository_selection_issue`, `github_repository_selections_list`, `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_rename`
 - **Run:** `run_archive`, `run_get_file`, `run_retry`, `run_review`, `run_show_artifacts`, `run_status`, `run_submit`, `run_task`, `run_watch`, `start_preview`
 - **Sandbox Policy:** `sandbox_policy_get`, `sandbox_policy_set`
 - **Skill:** `skill_assign`, `skill_assignments_list`, `skill_create`, `skill_defaults_apply`, `skill_defaults_preview`, `skill_delete`, `skill_generate`, `skill_get`, `skill_import`, `skill_import_preview`, `skill_list`, `skill_marketplace_browse`, `skill_marketplace_import`, `skill_marketplace_source_add`, `skill_marketplace_source_remove`, `skill_marketplace_sources_list`, `skill_marketplaces_list`, `skill_sync`, `skill_unassign`

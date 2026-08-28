@@ -162,7 +162,7 @@ function buildToolsDoc(groups, total) {
   lines.push("Common mappings include Agentweaver sign-in guidance for `401`s, resource-specific list/read hints for `404`s, review-state guidance for `409`s, and `diagnostics_get` retry guidance for timeouts.");
   lines.push("");
 
-  for (const g of groups) {
+  for (const [index, g] of groups.entries()) {
     lines.push(`## ${g.category}`);
     lines.push("");
     lines.push("| Tool | Description |");
@@ -170,7 +170,7 @@ function buildToolsDoc(groups, total) {
     for (const t of g.tools) {
       lines.push(`| \`${t.name}\` | ${t.description} |`);
     }
-    lines.push("");
+    if (index < groups.length - 1) lines.push("");
   }
 
   return lines.join("\n") + "\n";

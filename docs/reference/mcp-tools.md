@@ -119,8 +119,10 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
+| `github_repository_selection_issue` | Mint a short-lived, single-use repository selection code for one full_name returned by github_repository_selections_list. Pass only the returned code to project_create; never pass a repository URL or identifier. |
+| `github_repository_selections_list` | List the signed-in caller's authorized GitHub repositories as bounded, redacted metadata. Choose one full_name from this result, then call github_repository_selection_issue before project_create with origin 'github'. |
 | `project_configure` | Configure the AI model provider settings for a project. |
-| `project_create` | Create a new Agentweaver project. When origin is 'github', repository_selection_code is required after selecting an authorized repository. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
+| `project_create` | Create a new Agentweaver project. When origin is 'github', repository_selection_code is required; first use github_repository_selections_list and github_repository_selection_issue with the same caller. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
 | `project_delete` | Delete a project by ID. |
 | `project_get` | Get a project by ID. |
 | `project_list` | List all Agentweaver projects. |

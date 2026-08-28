@@ -27,6 +27,47 @@ public sealed class ProjectToolsTests
     }
 
     [Fact]
+    public void GitHubRepositorySelectionTools_ExposeTheBrowseAndIssueFlow()
+    {
+        var list = BuildTool(nameof(ProjectTools.GitHubRepositorySelectionsListAsync)).ProtocolTool;
+        var issue = BuildTool(nameof(ProjectTools.GitHubRepositorySelectionIssueAsync)).ProtocolTool;
+
+        list.Name.Should().Be("github_repository_selections_list");
+        issue.Name.Should().Be("github_repository_selection_issue");
+        issue.InputSchema.GetProperty("properties").TryGetProperty("full_name", out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GitHubRepositorySelectionTools_ForwardOnlyTheSelectedFullName()
+    {
+        var calls = new List<(HttpMethod Method, string Path, JsonElement? Body)>();
+        var tools = new ProjectTools(CreateApiClient((request, _) =>
+        {
+            JsonElement? body = request.Content is null
+                ? null
+                : request.Content.ReadFromJsonAsync<JsonElement>().GetAwaiter().GetResult();
+            calls.Add((request.Method, request.RequestUri!.AbsolutePath, body));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new { selection_code = "opaque-code" })
+            });
+        }));
+
+        await tools.GitHubRepositorySelectionsListAsync(CancellationToken.None);
+        await tools.GitHubRepositorySelectionIssueAsync("octo/secure-repo", CancellationToken.None);
+
+        calls.Should().HaveCount(2);
+        calls[0].Method.Should().Be(HttpMethod.Get);
+        calls[0].Path.Should().Be("/api/github/repository-selections");
+        calls[0].Body.Should().BeNull();
+        calls[1].Method.Should().Be(HttpMethod.Post);
+        calls[1].Path.Should().Be("/api/github/repository-selections");
+        calls[1].Body!.Value.GetProperty("full_name").GetString().Should().Be("octo/secure-repo");
+        calls[1].Body!.Value.TryGetProperty("repository_id", out _).Should().BeFalse();
+        calls[1].Body!.Value.TryGetProperty("source_repository", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task ProjectCreate_ForwardsOnlyTheOpaqueRepositorySelectionCode()
     {
         HttpRequestMessage? capturedRequest = null;
@@ -58,10 +99,10 @@ public sealed class ProjectToolsTests
         capturedBody.TryGetProperty("source_repository", out _).Should().BeFalse();
     }
 
-    private static McpServerTool BuildTool()
+    private static McpServerTool BuildTool(string methodName = nameof(ProjectTools.ProjectCreateAsync))
     {
-        var method = typeof(ProjectTools).GetMethod(nameof(ProjectTools.ProjectCreateAsync), BindingFlags.Public | BindingFlags.Instance)
-            ?? throw new InvalidOperationException($"Method {nameof(ProjectTools.ProjectCreateAsync)} not found.");
+        var method = typeof(ProjectTools).GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException($"Method {methodName} not found.");
         return McpServerTool.Create(method, new ProjectTools(CreateApiClient((_, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)))), options: null);
     }

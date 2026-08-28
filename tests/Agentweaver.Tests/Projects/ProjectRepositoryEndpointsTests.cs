@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +23,7 @@ public sealed class ProjectRepositoryEndpointsTests
         using var factory = new RepositoryConnectWebApplicationFactory(
             new FakeGitHubRepositoryClient(
                 [new GitHubRepositoryOwner("octo", true), new GitHubRepositoryOwner("octo-org", false)]));
+        await SeedGitHubTokenAsync(factory);
         var client = factory.CreateAuthenticatedClient();
 
         var createResponse = await client.PostAsJsonAsync("/api/projects", new
@@ -49,6 +51,7 @@ public sealed class ProjectRepositoryEndpointsTests
     {
         var fakeClient = new FakeGitHubRepositoryClient([new GitHubRepositoryOwner("octo", true)]);
         using var factory = new RepositoryConnectWebApplicationFactory(fakeClient);
+        await SeedGitHubTokenAsync(factory);
         var client = factory.CreateAuthenticatedClient();
 
         var createResponse = await client.PostAsJsonAsync("/api/projects", new
@@ -80,14 +83,21 @@ public sealed class ProjectRepositoryEndpointsTests
     {
         var fakeClient = new FakeGitHubRepositoryClient([new GitHubRepositoryOwner("octo", true)]);
         using var factory = new RepositoryConnectWebApplicationFactory(fakeClient);
+        await SeedGitHubTokenAsync(factory);
         var client = factory.CreateAuthenticatedClient();
+
+        var selection = await client.PostAsJsonAsync(
+            "/api/github/repository-selections", new { full_name = "octo/already-connected" });
+        selection.StatusCode.Should().Be(HttpStatusCode.OK);
+        var selectionCode = (await selection.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>())
+            .GetProperty("selection_code").GetString();
 
         var createResponse = await client.PostAsJsonAsync("/api/projects", new
         {
             name = "GH Project",
             origin = "github",
-            source_repository = "https://github.com/octo/already-connected",
             working_directory = factory.NewWorkingDirectory(),
+            repository_selection_code = selectionCode,
         });
         createResponse.EnsureSuccessStatusCode();
         var project = await createResponse.Content.ReadFromJsonAsync<ProjectResponse>();
@@ -112,9 +122,15 @@ public sealed class ProjectRepositoryEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    private static Task SeedGitHubTokenAsync(RepositoryConnectWebApplicationFactory factory) =>
+        factory.TokenStore.SetAsync(
+            GitHubTokenScope.Installation,
+            new GitHubToken("test-access-token", null, null, "test-login", null, []));
+
     private sealed class RepositoryConnectWebApplicationFactory : ProjectsWebApplicationFactory
     {
         private readonly FakeGitHubRepositoryClient _repoClient;
+        private readonly HttpMessageHandler _selectionHandler = new RepositorySelectionHandler();
 
         public RepositoryConnectWebApplicationFactory(FakeGitHubRepositoryClient repoClient) => _repoClient = repoClient;
 
@@ -126,18 +142,12 @@ public sealed class ProjectRepositoryEndpointsTests
                 var existingRepoClient = services.FirstOrDefault(d => d.ServiceType == typeof(IGitHubRepositoryClient));
                 if (existingRepoClient is not null) services.Remove(existingRepoClient);
                 services.AddSingleton<IGitHubRepositoryClient>(_repoClient);
-
-                var existingTokenProvider = services.FirstOrDefault(d => d.ServiceType == typeof(IGitHubAccessTokenProvider));
-                if (existingTokenProvider is not null) services.Remove(existingTokenProvider);
-                services.AddSingleton<IGitHubAccessTokenProvider>(new StubAccessTokenProvider("fake-token"));
+                services.Configure<Microsoft.Extensions.Http.HttpClientFactoryOptions>(
+                    "github",
+                    options => options.HttpMessageHandlerBuilderActions.Add(
+                        build => build.PrimaryHandler = _selectionHandler));
             });
         }
-    }
-
-    private sealed class StubAccessTokenProvider(string? token) : IGitHubAccessTokenProvider
-    {
-        public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult(token);
     }
 
     private sealed class FakeGitHubRepositoryClient(IReadOnlyList<GitHubRepositoryOwner> owners) : IGitHubRepositoryClient
@@ -152,5 +162,19 @@ public sealed class ProjectRepositoryEndpointsTests
             return Task.FromResult(GitHubRepositoryResult.Ok(
                 fullName, $"https://github.com/{fullName}", $"https://github.com/{fullName}.git", "main"));
         }
+    }
+
+    private sealed class RepositorySelectionHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """[{"id":42,"full_name":"octo/already-connected","owner":{"login":"octo"},"private":true,"default_branch":"main"}]""",
+                    Encoding.UTF8,
+                    "application/json"),
+            });
     }
 }
