@@ -99,11 +99,25 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     [InlineData("nohup npm test")]
     [InlineData("setsid npm test")]
     [InlineData("rm -rf node_modules")]
+    [InlineData("git push --force origin main")]
+    [InlineData("git remote set-url origin https://github.com/example/repo")]
+    [InlineData("git config credential.helper store")]
+    [InlineData("gh pr create --title test --body test")]
+    [InlineData("gh pr merge 1")]
+    [InlineData("gh pr close 1")]
+    [InlineData("gh repo delete example/repo")]
+    [InlineData("gh repo archive example/repo")]
+    [InlineData("gh api /user")]
+    [InlineData("gh auth login")]
+    [InlineData("gh auth logout")]
     public async Task Controlled_run_command_rejects_backgrounding_and_destructive_commands(string command)
     {
         var executor = new CountingExecutor();
         using var tracker = new ShellExecutionTracker();
-        var context = BuildContext(executor, tracker);
+        var context = BuildContext(
+            executor,
+            tracker,
+            destructivePatterns: [.. SandboxPolicy.Default(_root).DestructiveCommandPatterns]);
         var tool = CopilotAIAgent.BuildSessionConfigTools(
             context,
             includeControlledRunCommand: true).Single(t => t.Name == "run_command");
@@ -112,6 +126,84 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             new Dictionary<string, object?> { ["command"] = command }));
 
         result?.ToString().Should().Contain("rejected");
+        executor.ExecuteCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("git status")]
+    [InlineData("gh repo view")]
+    public async Task Controlled_run_command_supplies_repository_credential_only_to_git_and_gh(string command)
+    {
+        SandboxCommand? observed = null;
+        var executor = new CapturingExecutor(command => observed = command);
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker, repositoryAccessToken: "repository-access-token"),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        observed.Should().NotBeNull();
+        observed!.Environment.Should().Contain(
+            new KeyValuePair<string, string>("GH_TOKEN", "repository-access-token"));
+        observed.Environment.Should().Contain(
+            new KeyValuePair<string, string>("GITHUB_TOKEN", "repository-access-token"));
+        observed.Environment.Should().Contain(
+            new KeyValuePair<string, string>("GIT_CONFIG_VALUE_0", "!gh auth git-credential"));
+        observed.CommandLine.Should().NotContain("repository-access-token");
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_does_not_supply_repository_credential_to_other_commands()
+    {
+        SandboxCommand? observed = null;
+        var executor = new CapturingExecutor(command => observed = command);
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker, repositoryAccessToken: "repository-access-token"),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "dotnet --info" }));
+
+        observed.Should().NotBeNull();
+        observed!.Environment.Should().NotContain(
+            pair => pair.Value == "repository-access-token");
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_redacts_repository_credential_from_command_output()
+    {
+        var executor = new CapturingExecutor(_ => { }, "repository-access-token");
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker, repositoryAccessToken: "repository-access-token"),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "git status" }));
+
+        result?.ToString().Should().Contain("***").And.NotContain("repository-access-token");
+    }
+
+    [Theory]
+    [InlineData("git status; whoami")]
+    [InlineData("gh repo view > output.txt")]
+    [InlineData("git $(echo status)")]
+    [InlineData("gh repo view\r\nwhoami")]
+    public async Task Controlled_run_command_rejects_compound_credentialed_commands(string command)
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker, repositoryAccessToken: "repository-access-token"),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        result?.ToString().Should().Contain("GitHub credentials require one git or gh command");
         executor.ExecuteCalls.Should().Be(0);
     }
 
@@ -364,7 +456,9 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         ISandboxExecutor executor,
         ShellExecutionTracker tracker,
         string? workspace = null,
-        string? scratchDirectory = null) =>
+        string? scratchDirectory = null,
+        string? repositoryAccessToken = null,
+        string[]? destructivePatterns = null) =>
         new(
             AgentId: "agent",
             WorkingDirectory: workspace ?? _root,
@@ -375,10 +469,11 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             Redactor: SandboxOutputRedactor.Default,
             Options: new SandboxToolOptions(ShellEnabled: true, DefaultTimeoutMs: 600_000)
             {
-                DestructiveCommandPatterns = ["rm -rf"],
+                DestructiveCommandPatterns = destructivePatterns ?? ["rm -rf"],
                 RejectBackgroundCommands = true,
                 RejectDestructiveCommands = true,
                 MaximumTimeoutMs = 600_000,
+                RepositoryAccessToken = repositoryAccessToken,
             },
             Logger: NullLogger.Instance,
             ShellExecutionTracker: tracker,
@@ -410,7 +505,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         }
     }
 
-    private sealed class CapturingExecutor(Action<SandboxCommand> onExecute) : ISandboxExecutor
+    private sealed class CapturingExecutor(Action<SandboxCommand> onExecute, string stdout = "ok") : ISandboxExecutor
     {
         public bool IsRealIsolation => false;
         public string BackendName => "direct";
@@ -424,7 +519,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         {
             onExecute(command);
             return Task.FromResult(
-                new SandboxExecResult(0, "ok", "", TimedOut: false, OutputTruncated: false));
+                new SandboxExecResult(0, stdout, "", TimedOut: false, OutputTruncated: false));
         }
 
         public async IAsyncEnumerable<SandboxOutputChunk> StreamAsync(

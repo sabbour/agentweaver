@@ -74,6 +74,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly IQuestionGate? _questionGate;
     private readonly IRunOptionsStore? _runOptions;
     private readonly IEnumerable<IAgentRuntimeToolProvider> _toolProviders;
+    private readonly ISandboxRepositoryCredentialProvider? _repositoryCredentialProvider;
 
     // Names of tools built by an IAgentRuntimeToolProvider and wrapped in
     // InstrumentedCustomAIFunction (populated fresh on every RebuildInnerAgent call). The
@@ -263,7 +264,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         ILogger<CopilotAIAgent> logger,
         IQuestionGate? questionGate = null,
         IRunOptionsStore? runOptions = null,
-        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null)
+        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
+        ISandboxRepositoryCredentialProvider? repositoryCredentialProvider = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
@@ -275,6 +277,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _questionGate = questionGate;
         _runOptions = runOptions;
         _toolProviders = toolProviders ?? [];
+        _repositoryCredentialProvider = repositoryCredentialProvider;
     }
 
     /// <summary>
@@ -406,6 +409,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
                 : (int)TimeSpan.FromMinutes(5).TotalMilliseconds)
         {
+            RepositoryAccessToken = _repositoryCredentialProvider?.GetAccessToken(),
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,

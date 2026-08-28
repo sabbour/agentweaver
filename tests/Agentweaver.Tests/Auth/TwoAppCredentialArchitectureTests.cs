@@ -44,8 +44,17 @@ public sealed class TwoAppCredentialArchitectureTests
         methods[0].GetParameters().Take(2).Select(parameter => parameter.ParameterType)
             .Should().Equal(typeof(GitHubCapabilityPurpose), typeof(SnapshotRef));
         methods[0].GetParameters().Should().NotContain(parameter => parameter.IsOptional);
+
+        var credential = typeof(GitHubCapabilityBroker).GetMethod(
+            "TryUseRepositoryCredentialAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+        credential.Should().NotBeNull();
+        credential.GetParameters().Take(2).Select(parameter => parameter.ParameterType)
+            .Should().Equal(typeof(SnapshotRef), typeof(DateTimeOffset));
+        credential.GetParameters().Should().NotContain(parameter => parameter.IsOptional);
         File.ReadAllText(Path.Combine(FindRepositoryRoot(), "apps", "Agentweaver.Api", "Auth", "GitHubCapabilityBroker.cs"))
-            .Should().NotContain("IGitHubTokenScopeProvider").And.NotContain(".Resolve");
+            .Should().NotContain("IGitHubTokenScopeProvider").And.NotContain(".Resolve")
+            .And.NotContain("CommandLine").And.NotContain("git ").And.NotContain("gh ");
     }
 
     [Fact]
@@ -104,6 +113,26 @@ public sealed class TwoAppCredentialArchitectureTests
             .Should().Contain("AddScoped<RunGitHubCapabilitySnapshotLifecycle>");
         File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Runs", "WorkflowRestartService.cs"))
             .Should().Contain("PrepareForLaunchAsync(run, ct)");
+    }
+
+    [Fact]
+    public void RepositoryCredentialRegistry_UsesOnlyTheRunBoundRepositorySnapshot()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "apps",
+            "Agentweaver.Api",
+            "Sandbox",
+            "RunRepositoryCredentialRegistry.cs"));
+
+        source.Should().Contain("GetCapabilitySnapshotsAsync(runId, ct)")
+            .And.Contain("GitHubCapabilityPurpose.UnattendedRepository")
+            .And.Contain("TryUseRepositoryCredentialAsync")
+            .And.Contain("ConcurrentDictionary<string, Entry>")
+            .And.NotContain("CommandLine")
+            .And.NotContain("endpoint")
+            .And.NotContain("git ")
+            .And.NotContain("gh ");
     }
 
     [Fact]

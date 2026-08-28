@@ -41,6 +41,7 @@ public sealed class AgentHostReaperService : IAgentHostReaper
     // First-class preview lifecycle reconciler. Before reaping an orphaned claim, it derives durable
     // Previewable/PreviewActive state and atomically owns all retention or cleanup side effects.
     private readonly Preview.ISandboxPreviewService? _previewService;
+    private readonly RunRepositoryCredentialRegistry? _repositoryCredentials;
 
     public AgentHostReaperService(
         IKubernetes client,
@@ -48,7 +49,8 @@ public sealed class AgentHostReaperService : IAgentHostReaper
         KubernetesSandboxOptions options,
         ILogger<AgentHostReaperService> logger,
         ISecretStore? secretStore = null,
-        Preview.ISandboxPreviewService? previewService = null)
+        Preview.ISandboxPreviewService? previewService = null,
+        RunRepositoryCredentialRegistry? repositoryCredentials = null)
     {
         _client = client;
         _runStore = runStore;
@@ -56,6 +58,7 @@ public sealed class AgentHostReaperService : IAgentHostReaper
         _logger = logger;
         _secretStore = secretStore;
         _previewService = previewService;
+        _repositoryCredentials = repositoryCredentials;
     }
 
     /// <inheritdoc />
@@ -105,6 +108,7 @@ public sealed class AgentHostReaperService : IAgentHostReaper
                 // from the claim annotation and delete it so the credential's durable lifetime stays
                 // bounded by the pod's (spec-006 decouple-preview; no-op when absent).
                 await TryDeleteOrphanCredentialAsync(claim.AnnotatedRunId, ct).ConfigureAwait(false);
+                await TryRevokeOrphanRepositoryCredentialAsync(claim.AnnotatedRunId, ct).ConfigureAwait(false);
             }
         }
 
@@ -248,6 +252,21 @@ public sealed class AgentHostReaperService : IAgentHostReaper
         {
             _logger.LogWarning(ex,
                 "AgentHostReaper: failed to delete preview-runner credential for run {RunId} (best-effort)", runId);
+        }
+    }
+
+    private async Task TryRevokeOrphanRepositoryCredentialAsync(string? runId, CancellationToken ct)
+    {
+        if (_repositoryCredentials is null || string.IsNullOrWhiteSpace(runId))
+            return;
+
+        try
+        {
+            await _repositoryCredentials.RevokeAsync(runId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "AgentHostReaper: failed to revoke repository credential for run {RunId}", runId);
         }
     }
 

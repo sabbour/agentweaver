@@ -8,6 +8,12 @@ public sealed record SandboxToolOptions(
     int DefaultTimeoutMs = 300_000)
 {
     /// <summary>
+    /// Short-lived credential for the run's selected repository. The shell tool gives it only to a
+    /// simple <c>git</c> or <c>gh</c> child process. It is never written to disk or an event.
+    /// </summary>
+    public string? RepositoryAccessToken { get; init; }
+
+    /// <summary>
     /// Allowed repository roots accessible as read-only inside the sandbox.
     /// If empty, only the working directory is accessible.
     /// </summary>

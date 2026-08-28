@@ -99,10 +99,14 @@ internal sealed class RunCommandTool : ISandboxTool
                     timeout = ctx.Options.MinimumTimeoutMs;
                 if (ctx.Options.MaximumTimeoutMs > 0)
                     timeout = Math.Min(timeout, ctx.Options.MaximumTimeoutMs);
+                var environment = BuildCommandEnvironment(ctx.WorkingDirectory, scratchDirectory);
+                if (!TryAddRepositoryCredential(command, ctx.Options.RepositoryAccessToken, environment, out var credentialError))
+                    return credentialError!;
+
                 var cmd = new SandboxCommand(
                     command,
                     ctx.WorkingDirectory,
-                    BuildCommandEnvironment(ctx.WorkingDirectory, scratchDirectory),
+                    environment,
                     fsPolicy,
                     timeout,
                     NetworkEnabled: ctx.Options.NetworkEnabled,
@@ -130,8 +134,8 @@ internal sealed class RunCommandTool : ISandboxTool
                     executionLease?.Dispose();
                 }
 
-                var stdout = ctx.Redactor.Redact(result.Stdout);
-                var stderr = ctx.Redactor.Redact(result.Stderr);
+                var stdout = RedactOutput(result.Stdout, ctx);
+                var stderr = RedactOutput(result.Stderr, ctx);
                 var parts = new List<string>();
                 if (!string.IsNullOrWhiteSpace(stdout)) parts.Add($"stdout:\n{stdout}");
                 if (!string.IsNullOrWhiteSpace(stderr)) parts.Add($"stderr:\n{stderr}");
@@ -156,7 +160,7 @@ internal sealed class RunCommandTool : ISandboxTool
             ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR");
     }
 
-    private static IReadOnlyDictionary<string, string> BuildCommandEnvironment(
+    private static Dictionary<string, string> BuildCommandEnvironment(
         string workingDirectory,
         string? scratchDirectory)
     {
@@ -185,6 +189,48 @@ internal sealed class RunCommandTool : ISandboxTool
         }
 
         return environment;
+    }
+
+    private static bool TryAddRepositoryCredential(
+        string command,
+        string? accessToken,
+        IDictionary<string, string> environment,
+        out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return true;
+
+        var trimmed = command.Trim();
+        var isGitHubCommand = trimmed.Equals("git", StringComparison.Ordinal) ||
+            trimmed.Equals("gh", StringComparison.Ordinal) ||
+            trimmed.StartsWith("git ", StringComparison.Ordinal) ||
+            trimmed.StartsWith("gh ", StringComparison.Ordinal);
+        if (!isGitHubCommand)
+            return true;
+
+        if (trimmed.IndexOfAny([';', '|', '&', '\r', '\n', '`', '<', '>']) >= 0 ||
+            trimmed.Contains("$(", StringComparison.Ordinal))
+        {
+            error = "Command rejected: GitHub credentials require one git or gh command.";
+            return false;
+        }
+
+        // GH_TOKEN supports gh and `gh auth git-credential` supports HTTPS Git without a token file.
+        environment["GH_TOKEN"] = accessToken;
+        environment["GITHUB_TOKEN"] = accessToken;
+        environment["GIT_CONFIG_COUNT"] = "1";
+        environment["GIT_CONFIG_KEY_0"] = "credential.helper";
+        environment["GIT_CONFIG_VALUE_0"] = "!gh auth git-credential";
+        return true;
+    }
+
+    private static string RedactOutput(string value, SandboxToolContext ctx)
+    {
+        var redacted = ctx.Redactor.Redact(value);
+        return string.IsNullOrWhiteSpace(ctx.Options.RepositoryAccessToken)
+            ? redacted
+            : redacted.Replace(ctx.Options.RepositoryAccessToken, "***", StringComparison.Ordinal);
     }
 
     private static bool IsDestructivePattern(string command, string[] patterns)

@@ -61,11 +61,15 @@ public sealed record SandboxPolicy
         "bash <(curl", "sh <(curl", "eval $(curl", "eval $(wget",
         "| bash", "| sh",
         // Git destructive
-        "git push --force", "git push -f",
+        "git push", "git remote", "git config credential",
         "git reset --hard",
         "git push origin --delete", "git push --delete",
         "git branch -D",
         "git clean -fd", "git clean -fxd",
+        // GitHub repository changes and credential commands
+        "gh pr create", "gh pr merge", "gh pr close",
+        "gh repo delete", "gh repo archive",
+        "gh api", "gh auth login", "gh auth logout",
         // PowerShell destructive
         "Remove-Item -Recurse", "Remove-Item -Force", "ri -r", "ri -Recurse",
         "Format-Volume", "Clear-Disk",

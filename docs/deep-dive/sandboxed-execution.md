@@ -84,6 +84,12 @@ The API (`GET /api/sandbox-policy`, `PUT /api/sandbox-policy`) reads and writes 
 
 The policy is read through `ISandboxPolicyStore.GetPolicyAsync` and is configurable via the API at `GET /api/sandbox-policy` and `PUT /api/sandbox-policy`. See [sandbox-setup.md](../reference/sandbox-setup.md) for operator instructions.
 
+The API sends one short-lived installation credential for the selected repository and run. The sandbox gives it only to one `git` or `gh` command.
+
+The approval policy gates `git push`, remote changes, `gh pr` changes, `gh repo` changes, `gh api`, and `gh auth` commands. The API does not inspect or proxy these commands.
+
+The system keeps this credential out of pod specs, files, logs, events, annotations, shared environments, and credential-helper files. Normal release and orphan cleanup revoke it on a best-effort basis. Token expiry limits a failed revoke.
+
 ## Security model
 
 A `run_command` invocation passes three layers before the sandbox engine sees it.

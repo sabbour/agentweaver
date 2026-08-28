@@ -216,6 +216,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Source of the per-run AutoApproveTools flag propagated to the warm pod via /configure (bug
     // #221). Null in unit tests → the flag defaults false (same null-skip convention as above).
     private readonly IRunOptionsStore? _runOptions;
+    private readonly RunRepositoryCredentialRegistry? _repositoryCredentials;
     // First-class preview lifecycle reconciler. ReleaseAgentHostPodAsync derives durable
     // Previewable/PreviewActive state and applies all retention or cleanup effects before deciding
     // whether to delete the claim.
@@ -241,6 +242,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         ISecretStore? secretStore = null,
         IRunEventStream? runEventStream = null,
         IRunOptionsStore? runOptions = null,
+        RunRepositoryCredentialRegistry? repositoryCredentials = null,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
         IGitHubTokenScopeProvider? tokenScopeProvider = null,
@@ -259,6 +261,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _secretStore = secretStore;
         _runEventStream = runEventStream;
         _runOptions = runOptions;
+        _repositoryCredentials = repositoryCredentials;
         _accessTokenProvider = accessTokenProvider;
         _previewService = previewService;
         _authorshipCapabilityStore = authorshipCapabilityStore;
@@ -558,10 +561,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // immutable source refs; AgentHost creates their effective root inside execution-scratch.
             if (claimCreated)
             {
+                var repositoryAccessToken = _repositoryCredentials is null
+                    ? null
+                    : await _repositoryCredentials.MintAsync(runId, ct).ConfigureAwait(false);
                 var effectiveWorkingDirectory = await CallAgentHostConfigureAsync(
                     podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
                     effectiveScope,
                     await ResolveGitHubAccessTokenAsync(effectiveScope, submittingUser, ct).ConfigureAwait(false),
+                    repositoryAccessToken,
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
                     configProjectId,
@@ -600,6 +607,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // Crash/timeout during launch: delete any credential minted before the failure so it is
             // never left behind (spec-006 decouple-preview, RESIDUAL rev3 gap).
             await DeletePreviewRunnerCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            await RevokeRepositoryCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
     }
@@ -634,6 +642,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         if (_authorshipCapabilityStore is not null)
             await _authorshipCapabilityStore.RemoveAsync(runId, ct).ConfigureAwait(false);
         await DeletePreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
+        await RevokeRepositoryCredentialAsync(runId, ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: AgentHost pod released for run {RunId}", runId);
@@ -942,6 +951,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private async Task<string?> CallAgentHostConfigureAsync(
         string podIp, int port, string runId, string userId, string turnBearerToken,
         string kvUserSecretName, GitHubTokenScope tokenScope, string? gitHubAccessToken,
+        string? repositoryAccessToken,
         string? sharedWorkingDirectory,
         AgentHostLaunchContext launchContext,
         string? projectId,
@@ -974,6 +984,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             turnBearerToken,
             kvUserSecretName,
             gitHubAccessToken,
+            repositoryAccessToken,
             callerBearerToken = launchContext.CallerBearerToken,
             // Keep the legacy property during rolling upgrades; new AgentHosts prefer the explicit
             // sharedWorkingDirectory descriptor and create any local workspace inside the pod.
@@ -1143,6 +1154,24 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             _logger.LogWarning(ex,
                 "KubernetesSandboxExecutor: failed to delete preview-runner credential for run {RunId} (best-effort)",
+                runId);
+        }
+    }
+
+    private async Task RevokeRepositoryCredentialAsync(string runId, CancellationToken ct)
+    {
+        if (_repositoryCredentials is null)
+            return;
+
+        try
+        {
+            await _repositoryCredentials.RevokeAsync(runId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "KubernetesSandboxExecutor: failed to revoke repository credential for run {RunId}",
                 runId);
         }
     }

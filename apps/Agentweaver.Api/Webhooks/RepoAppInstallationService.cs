@@ -109,6 +109,28 @@ public sealed class RepoAppInstallationTokenService(
         CancellationToken ct = default)
         => await GetRepositoryAuthorityAsync(installationId, repositoryId, ct).ConfigureAwait(false) is not null;
 
+    /// <summary>Revokes a minted installation credential. This method does not persist or log it.</summary>
+    public async Task RevokeRepositoryTokenAsync(string token, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return;
+
+        try
+        {
+            using var request = CreateGitHubRequest(HttpMethod.Delete, "/installation/token", token);
+            using var response = await httpClientFactory.CreateClient("github").SendAsync(request, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (HttpRequestException)
+        {
+            // Token expiry is the backstop. Release and orphan cleanup must not fail on revoke.
+        }
+    }
+
     /// <summary>
     /// Resolves the installation's exact repository authority from GitHub. The request supplies
     /// only numeric identifiers; permissions and the display name are provider-owned values.
