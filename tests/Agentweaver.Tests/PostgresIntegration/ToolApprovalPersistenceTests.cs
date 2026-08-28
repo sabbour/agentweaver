@@ -302,6 +302,51 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
             "a failed coordinator's policy must not authorize a future child");
     }
 
+    [PostgresFact]
+    public async Task RunScopedChildGrant_DoesNotReviveAfterParentRecovery()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var project = ProjectId.New();
+        var parent = NewRun($"alice-{suffix}", project);
+        var firstChild = NewRun($"alice-{suffix}", project);
+        var activeChild = NewRun($"alice-{suffix}", project);
+        var runStore = new EfRunStore(pg.Factory);
+        foreach (var run in new[] { parent, firstChild, activeChild })
+            await runStore.InsertAsync(run);
+
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(options =>
+            options.UseNpgsql(
+                pg.ConnectionString,
+                npgsql => npgsql.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
+        using var provider = services.BuildServiceProvider();
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var gate = new DurableToolApprovalGate(
+            new DurableRunControlState(provider.GetRequiredService<IServiceScopeFactory>(), eventStream),
+            runStore: runStore);
+        var parentId = parent.Id.ToString();
+
+        gate.RegisterParentRun(firstChild.Id.ToString(), parentId);
+        var wait = gate.WaitForApprovalAsync(
+            firstChild.Id.ToString(), "before-terminalization", "web_fetch", "https://child.test",
+            TimeSpan.FromSeconds(10), default);
+        (await gate.GrantAsync(firstChild.Id.ToString(), "before-terminalization", ApprovalScope.Run)).Should().BeTrue();
+        (await wait).Should().BeTrue();
+
+        gate.RegisterParentRun(activeChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(activeChild.Id.ToString(), "web_fetch", "https://active.test").Should().BeTrue(
+            "an active coordinator's policy remains available to new children");
+
+        await runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        await runStore.UpdateStatusAsync(parent.Id, RunStatus.InProgress, endedAt: null);
+
+        var recoveredChild = NewRun($"alice-{suffix}", project);
+        await runStore.InsertAsync(recoveredChild);
+        gate.RegisterParentRun(recoveredChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(recoveredChild.Id.ToString(), "web_fetch", "https://recovered.test").Should().BeFalse(
+            "a recovered coordinator must not reactivate a policy granted during its prior lifecycle");
+    }
+
     private static Run NewRun(string owner, ProjectId projectId, RunStatus status = RunStatus.InProgress) => new()
     {
         Id = RunId.New(),

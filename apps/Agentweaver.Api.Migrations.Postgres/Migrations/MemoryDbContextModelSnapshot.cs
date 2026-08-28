@@ -1906,6 +1906,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("agent_name");
 
+                    b.Property<int>("ApprovalGeneration")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("approval_generation");
+
                     b.Property<DateTimeOffset?>("ArchivedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("archived_at");

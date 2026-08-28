@@ -10,6 +10,7 @@ public sealed class RunRecord
     public string Task { get; set; } = "";
     public string SubmittingUser { get; set; } = "";
     public string Status { get; set; } = "";
+    public int ApprovalGeneration { get; set; } = 1;
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset? EndedAt { get; set; }
     public string? Result { get; set; }

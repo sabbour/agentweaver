@@ -120,6 +120,35 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task RunScopedApproval_OnChild_DoesNotReviveAfterParentRecovery()
+    {
+        var parent = await InsertOwnedRunAsync("owner");
+        var firstChild = await InsertOwnedRunAsync("owner");
+        var recoveredChild = await InsertOwnedRunAsync("owner");
+        var gate = NewApprovalGate();
+        var parentId = parent.Id.ToString();
+
+        gate.RegisterParentRun(firstChild.Id.ToString(), parentId);
+        var wait = gate.WaitForApprovalAsync(
+            firstChild.Id.ToString(), "before-terminalization", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        (await gate.GrantAsync(firstChild.Id.ToString(), "before-terminalization", ApprovalScope.Run)).Should().BeTrue();
+        (await wait).Should().BeTrue();
+
+        gate.RegisterParentRun(recoveredChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(recoveredChild.Id.ToString(), "web_fetch", "https://active.test").Should().BeTrue(
+            "an active coordinator's session policy is inherited by newly dispatched children");
+
+        await _runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        await _runStore.UpdateStatusAsync(parent.Id, RunStatus.InProgress, endedAt: null);
+
+        var postRecoveryChild = await InsertOwnedRunAsync("owner");
+        gate.RegisterParentRun(postRecoveryChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(postRecoveryChild.Id.ToString(), "web_fetch", "https://recovered.test").Should().BeFalse(
+            "the coordinator lifecycle generation advances on terminalization, preventing pre-terminal policies from authorizing recovered children");
+    }
+
+    [Fact]
     public async Task RunScopedApproval_OnChild_FailsWhenParentIsNoLongerActive()
     {
         var parent = await InsertOwnedRunAsync("owner");

@@ -726,7 +726,7 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
     }
 
     [Fact]
-    public async Task PersistAgentHostApprovalAsync_HoldsActiveClaimAcrossReadAndCommit_BlockingConcurrentReviewReady()
+    public async Task PersistAgentHostApprovalAsync_HoldsActiveClaimAcrossReadAndCommit_ExpiresAfterConcurrentReviewReady()
     {
         var streams = new RunStreamStore();
         var runIdValue = RunId.New();
@@ -763,8 +763,8 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         await reviewReadyTask.WaitAsync(TimeSpan.FromSeconds(5));
         inner.ReviewReadyCalls.Should().Be(1);
 
-        gate.IsAutoApproved(runId, "web_fetch", "https://other.test").Should().BeTrue(
-            "the durable run-scope policy committed atomically before the later terminalization");
+        gate.IsAutoApproved(runId, "web_fetch", "https://other.test").Should().BeFalse(
+            "the durable run-scope policy committed before terminalization, but the run is no longer active");
     }
 
     private sealed class FixedStatusRunStore(RunStatus status) : IRunStore
