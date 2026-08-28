@@ -688,10 +688,13 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     /// <summary>
     /// Atomically creates fresh opaque references for a child or retry from the exact immutable
     /// parent snapshot rows. Existing target snapshots are never replaced. An empty parent set is
-    /// only accepted when <paramref name="projectId"/> is absent (no project at all) or the
-    /// project's persisted origin is explicitly <see cref="ProjectOriginKind.Blank"/>; otherwise a
-    /// run that should have inherited real capability protection is denied rather than silently
-    /// launched with none.
+    /// only accepted when the project's persisted origin is explicitly
+    /// <see cref="ProjectOriginKind.Blank"/>; otherwise a run that should have inherited real
+    /// capability protection is denied rather than silently launched with none. A missing or
+    /// unparseable <paramref name="projectId"/> can never prove a blank origin — it is denied
+    /// fail-closed rather than treated as an automatic pass. This is the persistence half of the
+    /// fix for the proven defect where a null <c>Run.ProjectId</c> let an empty-source child/retry
+    /// launch with zero GitHub capability snapshots.
     /// </summary>
     internal async Task<bool> TryInheritCapabilitySnapshotsAsync(
         string sourceRunId,
@@ -702,7 +705,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         var source = await GetCapabilitySnapshotsAsync(sourceRunId, ct).ConfigureAwait(false);
         if (source.Count == 0)
         {
-            return string.IsNullOrWhiteSpace(projectId) ||
+            return !string.IsNullOrWhiteSpace(projectId) &&
                 await IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false);
         }
 

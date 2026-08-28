@@ -569,6 +569,57 @@ public sealed class TwoAppPersistenceStoreTests
         (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenProjectIdIsMissing()
+    {
+        // Smith's proven authorization bypass: Run.ProjectId is nullable, and a null/missing
+        // project id can never prove a project's persisted origin is intentionally blank. Root
+        // construction and child/retry inheritance must both fail closed for every lifecycle path
+        // (root, child, retry, resume) rather than silently succeed with zero capability
+        // snapshots — regardless of whether any real capability sources exist.
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        // Seed live capability sources for the "project" id used by OpenDatabaseAsync so a failure
+        // here can only be attributed to the missing/null ProjectId on the Run itself, not to an
+        // absence of live sources.
+        await SeedCapabilitySourcesAsync(db);
+        var persistence = new TwoAppPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var root = RunForSnapshotLifecycle(projectId: null);
+
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Should().BeEmpty();
+
+        var child = RunForSnapshotLifecycle(projectId: null) with { ParentRunId = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(child.Id.ToString())).Should().BeEmpty();
+
+        var retry = RunForSnapshotLifecycle(projectId: null) with { RetriedFrom = root.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString())).Should().BeEmpty();
+
+        // Recovery/resume of the same denied root re-attempts root construction and still denies;
+        // it must never be satisfied by the earlier failed attempt's absence of snapshot rows.
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString())).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_ChildAndRetryDenyWhenProjectIdIsMissingEvenWithEmptyParentSnapshots()
+    {
+        // Direct reproduction of Smith's exact bypass without a real project row at all: an
+        // empty-source parent (no captured snapshots) combined with a null child/retry ProjectId
+        // must deny, not be treated as an automatic pass.
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var persistence = new TwoAppPersistenceStore(db);
+
+        (await persistence.TryInheritCapabilitySnapshotsAsync("missing-source-run", "target-run", projectId: null))
+            .Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync("target-run")).Should().BeEmpty();
+    }
+
     private static RunGitHubCapabilitySnapshotLifecycle CreateLifecycle(MemoryDbContext db, TwoAppPersistenceStore persistence)
     {
         var secrets = new InMemorySecretStore();

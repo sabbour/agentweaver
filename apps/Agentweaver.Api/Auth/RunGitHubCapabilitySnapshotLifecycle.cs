@@ -44,11 +44,23 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
         }
 
-        else if ((await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false)).Count == 0 &&
-
-                  !string.IsNullOrWhiteSpace(projectId))
+        else if ((await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false)).Count == 0)
 
         {
+
+            // A missing/unparseable ProjectId can never prove a project is intentionally blank-origin,
+
+            // so it cannot be used to justify a zero-snapshot launch. Fail closed rather than silently
+
+            // skip capture entirely (the proven defect: a null Run.ProjectId used to let root launches
+
+            // succeed with no GitHub capability snapshots at all).
+
+            if (string.IsNullOrWhiteSpace(projectId))
+
+                return false;
+
+
 
             // Trusted production root construction: select and insert-only create every currently
 
