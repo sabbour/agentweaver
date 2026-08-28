@@ -44,29 +44,42 @@ public interface IBacklogTaskStore
     /// </summary>
     Task<int> CountReadyForPickupAsync(CancellationToken ct = default);
 
-    /// <summary>Updates title/description only, gated on project_id. Returns false if not found in project.</summary>
+    /// <summary>Updates title/description only for contributor-manageable tasks, gated on project_id.
+    /// Returns false if not found in project or held provisional by a trusted automation invocation.</summary>
     Task<bool> UpdateContentAsync(
         ProjectId projectId, BacklogTaskId id, string title, string? description, CancellationToken ct = default);
 
-    /// <summary>Deletes a task, gated on project_id AND state IN ('backlog','ready') AND run_id IS NULL.
-    /// Returns false if Claimed (cannot delete a run-backed task) or not found in project.</summary>
+    /// <summary>Deletes a contributor-manageable task, gated on project_id AND state IN
+    /// ('backlog','ready') AND run_id IS NULL. Returns false if Claimed, provisionally held by
+    /// automation, or not found in project.</summary>
     Task<bool> TryDeleteAsync(ProjectId projectId, BacklogTaskId id, CancellationToken ct = default);
+
+    /// <summary>Deletes only a server-owned provisional automation task during failed trigger cleanup.</summary>
+    Task<bool> TryDeleteProvisionalAutomationTaskAsync(
+        ProjectId projectId, BacklogTaskId id, CancellationToken ct = default);
 
     /// <summary>Archives a task off the active board. Claimed tasks archive their linked coordinator run
     /// in the same transaction so the run card also disappears from board projections.</summary>
     Task<bool> TryArchiveAsync(
         ProjectId projectId, BacklogTaskId id, DateTimeOffset archivedAt, CancellationToken ct = default);
 
-    /// <summary>Atomic Backlog -> Ready. Sets committed_at and the destination order_key. Gated on
-    /// project_id AND state = 'backlog'. Retries on order_key UNIQUE conflict.</summary>
+    /// <summary>Atomic contributor Backlog -> Ready. Sets committed_at and the destination order_key.
+    /// Gated on project_id, state = 'backlog', and no pending automation invocation. Retries on
+    /// order_key UNIQUE conflict.</summary>
     Task<bool> TryMoveToReadyAsync(
         ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt, CancellationToken ct = default);
 
+    /// <summary>Atomic server-owned publication of a task held by a trusted automation invocation.
+    /// Clears the provisional marker as it moves Backlog -> Ready.</summary>
+    Task<bool> TryPublishAutomationInvocationTaskAsync(
+        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt, CancellationToken ct = default);
+
     /// <summary>
-    /// Atomic bulk Backlog -> Ready for an ENTIRE project. Moves every state='backlog' task to
-    /// state='ready' in ONE transaction, appended AFTER existing Ready items while preserving the
-    /// tasks' relative backlog order, stamping committed_at = <paramref name="committedAt"/> on each.
-    /// Idempotent: returns 0 when the backlog bucket is empty. Returns the count of tasks moved.
+    /// Atomic bulk contributor Backlog -> Ready for an ENTIRE project. Moves every non-provisional
+    /// state='backlog' task to state='ready' in ONE transaction, appended AFTER existing Ready items
+    /// while preserving the tasks' relative backlog order, stamping committed_at =
+    /// <paramref name="committedAt"/> on each. Idempotent: returns 0 when no contributor-manageable
+    /// task is in the backlog bucket. Returns the count of tasks moved.
     /// </summary>
     Task<int> MoveAllBacklogToReadyAsync(
         ProjectId projectId, DateTimeOffset committedAt, CancellationToken ct = default);

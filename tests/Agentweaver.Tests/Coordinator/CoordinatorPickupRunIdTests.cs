@@ -257,6 +257,9 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
 
         var backlog = _factory.Services.GetRequiredService<IBacklogTaskStore>();
         var task = (await backlog.ListByProjectAsync(project.Id)).Should().ContainSingle().Subject;
+        task.State.Should().Be(BacklogTaskState.Ready);
+        task.IsAutomationInvocationPending.Should().BeFalse(
+            "a task becomes claimable only after the trusted invocation binding commits");
         await _factory.Services.GetRequiredService<CoordinatorPickupService>().TryPickupAsync(project, task, CancellationToken.None);
         var claimed = await backlog.GetAsync(project.Id, task.Id);
         claimed!.RunId.Should().NotBeNull();

@@ -882,7 +882,7 @@ public sealed class SqliteToPostgresMigrator
             SELECT task_id, project_id, title, description, state, order_key,
                    captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                    workflow_override_id, archived_at, source_file_path,
-                   parent_prd_run_id, promotion_key, promotion_reason
+                   parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending
               FROM backlog_tasks;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -908,6 +908,7 @@ public sealed class SqliteToPostgresMigrator
                 ParentPrdRunId = reader.IsDBNull(15) ? null : reader.GetString(15),
                 PromotionKey = reader.IsDBNull(16) ? null : reader.GetString(16),
                 PromotionReason = reader.IsDBNull(17) ? null : reader.GetString(17),
+                IsAutomationInvocationPending = reader.GetInt64(18) != 0,
             });
         }
         return results;

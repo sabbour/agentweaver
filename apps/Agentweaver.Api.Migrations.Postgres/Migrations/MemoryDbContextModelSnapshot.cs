@@ -690,6 +690,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("description");
 
+                    b.Property<bool>("IsAutomationInvocationPending")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("automation_invocation_pending");
+
                     b.Property<string>("OrderKey")
                         .IsRequired()
                         .HasColumnType("text")
