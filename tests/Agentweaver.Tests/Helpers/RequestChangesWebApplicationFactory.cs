@@ -35,6 +35,30 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
         _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-rc-ccp-{Guid.NewGuid():N}");
     }
 
+    public async Task<ProjectId> CreateBlankProjectAsync(string workingDirectory)
+    {
+        var projectId = ProjectId.New();
+        var now = DateTimeOffset.UtcNow;
+        await Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
+        {
+            Id = projectId,
+            Name = $"Request changes test {Guid.NewGuid():N}",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = workingDirectory,
+            DefaultBranch = "main",
+            Owner = OwnerUser,
+            ProviderSettings = new ProjectProviderSettings
+            {
+                DefaultProvider = ModelSource.GitHubCopilot,
+            },
+            State = ProjectState.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        return projectId;
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((_, cfg) =>

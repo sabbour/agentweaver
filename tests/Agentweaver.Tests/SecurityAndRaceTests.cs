@@ -188,6 +188,7 @@ public sealed class SecurityAndRaceTests
     {
         var repoPath = CreateTempGitRepo();
         var runId = RunId.New();
+        var projectId = await _factory.CreateBlankProjectAsync(repoPath);
 
         var worktreeManager = _factory.Services.GetRequiredService<WorktreeManager>();
         var worktreeInfo = worktreeManager.AddWorktree(repoPath, "main", runId);
@@ -207,6 +208,7 @@ public sealed class SecurityAndRaceTests
             ModelSource = ModelSource.GitHubCopilot,
             Task = "original task description",
             SubmittingUser = RequestChangesWebApplicationFactory.OwnerUser,
+            ProjectId = projectId,
             Status = RunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
             WorktreePath = worktreeInfo.WorktreePath,
