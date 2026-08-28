@@ -217,14 +217,14 @@ public sealed class DurableRunControlStateTests : IDisposable
             .Should().BeFalse();
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AlwaysApproval_MissingOrEmptyPersistedOwner_FailsClosed(bool persistEmptyOwner)
+    [Fact]
+    public async Task AlwaysApproval_EmptyPersistedOwner_ApprovesRequestButPolicyFailsClosed()
     {
-        var runId = persistEmptyOwner
-            ? (await InsertOwnedRunAsync("")).Id.ToString()
-            : RunId.New().ToString();
+        // The run exists and is active, so PR #972 finding 2's active-run requirement is
+        // satisfied; the pending request itself is approved. But its persisted owner is empty,
+        // so no subject can be resolved -- the broader durable "always" policy must still fail
+        // closed rather than apply to an unidentified owner.
+        var runId = (await InsertOwnedRunAsync("")).Id.ToString();
         var gate = NewApprovalGate();
         var wait = gate.WaitForApprovalAsync(
             runId, "req-ownerless", "web_fetch", "https://example.test",
@@ -235,6 +235,28 @@ public sealed class DurableRunControlStateTests : IDisposable
 
         (await wait).Should().BeTrue();
         gate.IsAutoApproved(runId, "web_fetch", "https://example.test/next").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AlwaysApproval_RunNotFoundInStore_FailsClosedEntirely()
+    {
+        // PR #972 finding 2: every non-once scope from every caller -- not only AgentHost-context
+        // callers -- now requires an atomic active-run claim/check before any approval or policy
+        // event is persisted. A run id absent from the run store can never satisfy "InProgress",
+        // so the grant itself must fail closed here, not merely the durable policy: there is no
+        // context-based carve-out that would let this succeed.
+        var runId = RunId.New().ToString();
+        var gate = NewApprovalGate();
+        var wait = gate.WaitForApprovalAsync(
+            runId, "req-unpersisted", "web_fetch", "https://example.test",
+            TimeSpan.FromMilliseconds(300), default);
+
+        (await gate.GrantAsync(runId, "req-unpersisted", ApprovalScope.Always)).Should().BeFalse(
+            "a run absent from the run store can never satisfy the active-run requirement");
+
+        (await wait).Should().BeFalse(
+            "no approval event was ever persisted for a run that could not be proven active, so the pending request must expire");
+        gate.IsAutoApproved(runId, "web_fetch", "https://example.test").Should().BeFalse();
     }
 
     [Theory]

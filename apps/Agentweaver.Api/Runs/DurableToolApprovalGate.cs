@@ -24,7 +24,8 @@ public sealed class DurableToolApprovalGate(
     DurableRunControlState state,
     RunStreamStore? streams = null,
     ILogger<DurableToolApprovalGate>? logger = null,
-    IRunStore? runStore = null) : IToolApprovalGate, IAgentHostToolApprovalPersistence
+    IRunStore? runStore = null,
+    RunActiveClaimGuard? runActiveClaimGuard = null) : IToolApprovalGate, IAgentHostToolApprovalPersistence
 {
     private const string ProjectPolicyBucketPrefix = "__agentweaver_tool_approvals_project_owner_sha256_v1__";
     private const string RequestContext = "tool.approval_context";
@@ -210,73 +211,100 @@ public sealed class DurableToolApprovalGate(
             : await SubjectOfAsync(parentId).ConfigureAwait(false);
         var lockIds = PolicyLockStreamIds(runId, parentId, subject, parentSubject, scope);
 
-        return await _state.ExecuteExclusivelyAsync(
-            lockIds,
-            async (db, ct) =>
-            {
-                // Persisting a scoped policy claims the same database row terminalization updates.
-                // On Postgres, FOR UPDATE gives the grant and any terminal transition a single
-                // winner; SQLite retries the enclosing transaction if a competing writer wins.
-                // This closes the interval between the endpoint's pre-forward active check and
-                // the durable policy write.
-                if (context is not null
-                    && scope != ApprovalScope.Once
-                    && runStore is not null
-                    && !await LockAndRequireActiveRunAsync(db, runId, ct).ConfigureAwait(false))
+        // A non-once scope both reads a run's active status and commits a durable policy grant.
+        // Postgres closes that interval with FOR UPDATE inside the same transaction below. SQLite
+        // (and any other non-Npgsql provider) keeps run records and RunEvents in separate stores
+        // that cannot share one ACID transaction, so an in-process claim brackets the whole
+        // read-then-commit critical section below: no guarded run-store status transition can
+        // complete while a grant for the same run is mid-flight, and vice versa. This applies to
+        // EVERY non-once scope from EVERY caller -- standard API GrantAsync (context: null) and
+        // AgentHost-context PersistAgentHostApprovalAsync alike -- there is no context-based
+        // carve-out for the active-run requirement.
+        IAsyncDisposable? activeClaim = null;
+        if (scope != ApprovalScope.Once
+            && runActiveClaimGuard is not null
+            && RunId.TryParse(runId, out var claimRunId))
+        {
+            activeClaim = await runActiveClaimGuard.AcquireAsync(claimRunId, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+
+        try
+        {
+            return await _state.ExecuteExclusivelyAsync(
+                lockIds,
+                async (db, ct) =>
                 {
-                    return false;
-                }
-
-                var records = await db.RunEvents
-                    .AsNoTracking()
-                    .Where(e => e.RunId == runId
-                        && (e.EventType == RequestContext
-                            || e.EventType == RequestResolved
-                            || e.EventType == RunCleared))
-                    .OrderBy(e => e.Sequence)
-                    .ToListAsync(ct)
-                    .ConfigureAwait(false);
-                var persistedContext = LatestContext(records, requestId);
-                var resolvedContext = persistedContext ?? context;
-                if (resolvedContext is null || LatestResolutionRecord(records, requestId) is not null)
-                    return false;
-                var policyDestinations = BuildPolicyDestinations(
-                    runId, parentId, subject, parentSubject, resolvedContext.ToolName, scope);
-
-                // Claiming the pending request and writing every selected policy occur in this
-                // transaction under the same sorted advisory locks. A losing once/always race
-                // observes this resolution and cannot create a broader policy.
-                var events = new List<PendingEvent>();
-                if (persistedContext is null)
-                    events.Add(new PendingEvent(runId, RequestContext, resolvedContext));
-                events.Add(new PendingEvent(
-                    runId,
-                    RequestResolved,
-                    new ApprovalResolution(requestId, true, false)));
-                events.AddRange(policyDestinations.Select(destination =>
-                    new PendingEvent(destination.StreamId, PolicyGranted, destination.Policy)));
-
-                var nextSequences = await NextSequencesAsync(
-                        db,
-                        events.Select(e => e.StreamId).Distinct(StringComparer.Ordinal),
-                        ct)
-                    .ConfigureAwait(false);
-                var now = DateTime.UtcNow;
-                foreach (var entry in events)
-                {
-                    db.RunEvents.Add(new RunEventRecord
+                    // Persisting a scoped policy claims the same database row terminalization
+                    // updates. On Postgres, FOR UPDATE gives the grant and any terminal transition
+                    // a single winner; on SQLite the in-process claim acquired above serializes
+                    // this check against every guarded run-store status transition, since SQLite's
+                    // transaction retry only guards local write conflicts, not a separate run store.
+                    // The active-run requirement applies to every non-once scope regardless of
+                    // whether the caller supplied an AgentHost context.
+                    if (scope != ApprovalScope.Once
+                        && runStore is not null
+                        && !await LockAndRequireActiveRunAsync(db, runId, ct).ConfigureAwait(false))
                     {
-                        RunId = entry.StreamId,
-                        Sequence = nextSequences[entry.StreamId]++,
-                        EventType = entry.EventType,
-                        PayloadJson = JsonSerializer.Serialize(entry.Payload, JsonDefaults.Options),
-                        CreatedAt = now,
-                    });
-                }
+                        return false;
+                    }
 
-                return true;
-            },
-            CancellationToken.None).ConfigureAwait(false);
+                    var records = await db.RunEvents
+                        .AsNoTracking()
+                        .Where(e => e.RunId == runId
+                            && (e.EventType == RequestContext
+                                || e.EventType == RequestResolved
+                                || e.EventType == RunCleared))
+                        .OrderBy(e => e.Sequence)
+                        .ToListAsync(ct)
+                        .ConfigureAwait(false);
+                    var persistedContext = LatestContext(records, requestId);
+                    var resolvedContext = persistedContext ?? context;
+                    if (resolvedContext is null || LatestResolutionRecord(records, requestId) is not null)
+                        return false;
+                    var policyDestinations = BuildPolicyDestinations(
+                        runId, parentId, subject, parentSubject, resolvedContext.ToolName, scope);
+
+                    // Claiming the pending request and writing every selected policy occur in this
+                    // transaction under the same sorted advisory locks. A losing once/always race
+                    // observes this resolution and cannot create a broader policy.
+                    var events = new List<PendingEvent>();
+                    if (persistedContext is null)
+                        events.Add(new PendingEvent(runId, RequestContext, resolvedContext));
+                    events.Add(new PendingEvent(
+                        runId,
+                        RequestResolved,
+                        new ApprovalResolution(requestId, true, false)));
+                    events.AddRange(policyDestinations.Select(destination =>
+                        new PendingEvent(destination.StreamId, PolicyGranted, destination.Policy)));
+
+                    var nextSequences = await NextSequencesAsync(
+                            db,
+                            events.Select(e => e.StreamId).Distinct(StringComparer.Ordinal),
+                            ct)
+                        .ConfigureAwait(false);
+                    var now = DateTime.UtcNow;
+                    foreach (var entry in events)
+                    {
+                        db.RunEvents.Add(new RunEventRecord
+                        {
+                            RunId = entry.StreamId,
+                            Sequence = nextSequences[entry.StreamId]++,
+                            EventType = entry.EventType,
+                            PayloadJson = JsonSerializer.Serialize(entry.Payload, JsonDefaults.Options),
+                            CreatedAt = now,
+                        });
+                    }
+
+                    return true;
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (activeClaim is not null)
+                await activeClaim.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private async Task<bool> LockAndRequireActiveRunAsync(

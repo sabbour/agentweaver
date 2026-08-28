@@ -111,7 +111,15 @@ builder.Services.AddSingleton<SqliteDb>();
     if (!_isPostgres)
     {
         builder.Services.AddSingleton<SqliteRunStore>();
-        builder.Services.AddSingleton<IRunStore>(sp => sp.GetRequiredService<SqliteRunStore>());
+        // SQLite keeps run records and RunEvents/policy data in separate database files, so the
+        // active-run check a durable tool-approval scope persistence performs cannot share one
+        // ACID transaction with the run store the way Postgres's FOR UPDATE does. Wrapping the
+        // store in RunActiveClaimGuardedRunStore gives DurableToolApprovalGate a real in-process
+        // mutual-exclusion claim to close that gap instead of relying on another racy pre-read.
+        builder.Services.AddSingleton<RunActiveClaimGuard>();
+        builder.Services.AddSingleton<IRunStore>(sp => new RunActiveClaimGuardedRunStore(
+            sp.GetRequiredService<SqliteRunStore>(),
+            sp.GetRequiredService<RunActiveClaimGuard>()));
         builder.Services.AddSingleton<SqliteRunRevisionStore>();
         builder.Services.AddSingleton<IRunRevisionStore>(sp => sp.GetRequiredService<SqliteRunRevisionStore>());
         builder.Services.AddSingleton<SqliteWorkflowRunStore>();

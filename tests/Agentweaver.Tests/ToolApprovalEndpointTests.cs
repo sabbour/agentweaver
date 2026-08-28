@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Reflection;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
@@ -927,6 +929,151 @@ public sealed class ToolApprovalEndpointTests
     }
 
     [Fact]
+    public async Task PodPerRun_ImmediateRollbackFailure_ClosesProvisionalScopeViaHelperBeforeReporting503()
+    {
+        // PR #972 finding 1: when durable persistence fails AND the immediate provisional-scope
+        // rollback attempt also fails, the endpoint must not return 503 while the exact local
+        // scope could still authorize the pod. It must fall back to the same close-or-expire
+        // helper (EnsureProvisionalAgentHostScopeClosedAsync) already relied on for dropped or
+        // unproven AgentHost forwards, which retries the rollback and only returns once the scope
+        // is guaranteed removed (or its lease has elapsed).
+        var source = RunId.New();
+        const string requestId = "pod-rollback-retry";
+        var agentHost = new CurrentHostBridgeAgentHostClient(
+            source.ToString(),
+            requestId,
+            CoordinatorWebApplicationFactory.OwnerUser)
+        {
+            // The FIRST rollback attempt (the direct, pre-existing call) fails; the SECOND
+            // attempt -- made only if the new call to EnsureProvisionalAgentHostScopeClosedAsync
+            // is actually reached -- succeeds, keeping this test fast and deterministic.
+            FailRollbackAttempts = 1,
+        };
+        using var baseFactory = new CoordinatorWebApplicationFactory();
+        using var factory = baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:AgentExecutionMode"] = "pod-per-run",
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAgentHostApprovalHttpClient>();
+                services.AddSingleton<IAgentHostApprovalHttpClient>(agentHost);
+                services.RemoveAll<IAgentHostToolApprovalPersistence>();
+                services.AddSingleton<IAgentHostToolApprovalPersistence>(
+                    new FailingAgentHostApprovalPersistence(throwOnPersist: true));
+            });
+        });
+        using var ownerClient = CreateOwnerClient(factory, CoordinatorWebApplicationFactory.OwnerApiKey);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var secretStore = factory.Services.GetRequiredService<ISecretStore>();
+        await InsertRunAsync(
+            runStore,
+            source,
+            RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+        await secretStore.SetSecretAsync(
+            PreviewRunnerCredential.SecretKey(source.ToString()),
+            "pod-approval-credential");
+
+        var response = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{source}/tool-approvals",
+            new { request_id = requestId, scope = "run" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await agentHost.InitialTool.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+        agentHost.RollbackCalls.Should().Be(
+            2,
+            "the immediate rollback attempt failed once, so the new fallback to " +
+            "EnsureProvisionalAgentHostScopeClosedAsync must retry it rather than failing immediately");
+        agentHost.IsAutoApproved("web_fetch", "https://following.test").Should().BeFalse(
+            "the retried rollback via the helper must still remove the current pod's provisional bridge");
+        approvalGate.IsAutoApproved(source.ToString(), "web_fetch", "https://following.test")
+            .Should().BeFalse();
+
+        var detail = await response.Content.ReadAsStringAsync();
+        detail.Should().NotContain(
+            "Access may remain active",
+            "the response must not claim the scope may still be active once it is guaranteed closed or expired");
+    }
+
+    [Fact]
+    public async Task EnsureProvisionalAgentHostScopeClosedAsync_ReturnsImmediately_WhenRollbackSucceeds()
+    {
+        // Isolated, reflection-based coverage of the shared close-or-expire helper itself (used
+        // both by the pre-existing dropped/unproven-forward branches and by finding 1's new call
+        // site): when the rollback succeeds, it must return immediately without waiting out the
+        // remaining lease, no matter how far in the future that lease still is.
+        var agentHost = new CurrentHostBridgeAgentHostClient(
+            RunId.New().ToString(), "reflection-success", CoordinatorWebApplicationFactory.OwnerUser);
+        var farFutureExpiry = DateTimeOffset.UtcNow.AddSeconds(30);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await InvokeEnsureProvisionalAgentHostScopeClosedAsync(
+            agentHost, farFutureExpiry, "grant-success");
+        stopwatch.Stop();
+
+        stopwatch.Elapsed.Should().BeLessThan(
+            TimeSpan.FromSeconds(5),
+            "a successful rollback must short-circuit the lease wait entirely");
+        agentHost.RollbackCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task EnsureProvisionalAgentHostScopeClosedAsync_WaitsOutLease_WhenRollbackKeepsFailing()
+    {
+        // Symmetric coverage of the other branch: when rollback cannot be confirmed, the helper
+        // must genuinely block until the API-stamped lease elapses (never return early while the
+        // provisional scope could still authorize), using a short custom expiry to keep the test
+        // fast and deterministic.
+        var agentHost = new CurrentHostBridgeAgentHostClient(
+            RunId.New().ToString(), "reflection-wait", CoordinatorWebApplicationFactory.OwnerUser)
+        {
+            FailRollbackAttempts = int.MaxValue,
+        };
+        var nearExpiry = DateTimeOffset.UtcNow.AddMilliseconds(300);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await InvokeEnsureProvisionalAgentHostScopeClosedAsync(
+            agentHost, nearExpiry, "grant-wait");
+        stopwatch.Stop();
+
+        stopwatch.Elapsed.Should().BeCloseTo(TimeSpan.FromMilliseconds(300), TimeSpan.FromMilliseconds(250),
+            "the helper must wait out the remaining lease rather than returning as soon as rollback fails");
+        agentHost.RollbackCalls.Should().Be(1);
+    }
+
+    private static async Task InvokeEnsureProvisionalAgentHostScopeClosedAsync(
+        IAgentHostApprovalHttpClient agentHostApprovalClient,
+        DateTimeOffset scopeExpiresAt,
+        string scopeGrantId)
+    {
+        var method = typeof(RunEndpoints).GetMethod(
+            "EnsureProvisionalAgentHostScopeClosedAsync",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull(
+            "the private helper reused by finding 1's fix must still exist under this exact name");
+
+        var task = (Task)method!.Invoke(
+            null,
+            new object?[]
+            {
+                "target-run",
+                "request-id",
+                scopeGrantId,
+                scopeExpiresAt,
+                new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" },
+                agentHostApprovalClient,
+                null,
+                true,
+            })!;
+        await task;
+    }
+
+    [Fact]
     public async Task PodPerRun_DurableScopeClaimLosesToTerminalizationAndRollsBackCurrentHostBridge()
     {
         var source = RunId.New();
@@ -1322,6 +1469,15 @@ public sealed class ToolApprovalEndpointTests
         public Task<bool> InitialTool { get; }
         public bool DropScopedGrantResponse { get; set; }
 
+        /// <summary>
+        /// When greater than zero, the next that many <see cref="RollbackScopeAsync"/> calls
+        /// report an unreachable/transport failure (decrementing this count) without touching the
+        /// underlying gate, so the provisional scope remains applied. Used to deterministically
+        /// simulate an immediate rollback attempt failing before a later retry succeeds (PR #972
+        /// finding 1), without any real network flakiness or timing.
+        /// </summary>
+        public int FailRollbackAttempts { get; set; }
+
         public bool IsAutoApproved(string toolName, string? url) =>
             _gate.IsAutoApproved(_runId, toolName, url);
 
@@ -1408,6 +1564,16 @@ public sealed class ToolApprovalEndpointTests
             CancellationToken ct)
         {
             RollbackCalls++;
+            if (FailRollbackAttempts > 0)
+            {
+                FailRollbackAttempts--;
+                return Task.FromResult(new AgentHostApprovalOutcome(
+                    Resolved: false,
+                    State: "unreachable",
+                    Unreachable: true,
+                    StatusCode: null));
+            }
+
             var rolledBack = _gate.RollbackScopeGrant(childRunId, requestId, scopeGrantId);
             return Task.FromResult(new AgentHostApprovalOutcome(
                 Resolved: false,

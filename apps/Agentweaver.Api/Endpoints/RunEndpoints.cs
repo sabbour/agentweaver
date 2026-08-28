@@ -1833,8 +1833,27 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
                             CancellationToken.None).ConfigureAwait(false);
                         if (!rolledBack)
                         {
+                            // #972 finding 1: an immediate rollback failure must not surface a 503
+                            // while the exact provisional scope could still authorize the pod for
+                            // up to ProvisionalScopeLifetime. Reuse the same close-or-expire helper
+                            // relied on for dropped/unproven AgentHost forwards below: it retries
+                            // the rollback and, if that also fails, blocks until the API-stamped
+                            // lease elapses -- so the scope is guaranteed inert (removed or
+                            // expired) before this endpoint responds.
+                            await EnsureProvisionalAgentHostScopeClosedAsync(
+                                targetRunId,
+                                body.RequestId,
+                                provisionalScopeGrantId,
+                                provisionalScopeExpiresAt,
+                                sandboxRuntime.Value,
+                                agentHostApprovalClient,
+                                secretStore).ConfigureAwait(false);
+
+                            if (!await IsActiveToolApprovalTargetAsync(runStore, targetRun, ct).ConfigureAwait(false))
+                                return Results.Conflict(new { error = "Run is not active." });
+
                             return Results.Problem(
-                                "The AgentHost approved this request, durable scope persistence failed, and the provisional pod-local scope could not be removed. Access may remain active on that pod.",
+                                "The AgentHost approved this request, durable scope persistence failed, and the provisional pod-local scope could not be immediately removed. It has since been removed or its lease has elapsed.",
                                 statusCode: StatusCodes.Status503ServiceUnavailable);
                         }
 
