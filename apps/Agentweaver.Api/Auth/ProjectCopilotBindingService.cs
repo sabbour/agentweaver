@@ -40,7 +40,8 @@ public sealed class ProjectCopilotBindingService(
     TwoAppPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
-    IProjectRoleAssignmentStore roleAssignments)
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration)
 {
     private const string CookieName = "__Host-agentweaver-copilot-app-auth";
     private static readonly TimeSpan TransactionLifetime = TimeSpan.FromMinutes(10);
@@ -64,7 +65,8 @@ public sealed class ProjectCopilotBindingService(
             return new(CopilotBindingOutcome.HumanEntraSubjectRequired, null, null, null);
         if (!await IsExplicitOwnerAsync(projectId, caller.EntraObjectId!, ct).ConfigureAwait(false))
             return new(CopilotBindingOutcome.ProjectOwnerRequired, null, null, null);
-        if (!IsConfigurationValid())
+        if (!IsConfigurationValid() ||
+            await registration.ValidateAsync(ct).ConfigureAwait(false) != CopilotAppRegistrationState.Ready)
             return new(CopilotBindingOutcome.GitHubBindingUnavailable, null, null, null);
 
         var state = CreateRandomValue();
@@ -247,6 +249,13 @@ public sealed class ProjectCopilotBindingService(
             return claimed == AuthorizationClaimResult.Consumed
                 ? CopilotBindingOutcome.AuthorizationTransactionConsumed
                 : CopilotBindingOutcome.AuthorizationTransactionInvalid;
+        if (await registration.ValidateAsync(ct).ConfigureAwait(false) != CopilotAppRegistrationState.Ready)
+        {
+            await WriteTombstoneAsync(transaction.PkceVerifierProtected, CancellationToken.None).ConfigureAwait(false);
+            await CompleteFailureAsync(transaction, projectId, GitHubAuditReasonCode.BindingUnavailable, CancellationToken.None)
+                .ConfigureAwait(false);
+            return CopilotBindingOutcome.GitHubBindingUnavailable;
+        }
         if (!await IsExplicitOwnerAsync(projectId, transaction.EntraObjectId, ct).ConfigureAwait(false))
         {
             await CompleteFailureAsync(transaction, projectId, GitHubAuditReasonCode.TransactionInvalid, ct).ConfigureAwait(false);
@@ -332,7 +341,6 @@ public sealed class ProjectCopilotBindingService(
         !string.IsNullOrWhiteSpace(_callbackUrl) &&
         _callbackUrl.EndsWith("/auth/github/copilot-app/callback", StringComparison.Ordinal) &&
         string.IsNullOrWhiteSpace(configuration["Auth:CopilotApp:PrivateKey"]) &&
-        string.IsNullOrWhiteSpace(configuration["Auth:CopilotApp:RepositoryPermissions"]) &&
         !SameConfiguredValue(_clientId, configuration["Auth:RepoApp:ClientId"]) &&
         !SameConfiguredValue(_clientSecret, configuration["Auth:RepoApp:ClientSecret"]) &&
         !SameConfiguredValue(configuration["Auth:CopilotApp:SecretPath"], configuration["Auth:RepoApp:SecretPath"]) &&

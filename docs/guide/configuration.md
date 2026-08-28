@@ -85,12 +85,11 @@ App-level receiver implemented by the API; do not configure per-project webhook 
 | `Auth:RepoApp:WebhookVerificationTimeoutSeconds` | `5` | Body-read and signature-verification timeout (maximum `10`) |
 | `Auth:RepoApp:ApiUrl` | `https://api.github.com` | GitHub API origin for App installation-token minting |
 
-Project App grants are pinned with the GitHub numeric installation and repository IDs. The
-configuration request accepts only those identifiers: the API resolves the matching
-installation's permission map and repository full name from GitHub. Repository names remain
-display-only and are never authorization inputs. A provider permission expansion or reduction
-invalidates the affected unattended grant and activation; reconfigure and explicitly reactivate
-after GitHub permissions are corrected.
+Project App grants use GitHub numeric installation and repository IDs derived and verified by
+the server; clients never submit or override those identifiers, repository names, or permission
+maps. Repository names remain display-only and are never authorization inputs. A provider
+permission expansion or reduction invalidates the affected unattended grant and activation; fix
+the App permissions and wait for the server to verify a new grant.
 Installation tokens are scoped to Agentweaver's server-declared unattended repository
 permissions and never inherit unrelated installation permissions.
 
@@ -126,6 +125,9 @@ operations. Its client ID, client secret, and optional Key Vault secret path mus
 from the Repo App's values. Registration validation rejects a Copilot private key or
 repository permission, a shared App credential, or a Repo App configured to request user
 authorization during installation.
+At startup and whenever Project Settings checks automation readiness, Agentweaver retrieves the
+public Copilot App registration. Any reported permission fails closed: the App cannot be bound
+or used for unattended work until its registration has zero permissions.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
@@ -133,6 +135,8 @@ authorization during installation.
 | `Auth:CopilotApp:ClientSecret` | none | Copilot App OAuth client secret; store in user-secrets or Key Vault |
 | `Auth:CopilotApp:CallbackUrl` | none | Exact callback URL ending in `/auth/github/copilot-app/callback` |
 | `Auth:CopilotApp:BaseUrl` | `https://github.com` | GitHub authorization origin |
+| `Auth:CopilotApp:Slug` | none | GitHub App slug used for the required live registration check |
+| `Auth:CopilotApp:ApiUrl` | `https://api.github.com` | GitHub API origin used to check the public App registration |
 | `Auth:CopilotApp:Scopes` | `read:user` | Explicit non-repository user-authorization scopes |
 | `Auth:CopilotApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for the fixed callback route |
 | `Auth:CopilotApp:SecretPath` | none | Optional Key Vault path; must not equal the Repo App secret path |

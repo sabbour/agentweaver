@@ -92,6 +92,7 @@ import type {
   WorkspaceNode,
   WorkspaceRefsResponse,
   LinkedGitHubAccount,
+  UnattendedReadiness,
 } from './types';
 /** A skill file paired with the folder-relative path it should keep on the server (folder drag-and-drop). */
 export interface SkillUploadItem {
@@ -415,20 +416,19 @@ export class AgentweaverApiClient {
     );
   }
 
-  rotateProjectWebhookSecret(projectId: string): Promise<import('./types').WebhookSecretRotationResponse> {
-    return this.request<import('./types').WebhookSecretRotationResponse>(
-      'POST',
-      `/projects/${encodeURIComponent(projectId)}/webhook-secret/rotate`,
-      {},
+  getUnattendedReadiness(projectId: string): Promise<UnattendedReadiness> {
+    return this.request<UnattendedReadiness>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/github/unattended-readiness`,
     );
   }
 
-  autoCreateProjectWebhook(projectId: string): Promise<import('./types').GitHubWebhookProvisioningResponse> {
-    return this.request<import('./types').GitHubWebhookProvisioningResponse>(
-      'POST',
-      `/projects/${encodeURIComponent(projectId)}/webhooks/github/provision`,
-      {},
-    );
+  beginProjectCopilotAuthorization(projectId: string): Promise<{
+    authorization_url: string;
+    transaction_id: string;
+    expires_at: string;
+  }> {
+    return this.request('POST', `/projects/${encodeURIComponent(projectId)}/github/copilot/authorizations`, {});
   }
 
   deleteProject(projectId: string): Promise<void> {

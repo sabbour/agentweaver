@@ -223,7 +223,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     [Fact]
-    public async Task PutRepoAppInstallation_RejectsCallerDeclaredPermissionScope()
+    public async Task PutRepoAppInstallation_IsNotAvailableForCallerSuppliedScope()
     {
         var id = await CreateBlankProjectAsync();
 
@@ -237,9 +237,24 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
                 fullNameDisplay = "forged/repository",
             });
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task GetUnattendedReadiness_ReturnsOnlyAClosedRedactedStatus()
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/unattended-readiness");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("error").GetString().Should().Be("Caller-provided authorization scope is not allowed.");
+        body.GetProperty("status").GetString().Should().Be("not_ready");
+        body.GetProperty("reason_code").GetString().Should().Be("copilot_app_not_configured");
+        body.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeFalse();
+        body.TryGetProperty("installation_id", out _).Should().BeFalse();
+        body.TryGetProperty("repository_id", out _).Should().BeFalse();
+        body.TryGetProperty("permissions", out _).Should().BeFalse();
     }
 
     // =========================================================================
