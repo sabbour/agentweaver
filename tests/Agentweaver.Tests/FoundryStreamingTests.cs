@@ -1,9 +1,11 @@
 using System.Runtime.CompilerServices;
+using System.Diagnostics;
 using System.Threading.Channels;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 using Agentweaver.Tests.Helpers;
@@ -31,8 +33,8 @@ public sealed class FoundryStreamingTests : IDisposable
 
     // ---- Infrastructure ----
 
-    private FoundryAgentRunner Runner(IChatClient client)
-        => new(client, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), NullLogger<FoundryAgentRunner>.Instance);
+    private FoundryAgentRunner Runner(IChatClient client, ISandboxExecutor? executor = null)
+        => new(client, executor ?? SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), NullLogger<FoundryAgentRunner>.Instance);
 
     private static (ChannelWriter<RunEvent> writer, Func<List<RunEvent>> drain) MakeChannel()
     {
@@ -390,6 +392,40 @@ public sealed class FoundryStreamingTests : IDisposable
         events.Should().Contain(e => e.Type == "agent.turn.end");
         events.Should().NotContain(e => e.Type == "run.completed");
     }
+
+    [Fact]
+    public async Task RunCommand_UsesKataSafeWatchdogHeartbeats_AndBoundsAnUnresponsiveExecutor()
+    {
+        var executor = new CancellationIgnoringExecutor();
+        var client = new FakeStreamingChatClient(
+            new TurnSetup([FunctionCallUpdate("shell-call", "run_command", new() { ["command"] = "echo stuck" })]));
+        var runner = Runner(client, executor);
+        runner.DefaultCommandTimeoutMs = 20;
+        runner.ShellWatchdogGrace = TimeSpan.FromMilliseconds(50);
+        runner.ShellHeartbeatInterval = TimeSpan.FromMilliseconds(10);
+        runner.ShellWatchdogCleanupTimeout = TimeSpan.FromMilliseconds(30);
+        var (writer, drain) = MakeChannel();
+
+        Func<Task> act = () => runner.ExecuteAsync(
+            "task", _workDir, "", ModelSource.MicrosoftFoundry, "r-watchdog", null, writer, CancellationToken.None);
+
+        var stopwatch = Stopwatch.StartNew();
+        var exception = await act.Should().ThrowAsync<AgentProviderException>();
+        stopwatch.Stop();
+        exception.Which.ErrorCode.Should().Be("shell_execution_timeout");
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1),
+            "the Foundry watchdog must not leave an unresponsive command stuck indefinitely");
+        executor.Started.Task.IsCompleted.Should().BeTrue();
+
+        var events = drain();
+        events.Should().Contain(e => e.Type == EventTypes.ToolExecutionPending,
+            "Foundry must keep the run stream alive while the Kata shell tears down");
+        var failed = events.Single(e => e.Type == EventTypes.RunFailed);
+        Prop(failed.Payload, "errorCode").Should().Be("shell_execution_timeout");
+
+        executor.Release();
+        await executor.Completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+    }
 }
 
 // ---- Fake IChatClient ----
@@ -435,4 +471,39 @@ internal sealed class FakeStreamingChatClient : IChatClient
     public void Dispose() { }
 }
 
-// ---- ToAsyncEnumerable helper (not needed — FakeStreamingChatClient uses async iterator directly) ----
+internal sealed class CancellationIgnoringExecutor : ISandboxExecutor
+{
+    private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public bool IsRealIsolation => true;
+    public string BackendName => "kata";
+    public string SelectionReason => "test executor";
+    public bool HasNetworkWarning => false;
+    public string? NetworkWarningMessage => null;
+
+    public async Task<SandboxExecResult> ExecuteAsync(SandboxCommand command, CancellationToken ct = default)
+    {
+        Started.TrySetResult();
+        try
+        {
+            await _release.Task.ConfigureAwait(false);
+            return new SandboxExecResult(-1, "", "Timed out.", TimedOut: true, OutputTruncated: false);
+        }
+        finally
+        {
+            Completed.TrySetResult();
+        }
+    }
+
+    public async IAsyncEnumerable<SandboxOutputChunk> StreamAsync(
+        SandboxCommand command,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var result = await ExecuteAsync(command, ct);
+        yield return new SandboxOutputChunk(SandboxOutputStream.ExitCode, result.ExitCode.ToString());
+    }
+
+    public void Release() => _release.TrySetResult();
+}

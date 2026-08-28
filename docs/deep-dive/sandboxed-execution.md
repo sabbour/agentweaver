@@ -47,11 +47,12 @@ An explicit caller timeout is used as requested unless the active runtime policy
 minimum or maximum limit. The controlled Build/Test shell keeps its ten-minute minimum
 and maximum limit.
 
-The streaming watchdog adds a separate five-minute grace period after the effective
-command timeout. The executor cancels the command first and returns `timed_out: true`.
-The watchdog stops the agent turn only when the process still has not exited after that
-grace period. This extra time is important for Kata VM pods, where process termination
-can take longer while the Kata agent relays the signal.
+Both agent runners add a separate five-minute grace period after the effective command
+timeout. The executor cancels the command first and returns `timed_out: true`. Copilot's
+streaming watchdog and Foundry's direct tool-invocation watchdog stop the agent turn only
+when the process still has not exited after that grace period. Both emit shell-progress
+heartbeats while waiting. This extra time is important for Kata VM pods, where process
+termination can take longer while the Kata agent relays the signal.
 
 ## Tool architecture
 

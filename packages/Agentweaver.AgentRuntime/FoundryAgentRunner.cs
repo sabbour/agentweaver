@@ -41,6 +41,11 @@ public sealed class FoundryAgentRunner : IAgentRunner
     private readonly IQuestionGate? _questionGate;
     private readonly ILogger<FoundryAgentRunner> _logger;
 
+    internal int DefaultCommandTimeoutMs { get; set; } = (int)TimeSpan.FromMinutes(5).TotalMilliseconds;
+    internal TimeSpan ShellWatchdogGrace { get; set; } = SandboxToolOptions.WatchdogTimeoutGrace;
+    internal TimeSpan ShellHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(25);
+    internal TimeSpan ShellWatchdogCleanupTimeout { get; set; } = TimeSpan.FromSeconds(1);
+
     public FoundryAgentRunner(
         FoundryClientFactory factory,
         ISandboxExecutor executor,
@@ -129,13 +134,16 @@ public sealed class FoundryAgentRunner : IAgentRunner
         var sandboxRoot = workingDirectory;
 
         var toolOptions = new SandboxToolOptions(
-            ShellEnabled: sandboxPolicy.ShellEnabled)
+            ShellEnabled: sandboxPolicy.ShellEnabled,
+            DefaultTimeoutMs: DefaultCommandTimeoutMs)
         {
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
             NetworkEnabled = sandboxPolicy.NetworkEnabled,
+            ShellWatchdogGrace = ShellWatchdogGrace,
         };
+        using var shellExecutionTracker = new ShellExecutionTracker();
         var toolContext = new SandboxToolContext(
             AgentId: agentId,
             WorkingDirectory: workingDirectory,
@@ -151,6 +159,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
             IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
             IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
             QuestionGate: _questionGate,
+            ShellExecutionTracker: shellExecutionTracker,
             ScratchDirectory: Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH")
                 ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR"));
         var toolFunctions = SandboxToolRegistry.Build(toolContext);
@@ -319,9 +328,20 @@ public sealed class FoundryAgentRunner : IAgentRunner
                     // keys from the model), so read_file with file_path=X resolves correctly.
                     var fnArgs = new AIFunctionArguments(
                         toolArgs.ToDictionary(k => k.Key, k => (object?)k.Value));
-                    var raw = await tool.InvokeAsync(fnArgs, ct);
+                    var raw = resolvedName == "run_command"
+                        ? await InvokeRunCommandWithWatchdogAsync(
+                            tool, fnArgs, shellExecutionTracker, Emit, runId, ct).ConfigureAwait(false)
+                        : await tool.InvokeAsync(fnArgs, ct).ConfigureAwait(false);
                     resultText = raw?.ToString() ?? string.Empty;
                     Emit("tool.result", new { callId = call.CallId, content = SensitiveDataRedactor.RedactJsonStringIfApplicable(resultText) });
+                }
+                catch (AgentProviderException)
+                {
+                    throw;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -346,6 +366,101 @@ public sealed class FoundryAgentRunner : IAgentRunner
             _approvalStore.Clear(runId);
             _questionGate?.Clear(runId);
         }
+    }
+
+    private async Task<object?> InvokeRunCommandWithWatchdogAsync(
+        AIFunction tool,
+        AIFunctionArguments arguments,
+        ShellExecutionTracker shellExecutionTracker,
+        Action<string, object> emit,
+        string runId,
+        CancellationToken ct)
+    {
+        using var commandCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var invocation = tool.InvokeAsync(arguments, commandCts.Token).AsTask();
+        DateTimeOffset nextHeartbeatAt = DateTimeOffset.MaxValue;
+
+        while (!invocation.IsCompleted)
+        {
+            var snapshot = shellExecutionTracker.ActiveExecution;
+            if (snapshot is null)
+            {
+                await Task.WhenAny(invocation, Task.Delay(TimeSpan.FromMilliseconds(1), ct)).ConfigureAwait(false);
+                continue;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            if (now >= snapshot.Deadline)
+            {
+                commandCts.Cancel();
+                var completed = await Task.WhenAny(
+                    invocation,
+                    Task.Delay(ShellWatchdogCleanupTimeout, CancellationToken.None)).ConfigureAwait(false);
+                if (ReferenceEquals(completed, invocation))
+                {
+                    try
+                    {
+                        return await invocation.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        throw CreateShellTimeoutFailure(snapshot, emit);
+                    }
+                }
+
+                _ = invocation.ContinueWith(
+                    static task => _ = task.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                throw CreateShellTimeoutFailure(snapshot, emit);
+            }
+
+            if (nextHeartbeatAt == DateTimeOffset.MaxValue && ShellHeartbeatInterval > TimeSpan.Zero)
+                nextHeartbeatAt = now.Add(ShellHeartbeatInterval);
+
+            var wakeAt = nextHeartbeatAt < snapshot.Deadline ? nextHeartbeatAt : snapshot.Deadline;
+            var completedTask = await Task.WhenAny(
+                invocation,
+                Task.Delay(wakeAt - now, ct)).ConfigureAwait(false);
+            if (ReferenceEquals(completedTask, invocation))
+                break;
+
+            if (DateTimeOffset.UtcNow >= nextHeartbeatAt)
+            {
+                emit(EventTypes.ToolExecutionPending, new
+                {
+                    toolCallId = snapshot.ToolCallId,
+                    commandHash = snapshot.CommandHash,
+                    startedAtUtc = snapshot.StartedAt,
+                    deadlineUtc = snapshot.Deadline,
+                    elapsedSeconds = (DateTimeOffset.UtcNow - snapshot.StartedAt).TotalSeconds,
+                });
+                nextHeartbeatAt = DateTimeOffset.UtcNow.Add(ShellHeartbeatInterval);
+            }
+        }
+
+        return await invocation.ConfigureAwait(false);
+    }
+
+    private static AgentProviderException CreateShellTimeoutFailure(
+        ShellExecutionSnapshot snapshot,
+        Action<string, object> emit)
+    {
+        var failure = new AgentProviderException(
+            ModelSource.MicrosoftFoundry,
+            AgentProviderFailureKind.ProviderUnavailable,
+            "shell_execution_timeout",
+            $"Shell execution exceeded its hard deadline of {(snapshot.Deadline - snapshot.StartedAt).TotalMinutes:n0} minutes and was terminated.",
+            isRetryable: true);
+        emit(EventTypes.RunFailed, new
+        {
+            message = failure.UserMessage,
+            category = failure.FailureKind.ToString(),
+            errorCode = failure.ErrorCode,
+            retryable = failure.IsRetryable,
+        });
+        return failure;
     }
 
 }
