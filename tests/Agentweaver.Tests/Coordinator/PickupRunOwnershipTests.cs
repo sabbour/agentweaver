@@ -62,13 +62,26 @@ public sealed class PickupRunOwnershipTests : IClassFixture<ProjectsWebApplicati
 
         var runId = await InsertPickupRunAsync(submittingUser: GitHubLogin);
 
-        // The stream endpoint hides unauthorized runs with 404, so project authorization must be
-        // resolved before the in-memory stream owner's identity is considered.
+        // The stream endpoint must authorize from the persisted project before considering the
+        // in-memory stream owner's GitHub identity.
+        var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
+        var stream = streamStore.Create(runId, GitHubLogin);
+        stream.RecordNext(EventTypes.AgentMessage, new
+        {
+            messageId = "pickup-owner-authorization",
+            content = "project owner can read this pickup stream",
+        });
+        streamStore.Complete(runId);
+
         var resp = await _client.GetAsync($"/api/runs/{runId}/stream",
             HttpCompletionOption.ResponseHeadersRead);
 
-        resp.StatusCode.Should().NotBe(HttpStatusCode.NotFound,
+        resp.StatusCode.Should().Be(HttpStatusCode.OK,
             "the persisted project owner must be allowed to stream the run");
+        resp.Content.Headers.ContentType?.MediaType.Should().Be("text/event-stream");
+        var body = await resp.Content.ReadAsStringAsync();
+        body.Should().Contain("project owner can read this pickup stream");
+        body.Should().Contain("event: done");
     }
 
     [Fact]
