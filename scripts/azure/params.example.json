@@ -9,10 +9,6 @@
 // JSON, and fill in your own values -- JSONC (// and /* */ comments, trailing
 // commas) is tolerated on a best-effort basis by lib/config.mjs's parseJsonc().
 //
-// NEVER commit a params file containing a real GITHUB_CLIENT_SECRET. Prefer
-// the GITHUB_CLIENT_SECRET environment variable or the interactive secret
-// prompt for that field; it is accepted here only for fully unattended CI use
-// against disposable/test environments.
 {
   // Azure resource names (all optional -- fall back to variables.mjs's DEFAULTS --
   // EXCEPT KEYVAULT_NAME, see below).
@@ -27,24 +23,17 @@
   // REQUIRED for deploy commands (deploy-from-local/deploy-from-release/deploy-from-commit/verify):
   // no default -- must be the name of the Key Vault ALREADY provisioned for this environment.
   // There is deliberately no generic fallback here: a wrong-but-plausible name silently redirects
-  // the rendered ConfigMap/SecretProviderClass Key Vault references (and the GitHub OAuth secret
-  // lookups that flow from them) at the wrong vault instead of failing loudly. Look yours up with
+  // the rendered ConfigMap/SecretProviderClass Key Vault references at the wrong vault instead of
+  // failing loudly. Look yours up with
   // `az keyvault list --resource-group <RESOURCE_GROUP> --query "[].name" -o tsv`.
   "KEYVAULT_NAME": "REPLACE_WITH_YOUR_PROVISIONED_KEYVAULT_NAME",
 
   "NAMESPACE": "agentweaver",
 
-  // Required for AKS deploy mode (no default; must come from a flag, env var,
-  // this params file, or an interactive prompt).
-  "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
-  "GITHUB_CLIENT_SECRET": "",
-  // "GITHUB_ALLOWED_ORG": "microsoft", // Comma-separated GitHub org login(s) allowed to sign in.
-
-  // Optional: switch sign-in mode. Valid values: "GitHubLegacy" (default) or "Entra" (Microsoft
-  // Entra ID). When AUTH_MODE is "Entra", ENTRA_CLIENT_ID and ENTRA_TENANT_ID are required.
-  // "AUTH_MODE": "Entra",
-  // "ENTRA_CLIENT_ID": "your-entra-app-client-id",
-  // "ENTRA_TENANT_ID": "your-entra-tenant-id",
+  // Required for AKS deploy mode. Agentweaver only uses Entra browser sign-in.
+  "AUTH_MODE": "Entra",
+  "ENTRA_CLIENT_ID": "your-entra-app-client-id",
+  "ENTRA_TENANT_ID": "your-entra-tenant-id",
 
   // Optional overrides.
   // "PG_SERVER_NAME": "agentweaver-pg-staging", // Override the globally-unique Azure Flexible Server name if "agentweaver-pg" is already reserved.

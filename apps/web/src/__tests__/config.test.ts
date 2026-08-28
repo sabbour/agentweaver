@@ -1,8 +1,8 @@
 import { AgentweaverApiClient, ApiError } from '../api/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // The `/api` base-path convention: API_URL is the ORIGIN ONLY (no `/api` suffix). The API
-// client owns the single `/api` prefix for XHR endpoints, while GitHub OAuth redirect
-// endpoints live at the origin root (`/auth/github/authorize`). These tests lock in that
+// client owns the single `/api` prefix for XHR endpoints, while the Entra redirect
+// endpoint lives at the origin root (`/auth/entra/authorize`). These tests lock in that
 // convention for both localhost dev (absolute origin) and the deployed gateway (same origin,
 // empty API_URL) so a regression can never reintroduce the sign-in "unauthorized" bug.
 
@@ -22,18 +22,18 @@ async function loadConfigWith(apiUrl: string | undefined) {
   return import('../config');
 }
 
-describe('config GITHUB_AUTHORIZE_URL (origin root, never /api)', () => {
-  it('resolves to <origin>/auth/github/authorize for an absolute origin (localhost dev)', async () => {
+describe('config ENTRA_AUTHORIZE_URL (origin root, never /api)', () => {
+  it('resolves to <origin>/auth/entra/authorize for an absolute origin (localhost dev)', async () => {
     const cfg = await loadConfigWith('http://localhost:5000');
     expect(cfg.API_URL).toBe('http://localhost:5000');
-    expect(cfg.GITHUB_AUTHORIZE_URL).toBe('http://localhost:5000/auth/github/authorize');
+    expect(cfg.ENTRA_AUTHORIZE_URL).toBe('http://localhost:5000/auth/entra/authorize');
   });
 
-  it('resolves to same-origin /auth/github/authorize when API_URL is "" (deployed gateway)', async () => {
+  it('resolves to same-origin /auth/entra/authorize when API_URL is "" (deployed gateway)', async () => {
     const cfg = await loadConfigWith('');
     // Empty string is a VALID value meaning "same origin" — it must NOT fall through to a default.
     expect(cfg.API_URL).toBe('');
-    expect(cfg.GITHUB_AUTHORIZE_URL).toBe('/auth/github/authorize');
+    expect(cfg.ENTRA_AUTHORIZE_URL).toBe('/auth/entra/authorize');
   });
 
   it('treats an empty runtime API_URL as same-origin, not as unset (no localhost fallback)', async () => {

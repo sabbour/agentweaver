@@ -7,7 +7,7 @@ title: Two-App cutover validation
 This is the release-validation matrix for the two-GitHub-App Fleet migration
 ([#938](https://github.com/sabbour/agentweaver/issues/938)). It is a release
 gate, not a compatibility guide: Microsoft Entra remains the product sign-in,
-and the final cutover has no legacy GitHub OAuth or device-flow lane.
+and the final cutover has no legacy browser authentication or device-flow lane.
 
 Run this matrix only against the exact integrated release candidate after
 [#951](https://github.com/sabbour/agentweaver/issues/951) has merged. Earlier

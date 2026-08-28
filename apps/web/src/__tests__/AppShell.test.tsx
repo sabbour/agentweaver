@@ -24,7 +24,6 @@ vi.mock('../api/apiClient', () => ({
     getProject: vi.fn(),
     checkHealth: vi.fn(),
     getAuthSession: vi.fn(),
-    listLinkedGitHubAccounts: vi.fn(),
     getProjectAccessOverview: vi.fn(),
     getNotifications: vi.fn(),
   },
@@ -100,16 +99,6 @@ beforeEach(() => {
     entra_object_id: 'entra-1',
     platform_roles: ['PlatformAdmin'],
   } as never);
-  vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([
-    {
-      login: 'octocat',
-      name: 'Octocat',
-      avatar_url: 'https://example.com/octocat.png',
-      type: 'user',
-      is_default: true,
-      copilot_entitled: true,
-    },
-  ] as never);
   vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
     auth_mode: 'entra',
     platform_roles: ['PlatformAdmin'],

@@ -368,7 +368,7 @@ test("runLocalSetup: scaffolds appsettings.Development.json from the checked-in 
   assert.equal(developmentContents, exampleContents);
   assert.ok(
     infoLines.includes(
-      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; set Auth:GitHub:ClientId in it, then store ClientSecret and Providers:GitHubCopilot:GitHubToken via dotnet user-secrets before first sign-in.",
+      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; configure Auth:Entra:ClientId and Auth:Entra:TenantId before first sign-in.",
     ),
   );
 });
@@ -460,7 +460,7 @@ test("runLocalSetup: does not overwrite an existing appsettings.Development.json
   );
 });
 
-test("runLocalSetup: prints GitHub OAuth guidance in the local dev ready summary", async (t) => {
+test("runLocalSetup: prints Entra guidance in the local dev ready summary", async (t) => {
   const fixture = await createRepoRootFixture("ready-summary");
   t.after(fixture.cleanup);
   const infoLines = [];
@@ -487,19 +487,14 @@ test("runLocalSetup: prints GitHub OAuth guidance in the local dev ready summary
   assert.ok(sectionLines.includes("LOCAL DEV READY"));
   assert.ok(
     infoLines.includes(
-      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; set Auth:GitHub:ClientId in it, then store ClientSecret and Providers:GitHubCopilot:GitHubToken via dotnet user-secrets before first sign-in.",
+      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; configure Auth:Entra:ClientId and Auth:Entra:TenantId before first sign-in.",
     ),
   );
-  assert.ok(infoLines.includes("  For local sign-in: create a GitHub OAuth App: https://github.com/settings/developers"));
-  assert.ok(infoLines.includes("  Callback URL:      http://localhost:5000/auth/github/callback"));
+  assert.ok(infoLines.includes("  For local sign-in, configure a Microsoft Entra app registration."));
+  assert.ok(infoLines.includes("  Callback URL:      http://localhost:5000/auth/entra/callback"));
   assert.ok(
-    infoLines.includes("  Set Auth:GitHub:ClientId (non-secret) in apps/Agentweaver.Api/appsettings.Development.json."),
+    infoLines.includes("  Set Auth:Entra:ClientId and Auth:Entra:TenantId in apps/Agentweaver.Api/appsettings.Development.json."),
   );
-  assert.ok(
-    infoLines.includes("  Store secrets via user-secrets (run in apps/Agentweaver.Api), never in the JSON file:"),
-  );
-  assert.ok(infoLines.includes('    dotnet user-secrets set Auth:GitHub:ClientSecret "<client-secret>"'));
-  assert.ok(infoLines.includes('    dotnet user-secrets set Providers:GitHubCopilot:GitHubToken "<github-pat-with-copilot-access>"'));
   assert.ok(infoLines.includes("  Full walkthrough:  docs/guide/getting-started.md#1-configure-the-api"));
 });
 

@@ -85,13 +85,7 @@ configMapGenerator:
       - "TENANT_ID=changeme"
       - "OAUTH_ISSUER=https://agentweaver.example.com"
       - "OAUTH_AUDIENCE=https://agentweaver.example.com/mcp"
-      - "GITHUB_CALLBACK_URL=https://agentweaver.example.com/auth/github/callback"
-      - "GITHUB_FRONTEND_URL=https://agentweaver.example.com/"
-      - "GITHUB_ALLOWED_ORG=microsoft"
-      # Optional Entra sign-in wiring (#653/#658 app-side support; only meaningful when
-      # AUTH_MODE=Entra). Defaults preserve today's GitHub sign-in behavior -- see
-      # variables.mjs's DEFAULTS.AUTH_MODE comment for why "GitHubLegacy" (not "GitHub") is required.
-      - "AUTH_MODE=GitHubLegacy"
+      - "AUTH_MODE=Entra"
       - "ENTRA_CLIENT_ID="
       - "ENTRA_TENANT_ID="
       - "ENTRA_REDIRECT_URI=https://agentweaver.example.com/auth/entra/callback"
