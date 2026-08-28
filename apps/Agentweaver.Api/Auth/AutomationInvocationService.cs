@@ -1,7 +1,32 @@
 using Agentweaver.Api.Memory;
+using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Api.Auth;
+
+public sealed record AutomationInvocationClaim(string InvocationId);
+
+public interface IAutomationInvocationService
+{
+    Task<AutomationInvocationClaim?> TryClaimForProjectAsync(
+        ProjectId projectId,
+        string occurrenceKey,
+        string? deliveryId,
+        string? eventName,
+        CancellationToken ct = default);
+
+    Task<bool> TryBindBacklogTaskAsync(
+        string invocationId,
+        ProjectId projectId,
+        BacklogTaskId backlogTaskId,
+        CancellationToken ct = default);
+
+    Task<bool> TryPrepareRunAsync(
+        ProjectId expectedProjectId,
+        BacklogTaskId backlogTaskId,
+        string runId,
+        CancellationToken ct = default);
+}
 
 /// <summary>
 /// Internal boundary between a validated automation trigger and its unattended run.  It accepts no
@@ -10,8 +35,71 @@ namespace Agentweaver.Api.Auth;
 /// </summary>
 public sealed class AutomationInvocationService(
     MemoryDbContext db,
-    TwoAppPersistenceStore persistence)
+    TwoAppPersistenceStore persistence) : IAutomationInvocationService
 {
+    /// <summary>
+    /// Claims an invocation only from the sole active activation for the project. Trigger producers
+    /// supply no activation, repository, or installation identity; all three are recovered and
+    /// fenced from server-owned state before the durable claim is written.
+    /// </summary>
+    public async Task<AutomationInvocationClaim?> TryClaimForProjectAsync(
+        ProjectId projectId,
+        string occurrenceKey,
+        string? deliveryId,
+        string? eventName,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(occurrenceKey))
+            return null;
+
+        var activation = await db.AutomationActivations.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.ProjectId == projectId.ToString() &&
+                                      x.Status == AutomationActivationStatus.Active, ct)
+            .ConfigureAwait(false);
+        if (activation is null ||
+            !await TryClaimAsync(
+                activation.Id,
+                occurrenceKey,
+                deliveryId,
+                eventName,
+                activation.InstallationId,
+                activation.RepositoryId,
+                ct).ConfigureAwait(false))
+            return null;
+
+        var invocationId = await db.AutomationInvocations.AsNoTracking()
+            .Where(x => x.ActivationId == activation.Id &&
+                        x.OccurrenceKey == occurrenceKey &&
+                        x.ProjectId == projectId.ToString())
+            .Select(x => x.Id)
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(invocationId) ? null : new(invocationId);
+    }
+
+    public async Task<bool> TryBindBacklogTaskAsync(
+        string invocationId,
+        ProjectId projectId,
+        BacklogTaskId backlogTaskId,
+        CancellationToken ct = default)
+    {
+        var changed = await db.AutomationInvocations
+            .Where(x => x.Id == invocationId &&
+                        x.ProjectId == projectId.ToString() &&
+                        x.Outcome == AutomationInvocationOutcome.Claimed &&
+                        x.BacklogTaskId == null)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.BacklogTaskId, backlogTaskId.ToString()), ct)
+            .ConfigureAwait(false);
+        if (changed == 1)
+            return true;
+
+        return await db.AutomationInvocations.AsNoTracking().AnyAsync(x =>
+            x.Id == invocationId &&
+            x.ProjectId == projectId.ToString() &&
+            x.Outcome == AutomationInvocationOutcome.Claimed &&
+            x.BacklogTaskId == backlogTaskId.ToString(), ct).ConfigureAwait(false);
+    }
+
     public async Task<bool> TryClaimAsync(
         string activationId,
         string occurrenceKey,
@@ -54,16 +142,23 @@ public sealed class AutomationInvocationService(
     /// the exact same pair, which makes this replay-safe and prevents a later activation from being
     /// substituted for a claimed invocation.
     /// </summary>
-    public async Task<bool> TryPrepareRunAsync(string invocationId, string runId, CancellationToken ct = default)
+    public async Task<bool> TryPrepareRunAsync(
+        ProjectId expectedProjectId,
+        BacklogTaskId backlogTaskId,
+        string runId,
+        CancellationToken ct = default)
     {
         var invocation = await db.AutomationInvocations.AsNoTracking()
-            .SingleOrDefaultAsync(x => x.Id == invocationId && x.Outcome == AutomationInvocationOutcome.Claimed, ct)
+            .SingleOrDefaultAsync(x => x.ProjectId == expectedProjectId.ToString() &&
+                                      x.BacklogTaskId == backlogTaskId.ToString() &&
+                                      x.Outcome == AutomationInvocationOutcome.Claimed, ct)
             .ConfigureAwait(false);
         if (invocation is null)
             return false;
 
         var activation = await persistence.TryFenceAutomationActivationAsync(invocation.ActivationId, ct).ConfigureAwait(false);
         if (activation is null ||
+            activation.ProjectId != expectedProjectId.ToString() ||
             activation.ProjectId != invocation.ProjectId ||
             activation.InstallationId != invocation.InstallationId ||
             activation.RepositoryId != invocation.RepositoryId)

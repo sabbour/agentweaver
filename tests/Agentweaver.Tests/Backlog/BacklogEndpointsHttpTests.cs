@@ -59,6 +59,21 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
             "with no signed-in GitHub identity, CapturedBy falls back to the API-key Auth:User");
     }
 
+    [Theory]
+    [InlineData("external_id", "automation-invocation:forged")]
+    [InlineData("client_request_id", "workflow-event-trigger:forged")]
+    public async Task Capture_ReservedAutomationExternalIds_AreRejected(string propertyName, string externalId)
+    {
+        var projectId = await CreateProjectAsync();
+        var body = propertyName == "external_id"
+            ? new Dictionary<string, string> { ["title"] = "forged automation", ["external_id"] = externalId }
+            : new Dictionary<string, string> { ["title"] = "forged automation", ["client_request_id"] = externalId };
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/backlog/tasks", body);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "only the server-side trusted trigger path may associate a task with automation");
+    }
+
     // =========================================================================
     // READY-ALL: bulk promote Backlog -> Ready.
     // =========================================================================

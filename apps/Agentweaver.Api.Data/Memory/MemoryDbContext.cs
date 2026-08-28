@@ -709,6 +709,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.Id).HasColumnName("id");
             e.Property(x => x.ProjectId).HasColumnName("project_id");
             e.Property(x => x.ActivationId).HasColumnName("activation_id");
+            e.Property(x => x.BacklogTaskId).HasColumnName("backlog_task_id");
             e.Property(x => x.OccurrenceKey).HasColumnName("occurrence_key");
             e.Property(x => x.DeliveryId).HasColumnName("delivery_id");
             e.Property(x => x.EventName).HasColumnName("event_name");
@@ -718,6 +719,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ReceivedAt).HasColumnName("received_at");
             e.Property(x => x.CompletedAt).HasColumnName("completed_at");
             e.HasIndex(x => new { x.ActivationId, x.OccurrenceKey }).IsUnique();
+            e.HasIndex(x => x.BacklogTaskId).IsUnique().HasFilter("backlog_task_id IS NOT NULL")
+                .HasDatabaseName("UX_automation_invocations_backlog_task_id");
             e.HasIndex(x => x.DeliveryId).IsUnique().HasFilter("delivery_id IS NOT NULL")
                 .HasDatabaseName("UX_automation_invocations_delivery_id");
             e.HasOne<AutomationActivationRecord>().WithMany().HasForeignKey(x => x.ActivationId)

@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 using Agentweaver.Api.Webhooks;
 
@@ -28,16 +30,19 @@ public sealed class WorkflowEventTriggerService
     private readonly WorkflowRegistry _registry;
     private readonly ILogger<WorkflowEventTriggerService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public WorkflowEventTriggerService(
         IBacklogTaskStore backlogStore,
         WorkflowRegistry registry,
         ILogger<WorkflowEventTriggerService> logger,
+        IServiceScopeFactory scopeFactory,
         TimeProvider? timeProvider = null)
     {
         _backlogStore = backlogStore;
         _registry = registry;
         _logger = logger;
+        _scopeFactory = scopeFactory;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -60,6 +65,8 @@ public sealed class WorkflowEventTriggerService
         var set = _registry.GetOrLoad(project);
         var now = _timeProvider.GetUtcNow();
         var fired = new List<string>();
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var invocations = scope.ServiceProvider.GetRequiredService<IAutomationInvocationService>();
 
         foreach (var result in set.Available)
         {
@@ -86,6 +93,16 @@ public sealed class WorkflowEventTriggerService
                     continue;   // already fired for this dedupe key
             }
 
+            var invocation = await invocations.TryClaimForProjectAsync(
+                project.Id, idempotencyKey, dedupeKey, eventName, ct).ConfigureAwait(false);
+            if (invocation is null)
+            {
+                _logger.LogWarning(
+                    "Workflow event trigger refused workflow {WorkflowId} for project {ProjectId}: automation activation unavailable",
+                    def.Id, project.Id);
+                continue;
+            }
+
             var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
                 _backlogStore,
                 project,
@@ -96,6 +113,9 @@ public sealed class WorkflowEventTriggerService
                 idempotencyKey: idempotencyKey,
                 now: now,
                 ct: ct).ConfigureAwait(false);
+            if (!await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
+                    .ConfigureAwait(false))
+                throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
 
             _logger.LogInformation(
                 "Workflow event trigger: fired workflow {WorkflowId} for project {ProjectId} on event {EventName} (task {TaskId})",

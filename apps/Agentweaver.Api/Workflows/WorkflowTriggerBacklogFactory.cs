@@ -14,6 +14,10 @@ namespace Agentweaver.Api.Workflows;
 /// </summary>
 internal static class WorkflowTriggerBacklogFactory
 {
+    internal static bool IsTrustedAutomationTask(BacklogTask task) =>
+        task.SourceFilePath?.StartsWith("workflow-schedule-trigger:", StringComparison.Ordinal) == true ||
+        task.SourceFilePath?.StartsWith("workflow-event-trigger:", StringComparison.Ordinal) == true;
+
     public static async Task<BacklogTask> CreateReadyTaskAsync(
         IBacklogTaskStore backlogStore,
         Project project,
