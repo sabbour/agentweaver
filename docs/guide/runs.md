@@ -155,6 +155,10 @@ the timeline until resolved. Their project-configurable window defaults to 30 mi
 expires, choose **Retry approval** to create a fresh approval attempt while keeping the run and
 healthy preview process in place.
 
+Selecting **Review now** from an approval notification opens that exact run. If the notification
+does not include a valid run target, Agentweaver explains that the approval cannot be opened
+instead of sending you to a different run.
+
 ## RAI check
 
 Each agent run passes a **Responsible AI (RAI)** check before its output proceeds. If the check flags the output, the run automatically loops back — the agent revises and the check re-runs. This loopback is visible as a "Revise" edge in the pipeline graph. If the check passes, the run proceeds to the next stage (human review or assembly).

@@ -11,6 +11,7 @@ import {
 } from '@fluentui/react-components';
 import { NotificationsContext } from './notificationsContext';
 import { armAudioUnlock, getNotificationsMuted, playNotificationChime, setNotificationsMuted } from './sound';
+import { notificationTargetPath, unavailableNotificationTargetMessage } from './notificationTarget';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { NotificationDto } from '../api/types';
@@ -54,18 +55,22 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
 
   const handleCta = useCallback((notification: NotificationDto, toastId: string) => {
     dismissToast(toastId);
-    navigate(notification.cta_path);
+    const targetPath = notificationTargetPath(notification);
+    if (targetPath) navigate(targetPath);
   }, [dismissToast, navigate]);
 
   const announce = useCallback((notification: NotificationDto) => {
     const toastId = `notif-${notification.id}`;
     const copy = TOAST_COPY[notification.type] ?? FALLBACK_TOAST_COPY;
+    const targetPath = notificationTargetPath(notification);
     dispatchToast(
       <Toast>
         <ToastTitle>{copy.title}</ToastTitle>
         <ToastBody subtitle={notification.project_name ?? undefined}>{notification.title}</ToastBody>
         <ToastFooter>
-          <FluentLink onClick={() => handleCta(notification, toastId)}>{copy.cta}</FluentLink>
+          {targetPath
+            ? <FluentLink onClick={() => handleCta(notification, toastId)}>{copy.cta}</FluentLink>
+            : <span>{unavailableNotificationTargetMessage(notification)}</span>}
         </ToastFooter>
       </Toast>,
       {

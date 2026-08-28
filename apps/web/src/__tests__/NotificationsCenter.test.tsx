@@ -5,7 +5,7 @@ import { NotificationsProvider } from '../notifications/NotificationsProvider';
 import { getNotificationsMuted, setNotificationsMuted } from '../notifications/sound';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NotificationDto, NotificationsResponseDto } from '../api/types';
 
@@ -50,10 +50,16 @@ function renderBell(pollIntervalMs = 1000) {
       <MemoryRouter>
         <NotificationsProvider pollIntervalMs={pollIntervalMs}>
           <NotificationBell />
+          <CurrentLocation />
         </NotificationsProvider>
       </MemoryRouter>
     </AzureFluentProvider>,
   );
+}
+
+function CurrentLocation() {
+  const location = useLocation();
+  return <span data-testid="current-location">{location.pathname}</span>;
 }
 
 beforeEach(() => {
@@ -167,20 +173,54 @@ describe('NotificationBell + NotificationsProvider', () => {
       .toContain('1 pending tool approval');
   });
 
-  it('CTA click in the popover navigates to the notification cta_path', async () => {
-    vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([makeNotification()]));
+  it('CTA click routes a pending approval to its run, not a concurrent newer draft', async () => {
+    const newerDraft = makeNotification({
+      id: 'notif-newer-draft',
+      run_id: 'newer-draft-run',
+      title: 'Newer unrelated draft',
+      cta_path: '/projects/proj-1/orchestrations/newer-draft-run',
+    });
+    const pendingApproval = makeNotification({
+      id: 'notif-pending-approval',
+      type: 'tool_approval',
+      run_id: 'pending-approval-run',
+      title: 'Approval needed to run "start_preview"',
+      // Simulates a stale server path: routing must use the notification's exact run_id.
+      cta_path: '/projects/proj-1/orchestrations/newer-draft-run',
+    });
+    vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([newerDraft, pendingApproval]));
     const user = userEvent.setup();
 
     renderBell();
 
-    await waitFor(() => expect(screen.getByTestId('notification-bell-badge').textContent).toContain('1'));
+    await waitFor(() => expect(screen.getByTestId('notification-bell-badge').textContent).toContain('2'));
     await user.click(screen.getByTestId('notification-bell'));
-
-    const item = await screen.findByText(makeNotification().title);
+    const item = await screen.findByText(pendingApproval.title);
     await user.click(item);
 
-    // Popover should close after navigating.
-    await waitFor(() => expect(screen.queryByText(makeNotification().title)).toBeNull());
+    await waitFor(() => expect(screen.getByTestId('current-location').textContent)
+      .toBe('/projects/proj-1/orchestrations/pending-approval-run'));
+  });
+
+  it('shows a safe message instead of routing when an approval target is missing', async () => {
+    vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([
+      makeNotification({
+        type: 'tool_approval',
+        run_id: '',
+        project_id: null,
+        cta_path: '/projects/proj-1/orchestrations/newer-draft-run',
+      }),
+    ]));
+    const user = userEvent.setup();
+
+    renderBell();
+
+    await waitFor(() => expect(screen.getByTestId('notification-bell-badge')).toBeTruthy());
+    await user.click(screen.getByTestId('notification-bell'));
+
+    expect(await screen.findByText('This approval no longer has a run to review.')).toBeTruthy();
+    await user.click(screen.getByText(makeNotification().title));
+    expect(screen.getByTestId('current-location').textContent).toBe('/');
   });
 
   it('dismisses one notification without navigating from its row', async () => {

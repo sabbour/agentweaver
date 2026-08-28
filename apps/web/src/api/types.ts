@@ -1566,10 +1566,9 @@ export interface OverviewDto {
 }
 
 // ── #247 — Global notification center ─────────────────────────────────────────
-// GET /api/notifications — the signed-in user's pending Human Review requests across every
-// project/run they own. Tool Approval aggregation is a documented fast-follow (see
-// apps/Agentweaver.Api/Notifications/NotificationsService.cs), so `type` is currently always
-// "human_review", but the field is kept open-ended for that future addition.
+// GET /api/notifications — the signed-in user's pending Human Review and Tool Approval requests
+// across every project/run they own. The server includes a path for non-run notifications; run
+// notification routes are rebuilt from project_id + run_id so they always target that exact run.
 export interface NotificationDto {
   id: string;
   // Widened with `(string & {})` so the union still autocompletes known values while
@@ -1582,7 +1581,7 @@ export interface NotificationDto {
   agent_name: string | null;
   title: string;
   created_utc: string;
-  cta_path: string;
+  cta_path: string | null;
 }
 
 export interface NotificationsResponseDto {
