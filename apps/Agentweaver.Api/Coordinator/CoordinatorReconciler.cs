@@ -160,7 +160,7 @@ public sealed class CoordinatorReconciler
                 // work-plan status is settled. Work plans and runs use separate stores, so this check
                 // cannot be part of the EF candidate query. Persist the matching terminal plan state
                 // before considering an orphan re-arm; that durable transition survives pod restarts.
-                if (await TrySetStoppedCoordinatorWorkPlanStatusAsync(plan, ct).ConfigureAwait(false))
+                if (await TrySetTerminalCoordinatorWorkPlanStatusAsync(plan, ct).ConfigureAwait(false))
                     continue;
 
                 switch (plan.Status)
@@ -492,11 +492,11 @@ public sealed class CoordinatorReconciler
     }
 
     /// <summary>
-    /// Settles a candidate whose coordinator run has already stopped. The work-plan status is the
+    /// Settles a candidate whose coordinator run has reached a terminal result. The work-plan status is the
     /// durable orphan-scan cursor, so persisting this transition makes future scans skip the run even
     /// after this pod is replaced. Returns <c>true</c> when the candidate must not be re-armed.
     /// </summary>
-    private async Task<bool> TrySetStoppedCoordinatorWorkPlanStatusAsync(
+    private async Task<bool> TrySetTerminalCoordinatorWorkPlanStatusAsync(
         PlanCandidate plan,
         CancellationToken ct)
     {
@@ -505,8 +505,8 @@ public sealed class CoordinatorReconciler
             return false;
 
         var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
-        var stoppedStatus = GetStoppedCoordinatorWorkPlanStatus(run?.Status);
-        if (stoppedStatus is null)
+        var terminalStatus = GetTerminalCoordinatorWorkPlanStatus(run?.Status);
+        if (terminalStatus is null)
             return false;
 
         using var scope = _scopeFactory.CreateScope();
@@ -515,22 +515,21 @@ public sealed class CoordinatorReconciler
         await db.WorkPlans
             .Where(w => w.Id == plan.WorkPlanId && w.Status == plan.Status)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(w => w.Status, stoppedStatus)
+                .SetProperty(w => w.Status, terminalStatus)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
 
         _logger.LogInformation(
             "Coordinator reconciler: settled stopped coordinator run {RunId} as work-plan status {Status}",
-            plan.CoordinatorRunId, stoppedStatus);
+            plan.CoordinatorRunId, terminalStatus);
         return true;
     }
 
-    private static string? GetStoppedCoordinatorWorkPlanStatus(RunStatus? status) => status switch
+    private static string? GetTerminalCoordinatorWorkPlanStatus(RunStatus? status) => status switch
     {
         RunStatus.Completed or RunStatus.Merged => WorkPlanStatus.Complete,
         RunStatus.Declined => WorkPlanStatus.AssemblyDeclined,
         RunStatus.Failed or RunStatus.MergeFailed => WorkPlanStatus.AssemblyFailed,
-        RunStatus.AssembleReady => WorkPlanStatus.AwaitingAssembly,
         _ => null,
     };
 
