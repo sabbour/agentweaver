@@ -22,8 +22,9 @@ name: CI
 # suites.
 # `Changeset advisory` always runs regardless of paths, since it must evaluate
 # every PR for whether a changeset was needed.
-# Draft PRs skip the expensive test/build jobs (dotnet/web/node-toolchain/docs)
-# since draft PRs can't be merged anyway.
+# .NET checks run for draft PRs too: stacked draft layers need a real validation
+# signal before they can safely be made ready. The other expensive test/build jobs
+# (web/node-toolchain/docs) remain skipped for drafts.
 
 on:
   pull_request:
@@ -110,7 +111,7 @@ jobs:
   dotnet-test-plan:
     name: Plan .NET test shards
     needs: changes
-    if: needs.changes.outputs.dotnet == 'true' && github.event.pull_request.draft == false
+    if: needs.changes.outputs.dotnet == 'true'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.shards.outputs.matrix }}
@@ -216,7 +217,7 @@ jobs:
   dotnet-tests:
     name: .NET tests
     needs: [changes, dotnet-test-plan, dotnet-test-shards]
-    if: always() && needs.changes.outputs.dotnet == 'true' && github.event.pull_request.draft == false
+    if: always() && needs.changes.outputs.dotnet == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Require every .NET test shard
