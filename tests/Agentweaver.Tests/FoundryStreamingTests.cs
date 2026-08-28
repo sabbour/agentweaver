@@ -426,6 +426,47 @@ public sealed class FoundryStreamingTests : IDisposable
         executor.Release();
         await executor.Completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
     }
+
+    [Fact]
+    public async Task RunCommand_CallerCancellationStopsAnIgnoringExecutorWithoutShellTimeout()
+    {
+        var executor = new CancellationIgnoringExecutor();
+        var client = new FakeStreamingChatClient(
+            new TurnSetup([FunctionCallUpdate("shell-cancel", "run_command", new() { ["command"] = "echo stuck" })]));
+        var runner = Runner(client, executor);
+        runner.DefaultCommandTimeoutMs = (int)TimeSpan.FromSeconds(3).TotalMilliseconds;
+        runner.ShellWatchdogGrace = TimeSpan.FromSeconds(3);
+        runner.ShellHeartbeatInterval = TimeSpan.FromMilliseconds(10);
+        var (writer, drain) = MakeChannel();
+        using var cancellation = new CancellationTokenSource();
+
+        var run = runner.ExecuteAsync(
+            "task", _workDir, "", ModelSource.MicrosoftFoundry, "r-cancel", null, writer, cancellation.Token);
+        await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        var stopwatch = Stopwatch.StartNew();
+        cancellation.Cancel();
+        try
+        {
+            await executor.CancellationRequested.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Func<Task> act = () => run;
+            await act.Should().ThrowAsync<OperationCanceledException>();
+        }
+        finally
+        {
+            executor.Release();
+            await executor.Completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        stopwatch.Stop();
+
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1),
+            "caller cancellation must finish before the shell deadline instead of spinning on a cancelled delay");
+
+        var events = drain();
+        events.Should().NotContain(e =>
+            e.Type == EventTypes.RunFailed &&
+            Prop(e.Payload, "errorCode") == "shell_execution_timeout");
+    }
 }
 
 // ---- Fake IChatClient ----
@@ -476,6 +517,7 @@ internal sealed class CancellationIgnoringExecutor : ISandboxExecutor
     private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource CancellationRequested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public bool IsRealIsolation => true;
     public string BackendName => "kata";
@@ -486,6 +528,8 @@ internal sealed class CancellationIgnoringExecutor : ISandboxExecutor
     public async Task<SandboxExecResult> ExecuteAsync(SandboxCommand command, CancellationToken ct = default)
     {
         Started.TrySetResult();
+        using var cancellationRegistration = ct.Register(
+            () => CancellationRequested.TrySetResult());
         try
         {
             await _release.Task.ConfigureAwait(false);

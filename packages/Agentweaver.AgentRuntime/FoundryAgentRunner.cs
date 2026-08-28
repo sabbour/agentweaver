@@ -382,20 +382,29 @@ public sealed class FoundryAgentRunner : IAgentRunner
 
         while (!invocation.IsCompleted)
         {
-            var snapshot = shellExecutionTracker.ActiveExecution;
+            ThrowIfCallerCancelled(commandCts, ct);
+
+            var observation = shellExecutionTracker.Observe();
+            var snapshot = observation.ActiveExecution;
             if (snapshot is null)
             {
-                await Task.WhenAny(invocation, Task.Delay(TimeSpan.FromMilliseconds(1), ct)).ConfigureAwait(false);
+                using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var lifecycleChange = shellExecutionTracker.WaitForChangeAsync(observation.Version, waitCts.Token);
+                await Task.WhenAny(invocation, lifecycleChange).ConfigureAwait(false);
+                waitCts.Cancel();
                 continue;
             }
 
             var now = DateTimeOffset.UtcNow;
+            ThrowIfCallerCancelled(commandCts, ct);
             if (now >= snapshot.Deadline)
             {
                 commandCts.Cancel();
                 var completed = await Task.WhenAny(
                     invocation,
-                    Task.Delay(ShellWatchdogCleanupTimeout, CancellationToken.None)).ConfigureAwait(false);
+                    Task.Delay(ShellWatchdogCleanupTimeout, CancellationToken.None),
+                    Task.Delay(Timeout.InfiniteTimeSpan, ct)).ConfigureAwait(false);
+                ThrowIfCallerCancelled(commandCts, ct);
                 if (ReferenceEquals(completed, invocation))
                 {
                     try
@@ -423,6 +432,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
             var completedTask = await Task.WhenAny(
                 invocation,
                 Task.Delay(wakeAt - now, ct)).ConfigureAwait(false);
+            ThrowIfCallerCancelled(commandCts, ct);
             if (ReferenceEquals(completedTask, invocation))
                 break;
 
@@ -441,6 +451,15 @@ public sealed class FoundryAgentRunner : IAgentRunner
         }
 
         return await invocation.ConfigureAwait(false);
+    }
+
+    private static void ThrowIfCallerCancelled(CancellationTokenSource commandCts, CancellationToken ct)
+    {
+        if (!ct.IsCancellationRequested)
+            return;
+
+        commandCts.Cancel();
+        throw new OperationCanceledException(ct);
     }
 
     private static AgentProviderException CreateShellTimeoutFailure(
