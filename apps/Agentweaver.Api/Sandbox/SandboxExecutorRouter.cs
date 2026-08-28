@@ -32,6 +32,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly IRunOptionsStore? _runOptions;
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
     private readonly Preview.ISandboxPreviewService? _previewService;
+    private readonly RunRepositoryCredentialRegistry? _repositoryCredentials;
+    private readonly IRunStore? _runStore;
 
     public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
         IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null,
@@ -44,7 +46,9 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         IRunOptionsStore? runOptions = null,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
         Preview.ISandboxPreviewService? previewService = null,
-        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null)
+        RunRepositoryCredentialRegistry? repositoryCredentials = null,
+        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
+        IRunStore? runStore = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
@@ -59,7 +63,9 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _runOptions = runOptions;
         _accessTokenProvider = accessTokenProvider;
         _previewService = previewService;
+        _repositoryCredentials = repositoryCredentials;
         _authorshipCapabilityStore = authorshipCapabilityStore;
+        _runStore = runStore;
     }
 
     public ISandboxExecutor Resolve()
@@ -145,9 +151,10 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             return new KubernetesSandboxExecutor(
                 k8sClient, sandboxOptions, k8sLogger, _podRegistry, _turnTokenRegistry, readinessProbe,
                 _submittingUserResolver, _httpClientFactory, _tokenStore, _secretStore, _runEventStream,
-                _runOptions, _accessTokenProvider, _previewService,
+                _runOptions, _repositoryCredentials, _accessTokenProvider, _previewService,
                 tokenScopeProvider: _tokenScopeProvider,
-                authorshipCapabilityStore: _authorshipCapabilityStore);
+                authorshipCapabilityStore: _authorshipCapabilityStore,
+                runStore: _runStore);
         }
         catch (Exception ex)
         {

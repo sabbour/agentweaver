@@ -43,10 +43,11 @@ public sealed class YamlSandboxPolicyStore : ISandboxPolicyStore
         {
             var yaml = File.ReadAllText(filePath);
             var root = Deserializer.Deserialize<Dictionary<string, object?>>(yaml) ?? new(StringComparer.OrdinalIgnoreCase);
-            SandboxPolicyYamlDto dto = new();
-            if (TryGetValue(root, "sandbox", out var sandboxNode) && sandboxNode is not null)
-                dto = Deserializer.Deserialize<SandboxPolicyYamlDto>(Serializer.Serialize(sandboxNode)) ?? new();
-            return Task.FromResult(dto.ToDomain(repositoryPath));
+            if (!TryGetValue(root, "sandbox", out var sandboxNode) || sandboxNode is null)
+                return Task.FromResult(SandboxPolicy.Default(repositoryPath));
+
+            var dto = Deserializer.Deserialize<SandboxPolicyYamlDto>(Serializer.Serialize(sandboxNode)) ?? new();
+            return Task.FromResult(dto.ToDomain(SandboxPolicy.Default(repositoryPath)));
         }
         catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException)
         {
@@ -136,56 +137,21 @@ internal sealed class SandboxPolicyYamlDto
     public bool NetworkEnabled { get; set; } = true;
 
     public List<string> AllowedRepositoryRoots { get; set; } = [];
-    public List<string> DestructiveCommandPatterns { get; set; } =
-    [
-        // File deletion
-        "rm -rf", "rm -fr", "rm -r /", "shred ", "wipe ",
-        "find / -delete", "find / -exec rm",
-        "truncate --size 0",
-        // Disk and filesystem
-        "dd if=", "mkfs", "fdisk", "parted ", "wipefs",
-        "> /dev/sd", "> /dev/hd", "> /dev/nvme",
-        // Windows CMD destructive
-        "del /s", "rd /s /q", "format ", "cipher /w",
-        // Privilege escalation and system accounts
-        "chmod -R 777", "chmod -R 0777", "chown -R root",
-        "sudo rm", "sudo mkfs", "sudo dd",
-        "passwd ", "visudo",
-        // Process and system control
-        "kill -9", "pkill -9", "killall ",
-        "shutdown ", "reboot", "halt", "poweroff", "init 0", "init 6",
-        "systemctl stop", "systemctl disable", "service stop",
-        // Remote code execution from internet
-        "curl | sh", "curl | bash", "wget | sh", "wget | bash",
-        "bash <(curl", "sh <(curl", "eval $(curl", "eval $(wget",
-        "| bash", "| sh",
-        // Git destructive
-        "git push --force", "git push -f",
-        "git reset --hard",
-        "git push origin --delete", "git push --delete",
-        "git branch -D",
-        "git clean -fd", "git clean -fxd",
-        // PowerShell destructive
-        "Remove-Item -Recurse", "Remove-Item -Force", "ri -r", "ri -Recurse",
-        "Format-Volume", "Clear-Disk",
-        "Stop-Process -Force",
-        "Set-ExecutionPolicy Unrestricted", "Set-ExecutionPolicy Bypass",
-        "Invoke-Expression", "iex ",
-        "[System.IO.File]::Delete",
-        "Get-ChildItem | Remove-Item",
-    ];
+    public List<string>? DestructiveCommandPatterns { get; set; }
     public bool RequireApprovalForAllShell { get; set; } = false;
     public bool RedactPii { get; set; } = true;
     public int MaxOutputBytes { get; set; } = 4 * 1024 * 1024;
 
-    public SandboxPolicy ToDomain(string repositoryPath) => new()
+    public SandboxPolicy ToDomain(SandboxPolicy defaults) => new()
     {
-        RepositoryPath = repositoryPath,
+        RepositoryPath = defaults.RepositoryPath,
         ShellEnabled = ShellEnabled,
         Direct = Direct,
         NetworkEnabled = NetworkEnabled,
         AllowedRepositoryRoots = AllowedRepositoryRoots,
-        DestructiveCommandPatterns = DestructiveCommandPatterns,
+        DestructiveCommandPatterns = DestructiveCommandPatterns is null
+            ? [.. defaults.DestructiveCommandPatterns]
+            : DestructiveCommandPatterns,
         RequireApprovalForAllShell = RequireApprovalForAllShell,
         RedactPii = RedactPii,
         MaxOutputBytes = MaxOutputBytes,

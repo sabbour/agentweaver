@@ -77,6 +77,16 @@ internal sealed class LinuxNativeMxcSandboxExecutor : ISandboxExecutor
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command, CancellationToken ct = default)
     {
+        if (command.DirectExecution is not null)
+        {
+            return new SandboxExecResult(
+                126,
+                "",
+                "Command rejected: this sandbox backend cannot safely deliver repository credentials to a direct process.",
+                TimedOut: false,
+                OutputTruncated: false);
+        }
+
         var mxcPolicy = new SandboxPolicy
         {
             Version = "0.4.0-alpha",

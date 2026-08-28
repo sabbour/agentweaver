@@ -88,6 +88,12 @@ internal sealed class AgentHostRuntimeState
     public string? GitHubAccessToken { get; private set; }
 
     /// <summary>
+    /// Short-lived installation credential for the configured run and repository. The shell tool
+    /// passes this value only to a simple <c>git</c> or <c>gh</c> child process.
+    /// </summary>
+    public string? RepositoryAccessToken { get; private set; }
+
+    /// <summary>
     /// The authenticated platform caller token forwarded only for operator-assistant MCP requests.
     /// This is distinct from <see cref="GitHubAccessToken"/>: in Entra deployments the former is the
     /// Entra API access token while the latter is the linked GitHub token used by Copilot.
@@ -107,6 +113,7 @@ internal sealed class AgentHostRuntimeState
         PreviewRunnerCredential = string.Empty; // not available on env-var launch path
         KvUserSecretName = options.KvUserSecretName;
         GitHubAccessToken = null; // not available on env-var launch path
+        RepositoryAccessToken = null;
         CallerBearerToken = null; // operator-assistant-only warm-pod input
         Purpose = AgentHostPurpose.Default;
         WorkspaceMode = ExecutionWorkspaceMode.Shared;
@@ -127,7 +134,7 @@ internal sealed class AgentHostRuntimeState
     /// Atomically transitions the pod from standby to configured. Returns <see langword="false"/>
     /// when the pod was already configured (one-time semantics → caller returns 409).
     /// </summary>
-    public bool TryConfigure(string runId, string userId, string turnBearerToken, string? kvUserSecretName, string? gitHubAccessToken, string? previewRunnerCredential = null)
+    public bool TryConfigure(string runId, string userId, string turnBearerToken, string? kvUserSecretName, string? gitHubAccessToken, string? previewRunnerCredential = null, string? repositoryAccessToken = null)
         => TryConfigure(new AgentHostRunConfiguration(
             runId,
             userId,
@@ -135,7 +142,8 @@ internal sealed class AgentHostRuntimeState
             kvUserSecretName,
             gitHubAccessToken,
             previewRunnerCredential,
-            SharedWorkingDirectory: null));
+            SharedWorkingDirectory: null,
+            RepositoryAccessToken: repositoryAccessToken));
 
     /// <summary>Atomically applies the complete run-scoped warm-pod configuration.</summary>
     public bool TryConfigure(AgentHostRunConfiguration configuration)
@@ -153,6 +161,9 @@ internal sealed class AgentHostRuntimeState
         GitHubAccessToken = string.IsNullOrWhiteSpace(configuration.GitHubAccessToken)
             ? null
             : configuration.GitHubAccessToken;
+        RepositoryAccessToken = string.IsNullOrWhiteSpace(configuration.RepositoryAccessToken)
+            ? null
+            : configuration.RepositoryAccessToken;
         CallerBearerToken = string.IsNullOrWhiteSpace(configuration.CallerBearerToken)
             ? null
             : configuration.CallerBearerToken;
@@ -208,4 +219,5 @@ internal sealed record AgentHostRunConfiguration(
     string? CommitAuthorEmail = null,
     string? ProjectId = null,
     string? AgentName = null,
-    string? CallerBearerToken = null);
+    string? CallerBearerToken = null,
+    string? RepositoryAccessToken = null);

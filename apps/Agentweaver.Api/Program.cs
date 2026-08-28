@@ -486,6 +486,9 @@ builder.Services.AddSingleton<IRunAuthorshipCapabilityStore, EfRunAuthorshipCapa
 // AgentHost__UserId, scoping the in-pod GitHub Copilot auth to the user's Copilot-entitled token
 // instead of the installation token (which fails the first model turn).
 builder.Services.AddSingleton<IRunSubmittingUserResolver, RunStoreSubmittingUserResolver>();
+builder.Services.AddSingleton<RunRepositoryCredentialRegistry>();
+builder.Services.AddSingleton<IRunRepositoryCredentialLiveness, RunRepositoryCredentialLiveness>();
+builder.Services.AddHostedService<RunRepositoryCredentialReconciliationService>();
 builder.Services.AddSingleton<IRunAgentHostContextResolver>(sp =>
     new RunAgentHostContextResolver(
         sp.GetRequiredService<Agentweaver.Api.Infrastructure.IRunStore>(),

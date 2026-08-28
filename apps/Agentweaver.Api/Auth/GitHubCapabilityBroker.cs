@@ -85,6 +85,51 @@ internal sealed class GitHubCapabilityBroker(
             : (GitHubCapabilityBrokerOutcome.Issued, new(fenced.Purpose, operation, expiresAt));
     }
 
+    /// <summary>
+    /// Mints one short-lived installation credential after snapshot fencing. The caller receives
+    /// the value only in its callback. The API never uses this value for a GitHub command.
+    /// </summary>
+    internal async Task<GitHubCapabilityBrokerOutcome> TryUseRepositoryCredentialAsync(
+        SnapshotRef snapshotRef,
+        DateTimeOffset now,
+        Func<string, DateTimeOffset, Task> useCredential,
+        CancellationToken ct)
+    {
+        var fenced = await persistence.TryFenceLiveSnapshotAsync(
+            GitHubCapabilityPurpose.UnattendedRepository,
+            snapshotRef,
+            now,
+            ct).ConfigureAwait(false);
+        if (fenced is null)
+            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+
+        string? token = null;
+        DateTimeOffset? expiresAt = null;
+        var outcome = await installationTokens.MintForRepositoryAsync(
+            fenced.InstallationId!.Value,
+            fenced.RepositoryId!.Value,
+            (value, expires) =>
+            {
+                token = value;
+                expiresAt = expires;
+                return Task.CompletedTask;
+            },
+            ct).ConfigureAwait(false);
+        if (outcome != RepoAppInstallationOutcome.Success || string.IsNullOrWhiteSpace(token) ||
+            expiresAt is null || expiresAt <= now)
+            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+
+        if (await persistence.TryFenceLiveSnapshotAsync(
+                GitHubCapabilityPurpose.UnattendedRepository,
+                snapshotRef,
+                now,
+                ct).ConfigureAwait(false) is null)
+            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+
+        await useCredential(token, expiresAt.Value).ConfigureAwait(false);
+        return GitHubCapabilityBrokerOutcome.Issued;
+    }
+
     internal static bool IsOperationAllowed(
         GitHubCapabilityPurpose purpose,
         GitHubCapabilityOperation operation) =>

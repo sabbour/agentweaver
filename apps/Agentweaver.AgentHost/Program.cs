@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.AgentHost;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentTools;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 using Agentweaver.SandboxExec.PodExec;
@@ -130,6 +131,7 @@ else
 
 // ── Sandbox policy (no DB in pod) ─────────────────────────────────────────────
 builder.Services.AddSingleton<ISandboxPolicyStore, PodSandboxPolicyStore>();
+builder.Services.AddSingleton<ISandboxRepositoryCredentialProvider, RunScopedRepositoryCredentialProvider>();
 
 // ── Agent runtime (in-memory approvals, local executor — Kata VM IS the sandbox) ─
 builder.Services.AddSingleton<PreviewRunner>();
@@ -589,6 +591,12 @@ internal sealed record ConfigureRequest
     public string? GitHubAccessToken { get; init; }
 
     /// <summary>
+    /// Short-lived credential for the configured run and repository. The runtime gives this value
+    /// only to a single <c>git</c> or <c>gh</c> shell command.
+    /// </summary>
+    public string? RepositoryAccessToken { get; init; }
+
+    /// <summary>
     /// Authenticated platform caller token used by the operator assistant's MCP connection. Kept
     /// separate from <see cref="GitHubAccessToken"/> because Entra deployments use different
     /// credentials for Agentweaver API authorization and the linked GitHub/Copilot account.
@@ -679,7 +687,8 @@ internal sealed record ConfigureRequest
         CommitAuthorEmail,
         ProjectId,
         AgentName,
-        CallerBearerToken);
+        CallerBearerToken,
+        RepositoryAccessToken);
 }
 
 internal sealed record PreviewProcessStartRequest
