@@ -58,6 +58,12 @@ public sealed record FencedGitHubCapabilitySnapshot(
     internal TwoAppCredentialLocator? CredentialLocator { get; init; }
 }
 
+/// <summary>
+/// Server-only repository scope recovered by atomically consuming a selection code.
+/// It deliberately excludes the code, credential reference, and display metadata.
+/// </summary>
+internal sealed record ConsumedGitHubRepositorySelection(string EntraObjectId, long RepositoryId);
+
 public sealed record CapabilitySnapshotBackfillResult(int Migrated, int Unavailable);
 internal sealed record RepoAppAuthorizationTransaction(
     string State,
@@ -164,6 +170,88 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             ? AuthorizationClaimResult.Consumed
             : AuthorizationClaimResult.Invalid;
     }
+
+    internal async Task<bool> TryAddRepositorySelectionCodeAsync(
+        GitHubRepositorySelectionCodeRecord selection,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(selection.CodeHash) ||
+            string.IsNullOrWhiteSpace(selection.EntraObjectId) ||
+            selection.RepositoryId <= 0 ||
+            selection.ExpiresAtUnixMilliseconds <= selection.CreatedAt.ToUnixTimeMilliseconds())
+            throw new ArgumentException("Repository selection codes must have valid, bounded scope.");
+
+        db.GitHubRepositorySelectionCodes.Add(selection);
+        try
+        {
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            db.ChangeTracker.Clear();
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Atomically changes an unexpired caller-bound selection code from usable to consumed.
+    /// A consumed or expired code is deliberately indistinguishable from an unknown code.
+    /// </summary>
+    internal async Task<ConsumedGitHubRepositorySelection?> TryConsumeRepositorySelectionCodeAsync(
+        string codeHash,
+        string entraObjectId,
+        DateTimeOffset now,
+        CancellationToken ct = default)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        try
+        {
+            var changed = await db.GitHubRepositorySelectionCodes
+                .Where(x => x.CodeHash == codeHash &&
+                            x.EntraObjectId == entraObjectId &&
+                x.ConsumedAtUnixMilliseconds == null &&
+                x.ExpiresAtUnixMilliseconds > now.ToUnixTimeMilliseconds())
+                .ExecuteUpdateAsync(s => s.SetProperty(
+                    x => x.ConsumedAtUnixMilliseconds,
+                    now.ToUnixTimeMilliseconds()), ct)
+                .ConfigureAwait(false);
+            if (changed != 1)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                return null;
+            }
+
+            var selection = await db.GitHubRepositorySelectionCodes.AsNoTracking()
+                .Where(x => x.CodeHash == codeHash && x.EntraObjectId == entraObjectId)
+                .Select(x => new ConsumedGitHubRepositorySelection(x.EntraObjectId, x.RepositoryId))
+                .SingleAsync(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return selection;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    internal Task<RepoAppCredentialReference?> GetLiveRepoAppCredentialAsync(
+        string entraObjectId,
+        CancellationToken ct = default) =>
+        GetActiveRepoAppCredentialAsync(entraObjectId, ct);
+
+    internal Task<bool> IsLiveRepoAppCredentialAsync(
+        RepoAppCredentialReference credential,
+        CancellationToken ct = default) =>
+        db.GitHubAppAuthorizations.AsNoTracking().AnyAsync(x =>
+            x.Id == credential.Id &&
+            x.AppKind == GitHubAppKind.Repo &&
+            x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+            x.CredentialReference == credential.CredentialReference &&
+            x.CredentialVersion == credential.CredentialVersion &&
+            x.RevokedAt == null, ct);
 
     internal Task<RepoAppAuthorizationTransaction?> GetRepoAppAuthorizationTransactionAsync(
         string state,
