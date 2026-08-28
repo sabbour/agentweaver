@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 
@@ -21,17 +23,20 @@ public sealed class CoordinatorPickupService
     private readonly IRunStore _runStore;
     private readonly CoordinatorRunService _coordinatorRunService;
     private readonly ILogger<CoordinatorPickupService> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public CoordinatorPickupService(
         IBacklogTaskStore backlogStore,
         IRunStore runStore,
         CoordinatorRunService coordinatorRunService,
-        ILogger<CoordinatorPickupService> logger)
+        ILogger<CoordinatorPickupService> logger,
+        IServiceScopeFactory scopeFactory)
     {
         _backlogStore = backlogStore;
         _runStore = runStore;
         _coordinatorRunService = coordinatorRunService;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     /// <summary>
@@ -132,6 +137,21 @@ public sealed class CoordinatorPickupService
             return;
         }
 
+        var invocationId = GetAutomationInvocationId(task.SourceFilePath);
+        if (invocationId is not null)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var invocationService = scope.ServiceProvider.GetRequiredService<AutomationInvocationService>();
+            if (!await invocationService.TryPrepareRunAsync(invocationId, runId.ToString(), ct).ConfigureAwait(false))
+            {
+                await _runStore.TrySetTerminalStatusAsync(
+                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, "automation_invocation_unavailable", ct)
+                    .ConfigureAwait(false);
+                _logger.LogWarning("Pickup refused automation invocation {InvocationId} for run {RunId}", invocationId, runId);
+                return;
+            }
+        }
+
         // Reservation committed. Activate the coordinator workflow + unattended confirm post-commit.
         // CancellationToken.None: the run must outlive the heartbeat tick that spawned it.
         try
@@ -159,5 +179,14 @@ public sealed class CoordinatorPickupService
 
             // Task stays Claimed -> Failed coordinator run shown in the terminal column. No silent re-queue (FR-012).
         }
+    }
+
+    internal static string? GetAutomationInvocationId(string? sourceFilePath)
+    {
+        const string prefix = "automation-invocation:";
+        if (sourceFilePath is null || !sourceFilePath.StartsWith(prefix, StringComparison.Ordinal))
+            return null;
+        try { return new SnapshotRef(sourceFilePath[prefix.Length..]).Value; }
+        catch (ArgumentException) { return null; }
     }
 }
