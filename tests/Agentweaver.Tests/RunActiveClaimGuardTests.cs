@@ -82,6 +82,75 @@ public sealed class RunActiveClaimGuardTests
     }
 
     [Fact]
+    public async Task AcquireAsync_RemovesEntryAfterTheFinalClaimIsReleased()
+    {
+        var guard = new RunActiveClaimGuard();
+
+        await using (await guard.AcquireAsync(RunId.New(), CancellationToken.None))
+            guard.EntryCount.Should().Be(1);
+
+        guard.EntryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_KeepsEntryUntilAWaitingClaimIsReleased()
+    {
+        var guard = new RunActiveClaimGuard();
+        var runId = RunId.New();
+        var first = await guard.AcquireAsync(runId, CancellationToken.None);
+        var secondTask = guard.AcquireAsync(runId, CancellationToken.None);
+
+        guard.EntryCount.Should().Be(1);
+
+        await first.DisposeAsync();
+        var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(5));
+        guard.EntryCount.Should().Be(1, "the acquired waiter still owns the registry entry");
+
+        await second.DisposeAsync();
+        guard.EntryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_CancelledWaiterReleasesItsEntryReference()
+    {
+        var guard = new RunActiveClaimGuard();
+        var runId = RunId.New();
+        var holder = await guard.AcquireAsync(runId, CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+        var waiter = guard.AcquireAsync(runId, cancellation.Token);
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await waiter);
+        guard.EntryCount.Should().Be(1, "the active holder still requires the entry");
+
+        await holder.DisposeAsync();
+        guard.EntryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_WaiterAndNewAcquisitionShareTheSameEntryAcrossFinalRelease()
+    {
+        var guard = new RunActiveClaimGuard();
+        var runId = RunId.New();
+        var first = await guard.AcquireAsync(runId, CancellationToken.None);
+        var waiterTask = guard.AcquireAsync(runId, CancellationToken.None);
+
+        await first.DisposeAsync();
+        var waiter = await waiterTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // The waiter acquired after the original holder released. A concurrent later acquisition
+        // must use that same entry and wait, rather than observe an entry removed too early and
+        // create a second semaphore for this run.
+        var laterTask = guard.AcquireAsync(runId, CancellationToken.None);
+        laterTask.IsCompleted.Should().BeFalse();
+
+        await waiter.DisposeAsync();
+        var later = await laterTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await later.DisposeAsync();
+        guard.EntryCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task GuardedRunStore_TrySetTerminalStatusAsync_WaitsForExternallyHeldActiveClaim()
     {
         var guard = new RunActiveClaimGuard();

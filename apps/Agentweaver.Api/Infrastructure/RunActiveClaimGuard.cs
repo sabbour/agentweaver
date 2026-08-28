@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-
 namespace Agentweaver.Api.Infrastructure;
 
 /// <summary>
@@ -19,12 +17,23 @@ namespace Agentweaver.Api.Infrastructure;
 /// process ever opens a given SQLite deployment's database files, so an in-process lock is a
 /// complete fix here, not a partial workaround.
 ///
-/// Keyed by run id. Entries are never removed; the number of distinct runs a single process
-/// ever handles is bounded and the per-entry cost (one <see cref="SemaphoreSlim"/>) is small.
+/// Keyed by run id. An entry is retained while it has either a holder or a waiter, then removed
+/// and disposed. Registry changes are synchronized separately from the per-run waits, preserving
+/// concurrency between different runs.
 /// </summary>
 public sealed class RunActiveClaimGuard
 {
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.Ordinal);
+    private readonly object _registryGate = new();
+    private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
+
+    internal int EntryCount
+    {
+        get
+        {
+            lock (_registryGate)
+                return _entries.Count;
+        }
+    }
 
     /// <summary>
     /// Acquires the exclusive claim for <paramref name="runId"/>, waiting if another operation
@@ -33,19 +42,59 @@ public sealed class RunActiveClaimGuard
     /// </summary>
     public async Task<IAsyncDisposable> AcquireAsync(Domain.RunId runId, CancellationToken ct)
     {
-        var semaphore = _locks.GetOrAdd(runId.ToString(), _ => new SemaphoreSlim(1, 1));
-        await semaphore.WaitAsync(ct).ConfigureAwait(false);
-        return new Releaser(semaphore);
+        var key = runId.ToString();
+        Entry entry;
+        lock (_registryGate)
+        {
+            if (!_entries.TryGetValue(key, out entry!))
+                _entries.Add(key, entry = new Entry());
+            entry.Users++;
+        }
+
+        try
+        {
+            await entry.Semaphore.WaitAsync(ct).ConfigureAwait(false);
+            return new Releaser(this, key, entry);
+        }
+        catch
+        {
+            ReleaseReference(key, entry);
+            throw;
+        }
     }
 
-    private sealed class Releaser(SemaphoreSlim semaphore) : IAsyncDisposable
+    private void ReleaseReference(string key, Entry entry)
+    {
+        lock (_registryGate)
+        {
+            if (--entry.Users != 0)
+                return;
+
+            if (_entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry))
+            {
+                _entries.Remove(key);
+                entry.Semaphore.Dispose();
+            }
+        }
+    }
+
+    private sealed class Entry
+    {
+        public readonly SemaphoreSlim Semaphore = new(1, 1);
+        public int Users;
+    }
+
+    private sealed class Releaser(RunActiveClaimGuard owner, string key, Entry entry) : IAsyncDisposable
     {
         private int _released;
 
         public ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _released, 1) == 0)
-                semaphore.Release();
+            {
+                entry.Semaphore.Release();
+                owner.ReleaseReference(key, entry);
+            }
             return ValueTask.CompletedTask;
         }
     }
