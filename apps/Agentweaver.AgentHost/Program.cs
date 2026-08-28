@@ -422,6 +422,7 @@ app.MapGet("/healthz", (AgentHostStartupService startup) =>
 
 // ── Tool approval endpoints ───────────────────────────────────────────────────
 app.MapPost("/tool-approvals", ToolApprovalEndpointHandlers.GrantAsync);
+app.MapGet("/tool-approvals/{requestId}", ToolApprovalEndpointHandlers.GetPendingContextAsync);
 app.MapPost("/tool-denials", ToolApprovalEndpointHandlers.DenyAsync);
 
 // ── PreviewRunner endpoints ───────────────────────────────────────────────────
@@ -721,6 +722,32 @@ internal sealed record AgentHostToolApprovalRequest
 
 internal static class ToolApprovalEndpointHandlers
 {
+    public static Task<IResult> GetPendingContextAsync(
+        HttpContext ctx,
+        string requestId,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState)
+    {
+        if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+            return Task.FromResult<IResult>(Results.Unauthorized());
+        if (string.IsNullOrWhiteSpace(requestId))
+            return Task.FromResult<IResult>(Results.BadRequest(new { error = "requestId is required" }));
+
+        var context = gate.GetRequestContext(runtimeState.RunId, requestId);
+        var state = gate.GetRequestState(runtimeState.RunId, requestId);
+        return Task.FromResult<IResult>(
+            state == ToolApprovalRequestState.Pending && context is not null
+                ? Results.Ok(new
+                {
+                    resolved = false,
+                    applied = false,
+                    state = "pending",
+                    toolName = context.ToolName,
+                    url = context.Url,
+                })
+                : ResultFor(state));
+    }
+
     public static async Task<IResult> GrantAsync(
         HttpContext ctx,
         AgentHostToolApprovalRequest request,

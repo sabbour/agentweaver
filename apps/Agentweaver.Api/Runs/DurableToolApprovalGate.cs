@@ -10,11 +10,21 @@ using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Runs;
 
+public interface IAgentHostToolApprovalPersistence
+{
+    Task<bool> PersistAgentHostApprovalAsync(
+        string runId,
+        string requestId,
+        string toolName,
+        string? url,
+        ApprovalScope scope);
+}
+
 public sealed class DurableToolApprovalGate(
     DurableRunControlState state,
     RunStreamStore? streams = null,
     ILogger<DurableToolApprovalGate>? logger = null,
-    IRunStore? runStore = null) : IToolApprovalGate
+    IRunStore? runStore = null) : IToolApprovalGate, IAgentHostToolApprovalPersistence
 {
     private const string ProjectPolicyBucketPrefix = "__agentweaver_tool_approvals_project_owner_sha256_v1__";
     private const string RequestContext = "tool.approval_context";
@@ -81,9 +91,9 @@ public sealed class DurableToolApprovalGate(
     }
 
     /// <summary>
-    /// Persists a scope selected for an AgentHost-owned request after the pod has atomically
-    /// accepted that exact approval. The AgentHost supplies its server-captured tool context; the
-    /// API never trusts UI metadata when creating a durable policy.
+    /// Persists a scope selected for an AgentHost-owned pending request before the pod releases
+    /// its local approval wait. The AgentHost supplies its server-captured tool context; the API
+    /// never trusts UI metadata when creating a durable policy.
     /// </summary>
     public async Task<bool> PersistAgentHostApprovalAsync(
         string runId,

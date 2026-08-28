@@ -470,6 +470,7 @@ builder.Services.AddSingleton<DurableShellApprovalStore>();
 builder.Services.AddSingleton<IShellApprovalStore>(sp => sp.GetRequiredService<DurableShellApprovalStore>());
 builder.Services.AddSingleton<DurableToolApprovalGate>();
 builder.Services.AddSingleton<IToolApprovalGate>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
+builder.Services.AddSingleton<IAgentHostToolApprovalPersistence>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
 builder.Services.AddSingleton<DurableQuestionGate>();
 builder.Services.AddSingleton<IQuestionGate>(sp => sp.GetRequiredService<DurableQuestionGate>());
 builder.Services.AddSingleton<DurableRunOptionsStore>();

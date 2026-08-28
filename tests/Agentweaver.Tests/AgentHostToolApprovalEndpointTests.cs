@@ -22,8 +22,12 @@ namespace Agentweaver.Tests;
 
 public sealed class AgentHostToolApprovalEndpointTests
 {
-    [Fact]
-    public async Task ProductionRuntimeWiring_RunGrant_ResolvesOnlyTheConfiguredRequestUntilApiPersistsScope()
+    [Theory]
+    [InlineData("run")]
+    [InlineData("tool")]
+    [InlineData("always")]
+    public async Task ProductionRuntimeWiring_ScopedGrant_AutoApprovesFollowingToolCallForConfiguredRun(
+        string scope)
     {
         var services = new ServiceCollection();
         AgentHostRuntimeServiceCollectionExtensions.AddAgentHostRuntime(services);
@@ -55,7 +59,7 @@ public sealed class AgentHostToolApprovalEndpointTests
             {
                 RunId = "run-1",
                 RequestId = "req-run",
-                Scope = "run",
+                Scope = scope,
             },
             gate,
             state);
@@ -63,7 +67,7 @@ public sealed class AgentHostToolApprovalEndpointTests
         Status(result).Should().Be(StatusCodes.Status200OK);
         (await firstFetch).Should().BeTrue();
         gate.IsAutoApproved("run-1", "web_fetch", "https://second.test")
-            .Should().BeFalse("the API persists durable scopes only after this local approval succeeds");
+            .Should().BeTrue($"a successful {scope}-scoped approval must cover following local tool calls");
         gate.IsAutoApproved("different-run", "web_fetch", "https://second.test")
             .Should().BeFalse();
     }
@@ -88,6 +92,30 @@ public sealed class AgentHostToolApprovalEndpointTests
         Json(result).GetProperty("applied").GetBoolean().Should().BeTrue();
         Json(result).GetProperty("toolName").GetString().Should().Be("web_fetch");
         (await wait).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetPendingContext_DoesNotResolveTheLocalApproval()
+    {
+        var gate = new InMemoryToolApprovalGate();
+        var state = ConfiguredState();
+        var wait = gate.WaitForApprovalAsync(
+            "run-1", "req-context", "web_fetch", "https://context.test",
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+        await WaitForStateAsync(gate, "req-context", ToolApprovalRequestState.Pending);
+
+        var result = await ToolApprovalEndpointHandlers.GetPendingContextAsync(
+            Context("pod-credential"),
+            "req-context",
+            gate,
+            state);
+
+        Status(result).Should().Be(StatusCodes.Status200OK);
+        Json(result).GetProperty("state").GetString().Should().Be("pending");
+        Json(result).GetProperty("toolName").GetString().Should().Be("web_fetch");
+        gate.GetRequestState("run-1", "req-context").Should().Be(ToolApprovalRequestState.Pending);
+        gate.Deny("run-1", "req-context").Should().BeTrue();
+        (await wait).Should().BeFalse();
     }
 
     [Fact]

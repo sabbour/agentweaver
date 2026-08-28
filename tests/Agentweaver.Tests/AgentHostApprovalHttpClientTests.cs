@@ -54,6 +54,28 @@ public sealed class AgentHostApprovalHttpClientTests
         handler.Body.Should().NotContain("\"scope\"");
     }
 
+    [Fact]
+    public async Task GetPendingContext_TargetsRequestPathWithoutResolvingIt()
+    {
+        var handler = new CapturingHandler(
+            """{"resolved":false,"state":"pending","toolName":"web_fetch","url":"https://example.test"}""");
+        var client = CreateClient(handler, Origin);
+
+        var result = await client.GetPendingContextAsync(
+            "child-run", "request/1", "pod-bearer", CancellationToken.None);
+
+        result.Should().Be(new AgentHostApprovalOutcome(
+            false,
+            "pending",
+            false,
+            200,
+            ToolName: "web_fetch",
+            Url: "https://example.test"));
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        handler.LastRequest.RequestUri!.ToString().Should().Be($"{Origin}/tool-approvals/request%2F1");
+        handler.Body.Should().BeNull();
+    }
+
     private static AgentHostApprovalHttpClient CreateClient(HttpMessageHandler handler, string? origin) =>
         new(
             new StubHttpClientFactory(handler),

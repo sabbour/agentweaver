@@ -1643,7 +1643,7 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     ToolApprovalRequest body,
     IRunStore runStore,
     IToolApprovalGate approvalGate,
-    DurableToolApprovalGate durableApprovalGate,
+    IAgentHostToolApprovalPersistence durableApprovalGate,
     IAgentHostApprovalHttpClient agentHostApprovalClient,
     IOptions<SandboxRuntimeOptions> sandboxRuntime,
     RunStreamStore streamStore,
@@ -1732,36 +1732,84 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
 
         if (state is ToolApprovalRequestState.Unknown)
         {
-            var podOutcome = await TryResolveAgentHostApprovalAsync(
-                approve: true,
-                targetRunId,
-                body.RequestId,
-                body.Scope,
-                sandboxRuntime.Value,
-                agentHostApprovalClient,
-                secretStore,
-                streamStore,
-                ct).ConfigureAwait(false);
-            if (podOutcome is not null)
+            AgentHostApprovalOutcome? podOutcome;
+            if (approvalScope == ApprovalScope.Once)
             {
-                if (podOutcome.Applied && approvalScope != ApprovalScope.Once)
+                podOutcome = await TryResolveAgentHostApprovalAsync(
+                    approve: true,
+                    targetRunId,
+                    body.RequestId,
+                    body.Scope,
+                    sandboxRuntime.Value,
+                    agentHostApprovalClient,
+                    secretStore,
+                    streamStore,
+                    ct).ConfigureAwait(false);
+            }
+            else if (!sandboxRuntime.Value.IsPodPerRun)
+            {
+                podOutcome = null;
+            }
+            else
+            {
+                var contextOutcome = await agentHostApprovalClient.GetPendingContextAsync(
+                    targetRunId,
+                    body.RequestId,
+                    await GetAgentHostApprovalBearerAsync(
+                        targetRunId,
+                        sandboxRuntime.Value,
+                        secretStore,
+                        ct).ConfigureAwait(false),
+                    ct).ConfigureAwait(false);
+                if (contextOutcome.Unreachable)
+                    return MapAgentHostApprovalOutcome(contextOutcome, targetRunId, body.RequestId, approve: true);
+                if (!string.Equals(contextOutcome.State, "pending", StringComparison.OrdinalIgnoreCase)
+                    || string.IsNullOrWhiteSpace(contextOutcome.ToolName))
                 {
-                    if (string.IsNullOrWhiteSpace(podOutcome.ToolName)
-                        || !await durableApprovalGate.PersistAgentHostApprovalAsync(
-                            targetRunId,
-                            body.RequestId,
-                            podOutcome.ToolName,
-                            podOutcome.Url,
-                            approvalScope).ConfigureAwait(false))
-                    {
-                        return Results.Problem(
-                            "The AgentHost approved this request, but the selected scope could not be persisted. No future policy was applied.",
-                            statusCode: StatusCodes.Status503ServiceUnavailable);
-                    }
+                    return MapAgentHostApprovalOutcome(contextOutcome, targetRunId, body.RequestId, approve: true);
                 }
 
-                return MapAgentHostApprovalOutcome(podOutcome, targetRunId, body.RequestId, approve: true);
+                if (!await durableApprovalGate.PersistAgentHostApprovalAsync(
+                        targetRunId,
+                        body.RequestId,
+                        contextOutcome.ToolName,
+                        contextOutcome.Url,
+                        approvalScope).ConfigureAwait(false))
+                {
+                    // Do not release a locally scoped approval when its durable counterpart could
+                    // not be recorded. A best-effort deny wakes the blocked callback fail-closed.
+                    await TryResolveAgentHostApprovalAsync(
+                        approve: false,
+                        targetRunId,
+                        body.RequestId,
+                        body.Scope,
+                        sandboxRuntime.Value,
+                        agentHostApprovalClient,
+                        secretStore,
+                        streamStore,
+                        ct).ConfigureAwait(false);
+                    return Results.Problem(
+                        "The selected scope could not be persisted. The AgentHost request was not approved.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+
+                // Complete the local wait only after the durable policy is committed. The local
+                // gate applies the same scope, covering the next tool call without a policy-read
+                // race while the API remains the cross-pod durable authority.
+                podOutcome = await TryResolveAgentHostApprovalAsync(
+                    approve: true,
+                    targetRunId,
+                    body.RequestId,
+                    body.Scope,
+                    sandboxRuntime.Value,
+                    agentHostApprovalClient,
+                    secretStore,
+                    streamStore,
+                    ct).ConfigureAwait(false);
             }
+
+            if (podOutcome is not null)
+                return MapAgentHostApprovalOutcome(podOutcome, targetRunId, body.RequestId, approve: true);
 
             return Results.NotFound(new
             {
@@ -2826,20 +2874,11 @@ internal static async Task<AgentHostApprovalOutcome?> TryResolveAgentHostApprova
     if (!sandboxRuntime.IsPodPerRun)
         return null;
 
-    string? bearer = null;
-    if (secretStore is not null)
-    {
-        try
-        {
-            var secret = await secretStore.GetSecretAsync(
-                PreviewRunnerCredential.SecretKey(targetRunId), ct).ConfigureAwait(false);
-            bearer = secret.Found ? secret.Value : null;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            bearer = null;
-        }
-    }
+    var bearer = await GetAgentHostApprovalBearerAsync(
+        targetRunId,
+        sandboxRuntime,
+        secretStore,
+        ct).ConfigureAwait(false);
 
     var outcome = approve
         ? await agentHostApprovalClient.GrantAsync(targetRunId, requestId, scope, bearer, ct).ConfigureAwait(false)
@@ -2849,6 +2888,27 @@ internal static async Task<AgentHostApprovalOutcome?> TryResolveAgentHostApprova
         EmitAgentHostApprovalResolved(streamStore, targetRunId, requestId, outcome.State);
 
     return outcome;
+}
+
+private static async Task<string?> GetAgentHostApprovalBearerAsync(
+    string targetRunId,
+    SandboxRuntimeOptions sandboxRuntime,
+    ISecretStore? secretStore,
+    CancellationToken ct)
+{
+    if (!sandboxRuntime.IsPodPerRun || secretStore is null)
+        return null;
+
+    try
+    {
+        var secret = await secretStore.GetSecretAsync(
+            PreviewRunnerCredential.SecretKey(targetRunId), ct).ConfigureAwait(false);
+        return secret.Found ? secret.Value : null;
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return null;
+    }
 }
 
 private static IResult MapAgentHostApprovalOutcome(

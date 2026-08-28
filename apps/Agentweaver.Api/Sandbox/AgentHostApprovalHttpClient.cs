@@ -14,6 +14,13 @@ public sealed record AgentHostApprovalOutcome(
 
 public interface IAgentHostApprovalHttpClient
 {
+    Task<AgentHostApprovalOutcome> GetPendingContextAsync(
+        string childRunId,
+        string requestId,
+        string? bearer,
+        CancellationToken ct) =>
+        Task.FromResult(new AgentHostApprovalOutcome(false, "unreachable", true, null));
+
     Task<AgentHostApprovalOutcome> GrantAsync(
         string childRunId,
         string requestId,
@@ -41,14 +48,28 @@ public sealed class AgentHostApprovalHttpClient(
         string scope,
         string? bearer,
         CancellationToken ct) =>
-        SendAsync(childRunId, requestId, scope, bearer, "/tool-approvals", ct);
+        SendAsync(childRunId, requestId, scope, bearer, "/tool-approvals", HttpMethod.Post, ct);
+
+    public Task<AgentHostApprovalOutcome> GetPendingContextAsync(
+        string childRunId,
+        string requestId,
+        string? bearer,
+        CancellationToken ct) =>
+        SendAsync(
+            childRunId,
+            requestId,
+            scope: null,
+            bearer,
+            "/tool-approvals/" + Uri.EscapeDataString(requestId),
+            HttpMethod.Get,
+            ct);
 
     public Task<AgentHostApprovalOutcome> DenyAsync(
         string childRunId,
         string requestId,
         string? bearer,
         CancellationToken ct) =>
-        SendAsync(childRunId, requestId, scope: null, bearer, "/tool-denials", ct);
+        SendAsync(childRunId, requestId, scope: null, bearer, "/tool-denials", HttpMethod.Post, ct);
 
     private async Task<AgentHostApprovalOutcome> SendAsync(
         string childRunId,
@@ -56,17 +77,20 @@ public sealed class AgentHostApprovalHttpClient(
         string? scope,
         string? bearer,
         string path,
+        HttpMethod method,
         CancellationToken ct)
     {
         var origin = await originResolver.TryResolveOriginAsync(childRunId, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(origin))
             return new(false, "unreachable", true, null);
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, origin.TrimEnd('/') + path)
+        using var request = new HttpRequestMessage(method, origin.TrimEnd('/') + path)
         {
-            Content = scope is null
-                ? JsonContent.Create(new { runId = childRunId, requestId })
-                : JsonContent.Create(new { runId = childRunId, requestId, scope }),
+            Content = method == HttpMethod.Get
+                ? null
+                : scope is null
+                    ? JsonContent.Create(new { runId = childRunId, requestId })
+                    : JsonContent.Create(new { runId = childRunId, requestId, scope }),
         };
         if (!string.IsNullOrEmpty(bearer))
             request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + bearer);

@@ -27,7 +27,7 @@ internal sealed class AgentHostDurableToolApprovalGate(
         _local.WaitForApprovalAsync(runId, requestId, toolName, url, timeout, ct);
 
     public Task<bool> GrantAsync(string runId, string requestId, ApprovalScope scope) =>
-        _local.GrantAsync(runId, requestId, ApprovalScope.Once);
+        _local.GrantAsync(runId, requestId, scope);
 
     public bool Deny(string runId, string requestId) =>
         _local.Deny(runId, requestId);
