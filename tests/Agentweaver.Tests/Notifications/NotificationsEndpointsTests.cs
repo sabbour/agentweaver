@@ -323,11 +323,11 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         match.GetProperty("project_id").GetString().Should().Be(projectId);
         match.GetProperty("agent_name").GetString().Should().Be("Coordinator");
         match.GetProperty("title").GetString().Should().Be("Implement the checkout flow");
-        match.GetProperty("cta_path").GetString().Should().Be($"/projects/{projectId}/orchestrations/wf-run-1");
+        match.GetProperty("cta_path").GetString().Should().Be($"/projects/{projectId}/orchestrations/{run.Id}");
     }
 
     [Fact]
-    public async Task GetNotifications_FallsBackToRunIdInCtaPath_WhenWorkflowRunIdMissing()
+    public async Task GetNotifications_UsesRunIdInCtaPath_WhenWorkflowRunIdIsMissing()
     {
         var projectId = await CreateBlankProjectAsync("Notif Project B");
         var run = await InsertAwaitingReviewRunAsync(projectId, "Legacy run with no workflow id");
@@ -448,8 +448,34 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         match.GetProperty("type").GetString().Should().Be("tool_approval");
         match.GetProperty("project_id").GetString().Should().Be(projectId);
         match.GetProperty("agent_name").GetString().Should().Be("Researcher");
-        match.GetProperty("cta_path").GetString().Should().Be($"/projects/{projectId}/orchestrations/wf-run-2");
+        match.GetProperty("cta_path").GetString().Should().Be($"/projects/{projectId}/orchestrations/{run.Id}");
         match.GetProperty("id").GetString().Should().Be($"tool_approval:{run.Id}:toolu_01pending");
+    }
+
+    [Fact]
+    public async Task GetNotifications_ToolApprovalCta_UsesPendingRunId_WhenConcurrentRunHasItsWorkflowId()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project Concurrent Runs");
+        var newerDraft = await InsertInProgressRunAsync(projectId, "Newer unrelated draft", "Coordinator");
+        var pendingApprovalRun = await InsertInProgressRunAsync(
+            projectId,
+            "Run waiting for approval",
+            "Researcher",
+            newerDraft.Id.ToString());
+        await InsertToolApprovalRequiredEventAsync(
+            pendingApprovalRun.Id.ToString(),
+            "toolu_01concurrent",
+            "start_preview");
+
+        var response = await _client.GetAsync("/api/notifications");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notification = body.GetProperty("notifications").EnumerateArray()
+            .Single(n => n.GetProperty("run_id").GetString() == pendingApprovalRun.Id.ToString());
+
+        notification.GetProperty("cta_path").GetString()
+            .Should().Be($"/projects/{projectId}/orchestrations/{pendingApprovalRun.Id}");
+        notification.GetProperty("cta_path").GetString()
+            .Should().NotBe($"/projects/{projectId}/orchestrations/{newerDraft.Id}");
     }
 
     [Fact]

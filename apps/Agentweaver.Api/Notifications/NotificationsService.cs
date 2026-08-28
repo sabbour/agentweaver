@@ -240,9 +240,9 @@ public sealed class NotificationsService
     {
         var projectId = run.ProjectId!.ToString()!;
         var occurrenceAt = reviewReadyAt ?? run.EndedAt ?? run.StartedAt;
-        // Mirrors the frontend's own fallback (ProjectPage.tsx): workflow_run_id when present,
-        // otherwise the execution id, so the CTA always lands on a resolvable orchestration route.
-        var deepLinkRunId = run.WorkflowRunId ?? run.Id.ToString();
+        // Run detail routes are keyed by the persisted execution run_id. A workflow_run_id can
+        // identify a different workflow record, so never use it to navigate to an approval/review.
+        var deepLinkRunId = run.Id.ToString();
         var title = string.IsNullOrWhiteSpace(run.Task)
             ? "A run is awaiting your review"
             : Truncate(run.Task, 120);
@@ -268,10 +268,9 @@ public sealed class NotificationsService
         IReadOnlyDictionary<string, string> ownedProjectNames)
     {
         var projectId = run.ProjectId!.ToString()!;
-        // Same CTA deep-link convention as Human Review — the board's RunCard navigates a pending
-        // tool-approval run to the same orchestration route (workflow_run_id when present, otherwise
-        // the execution id); the approval UI itself lives inline on that route.
-        var deepLinkRunId = run.WorkflowRunId ?? run.Id.ToString();
+        // The approval event belongs to this exact execution run. Detail routes are run_id-keyed;
+        // using workflow_run_id can send the operator to a different active orchestration.
+        var deepLinkRunId = run.Id.ToString();
         var title = string.IsNullOrWhiteSpace(approval.ToolName)
             ? "A run needs tool approval"
             : Truncate($"Approval needed to run \"{approval.ToolName}\"", 120);
