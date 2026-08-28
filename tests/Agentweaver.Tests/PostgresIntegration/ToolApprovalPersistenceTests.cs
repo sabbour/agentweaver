@@ -112,6 +112,60 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
             .Should().Be(await always);
     }
 
+    [PostgresFact]
+    public async Task ConcurrentAlwaysGrantAndDeny_DenialWinnerLeavesNoProjectPolicy()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var project = ProjectId.New();
+        var source = NewRun($"alice-{suffix}", project);
+        var future = NewRun($"alice-{suffix}", project);
+        var runStore = new EfRunStore(pg.Factory);
+        await runStore.InsertAsync(source);
+        await runStore.InsertAsync(future);
+
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(options =>
+            options.UseNpgsql(
+                pg.ConnectionString,
+                npgsql => npgsql.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
+        using var provider = services.BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var stateA = new DurableRunControlState(scopeFactory, eventStream);
+        var stateB = new DurableRunControlState(scopeFactory, eventStream);
+        var gateA = new DurableToolApprovalGate(stateA, runStore: runStore);
+        var gateB = new DurableToolApprovalGate(stateB, runStore: runStore);
+        var runId = source.Id.ToString();
+        var wait = gateA.WaitForApprovalAsync(
+            runId, "always-vs-deny", "web_fetch", "https://source.test",
+            TimeSpan.FromSeconds(10), default);
+        var lockHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLock = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blocker = stateA.ExecuteExclusivelyAsync(
+            [runId],
+            async (_, _) =>
+            {
+                lockHeld.SetResult();
+                await releaseLock.Task;
+                return true;
+            });
+        await lockHeld.Task;
+
+        var deny = Task.Run(() => gateB.Deny(runId, "always-vs-deny"));
+        await Task.Delay(100);
+        var always = gateA.GrantAsync(runId, "always-vs-deny", ApprovalScope.Always);
+        await Task.Delay(100);
+        releaseLock.SetResult();
+
+        (await deny).Should().BeTrue();
+        (await always).Should().BeFalse();
+        await blocker;
+        (await wait).Should().BeFalse();
+        gateA.GetRequestState(runId, "always-vs-deny").Should().Be(ToolApprovalRequestState.Denied);
+        gateA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test")
+            .Should().BeFalse("a denied request must not leave an Always policy behind");
+    }
+
     private static Run NewRun(string owner, ProjectId projectId) => new()
     {
         Id = RunId.New(),

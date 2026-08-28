@@ -49,9 +49,8 @@ public sealed class DurableToolApprovalGate(
             catch (OperationCanceledException) { break; }
         }
 
-        if (LatestContext(runId, requestId) is not null && LatestResolution(runId, requestId) is null)
+        if (await ResolveDenialAsync(runId, requestId, expired: true).ConfigureAwait(false))
         {
-            _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, false, true));
             logger?.LogWarning(
                 "Tool approval timed out: runId={RunId} requestId={DisplayId}",
                 runId, requestId.Length >= 8 ? requestId[..8] : requestId);
@@ -103,7 +102,8 @@ public sealed class DurableToolApprovalGate(
 
     public bool Deny(string runId, string requestId)
     {
-        if (LatestContext(runId, requestId) is null || LatestResolution(runId, requestId) is not null)
+        var resolved = ResolveDenialAsync(runId, requestId, expired: false).GetAwaiter().GetResult();
+        if (!resolved)
         {
             logger?.LogWarning(
                 "Deny rejected: runId={RunId} requestId={DisplayId} reason={Reason}",
@@ -112,7 +112,6 @@ public sealed class DurableToolApprovalGate(
             return false;
         }
 
-        _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, false, false));
         EmitResolved(runId, requestId, approved: false, expired: false);
         return true;
     }
@@ -253,6 +252,41 @@ public sealed class DurableToolApprovalGate(
             },
             CancellationToken.None).ConfigureAwait(false);
     }
+
+    private Task<bool> ResolveDenialAsync(string runId, string requestId, bool expired) =>
+        _state.ExecuteExclusivelyAsync(
+            [runId],
+            async (db, ct) =>
+            {
+                var records = await db.RunEvents
+                    .AsNoTracking()
+                    .Where(e => e.RunId == runId
+                        && (e.EventType == RequestContext
+                            || e.EventType == RequestResolved
+                            || e.EventType == RunCleared))
+                    .OrderBy(e => e.Sequence)
+                    .ToListAsync(ct)
+                    .ConfigureAwait(false);
+                if (LatestContext(records, requestId) is null ||
+                    LatestResolutionRecord(records, requestId) is not null)
+                {
+                    return false;
+                }
+
+                var nextSequences = await NextSequencesAsync(db, [runId], ct).ConfigureAwait(false);
+                db.RunEvents.Add(new RunEventRecord
+                {
+                    RunId = runId,
+                    Sequence = nextSequences[runId],
+                    EventType = RequestResolved,
+                    PayloadJson = JsonSerializer.Serialize(
+                        new ApprovalResolution(requestId, false, expired),
+                        JsonDefaults.Options),
+                    CreatedAt = DateTime.UtcNow,
+                });
+                return true;
+            },
+            CancellationToken.None);
 
     private static IEnumerable<string> PolicyLockStreamIds(
         string runId,

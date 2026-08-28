@@ -281,6 +281,51 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task ConcurrentAlwaysGrantAndDeny_OnlyTheWinningClaimCanLeaveAPolicy()
+    {
+        var project = ProjectId.New();
+        var source = await InsertOwnedRunAsync("alice", project);
+        var future = await InsertOwnedRunAsync("alice", project);
+        var replicaA = NewApprovalGate();
+        var replicaB = NewApprovalGate();
+        var runId = source.Id.ToString();
+        var wait = replicaA.WaitForApprovalAsync(
+            runId, "always-vs-deny", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var always = Task.Run(async () =>
+        {
+            await start.Task;
+            return await replicaA.GrantAsync(runId, "always-vs-deny", ApprovalScope.Always);
+        });
+        var deny = Task.Run(async () =>
+        {
+            await start.Task;
+            return replicaB.Deny(runId, "always-vs-deny");
+        });
+        start.SetResult();
+
+        await Task.WhenAll(always, deny);
+
+        (await always).Should().NotBe(await deny,
+            "the exclusive request-stream claim permits exactly one terminal decision");
+        if (await deny)
+        {
+            (await wait).Should().BeFalse();
+            replicaA.GetRequestState(runId, "always-vs-deny").Should().Be(ToolApprovalRequestState.Denied);
+            replicaA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test")
+                .Should().BeFalse("a denial must not leave an Always policy behind");
+        }
+        else
+        {
+            (await wait).Should().BeTrue();
+            replicaA.GetRequestState(runId, "always-vs-deny").Should().Be(ToolApprovalRequestState.Approved);
+            replicaA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test").Should().BeTrue();
+        }
+    }
+
+    [Fact]
     public async Task AlwaysApproval_DoesNotCrossProjectBoundary()
     {
         var sourceProject = ProjectId.New();
