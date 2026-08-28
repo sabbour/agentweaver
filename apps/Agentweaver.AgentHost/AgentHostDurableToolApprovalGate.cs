@@ -46,7 +46,7 @@ internal sealed class AgentHostDurableToolApprovalGate(
                 .GetAwaiter()
                 .GetResult();
             if (!durablyApproved && locallyApproved)
-                Clear(runId);
+                _local.InvalidateScopeGrantsForPolicy(runId, toolName, url);
             return durablyApproved;
         }
         catch

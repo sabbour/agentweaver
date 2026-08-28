@@ -363,6 +363,74 @@ public sealed class AgentHostToolApprovalEndpointTests
     }
 
     [Fact]
+    public async Task RejectedProvisionalScope_DoesNotClearFinalizedDifferentToolOrPendingApproval()
+    {
+        var state = ConfiguredState();
+        var policyClient = new RecordingPolicyClient(autoApproved: true)
+        {
+            AutoApproveForTool = toolName => toolName == "web_fetch",
+        };
+        var gate = new AgentHostDurableToolApprovalGate(state, policyClient);
+        var finalized = gate.WaitForApprovalAsync(
+            "run-1", "req-finalized", "web_fetch", "https://first.test",
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+        var rejected = gate.WaitForApprovalAsync(
+            "run-1", "req-rejected", "shell", null,
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+        var pending = gate.WaitForApprovalAsync(
+            "run-1", "req-pending", "start_preview", null,
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+        await WaitForStateAsync(gate, "req-finalized", ToolApprovalRequestState.Pending);
+        await WaitForStateAsync(gate, "req-rejected", ToolApprovalRequestState.Pending);
+
+        var finalizedGrant = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = "req-finalized",
+                Scope = "run",
+                ScopeGrantId = "grant-finalized",
+                ScopeExpiresAt = DateTimeOffset.UtcNow.AddMinutes(1),
+            },
+            gate,
+            state);
+        Status(finalizedGrant).Should().Be(StatusCodes.Status200OK);
+        (await finalized).Should().BeTrue();
+        gate.FinalizeScopeGrant("run-1", "req-finalized", "grant-finalized").Should().BeTrue();
+
+        var rejectedGrant = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = "req-rejected",
+                Scope = "tool",
+                ScopeGrantId = "grant-rejected",
+                ScopeExpiresAt = DateTimeOffset.UtcNow.AddMinutes(1),
+            },
+            gate,
+            state);
+        Status(rejectedGrant).Should().Be(StatusCodes.Status200OK);
+        (await rejected).Should().BeTrue();
+
+        gate.IsAutoApproved("run-1", "shell", null).Should().BeFalse(
+            "the durable reader rejects the shell scope before its policy is persisted");
+        gate.GetRequestState("run-1", "req-pending").Should().Be(ToolApprovalRequestState.Pending,
+            "invalidating the rejected scope must not call whole-run Clear");
+
+        var localField = typeof(AgentHostDurableToolApprovalGate).GetField(
+            "_local",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var local = (InMemoryToolApprovalGate)localField!.GetValue(gate)!;
+        local.IsAutoApproved("run-1", "web_fetch", "https://later.test").Should().BeTrue(
+            "the rejected shell scope must not remove a different finalized scope");
+
+        gate.Deny("run-1", "req-pending").Should().BeTrue();
+        (await pending).Should().BeFalse();
+    }
+
+    [Fact]
     public void FreshPod_UsesApiBackedPolicyForItsConfiguredRun()
     {
         var state = ConfiguredState();
@@ -505,6 +573,7 @@ public sealed class AgentHostToolApprovalEndpointTests
     {
         public List<(string RunId, string ToolName)> Requests { get; } = [];
         public bool AutoApproved { get; set; } = autoApproved;
+        public Func<string, bool>? AutoApproveForTool { get; init; }
 
         public Task<bool> IsAutoApprovedAsync(
             string runId,
@@ -513,7 +582,7 @@ public sealed class AgentHostToolApprovalEndpointTests
             CancellationToken ct)
         {
             Requests.Add((runId, toolName));
-            return Task.FromResult(AutoApproved);
+            return Task.FromResult(AutoApproveForTool?.Invoke(toolName) ?? AutoApproved);
         }
     }
 

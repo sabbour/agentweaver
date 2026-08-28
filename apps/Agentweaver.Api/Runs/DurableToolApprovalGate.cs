@@ -145,9 +145,10 @@ public sealed class DurableToolApprovalGate(
         try
         {
             var registeredParentId = ParentOf(runId);
+            var lifecycleRunId = UnderlyingRunId(runId);
             if (runActiveClaimGuard is not null)
             {
-                foreach (var claimRunId in ActiveReadClaimRunIds(runId, registeredParentId)
+                foreach (var claimRunId in ActiveReadClaimRunIds(lifecycleRunId, registeredParentId)
                              .Distinct()
                              .OrderBy(id => id.ToString(), StringComparer.Ordinal))
                 {
@@ -257,13 +258,14 @@ public sealed class DurableToolApprovalGate(
         ApprovalScope scope,
         ApprovalContext? context)
     {
+        var lifecycleRunId = UnderlyingRunId(runId);
         var subject = scope == ApprovalScope.Once
             ? null
-            : await SubjectOfAsync(runId).ConfigureAwait(false);
+            : await SubjectOfAsync(lifecycleRunId).ConfigureAwait(false);
         var parentId = scope == ApprovalScope.Once ? null : ParentOf(runId);
         var parentSubject = parentId is null
             ? null
-            : await SubjectOfAsync(parentId).ConfigureAwait(false);
+            : await SubjectOfAsync(UnderlyingRunId(parentId)).ConfigureAwait(false);
         var lockIds = PolicyLockStreamIds(runId, parentId, subject, parentSubject, scope);
 
         // A non-once scope both reads a run's active status and commits a durable policy grant.
@@ -279,7 +281,7 @@ public sealed class DurableToolApprovalGate(
         if (scope != ApprovalScope.Once
             && runActiveClaimGuard is not null)
         {
-            foreach (var claimRunId in ActiveClaimRunIds(runId, parentId, subject, parentSubject, scope)
+            foreach (var claimRunId in ActiveClaimRunIds(lifecycleRunId, parentId, subject, parentSubject, scope)
                          .Distinct()
                          .OrderBy(id => id.ToString(), StringComparer.Ordinal))
             {
@@ -317,7 +319,7 @@ public sealed class DurableToolApprovalGate(
                     // across the separate run-store reads and this policy commit.
                     if (scope != ApprovalScope.Once
                         && !await LockAndRequireActiveRunsAsync(
-                            db, ActivePolicyRunIds(runId, policyDestinations), ct).ConfigureAwait(false))
+                            db, ActivePolicyRunIds(lifecycleRunId, policyDestinations), ct).ConfigureAwait(false))
                     {
                         return false;
                     }
@@ -430,14 +432,15 @@ public sealed class DurableToolApprovalGate(
     }
 
     private static IEnumerable<string> ActivePolicyRunIds(
-        string runId,
+        string lifecycleRunId,
         IReadOnlyList<PolicyDestination> policyDestinations)
     {
-        yield return runId;
+        yield return lifecycleRunId;
         foreach (var destination in policyDestinations)
         {
-            if (RunId.TryParse(destination.StreamId, out _))
-                yield return destination.StreamId;
+            var destinationLifecycleRunId = UnderlyingRunId(destination.StreamId);
+            if (RunId.TryParse(destinationLifecycleRunId, out _))
+                yield return destinationLifecycleRunId;
         }
     }
 
@@ -621,7 +624,7 @@ public sealed class DurableToolApprovalGate(
         var subjects = new Dictionary<string, ApprovalSubject>(StringComparer.Ordinal);
         foreach (var runId in runIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
         {
-            var subject = await ActiveSubjectOfAsync(db, runId, ct).ConfigureAwait(false);
+            var subject = await ActiveSubjectOfAsync(db, UnderlyingRunId(runId), ct).ConfigureAwait(false);
             if (subject is not null)
                 subjects[runId] = subject;
         }
@@ -770,6 +773,31 @@ public sealed class DurableToolApprovalGate(
         right is not null &&
         string.Equals(left.Owner, right.Owner, StringComparison.Ordinal) &&
         left.ProjectId == right.ProjectId;
+
+    // Coordinator-phase turns have their own event-stream identity so a draft approval cannot
+    // collide with an approval from another phase. They are not persisted runs, however; bind
+    // their status checks and active claims to their coordinator's real run row.
+    private static string UnderlyingRunId(string runId)
+    {
+        foreach (var suffix in CoordinatorPhaseSuffixes)
+        {
+            if (runId.EndsWith(suffix, StringComparison.Ordinal))
+            {
+                var candidate = runId[..^suffix.Length];
+                if (RunId.TryParse(candidate, out _))
+                    return candidate;
+            }
+        }
+
+        return runId;
+    }
+
+    private static readonly string[] CoordinatorPhaseSuffixes =
+    [
+        "-coordinator-draft",
+        "-coordinator-decompose",
+        "-coordinator-orchestrate",
+    ];
 
     private sealed record ApprovalContext(string RequestId, string ToolName, string? Url);
     private sealed record ApprovalResolution(string RequestId, bool Approved, bool Expired = false);

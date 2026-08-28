@@ -38,6 +38,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalTo
     // A finalized pod-local scope remains lifecycle-bound. Retaining its exact grant lets Clear
     // remove only policies that must be revoked when the pod learns its run is no longer active.
     private readonly ConcurrentDictionary<ScopeGrantKey, ScopeGrant> _finalizedScopeGrants = new();
+    private readonly object _scopeGrantsLock = new();
 
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
 
@@ -198,17 +199,19 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalTo
             return false;
 
         var key = new ScopeGrantKey(runId, requestId);
-        if (!_scopeGrants.TryGetValue(key, out var grant)
-            || !string.Equals(grant.Id, scopeGrantId, StringComparison.Ordinal)
-            || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)_scopeGrants)
-                .Remove(new KeyValuePair<ScopeGrantKey, ScopeGrant>(key, grant)))
+        lock (_scopeGrantsLock)
         {
-            return false;
+            if (!_scopeGrants.TryGetValue(key, out var grant)
+                || !string.Equals(grant.Id, scopeGrantId, StringComparison.Ordinal)
+                || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)_scopeGrants)
+                    .Remove(new KeyValuePair<ScopeGrantKey, ScopeGrant>(key, grant)))
+            {
+                return false;
+            }
+
+            RemoveScopePolicies(runId, grant);
+            return true;
         }
-
-        RemoveScopePolicies(runId, grant);
-
-        return true;
     }
 
     /// <inheritdoc />
@@ -219,16 +222,50 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalTo
             return false;
 
         var key = new ScopeGrantKey(runId, requestId);
-        if (!_scopeGrants.TryGetValue(key, out var grant)
-            || !string.Equals(grant.Id, scopeGrantId, StringComparison.Ordinal)
-            || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)_scopeGrants)
-                .Remove(new KeyValuePair<ScopeGrantKey, ScopeGrant>(key, grant)))
+        lock (_scopeGrantsLock)
         {
+            if (!_scopeGrants.TryGetValue(key, out var grant)
+                || !string.Equals(grant.Id, scopeGrantId, StringComparison.Ordinal)
+                || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)_scopeGrants)
+                    .Remove(new KeyValuePair<ScopeGrantKey, ScopeGrant>(key, grant)))
+            {
+                return false;
+            }
+
+            _finalizedScopeGrants[key] = grant;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Withdraws only local scope grants that could have authorized this exact policy after a
+    /// lifecycle-aware durable-policy lookup rejects it. Unrelated grants and pending requests
+    /// remain intact, so one uncommitted scope cannot revoke another approval in the same pod.
+    /// </summary>
+    public bool InvalidateScopeGrantsForPolicy(string runId, string toolName, string? url)
+    {
+        if (string.IsNullOrWhiteSpace(toolName) || OwnerOf(runId) is not { } owner)
             return false;
+
+        var risk = ToolApprovalPolicySemantics.RiskFor(toolName);
+        var removed = false;
+        lock (_scopeGrantsLock)
+        {
+            removed |= RemoveMatchingScopeGrants(
+                runId,
+                owner,
+                toolName,
+                risk,
+                _scopeGrants);
+            removed |= RemoveMatchingScopeGrants(
+                runId,
+                owner,
+                toolName,
+                risk,
+                _finalizedScopeGrants);
         }
 
-        _finalizedScopeGrants[key] = grant;
-        return true;
+        return removed;
     }
 
     /// <inheritdoc />
@@ -316,25 +353,42 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalTo
             scopeGrant = new ScopeGrant(
                 provisionalScopeGrantId,
                 parentRunId,
-                provisionalExpiresAt ?? DateTimeOffset.UtcNow + ToolApprovalScopeProtocol.ProvisionalScopeLifetime);
+                provisionalExpiresAt ?? DateTimeOffset.UtcNow + ToolApprovalScopeProtocol.ProvisionalScopeLifetime,
+                policy);
             var scopeGrantKey = new ScopeGrantKey(runId, requestId);
-            if (_scopeGrants.TryRemove(scopeGrantKey, out var priorGrant))
-                RemoveScopePolicies(runId, priorGrant);
-            if (_finalizedScopeGrants.TryRemove(scopeGrantKey, out priorGrant))
-                RemoveScopePolicies(runId, priorGrant);
-            _scopeGrants[scopeGrantKey] = scopeGrant;
+            lock (_scopeGrantsLock)
+            {
+                if (_scopeGrants.TryRemove(scopeGrantKey, out var priorGrant))
+                    RemoveScopePolicies(runId, priorGrant);
+                if (_finalizedScopeGrants.TryRemove(scopeGrantKey, out priorGrant))
+                    RemoveScopePolicies(runId, priorGrant);
+                _scopeGrants[scopeGrantKey] = scopeGrant;
+                AddScopePolicy(scope, runId, parentRunId, scopeGrant.Id, policy, context.ToolName);
+            }
+            return;
         }
 
+        AddScopePolicy(scope, runId, parentRunId, scopeGrant?.Id, policy, context.ToolName);
+    }
+
+    private void AddScopePolicy(
+        ApprovalScope scope,
+        string runId,
+        string? parentRunId,
+        string? scopeGrantId,
+        ApprovalPolicy policy,
+        string toolName)
+    {
         if (scope is ApprovalScope.Run or ApprovalScope.Tool)
         {
-            AddRunPolicy(runId, scopeGrant?.Id, policy);
+            AddRunPolicy(runId, scopeGrantId, policy);
             if (scope == ApprovalScope.Run && parentRunId is not null)
-                AddRunPolicy(parentRunId, scopeGrant?.Id, policy);
+                AddRunPolicy(parentRunId, scopeGrantId, policy);
         }
         else if (scope == ApprovalScope.Always &&
-                 ToolApprovalPolicySemantics.IsAlwaysEligible(context.ToolName))
+                 ToolApprovalPolicySemantics.IsAlwaysEligible(toolName))
         {
-            lock (_alwaysLock) _alwaysAllowedPolicies.Add(new ScopedApprovalPolicy(scopeGrant?.Id, policy));
+            lock (_alwaysLock) _alwaysAllowedPolicies.Add(new ScopedApprovalPolicy(scopeGrantId, policy));
         }
     }
 
@@ -391,15 +445,18 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalTo
     private void ExpireProvisionalScopeGrants()
     {
         var now = DateTimeOffset.UtcNow;
-        foreach (var pair in _scopeGrants)
+        lock (_scopeGrantsLock)
         {
-            if (pair.Value.ExpiresAt > now
-                || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)_scopeGrants).Remove(pair))
+            foreach (var pair in _scopeGrants)
             {
-                continue;
-            }
+                if (pair.Value.ExpiresAt > now
+                    || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)_scopeGrants).Remove(pair))
+                {
+                    continue;
+                }
 
-            RemoveScopePolicies(pair.Key.RunId, pair.Value);
+                RemoveScopePolicies(pair.Key.RunId, pair.Value);
+            }
         }
     }
 
@@ -407,16 +464,43 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalTo
         string runId,
         ConcurrentDictionary<ScopeGrantKey, ScopeGrant> scopeGrants)
     {
+        lock (_scopeGrantsLock)
+        {
+            foreach (var pair in scopeGrants)
+            {
+                if (!string.Equals(pair.Key.RunId, runId, StringComparison.Ordinal)
+                    || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)scopeGrants).Remove(pair))
+                {
+                    continue;
+                }
+
+                RemoveScopePolicies(runId, pair.Value);
+            }
+        }
+    }
+
+    private bool RemoveMatchingScopeGrants(
+        string runId,
+        string owner,
+        string toolName,
+        string risk,
+        ConcurrentDictionary<ScopeGrantKey, ScopeGrant> scopeGrants)
+    {
+        var removed = false;
         foreach (var pair in scopeGrants)
         {
             if (!string.Equals(pair.Key.RunId, runId, StringComparison.Ordinal)
+                || !PolicyMatches(pair.Value.Policy, owner, toolName, risk)
                 || !((ICollection<KeyValuePair<ScopeGrantKey, ScopeGrant>>)scopeGrants).Remove(pair))
             {
                 continue;
             }
 
             RemoveScopePolicies(runId, pair.Value);
+            removed = true;
         }
+
+        return removed;
     }
 
     private string? OwnerOf(string runId)
@@ -484,6 +568,10 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalTo
 
     private sealed record ApprovalPolicy(string Owner, string ToolId, string RiskSemantics);
     private sealed record ScopedApprovalPolicy(string? ScopeGrantId, ApprovalPolicy Policy);
-    private sealed record ScopeGrant(string Id, string? ParentRunId, DateTimeOffset ExpiresAt);
+    private sealed record ScopeGrant(
+        string Id,
+        string? ParentRunId,
+        DateTimeOffset ExpiresAt,
+        ApprovalPolicy Policy);
     private sealed record ScopeGrantKey(string RunId, string RequestId);
 }

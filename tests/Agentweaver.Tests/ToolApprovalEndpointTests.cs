@@ -55,8 +55,13 @@ public sealed class ToolApprovalEndpointTests
     // subtask run. That synthetic id is not a real run-store row and must never reach RunId.Parse —
     // before the fix this crashed with a bare 500 ("Guid should contain 32 digits...") on the very
     // FIRST approval click of a run, before decompose even started.
-    [Fact]
-    public async Task Approve_CoordinatorPhaseApproval_DoesNotCrash_AndResolvesToCoordinatorRun()
+    [Theory]
+    [InlineData("once")]
+    [InlineData("run")]
+    [InlineData("tool")]
+    [InlineData("always")]
+    public async Task Approve_CoordinatorPhaseApproval_UsesCoordinatorLifecycleAndPreservesSyntheticIdentity(
+        string scope)
     {
         using var factory = new AgentweaverWebApplicationFactory();
         using var client = CreateAuthenticatedClient(factory);
@@ -74,10 +79,25 @@ public sealed class ToolApprovalEndpointTests
 
         var response = await client.PostAsJsonAsync(
             $"/api/runs/{coordinatorId}/tool-approvals",
-            new { request_id = requestId, scope = "once" });
+            new { request_id = requestId, scope });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK, "the coordinator-phase synthetic key must resolve without crashing");
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "scoped coordinator-phase approvals must validate the real coordinator lifecycle, not the synthetic event-stream key");
         (await pendingApproval.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+
+        if (scope is "run" or "tool")
+        {
+            approvalGate.IsAutoApproved(
+                draftRunKey,
+                "web_fetch",
+                "https://github.com/example/repo/issues/2").Should().BeTrue(
+                "the scoped policy remains bound to the coordinator draft's synthetic approval identity");
+            approvalGate.IsAutoApproved(
+                coordinatorId.ToString(),
+                "web_fetch",
+                "https://github.com/example/repo/issues/2").Should().BeFalse(
+                "a coordinator-phase tool approval must not bleed into the coordinator's independent run stream");
+        }
     }
 
     // #349 — exact repro: an agent issues 3 concurrent approval-gated web_fetch tool.call events,

@@ -242,6 +242,44 @@ public sealed class ToolApprovalGateTests
             "finalized pod-local scopes remain lifecycle-bound and must be withdrawn with their run");
     }
 
+    [Fact]
+    public async Task InvalidateScopeGrantsForPolicy_OnlyRemovesMatchingScopeAndPreservesPendingApproval()
+    {
+        var gate = CreateGate();
+        const string runId = "run-scope-isolation";
+        var finalized = Register(gate, runId, "req-finalized", toolName: "web_fetch");
+        var rejected = Register(gate, runId, "req-rejected", toolName: "shell");
+        var unrelatedPending = Register(gate, runId, "req-pending", toolName: "start_preview");
+
+        (await gate.GrantProvisionalScopeAsync(
+            runId,
+            "req-finalized",
+            ApprovalScope.Run,
+            "grant-finalized",
+            DateTimeOffset.UtcNow.AddMinutes(1))).Should().BeTrue();
+        (await finalized).Should().BeTrue();
+        gate.FinalizeScopeGrant(runId, "req-finalized", "grant-finalized").Should().BeTrue();
+
+        (await gate.GrantProvisionalScopeAsync(
+            runId,
+            "req-rejected",
+            ApprovalScope.Tool,
+            "grant-rejected",
+            DateTimeOffset.UtcNow.AddMinutes(1))).Should().BeTrue();
+        (await rejected).Should().BeTrue();
+
+        gate.InvalidateScopeGrantsForPolicy(runId, "shell", null).Should().BeTrue();
+
+        gate.IsAutoApproved(runId, "web_fetch", "https://finalized.test").Should().BeTrue(
+            "a failed shell scope must not revoke a finalized web-fetch scope");
+        gate.GetRequestState(runId, "req-pending").Should().Be(ToolApprovalRequestState.Pending,
+            "a failed scope must not clear unrelated pending approvals");
+        gate.IsAutoApproved(runId, "shell", null).Should().BeFalse();
+
+        gate.Deny(runId, "req-pending").Should().BeTrue();
+        (await unrelatedPending).Should().BeFalse();
+    }
+
     // ── Sibling propagation (RegisterParentRun, commit cb7fbbf) ───────────────────
 
     [Fact]
