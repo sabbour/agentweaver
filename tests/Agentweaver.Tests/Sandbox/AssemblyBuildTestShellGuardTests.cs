@@ -684,7 +684,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         var result = await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
         {
             ["command"] = sleepLongerThanTimeout,
-            ["timeout_ms"] = 300, // executor expires at 300ms; watchdog grace is 60s away
+            ["timeout_ms"] = 300, // executor expires at 300ms; watchdog grace is five minutes away
         }));
 
         result?.ToString().Should().Contain("timed_out: true",

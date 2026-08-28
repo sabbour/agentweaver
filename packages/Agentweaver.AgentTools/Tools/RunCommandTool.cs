@@ -142,7 +142,7 @@ internal sealed class RunCommandTool : ISandboxTool
                         // the same value made the watchdog win the race and fatally abort the turn.
                         executionLease = await ctx.ShellExecutionTracker.EnterAsync(
                             commandHash,
-                            TimeSpan.FromMilliseconds(timeout) + SandboxToolOptions.WatchdogTimeoutGrace,
+                            TimeSpan.FromMilliseconds(timeout) + ctx.Options.ShellWatchdogGrace,
                             ct).ConfigureAwait(false);
                     }
                     result = await ctx.Executor.ExecuteAsync(cmd, ct).ConfigureAwait(false);
