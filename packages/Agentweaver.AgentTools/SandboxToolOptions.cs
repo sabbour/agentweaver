@@ -63,4 +63,11 @@ public sealed record SandboxToolOptions(
     /// on a cold or loaded node, causing the 60 s grace to be consumed before the process exits).
     /// </summary>
     public static readonly TimeSpan WatchdogTimeoutGrace = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Grace added to the effective command timeout before the runner treats a command as
+    /// unkillably stuck. Defaults to the Kata-safe production value; configurable per tool context
+    /// so every runner can apply the same watchdog policy.
+    /// </summary>
+    public TimeSpan ShellWatchdogGrace { get; init; } = WatchdogTimeoutGrace;
 }
