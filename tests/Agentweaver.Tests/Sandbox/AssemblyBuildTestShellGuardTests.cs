@@ -398,6 +398,9 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     [InlineData("gh repo view --browser")]
     [InlineData("gh repo view sabbour/agentweaver --web")]
     [InlineData("gh gist clone deadbeef")]
+    [InlineData("gh gist edit deadbeef")]
+    [InlineData("gh config set editor credential-observer.sh")]
+    [InlineData("gh config set pager credential-observer.sh")]
     [InlineData("gh issue develop 1")]
     [InlineData("gh issue develop 1 --checkout")]
     [InlineData("gh issue develop 1 -c")]
@@ -447,6 +450,49 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             "an approval must not make a non-allowlisted command eligible for the repository token");
         observed.Should().BeNull(
             "an editor, browser, clone, checkout, or nested gh child must never receive the repository token");
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_blocks_a_persisted_gh_editor_before_it_receives_the_sentinel()
+    {
+        const string sentinel = "sentinel-repository-token";
+        var observerOutput = Path.Combine(_root, "gh-editor-token.txt");
+        var observerExecutable = Path.Combine(_root, "credential-observer.sh");
+        WriteEnvironmentObserver(observerExecutable, observerOutput);
+        var executor = new PersistedGhEditorExecutor();
+        var approvalChecks = 0;
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(
+                executor,
+                tracker,
+                repositoryAccessToken: sentinel,
+                requireApprovalForAllShell: true,
+                isCommandApproved: _ =>
+                {
+                    approvalChecks++;
+                    return true;
+                }),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var configSet = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?>
+            {
+                ["command"] = "gh config set editor credential-observer.sh",
+            }));
+        var gistEdit = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?>
+            {
+                ["command"] = "gh gist edit deadbeef",
+            }));
+
+        configSet?.ToString().Should().Contain("parsed direct gh command forms");
+        gistEdit?.ToString().Should().Contain("parsed direct gh command forms");
+        approvalChecks.Should().Be(2,
+            "approval must not make persisted editor configuration or gist editing credential-eligible");
+        executor.ExecuteCalls.Should().Be(0);
+        File.Exists(observerOutput).Should().BeFalse(
+            "the workspace editor script must never receive the credential-bearing gh process environment");
     }
 
     [Fact]
@@ -871,6 +917,74 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             onExecute(command);
             return Task.FromResult(
                 new SandboxExecResult(0, stdout, "", TimedOut: false, OutputTruncated: false));
+        }
+
+        public async IAsyncEnumerable<SandboxOutputChunk> StreamAsync(
+            SandboxCommand command,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var result = await ExecuteAsync(command, ct);
+            yield return new SandboxOutputChunk(SandboxOutputStream.Stdout, result.Stdout);
+        }
+    }
+
+    private sealed class PersistedGhEditorExecutor : ISandboxExecutor
+    {
+        private string? _editor;
+
+        public int ExecuteCalls { get; private set; }
+        public bool IsRealIsolation => false;
+        public string BackendName => "direct";
+        public string SelectionReason => "test";
+        public bool HasNetworkWarning => false;
+        public string? NetworkWarningMessage => null;
+
+        public async Task<SandboxExecResult> ExecuteAsync(
+            SandboxCommand command,
+            CancellationToken ct = default)
+        {
+            ExecuteCalls++;
+            var directExecution = command.DirectExecution
+                ?? throw new InvalidOperationException("The credential test expects direct gh execution.");
+
+            if (directExecution.Executable == "gh" &&
+                directExecution.Arguments.Count == 4 &&
+                directExecution.Arguments[0] == "config" &&
+                directExecution.Arguments[1] == "set" &&
+                directExecution.Arguments[2] == "editor")
+            {
+                _editor = directExecution.Arguments[3];
+            }
+            else if (directExecution.Executable == "gh" &&
+                     directExecution.Arguments.Count >= 2 &&
+                     directExecution.Arguments[0] == "gist" &&
+                     directExecution.Arguments[1] == "edit" &&
+                     _editor is not null)
+            {
+                var editor = new ProcessStartInfo
+                {
+                    FileName = "sh",
+                    WorkingDirectory = command.WorkingDirectory,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                editor.ArgumentList.Add(_editor);
+                if (directExecution.Environment is { } environment)
+                {
+                    foreach (var pair in environment)
+                        editor.Environment[pair.Key] = pair.Value;
+                }
+
+                using var process = Process.Start(editor)
+                    ?? throw new InvalidOperationException("Could not start configured editor.");
+                await process.WaitForExitAsync(ct);
+                if (process.ExitCode != 0)
+                    throw new InvalidOperationException(await process.StandardError.ReadToEndAsync(ct));
+            }
+
+            return new SandboxExecResult(0, "ok", "", TimedOut: false, OutputTruncated: false);
         }
 
         public async IAsyncEnumerable<SandboxOutputChunk> StreamAsync(

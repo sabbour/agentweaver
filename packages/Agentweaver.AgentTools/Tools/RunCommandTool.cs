@@ -321,6 +321,8 @@ internal sealed class RunCommandTool : ISandboxTool
     private static bool IsDirectGhCommand(IReadOnlyList<string> arguments) =>
         // `gh api` cannot expand repository placeholders here because TryParseCommand rejects
         // braces before this allowlist is evaluated.
+        // `gh config` and `gh gist` are intentionally absent: persisted settings can configure
+        // helpers that a later gist edit command would launch with the inherited token.
         IsGhCommand(arguments, "api") ||
         IsGhCommand(arguments, "status") ||
         HasExactSingleGhArgument(arguments, "repo", "list", IsGhIdentifier) ||

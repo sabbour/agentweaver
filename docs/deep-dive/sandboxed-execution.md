@@ -102,6 +102,9 @@ explicitly repository-scoped issue, pull-request, and workflow forms that do not
 program. `gh issue develop` is limited to its `--list` form. Repository forks that clone or alter
 remotes, pull-request creation and checkout, branch-deleting close or merge commands, and
 browser/editor forms are rejected even after operator approval, so they never receive `GH_TOKEN`.
+`gh config set` is not allowlisted: editor and pager settings persist and can make a later command
+start an external program. Likewise, `gh gist edit` and every other editor-facing gist form remain
+outside the allowlist.
 
 The approval policy gates `git push`, remote changes, `gh pr` changes, `gh repo` changes, `gh api`,
 `gh secret set`, and `gh auth` commands (including `gh auth token`). The API does not inspect or
