@@ -87,38 +87,11 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
     /// <inheritdoc />
     public Task<bool> GrantAsync(string runId, string requestId, ApprovalScope scope)
     {
-        var resolved = Resolve(runId, requestId, result: true);
-
-        if (resolved && scope != ApprovalScope.Once)
-        {
-            if (_requestContext.TryGetValue(runId, out var runCtx) &&
-                runCtx.TryGetValue(requestId, out var ctx) &&
-                !string.IsNullOrWhiteSpace(ctx.ToolName) &&
-                OwnerOf(runId) is { } owner)
-            {
-                var policy = new ApprovalPolicy(
-                    owner,
-                    ctx.ToolName,
-                    ToolApprovalPolicySemantics.RiskFor(ctx.ToolName));
-
-                if (scope is ApprovalScope.Run or ApprovalScope.Tool)
-                {
-                    AddRunPolicy(runId, policy);
-                    if (_parentRuns.TryGetValue(runId, out var parentId) &&
-                        OwnerOf(parentId) is { } parentOwner &&
-                        string.Equals(parentOwner, owner, StringComparison.Ordinal))
-                    {
-                        AddRunPolicy(parentId, policy);
-                    }
-                }
-                else if (scope == ApprovalScope.Always &&
-                         ToolApprovalPolicySemantics.IsAlwaysEligible(ctx.ToolName))
-                {
-                    lock (_alwaysLock) _alwaysAllowedPolicies.Add(policy);
-                }
-            }
-        }
-
+        var resolved = Resolve(
+            runId,
+            requestId,
+            result: true,
+            beforeCompletion: () => ApplyScopePolicy(runId, requestId, scope));
         return Task.FromResult(resolved);
     }
 
@@ -210,11 +183,50 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         // Always-allowed policies are intentionally not cleared — they survive run boundaries.
     }
 
-    private bool Resolve(string runId, string requestId, bool result)
+    private bool Resolve(
+        string runId,
+        string requestId,
+        bool result,
+        Action? beforeCompletion = null)
     {
         if (!_pending.TryGetValue(runId, out var runPending)) return false;
         if (!runPending.TryGetValue(requestId, out var pending)) return false;
-        return pending.TryResolve(result ? ToolApprovalRequestState.Approved : ToolApprovalRequestState.Denied);
+        return pending.TryResolve(
+            result ? ToolApprovalRequestState.Approved : ToolApprovalRequestState.Denied,
+            beforeCompletion);
+    }
+
+    private void ApplyScopePolicy(string runId, string requestId, ApprovalScope scope)
+    {
+        if (scope == ApprovalScope.Once ||
+            !_requestContext.TryGetValue(runId, out var runCtx) ||
+            !runCtx.TryGetValue(requestId, out var context) ||
+            string.IsNullOrWhiteSpace(context.ToolName) ||
+            OwnerOf(runId) is not { } owner)
+        {
+            return;
+        }
+
+        var policy = new ApprovalPolicy(
+            owner,
+            context.ToolName,
+            ToolApprovalPolicySemantics.RiskFor(context.ToolName));
+
+        if (scope is ApprovalScope.Run or ApprovalScope.Tool)
+        {
+            AddRunPolicy(runId, policy);
+            if (_parentRuns.TryGetValue(runId, out var parentId) &&
+                OwnerOf(parentId) is { } parentOwner &&
+                string.Equals(parentOwner, owner, StringComparison.Ordinal))
+            {
+                AddRunPolicy(parentId, policy);
+            }
+        }
+        else if (scope == ApprovalScope.Always &&
+                 ToolApprovalPolicySemantics.IsAlwaysEligible(context.ToolName))
+        {
+            lock (_alwaysLock) _alwaysAllowedPolicies.Add(policy);
+        }
     }
 
     private void MarkResolved(string runId, string requestId, ToolApprovalRequestState state)
@@ -289,7 +301,9 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
             }
         }
 
-        internal bool TryResolve(ToolApprovalRequestState resolutionState)
+        internal bool TryResolve(
+            ToolApprovalRequestState resolutionState,
+            Action? beforeCompletion = null)
         {
             lock (_sync)
             {
@@ -297,6 +311,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
                     return false;
 
                 _resolutionState = resolutionState;
+                beforeCompletion?.Invoke();
                 _markResolved(resolutionState);
                 Completion.TrySetResult(resolutionState == ToolApprovalRequestState.Approved);
                 return true;

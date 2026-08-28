@@ -94,6 +94,52 @@ public sealed class AgentHostToolApprovalEndpointTests
         (await wait).Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData("run")]
+    [InlineData("tool")]
+    [InlineData("always")]
+    public async Task Grant_LateScopedRetry_DoesNotCreateCurrentPodBridge(string scope)
+    {
+        var state = ConfiguredState();
+        var gate = new AgentHostDurableToolApprovalGate(
+            state,
+            new RecordingPolicyClient(autoApproved: false));
+        var wait = gate.WaitForApprovalAsync(
+            "run-1", "req-late", "web_fetch", "https://first.test",
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+        await WaitForStateAsync(gate, "req-late", ToolApprovalRequestState.Pending);
+
+        var winner = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = "req-late",
+                Scope = "once",
+            },
+            gate,
+            state);
+        Status(winner).Should().Be(StatusCodes.Status200OK);
+        (await wait).Should().BeTrue();
+
+        var late = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = "req-late",
+                Scope = scope,
+            },
+            gate,
+            state);
+
+        Status(late).Should().Be(StatusCodes.Status200OK);
+        Json(late).GetProperty("state").GetString().Should().Be("approved");
+        Json(late).GetProperty("applied").GetBoolean().Should().BeFalse();
+        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test")
+            .Should().BeFalse("a late scoped forward did not win the local approval");
+    }
+
     [Fact]
     public async Task GetPendingContext_DoesNotResolveTheLocalApproval()
     {

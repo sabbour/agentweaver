@@ -1773,17 +1773,18 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
                     approve: true,
                     targetRunId,
                     body.RequestId,
-                    scope: "once",
+                    scope: body.Scope,
                     sandboxRuntime.Value,
                     agentHostApprovalClient,
                     secretStore,
                     streamStore,
                     ct).ConfigureAwait(false);
 
-                // The AgentHost must complete this request as a one-time approval before the API
-                // publishes a durable scope. If forwarding fails or the pod denies/expires the
-                // request, no local or durable scoped policy has been activated.
-                if (podOutcome is { Resolved: true, Unreachable: false }
+                // The AgentHost applies the selected scope locally before it releases the blocked
+                // tool call. That current-pod bridge covers an immediate following call while this
+                // API persists the cross-pod policy. A terminal state alone is insufficient: a
+                // duplicate/late forward reports the original approval but Applied=false.
+                if (podOutcome is { Resolved: true, Applied: true, Unreachable: false }
                     && string.Equals(podOutcome.State, "approved", StringComparison.OrdinalIgnoreCase)
                     && !await durableApprovalGate.PersistAgentHostApprovalAsync(
                         targetRunId,
@@ -2924,6 +2925,7 @@ private static IResult MapAgentHostApprovalOutcome(
                 request_id = requestId,
                 approved,
                 resolved = true,
+                applied = outcome.Applied,
                 expired,
                 state = outcome.State,
             });

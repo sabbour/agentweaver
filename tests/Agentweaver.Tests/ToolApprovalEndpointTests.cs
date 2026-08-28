@@ -496,10 +496,10 @@ public sealed class ToolApprovalEndpointTests
             new { request_id = "pod-session-scope", scope = "run" });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        agentHost.LastScope.Should().Be("once");
+        agentHost.LastScope.Should().Be("run");
         approvalGate.IsAutoApproved(sibling.ToString(), "web_fetch", "https://sibling.test")
             .Should().BeTrue(
-                "the API persists the scope after the AgentHost has completed the one-time approval");
+                "the API persists the scope after the AgentHost has completed its local approval");
 
         var alwaysSource = RunId.New();
         var futurePodRun = RunId.New();
@@ -521,6 +521,7 @@ public sealed class ToolApprovalEndpointTests
             new { request_id = "pod-always-scope", scope = "always" });
 
         always.StatusCode.Should().Be(HttpStatusCode.OK);
+        agentHost.LastScope.Should().Be("always");
         var futurePolicy = await ownerClient.GetFromJsonAsync<System.Text.Json.JsonElement>(
             $"/api/runs/{futurePodRun}/tool-approval-policies/web_fetch");
         futurePolicy.GetProperty("auto_approved").GetBoolean().Should().BeTrue(
@@ -572,7 +573,7 @@ public sealed class ToolApprovalEndpointTests
             new { request_id = "pod-missing-context", scope = "run" });
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
-        agentHost.LastScope.Should().Be("once");
+        agentHost.LastScope.Should().Be("run");
         agentHost.DenyCalls.Should().Be(0, "the one-time approval is already terminal");
         approvalGate.IsAutoApproved(runId.ToString(), "web_fetch", "https://following.test")
             .Should().BeFalse("a failed AgentHost scope persistence must not widen future access");
@@ -632,7 +633,7 @@ public sealed class ToolApprovalEndpointTests
             new { request_id = $"pod-{scope}-{state}", scope });
 
         response.StatusCode.Should().Be((HttpStatusCode)expectedStatusCode);
-        agentHost.LastScope.Should().Be("once");
+        agentHost.LastScope.Should().Be(scope);
         if (state is "expired" or "denied")
         {
             var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
@@ -644,6 +645,130 @@ public sealed class ToolApprovalEndpointTests
             "web_fetch",
             "https://following.test").Should().BeFalse(
             "an AgentHost {0} result must not create a {1} policy", state, scope);
+    }
+
+    [Theory]
+    [InlineData("run")]
+    [InlineData("tool")]
+    [InlineData("always")]
+    public async Task PodPerRun_OnceWinsLateScopedForward_DoesNotPersistDurablePolicy(string scope)
+    {
+        var agentHost = new OnceWinsAgentHostClient();
+        using var baseFactory = new CoordinatorWebApplicationFactory();
+        using var factory = baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:AgentExecutionMode"] = "pod-per-run",
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAgentHostApprovalHttpClient>();
+                services.AddSingleton<IAgentHostApprovalHttpClient>(agentHost);
+            });
+        });
+        using var ownerClient = CreateOwnerClient(factory, CoordinatorWebApplicationFactory.OwnerApiKey);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var secretStore = factory.Services.GetRequiredService<ISecretStore>();
+        var project = await CreateProjectAsync(baseFactory, ownerClient);
+        var source = RunId.New();
+        var future = RunId.New();
+        await InsertRunAsync(
+            runStore, source, RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser, projectId: project);
+        await InsertRunAsync(
+            runStore, future, RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser, projectId: project);
+        await secretStore.SetSecretAsync(
+            PreviewRunnerCredential.SecretKey(source.ToString()),
+            "pod-approval-credential");
+
+        var lateScope = ownerClient.PostAsJsonAsync(
+            $"/api/runs/{source}/tool-approvals",
+            new { request_id = "pod-once-wins", scope });
+        await agentHost.LateScopeForwarded.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var once = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{source}/tool-approvals",
+            new { request_id = "pod-once-wins", scope = "once" });
+        once.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var late = await lateScope.WaitAsync(TimeSpan.FromSeconds(5));
+        late.StatusCode.Should().Be(HttpStatusCode.OK);
+        var lateBody = await late.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        lateBody.GetProperty("state").GetString().Should().Be("approved");
+        lateBody.GetProperty("applied").GetBoolean().Should().BeFalse();
+        approvalGate.IsAutoApproved(
+            scope == "always" ? future.ToString() : source.ToString(),
+            "web_fetch",
+            "https://following.test").Should().BeFalse(
+            "an unapplied scoped retry must not persist a durable policy");
+    }
+
+    [Fact]
+    public async Task PodPerRun_CurrentHostBridgeCoversNextCallBeforeDurablePolicyCommit()
+    {
+        var source = RunId.New();
+        const string requestId = "pod-current-host-bridge";
+        var agentHost = new CurrentHostBridgeAgentHostClient(
+            source.ToString(),
+            requestId,
+            CoordinatorWebApplicationFactory.OwnerUser);
+        using var baseFactory = new CoordinatorWebApplicationFactory();
+        using var factory = baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:AgentExecutionMode"] = "pod-per-run",
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAgentHostApprovalHttpClient>();
+                services.AddSingleton<IAgentHostApprovalHttpClient>(agentHost);
+                services.RemoveAll<IAgentHostToolApprovalPersistence>();
+                services.AddSingleton<BlockingAgentHostApprovalPersistence>();
+                services.AddSingleton<IAgentHostToolApprovalPersistence>(sp =>
+                    sp.GetRequiredService<BlockingAgentHostApprovalPersistence>());
+            });
+        });
+        using var ownerClient = CreateOwnerClient(factory, CoordinatorWebApplicationFactory.OwnerApiKey);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var secretStore = factory.Services.GetRequiredService<ISecretStore>();
+        var persistence = factory.Services.GetRequiredService<BlockingAgentHostApprovalPersistence>();
+        await InsertRunAsync(
+            runStore,
+            source,
+            RunStatus.InProgress,
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+        await secretStore.SetSecretAsync(
+            PreviewRunnerCredential.SecretKey(source.ToString()),
+            "pod-approval-credential");
+
+        agentHost.IsAutoApproved("web_fetch", "https://following.test").Should().BeFalse();
+        approvalGate.IsAutoApproved(source.ToString(), "web_fetch", "https://following.test")
+            .Should().BeFalse();
+
+        var approval = ownerClient.PostAsJsonAsync(
+            $"/api/runs/{source}/tool-approvals",
+            new { request_id = requestId, scope = "run" });
+        await persistence.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        agentHost.LastScope.Should().Be("run");
+        (await agentHost.InitialTool.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+        agentHost.IsAutoApproved("web_fetch", "https://following.test").Should().BeTrue(
+            "the current AgentHost accepts its local bridge before it releases the waiting tool");
+        approvalGate.IsAutoApproved(source.ToString(), "web_fetch", "https://following.test")
+            .Should().BeFalse("the durable policy is still blocked from committing");
+
+        persistence.Release();
+        var response = await approval.WaitAsync(TimeSpan.FromSeconds(5));
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        approvalGate.IsAutoApproved(source.ToString(), "web_fetch", "https://following.test")
+            .Should().BeTrue("the durable policy is published after successful local acceptance");
     }
 
     [Fact]
@@ -791,5 +916,181 @@ public sealed class ToolApprovalEndpointTests
             string? url,
             ApprovalScope scope) =>
             Task.FromResult(false);
+    }
+
+    private sealed class OnceWinsAgentHostClient : IAgentHostApprovalHttpClient
+    {
+        private readonly TaskCompletionSource _onceApplied =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource LateScopeForwarded { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<AgentHostApprovalOutcome> GetPendingContextAsync(
+            string childRunId,
+            string requestId,
+            string? bearer,
+            CancellationToken ct) =>
+            Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: false,
+                State: "pending",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                ToolName: "web_fetch"));
+
+        public async Task<AgentHostApprovalOutcome> GrantAsync(
+            string childRunId,
+            string requestId,
+            string scope,
+            string? bearer,
+            CancellationToken ct)
+        {
+            if (scope == "once")
+            {
+                _onceApplied.TrySetResult();
+                return new AgentHostApprovalOutcome(
+                    Resolved: true,
+                    State: "approved",
+                    Unreachable: false,
+                    StatusCode: StatusCodes.Status200OK,
+                    Applied: true,
+                    ToolName: "web_fetch");
+            }
+
+            LateScopeForwarded.TrySetResult();
+            await _onceApplied.Task.WaitAsync(ct);
+            return new AgentHostApprovalOutcome(
+                Resolved: true,
+                State: "approved",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                Applied: false,
+                ToolName: "web_fetch");
+        }
+
+        public Task<AgentHostApprovalOutcome> DenyAsync(
+            string childRunId,
+            string requestId,
+            string? bearer,
+            CancellationToken ct) =>
+            Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: true,
+                State: "denied",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                Applied: true));
+    }
+
+    private sealed class CurrentHostBridgeAgentHostClient : IAgentHostApprovalHttpClient
+    {
+        private readonly string _runId;
+        private readonly string _requestId;
+        private readonly InMemoryToolApprovalGate _gate;
+
+        public CurrentHostBridgeAgentHostClient(string runId, string requestId, string owner)
+        {
+            _runId = runId;
+            _requestId = requestId;
+            _gate = new InMemoryToolApprovalGate(new SingleRunOwnerResolver(runId, owner));
+            InitialTool = _gate.WaitForApprovalAsync(
+                runId,
+                requestId,
+                "web_fetch",
+                "https://first.test",
+                TimeSpan.FromMinutes(1),
+                CancellationToken.None);
+        }
+
+        public string? LastScope { get; private set; }
+        public Task<bool> InitialTool { get; }
+
+        public bool IsAutoApproved(string toolName, string? url) =>
+            _gate.IsAutoApproved(_runId, toolName, url);
+
+        public Task<AgentHostApprovalOutcome> GetPendingContextAsync(
+            string childRunId,
+            string requestId,
+            string? bearer,
+            CancellationToken ct)
+        {
+            var context = _gate.GetRequestContext(_runId, _requestId);
+            return Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: false,
+                State: "pending",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                ToolName: context?.ToolName,
+                Url: context?.Url));
+        }
+
+        public async Task<AgentHostApprovalOutcome> GrantAsync(
+            string childRunId,
+            string requestId,
+            string scope,
+            string? bearer,
+            CancellationToken ct)
+        {
+            LastScope = scope;
+            var applied = await _gate.GrantAsync(
+                _runId,
+                _requestId,
+                scope switch
+                {
+                    "run" => ApprovalScope.Run,
+                    "always" => ApprovalScope.Always,
+                    "tool" => ApprovalScope.Tool,
+                    _ => ApprovalScope.Once,
+                });
+            return new AgentHostApprovalOutcome(
+                Resolved: _gate.GetRequestState(_runId, _requestId) == ToolApprovalRequestState.Approved,
+                State: "approved",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                Applied: applied,
+                ToolName: "web_fetch",
+                Url: "https://first.test");
+        }
+
+        public Task<AgentHostApprovalOutcome> DenyAsync(
+            string childRunId,
+            string requestId,
+            string? bearer,
+            CancellationToken ct) =>
+            Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: false,
+                State: "unknown",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status404NotFound));
+    }
+
+    private sealed class BlockingAgentHostApprovalPersistence(
+        DurableToolApprovalGate inner) : IAgentHostToolApprovalPersistence
+    {
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release() => _release.TrySetResult();
+
+        public async Task<bool> PersistAgentHostApprovalAsync(
+            string runId,
+            string requestId,
+            string toolName,
+            string? url,
+            ApprovalScope scope)
+        {
+            Entered.TrySetResult();
+            await _release.Task.ConfigureAwait(false);
+            return await inner.PersistAgentHostApprovalAsync(runId, requestId, toolName, url, scope)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private sealed class SingleRunOwnerResolver(string runId, string owner) : IToolApprovalOwnerResolver
+    {
+        public string? GetCanonicalOwner(string candidateRunId) =>
+            string.Equals(candidateRunId, runId, StringComparison.Ordinal) ? owner : null;
     }
 }

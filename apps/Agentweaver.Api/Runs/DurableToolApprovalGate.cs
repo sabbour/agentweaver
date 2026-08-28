@@ -91,9 +91,9 @@ public sealed class DurableToolApprovalGate(
     }
 
     /// <summary>
-    /// Persists a scope selected for an AgentHost-owned request after the pod has completed its
-    /// one-time approval. The AgentHost supplies its server-captured tool context; the API never
-    /// trusts UI metadata when creating a durable policy.
+    /// Persists a scope selected for an AgentHost-owned request after the pod has successfully
+    /// applied that request's local approval. The AgentHost supplies its server-captured tool
+    /// context; the API never trusts UI metadata when creating a durable policy.
     /// </summary>
     public async Task<bool> PersistAgentHostApprovalAsync(
         string runId,
