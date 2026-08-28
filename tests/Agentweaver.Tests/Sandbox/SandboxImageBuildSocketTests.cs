@@ -25,15 +25,25 @@ public sealed class SandboxImageBuildSocketTests
     /// <summary>Nine bytes of empty SETTINGS frame — what a live gRPC server answers with.</summary>
     private static readonly byte[] SettingsFrame = [0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00];
 
+    /// <summary>The HTTP/2 client preface and empty SETTINGS frame the build capability probe sends.</summary>
+    private static readonly byte[] Http2Preface =
+    [
+        0x50, 0x52, 0x49, 0x20, 0x2a, 0x20, 0x48, 0x54, 0x54, 0x50, 0x2f, 0x32, 0x2e, 0x30, 0x0d,
+        0x0a, 0x0d, 0x0a, 0x53, 0x4d, 0x0d, 0x0a, 0x0d, 0x0a,
+        0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
     private static SandboxCapability ImageBuildCapability(string socketPath) =>
         new KataBwrapExecutor(imageBuildSocket: socketPath)
             .DescribeCapabilities()
             .Single(capability => capability.Id == SandboxCapabilityIds.ImageBuild);
 
     /// <summary>
-    /// Accepts one connection and writes <paramref name="reply"/>, standing in for whatever process
-    /// happens to hold the socket path. Nothing here parses the probe's request: the probe is only
-    /// entitled to conclude from what comes back.
+    /// Accepts one connection and, after receiving the probe's HTTP/2 preface, writes
+    /// <paramref name="reply"/>, standing in for whatever process happens to hold the socket path.
+    /// A real gRPC server does not close the connection after sending SETTINGS before the client has
+    /// written its preface. Mirroring that ordering prevents the test server from racing the probe's
+    /// send with a close, which some Linux socket implementations report as a broken pipe.
     ///
     /// Runs on a dedicated background <see cref="Thread"/> rather than <see cref="Task.Run"/>: the
     /// probe's own receive timeout (750ms, see <c>KataBwrapExecutor.ImageBuildProbeTimeoutMs</c>) is
@@ -58,7 +68,29 @@ public sealed class SandboxImageBuildSocketTests
                 using var accepted = listener.Accept();
                 if (reply is not null)
                 {
-                    accepted.Send(reply);
+                    Span<byte> request = stackalloc byte[Http2Preface.Length];
+                    var read = 0;
+                    while (read < request.Length)
+                    {
+                        var received = accepted.Receive(request[read..]);
+                        if (received <= 0)
+                            return;
+
+                        read += received;
+                    }
+
+                    if (!request.SequenceEqual(Http2Preface))
+                        return;
+
+                    var sent = 0;
+                    while (sent < reply.Length)
+                    {
+                        var written = accepted.Send(reply, sent, reply.Length - sent, SocketFlags.None);
+                        if (written <= 0)
+                            return;
+
+                        sent += written;
+                    }
                 }
             }
             catch (SocketException)
