@@ -270,6 +270,7 @@ builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
 builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
 builder.Services.AddScoped<TwoAppPersistenceStore>();
+builder.Services.AddScoped<AutomationActivationSnapshotService>();
 builder.Services.AddScoped<ITwoAppCredentialVault, TwoAppCredentialVault>();
 builder.Services.AddScoped<GitHubRepositorySelectionClient>();
 builder.Services.AddScoped<GitHubRepositorySelectionBroker>();

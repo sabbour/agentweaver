@@ -546,6 +546,9 @@ public sealed class RepoAppInstallationLifecycleService(MemoryDbContext db)
             installation.RevokedAt = now;
             await db.GitHubRepositoryGrants.Where(x => x.InstallationId == installationId && x.RevokedAt == null)
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.RevokedAt, now), ct).ConfigureAwait(false);
+            await db.AutomationActivations.Where(x => x.InstallationId == installationId && x.Status == AutomationActivationStatus.Active)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, AutomationActivationStatus.Invalidated)
+                    .SetProperty(x => x.InvalidatedAt, now), ct).ConfigureAwait(false);
             return;
         }
         if (payload.Action is "created" or "unsuspend")
@@ -554,8 +557,15 @@ public sealed class RepoAppInstallationLifecycleService(MemoryDbContext db)
         foreach (var repository in payload.RepositoriesRemoved ?? [])
         {
             if (repository.Id > 0)
+            {
                 await db.GitHubRepositoryGrants.Where(x => x.InstallationId == installationId && x.RepositoryId == repository.Id)
                     .ExecuteUpdateAsync(s => s.SetProperty(x => x.RevokedAt, now), ct).ConfigureAwait(false);
+                await db.AutomationActivations.Where(x => x.InstallationId == installationId &&
+                                                          x.RepositoryId == repository.Id &&
+                                                          x.Status == AutomationActivationStatus.Active)
+                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, AutomationActivationStatus.Invalidated)
+                        .SetProperty(x => x.InvalidatedAt, now), ct).ConfigureAwait(false);
+            }
         }
     }
 }

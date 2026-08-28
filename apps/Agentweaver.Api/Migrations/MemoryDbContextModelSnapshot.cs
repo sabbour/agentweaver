@@ -488,6 +488,14 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("automation_key");
 
+                    b.Property<string>("CopilotBindingGrantDigest")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("copilot_binding_grant_digest");
+
+                    b.Property<string>("CopilotBindingId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("copilot_binding_id");
+
                     b.Property<long>("InstallationId")
                         .HasColumnType("INTEGER")
                         .HasColumnName("installation_id");
@@ -505,6 +513,10 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("repository_id");
 
+                    b.Property<string>("RepositoryGrantDigest")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("repository_grant_digest");
+
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER")
                         .HasColumnName("status");
@@ -513,8 +525,10 @@ namespace Agentweaver.Api.Migrations
 
                     b.HasIndex("InstallationId", "RepositoryId");
 
-                    b.HasIndex("ProjectId", "InstallationId", "RepositoryId", "AutomationKey")
-                        .IsUnique();
+                    b.HasIndex("ProjectId")
+                        .IsUnique()
+                        .HasFilter("status = 0")
+                        .HasDatabaseName("UX_automation_activations_active_project");
 
                     b.ToTable("automation_activations", (string)null);
                 });
