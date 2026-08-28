@@ -1769,43 +1769,33 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
                     return MapAgentHostApprovalOutcome(contextOutcome, targetRunId, body.RequestId, approve: true);
                 }
 
-                if (!await durableApprovalGate.PersistAgentHostApprovalAsync(
+                podOutcome = await TryResolveAgentHostApprovalAsync(
+                    approve: true,
+                    targetRunId,
+                    body.RequestId,
+                    scope: "once",
+                    sandboxRuntime.Value,
+                    agentHostApprovalClient,
+                    secretStore,
+                    streamStore,
+                    ct).ConfigureAwait(false);
+
+                // The AgentHost must complete this request as a one-time approval before the API
+                // publishes a durable scope. If forwarding fails or the pod denies/expires the
+                // request, no local or durable scoped policy has been activated.
+                if (podOutcome is { Resolved: true, Unreachable: false }
+                    && string.Equals(podOutcome.State, "approved", StringComparison.OrdinalIgnoreCase)
+                    && !await durableApprovalGate.PersistAgentHostApprovalAsync(
                         targetRunId,
                         body.RequestId,
                         contextOutcome.ToolName,
                         contextOutcome.Url,
                         approvalScope).ConfigureAwait(false))
                 {
-                    // Do not release a locally scoped approval when its durable counterpart could
-                    // not be recorded. A best-effort deny wakes the blocked callback fail-closed.
-                    await TryResolveAgentHostApprovalAsync(
-                        approve: false,
-                        targetRunId,
-                        body.RequestId,
-                        body.Scope,
-                        sandboxRuntime.Value,
-                        agentHostApprovalClient,
-                        secretStore,
-                        streamStore,
-                        ct).ConfigureAwait(false);
                     return Results.Problem(
-                        "The selected scope could not be persisted. The AgentHost request was not approved.",
+                        "The AgentHost approved this request, but the selected scope could not be persisted. No future policy was applied.",
                         statusCode: StatusCodes.Status503ServiceUnavailable);
                 }
-
-                // Complete the local wait only after the durable policy is committed. The local
-                // gate applies the same scope, covering the next tool call without a policy-read
-                // race while the API remains the cross-pod durable authority.
-                podOutcome = await TryResolveAgentHostApprovalAsync(
-                    approve: true,
-                    targetRunId,
-                    body.RequestId,
-                    body.Scope,
-                    sandboxRuntime.Value,
-                    agentHostApprovalClient,
-                    secretStore,
-                    streamStore,
-                    ct).ConfigureAwait(false);
             }
 
             if (podOutcome is not null)
