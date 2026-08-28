@@ -103,7 +103,7 @@ public sealed class WorkflowEventTriggerService
                 continue;
             }
 
-            var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
+            var task = await WorkflowTriggerBacklogFactory.CreateUnpublishedTaskAsync(
                 _backlogStore,
                 project,
                 def,
@@ -113,9 +113,20 @@ public sealed class WorkflowEventTriggerService
                 idempotencyKey: idempotencyKey,
                 now: now,
                 ct: ct).ConfigureAwait(false);
-            if (!await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
-                    .ConfigureAwait(false))
-                throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
+            try
+            {
+                if (!await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
+                        .ConfigureAwait(false))
+                    throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
+                if (!await WorkflowTriggerBacklogFactory.TryPublishAsync(_backlogStore, project, task, now, ct)
+                        .ConfigureAwait(false))
+                    throw new InvalidOperationException("Unable to publish trusted automation invocation backlog task.");
+            }
+            catch
+            {
+                await DiscardUnpublishedTaskAsync(invocations, invocation, project, task).ConfigureAwait(false);
+                throw;
+            }
 
             _logger.LogInformation(
                 "Workflow event trigger: fired workflow {WorkflowId} for project {ProjectId} on event {EventName} (task {TaskId})",
@@ -124,5 +135,22 @@ public sealed class WorkflowEventTriggerService
         }
 
         return fired;
+    }
+
+    private async Task DiscardUnpublishedTaskAsync(
+        IAutomationInvocationService invocations,
+        AutomationInvocationClaim invocation,
+        Project project,
+        BacklogTask task)
+    {
+        var deleted = await _backlogStore.TryDeleteAsync(project.Id, task.Id, CancellationToken.None)
+            .ConfigureAwait(false);
+        if (!deleted)
+            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
+        var released = await invocations.TryDiscardInvocationForTaskAsync(
+                invocation.InvocationId, project.Id, task.Id, CancellationToken.None)
+            .ConfigureAwait(false);
+        if (!released)
+            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
     }
 }

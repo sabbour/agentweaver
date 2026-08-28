@@ -12,7 +12,7 @@ namespace Agentweaver.Tests.Workflows;
 /// <summary>
 /// Tests for <see cref="WorkflowEventTriggerService"/> (issue #53, first-pass event trigger
 /// mechanism) over REAL <see cref="SqliteBacklogTaskStore"/> / <see cref="WorkflowRegistry"/>
-/// (Principle VII: no mocks). Proves: a matching event fires a Ready backlog task bound to the
+/// (Principle VII: no mocks). Proves: a matching event atomically publishes a Ready backlog task bound to the
 /// workflow, a non-matching event name fires nothing, a dedupe key makes a repeated call a no-op, and
 /// a workflow with no trigger (or a schedule trigger) never fires on an event.
 /// </summary>
@@ -255,6 +255,53 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task FireEvent_CoordinatorCannotClaimTaskBetweenCreationAndInvocationBinding()
+    {
+        var project = await SeedProjectAsync(IssueOpenedEventYaml);
+        var invocations = new CoordinatorInterleavingAutomationInvocationService(_backlog);
+        await using var provider = new ServiceCollection()
+            .AddScoped<Agentweaver.Api.Auth.IAutomationInvocationService>(_ => invocations)
+            .BuildServiceProvider();
+        var service = new WorkflowEventTriggerService(
+            _backlog, _registry, new LoggerAdapter<WorkflowEventTriggerService>(_logger),
+            provider.GetRequiredService<IServiceScopeFactory>());
+
+        await service.FireEventAsync(project, "issue.opened", "interleaved-delivery", null, CancellationToken.None);
+
+        invocations.ClaimResultDuringBinding.Should().Be(ClaimReserveResult.Lost,
+            "the task is still Backlog while the trigger writes its durable invocation binding");
+        var task = (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle().Subject;
+        task.State.Should().Be(BacklogTaskState.Ready);
+    }
+
+    [Fact]
+    public async Task FireEvent_WhenBindingFails_RemovesUnpublishedTaskSoDeliveryCanRetry()
+    {
+        var project = await SeedProjectAsync(IssueOpenedEventYaml);
+        var invocations = new FailFirstBindingInvocationService();
+        await using var provider = new ServiceCollection()
+            .AddScoped<Agentweaver.Api.Auth.IAutomationInvocationService>(_ => invocations)
+            .BuildServiceProvider();
+        var service = new WorkflowEventTriggerService(
+            _backlog, _registry, new LoggerAdapter<WorkflowEventTriggerService>(_logger),
+            provider.GetRequiredService<IServiceScopeFactory>());
+
+        await FluentActions.Invoking(() => service.FireEventAsync(
+                project, "issue.opened", "retry-delivery", null, CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>();
+        (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty(
+            "a failed binding must not leave a task that a coordinator can claim or that suppresses the retry");
+        invocations.ReleasedUnboundClaims.Should().Be(1);
+
+        var retried = await service.FireEventAsync(
+            project, "issue.opened", "retry-delivery", null, CancellationToken.None);
+
+        retried.Should().Equal("on-issue-opened");
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.State.Should().Be(BacklogTaskState.Ready);
+    }
+
+    [Fact]
     public async Task FireEvent_NonMatchingEventName_FiresNothing()
     {
         var project = await SeedProjectAsync(IssueOpenedEventYaml);
@@ -413,4 +460,30 @@ file sealed class LoggerAdapter<TCategory>(CapturingLogger inner) : Microsoft.Ex
         Exception? exception,
         Func<TState, Exception?, string> formatter) =>
         inner.Log(logLevel, eventId, state, exception, formatter);
+}
+
+file sealed class FailFirstBindingInvocationService : Agentweaver.Api.Auth.IAutomationInvocationService
+{
+    private int _bindings;
+
+    public int ReleasedUnboundClaims { get; private set; }
+
+    public Task<Agentweaver.Api.Auth.AutomationInvocationClaim?> TryClaimForProjectAsync(
+        ProjectId projectId, string occurrenceKey, string? deliveryId, string? eventName, CancellationToken ct = default) =>
+        Task.FromResult<Agentweaver.Api.Auth.AutomationInvocationClaim?>(new($"test-invocation-{_bindings}"));
+
+    public Task<bool> TryBindBacklogTaskAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(Interlocked.Increment(ref _bindings) != 1);
+
+    public Task<bool> TryDiscardInvocationForTaskAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default)
+    {
+        ReleasedUnboundClaims++;
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> TryPrepareRunAsync(
+        ProjectId expectedProjectId, BacklogTaskId backlogTaskId, string runId, CancellationToken ct = default) =>
+        Task.FromResult(true);
 }
