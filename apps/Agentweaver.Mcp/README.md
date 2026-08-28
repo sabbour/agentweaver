@@ -132,19 +132,24 @@ Tools for managing coordinator runs.
 | `diagnostics_get` | Real-time system diagnostics snapshot (API version, uptime, project/run counts, heartbeat & checkpoint-GC state). |
 | `heartbeat_status` | Current coordinator heartbeat service status (enabled, interval, last tick, service state). |
 
-### GitHub Auth
+### GitHub capabilities
 
-GitHub OAuth tools.
+GitHub App capability tools use one-time, opaque browser handoffs. They never return
+OAuth state, callback cookies, credentials, installation data, repository data, or
+permissions. Repo App access is caller-scoped. Copilot App access is project-scoped and
+requires server-verified Project Owner authority.
 
 Current GitHub MCP helpers cover:
 
 | Tool | Description |
 |------|-------------|
-| `github_status` | Check the current GitHub authentication status. |
-| `github_accounts_list` | List the current GitHub user plus reachable GitHub org accounts. |
-| `github_repos_list` | List repositories for the current GitHub user or a selected reachable org account. |
-| `github_signin` | Start the GitHub device flow sign-in. |
-| `github_signout` | Sign out of GitHub authentication. |
+| `github_repo_app_connect` | Start a caller-scoped Repo App browser handoff. |
+| `github_repo_app_authorization_status` | Poll redacted Repo App authorization state. |
+| `github_repo_app_disconnect` | De-privilege the caller by disconnecting the Repo App. |
+| `project_copilot_app_connect` | Start an Owner-authorized, project-pinned Copilot App browser handoff. |
+| `project_copilot_app_authorization_status` | Poll redacted, caller- and project-scoped Copilot App authorization state. |
+| `project_copilot_app_disconnect` | De-privilege a project by disconnecting the Copilot App. |
+| `project_github_capability_status` | Inspect server-derived, redacted unattended GitHub readiness. |
 
 ### Memory
 

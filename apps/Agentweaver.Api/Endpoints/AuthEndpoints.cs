@@ -118,6 +118,53 @@ app.MapPost("/api/auth/github/repo-app/authorizations", async (
     });
 });
 
+// MCP cannot receive an HttpOnly browser cookie. This endpoint persists it only long enough for
+// the opaque browser handoff URL to set it, then redirects the browser to GitHub.
+app.MapPost("/api/auth/github/repo-app/authorizations/handoff", async (
+    HttpContext httpContext,
+    RepoAppAuthorizationBeginRequest? request,
+    IConfiguration configuration,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var service = new RepoAppUserAuthorizationService(
+        configuration, persistence, secretStore, httpClientFactory);
+    var result = await service.BeginMcpHandoffAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext),
+        httpContext.User,
+        request?.ReturnRouteKey,
+        ct).ConfigureAwait(false);
+    return result.Outcome == RepoAppAuthorizationOutcome.Success
+        ? Results.Ok(new
+        {
+            transaction_id = result.TransactionId,
+            browser_url = result.BrowserUrl,
+            expires_at = result.ExpiresAt,
+        })
+        : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
+});
+
+app.MapGet("/auth/github/repo-app/handoff/{transactionId}", async (
+    HttpContext httpContext,
+    string transactionId,
+    IConfiguration configuration,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var service = new RepoAppUserAuthorizationService(
+        configuration, persistence, secretStore, httpClientFactory);
+    var handoff = await service.TakeMcpBrowserHandoffAsync(transactionId, ct).ConfigureAwait(false);
+    if (handoff is null)
+        return Results.NotFound();
+
+    RepoAppUserAuthorizationService.SetCallbackCookie(httpContext, handoff.Value.CallbackCookie);
+    return Results.Redirect(handoff.Value.AuthorizationUrl);
+}).AllowAnonymous();
+
 // This callback is deliberately outside /api: GitHub navigates the browser here and cannot send
 // its bearer header. The one-time, HttpOnly callback cookie is bound to a server-side Entra subject
 // established at the authenticated begin endpoint; callback input cannot select a subject.

@@ -37,6 +37,30 @@ public sealed class ProjectCopilotBindingServiceTests
     }
 
     [Fact]
+    public async Task McpBrowserHandoff_PinsProjectAndTransfersTheCookieOnlyOnce()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var project = ProjectId.New();
+        await SeedProjectAsync(db, project);
+        roles.SetOwner(project, "owner");
+        var service = CreateService(db, roles, new InMemorySecretStore());
+
+        var begin = await service.BeginMcpHandoffAsync(Human("owner"), HumanPrincipal(), project);
+
+        begin.Outcome.Should().Be(CopilotBindingOutcome.Success);
+        begin.BrowserUrl.Should().Be(
+            $"https://agentweaver.test/auth/github/copilot-app/handoff/{begin.TransactionId}");
+        JsonSerializer.Serialize(begin).Should().NotContain("state").And.NotContain("cookie")
+            .And.NotContain("repository").And.NotContain("installation");
+
+        var handoff = await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!);
+        handoff.Should().NotBeNull();
+        handoff!.Value.AuthorizationUrl.Should().Contain("state=").And.NotContain(begin.TransactionId!);
+        (await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!)).Should().BeNull();
+    }
+
+    [Fact]
     public async Task Complete_RejectsProjectSubstitutionAndOwnerLossWithoutBinding()
     {
         await using var db = await OpenDatabaseAsync();

@@ -63,7 +63,7 @@ public sealed class McpApiException : McpException
             return new McpErrorPayload(
                 statusCode,
                 "Not signed in.",
-                "Call github_signin then session_start before retrying.",
+                "Sign in to Agentweaver, then retry.",
                 normalizedMessage,
                 normalizedPath);
         }

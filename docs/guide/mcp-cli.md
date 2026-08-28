@@ -11,12 +11,10 @@ Use this guide when driving Agentweaver from Copilot CLI, Claude Desktop, or ano
 The hosted MCP endpoint is `https://<your-agentweaver-host>/mcp`. In the web app,
 open **Account settings → MCP clients** to copy the URL and a client-specific configuration.
 
-The MCP server accepts the same bearer-token model as Agentweaver's web/API session.
-Agentweaver intentionally does not render the browser session token in the UI. Use an
-existing GitHub bearer token instead—for example, obtain the token used by GitHub CLI
-with `gh auth token`—or let a client that supports MCP OAuth complete its interactive
-sign-in flow. Set it in your client environment as `AGENTWEAVER_TOKEN`; do not commit it
-to a configuration file.
+The MCP server accepts the same authenticated Agentweaver caller context as the web/API
+session. Microsoft Entra is the product sign-in boundary; GitHub App capability is connected
+separately, not used as an application identity. Set a deployment-authorized caller bearer in
+the client environment as `AGENTWEAVER_TOKEN`; do not commit it to a configuration file.
 
 ### Local (stdio)
 
@@ -33,7 +31,7 @@ attributes calls to you and enforces project ownership:
       "args": ["run", "--project", "apps/Agentweaver.Mcp", "--no-build"],
       "env": {
         "AGENTWEAVER_API_URL": "http://localhost:5000",
-        // Your own bearer — e.g. `gh auth token`. Do NOT use the shared internal service key.
+        // Your own authenticated caller bearer. Do NOT use the shared internal service key.
         "AGENTWEAVER_TOKEN": "${input:agentweaver-token}"
       }
     }
@@ -86,7 +84,7 @@ Add this to your `mcp.json`:
     {
       "id": "agentweaver-token",
       "type": "promptString",
-      "description": "Your existing Agentweaver/GitHub bearer token",
+      "description": "Your authenticated Agentweaver caller bearer",
       "password": true
     }
   ]
@@ -111,13 +109,20 @@ Add this to `.copilot/mcp-config.json` (or `~/.copilot/mcp-config.json`):
 }
 ```
 
-## Auth-first
+## Sign-in and GitHub capabilities
 
-Before repo-backed or run-backed work, verify auth:
+Sign in to Agentweaver as a human Entra subject before using MCP. Connect GitHub capabilities
+separately and explicitly:
 
-`github_status → [if signed out] github_signin → session_start`
+`github_repo_app_connect → open browser_url → github_repo_app_authorization_status`
 
-If a call fails with `401`, do not show the raw error. Re-check auth, sign in, then retry.
+For unattended project work, a Project Owner also completes
+`project_copilot_app_connect → open browser_url → project_copilot_app_authorization_status`
+and verifies `project_github_capability_status`. Handoff and polling return only opaque
+transaction identifiers and lifecycle state; credentials, OAuth state, installations,
+repositories, and permissions never appear in MCP output.
+
+If a call fails with `401`, do not show the raw error. Sign in to Agentweaver, then retry.
 
 ## Recommended entry points
 
@@ -144,11 +149,11 @@ If a tool returns `-32001 Request timed out`:
 
 Manual end-to-end path:
 
-`github_signin → session_start → project_list (or project_create) → list_blueprints → coordinator_start → run_status (poll) → [coordinator_steer if needed] → [run_show_artifacts → run_get_file → run_review if gated]`
+`project_list (or project_create) → list_blueprints → coordinator_start → run_status (poll) → [coordinator_steer if needed] → [run_show_artifacts → run_get_file → run_review if gated]`
 
 Common one-call path:
 
-`github_signin → session_start → run_task`
+`run_task`
 
 ## Backlog flow
 
@@ -172,7 +177,7 @@ npm run test:mcp-smoke
 ```
 
 The test discovers the live MCP tools, verifies their capability contract, checks
-GitHub sign-in, creates or reuses a project, submits a minimal run, polls for at
+Agentweaver sign-in, creates or reuses a project, submits a minimal run, polls for at
 most five minutes, confirms an outcome gate when needed, requires a successful
 terminal state and at least one artifact, then archives the run. Each failure
 names the workflow step and MCP tool that failed.

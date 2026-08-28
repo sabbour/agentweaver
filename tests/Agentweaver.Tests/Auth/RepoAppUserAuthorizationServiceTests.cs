@@ -45,6 +45,30 @@ public sealed class RepoAppUserAuthorizationServiceTests
     }
 
     [Fact]
+    public async Task McpBrowserHandoff_TransfersCallbackCookieOnceWithoutExposingOAuthState()
+    {
+        await using var database = await OpenDatabaseAsync();
+        var secrets = new InMemorySecretStore();
+        var service = CreateService(database, secrets, new StubHttpClientFactory());
+
+        var begin = await service.BeginMcpHandoffAsync(Human("entra"), HumanPrincipal(), "settings");
+
+        begin.Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+        begin.TransactionId.Should().HaveLength(43);
+        begin.BrowserUrl.Should().Be(
+            $"https://agentweaver.test/auth/github/repo-app/handoff/{begin.TransactionId}");
+        System.Text.Json.JsonSerializer.Serialize(begin).Should()
+            .NotContain("state").And.NotContain("cookie").And.NotContain("code_challenge");
+
+        var handoff = await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!);
+        handoff.Should().NotBeNull();
+        handoff!.Value.AuthorizationUrl.Should().Contain("state=").And.NotContain(begin.TransactionId!);
+        handoff.Value.CallbackCookie.Should().NotBeNullOrWhiteSpace();
+        (await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!)).Should().BeNull(
+            "a callback cookie is transferred only to the first browser opening the opaque handoff URL");
+    }
+
+    [Fact]
     public async Task Callback_RejectsWrongMissingCookieAndWrongSubjectWithoutRedeeming()
     {
         await using var database = await OpenDatabaseAsync();

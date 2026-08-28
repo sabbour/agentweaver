@@ -74,6 +74,61 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
         return Task.CompletedTask;
     });
 
+// MCP receives only this opaque browser handoff; the OAuth state and callback cookie stay in the API.
+app.MapPost("/api/projects/{id}/github/copilot/authorizations/handoff", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    if (await projectStore.GetAsync(projectId, ct).ConfigureAwait(false) is null)
+        return Results.NotFound();
+
+    var service = new ProjectCopilotBindingService(
+        httpContext.RequestServices.GetRequiredService<IConfiguration>(),
+        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+    var result = await service.BeginMcpHandoffAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+    return result.Outcome == CopilotBindingOutcome.Success
+        ? Results.Ok(new
+        {
+            transaction_id = result.TransactionId,
+            browser_url = result.BrowserUrl,
+            expires_at = result.ExpiresAt,
+        })
+        : CopilotBindingFailure(result.Outcome);
+})
+    .WithName("BeginProjectCopilotAuthorizationMcpHandoff")
+    .WithTags("Projects", "GitHub Copilot");
+
+app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
+    HttpContext httpContext,
+    string transactionId,
+    IConfiguration configuration,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    var service = new ProjectCopilotBindingService(
+        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration);
+    var handoff = await service.TakeMcpBrowserHandoffAsync(transactionId, ct).ConfigureAwait(false);
+    if (handoff is null)
+        return Results.NotFound();
+
+    ProjectCopilotBindingService.SetCallbackCookie(httpContext, handoff.Value.CallbackCookie);
+    return Results.Redirect(handoff.Value.AuthorizationUrl);
+}).AllowAnonymous();
+
 // This callback uses only the one-time cookie issued at the authenticated begin endpoint. It never
 // accepts a project id or Entra subject from GitHub; both remain pinned in the transaction.
 app.MapGet("/auth/github/copilot-app/callback", async (

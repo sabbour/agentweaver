@@ -38,8 +38,8 @@ There are two entry points:
   Agentweaver server trusts); stdio transport has no such requirement since it
   never leaves the local subprocess.
 - Authentication: `AGENTWEAVER_TOKEN`, `GITHUB_TOKEN`, or `--token`. The smoke
-  checks `github_status` and invokes `github_signin` when the server has no
-  existing GitHub session.
+  assumes GitHub capability authorization is supplied out of band; it does not
+  automate a one-time browser handoff.
 - Project selection: `--project-id` / `AGENTWEAVER_SMOKE_PROJECT_ID` takes
   precedence. Otherwise the smoke reuses `--project-name` /
   `AGENTWEAVER_SMOKE_PROJECT_NAME`, falls back to the first existing project,

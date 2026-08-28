@@ -91,11 +91,6 @@ export async function runSmoke({
   let runId = null;
   let primaryError = null;
   try {
-    const auth = await callStep(client, report, 'auth-status', 'GitHub sign-in check');
-    if (auth?.status !== 'signed_in') {
-      await callStep(client, report, 'auth-signin', 'GitHub sign-in');
-    }
-
     const project = await resolveProject(client, report, { projectId, projectName, workingDirectory, blueprintId });
     const submit = await callStep(client, report, 'submit-run', 'run submission', {
       project_id: project.id,

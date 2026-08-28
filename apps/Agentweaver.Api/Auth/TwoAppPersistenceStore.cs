@@ -13,6 +13,17 @@ namespace Agentweaver.Api.Auth;
 public enum AuthorizationClaimResult { Claimed, Invalid, Consumed }
 public enum BindingWriteResult { Bound, Unavailable }
 public enum InvocationClaimResult { Claimed, Duplicate }
+
+/// <summary>
+/// Internal-only authorization state used to transfer the callback cookie to a browser opened
+/// from MCP. OAuth state and callback-cookie material never leave the API process.
+/// </summary>
+internal sealed record McpBrowserHandoffTransaction(
+    string State,
+    string PkceVerifierReference,
+    DateTimeOffset ExpiresAt,
+    GitHubAuthorizationStatus Status);
+
 public sealed record SnapshotRef
 {
     public SnapshotRef(string value)
@@ -174,6 +185,27 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     internal Task<CopilotAuthorizationTransaction?> GetCopilotAuthorizationTransactionByIdAsync(string id, string subject, CancellationToken ct = default) =>
         db.GitHubAuthorizations.AsNoTracking().Where(x => x.ExternalTransactionId == id && x.EntraObjectId == subject && x.AppKind == GitHubAppKind.Copilot && x.Purpose == GitHubAuthorizationPurpose.InteractiveCopilot && x.ProjectId != null)
             .Select(x => new CopilotAuthorizationTransaction(x.State, x.EntraObjectId, x.ProjectId!, x.ExpiresAtUnixMilliseconds, x.ReturnRouteKey, x.PkceVerifierProtected, x.CallbackCookieHash)).SingleOrDefaultAsync(ct);
+    internal Task<McpBrowserHandoffTransaction?> GetMcpBrowserHandoffTransactionAsync(
+        string transactionId,
+        GitHubAppKind appKind,
+        GitHubAuthorizationPurpose purpose,
+        CancellationToken ct = default)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return
+        db.GitHubAuthorizations.AsNoTracking()
+            .Where(x => x.ExternalTransactionId == transactionId &&
+                        x.AppKind == appKind &&
+                        x.Purpose == purpose &&
+                        x.Status == GitHubAuthorizationStatus.Pending &&
+                        x.ExpiresAtUnixMilliseconds >= now)
+            .Select(x => new McpBrowserHandoffTransaction(
+                x.State,
+                x.PkceVerifierProtected,
+                DateTimeOffset.FromUnixTimeMilliseconds(x.ExpiresAtUnixMilliseconds),
+                x.Status))
+            .SingleOrDefaultAsync(ct);
+    }
 
     public async Task<AuthorizationClaimResult> ClaimAuthorizationByTransactionIdAsync(
         string transactionId,
