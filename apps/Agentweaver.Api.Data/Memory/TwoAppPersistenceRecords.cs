@@ -11,7 +11,21 @@ public enum AutomationInvocationOutcome { Claimed, Duplicate, Completed, Failed 
 public enum GitHubAuditActorKind { HumanEntraSubject, GitHubWebhook }
 public enum GitHubAuditAction { AuthorizationCompleted, BindingChanged, InstallationChanged, GrantChanged, AutomationActivated, AutomationInvoked, RunSnapshotValidated, CapabilitySnapshotMigrated }
 public enum GitHubAuditOutcome { Succeeded, Denied, Failed }
-public enum GitHubAuditReasonCode { None, BindingUnavailable, InstallationUnavailable, TransactionInvalid, TransactionConsumed, RotationMismatch, DuplicateDelivery, SnapshotMigrationUnavailable }
+public enum GitHubAuditReasonCode
+{
+    None,
+    BindingUnavailable,
+    InstallationUnavailable,
+    TransactionInvalid,
+    TransactionConsumed,
+    RotationMismatch,
+    DuplicateDelivery,
+    SnapshotMigrationUnavailable,
+    HumanEntraSubjectRequired,
+    ProjectOwnerRequired,
+    ActivationPrerequisiteAmbiguous,
+    ActivationConflict,
+}
 public enum GitHubRepositorySelectionCredentialKind { EntraRepoApp, GitHubLegacy }
 
 public sealed class GitHubAuthorizationRecord
@@ -135,6 +149,12 @@ public sealed class AutomationActivationRecord
     public string ProjectId { get; set; } = "";
     public long InstallationId { get; set; }
     public long RepositoryId { get; set; }
+    /// <summary>Non-reversible digest of the exact provider-owned repository grant.</summary>
+    public string? RepositoryGrantDigest { get; set; }
+    /// <summary>Opaque identity of the exact project-scoped Copilot binding.</summary>
+    public string? CopilotBindingId { get; set; }
+    /// <summary>Non-reversible digest of the exact Copilot binding grant.</summary>
+    public string? CopilotBindingGrantDigest { get; set; }
     public string AutomationKey { get; set; } = "";
     public AutomationActivationStatus Status { get; set; }
     public DateTimeOffset ActivatedAt { get; set; }
