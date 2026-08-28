@@ -2,7 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SkillsPage } from '../pages/SkillsPage';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import {
@@ -781,28 +781,27 @@ describe('SkillsPage — blueprint defaults', () => {
     renderPage();
     const trigger = await screen.findByRole('button', { name: 'Preview blueprint defaults' });
     await user.click(trigger);
-    // A longer timeout guards against full-suite parallel-worker CPU
-    // contention delaying Fluent UI's dialog mount/focus-trap wiring (same
-    // rationale as the CoordinatorRunPage dialog tests).
-    await screen.findByRole('dialog', {}, { timeout: 4000 });
+    const escapeDialog = await screen.findByRole('dialog');
 
+    const escapeDialogRemoved = waitForElementToBeRemoved(escapeDialog);
     await user.keyboard('{Escape}');
+    await escapeDialogRemoved;
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).toBeNull();
       expect(document.activeElement).toBe(trigger);
       expect((trigger as HTMLButtonElement).disabled).toBe(false);
-    }, { timeout: 4000 });
+    });
 
     await user.click(trigger);
-    await screen.findByRole('dialog', {}, { timeout: 4000 });
+    const backdropDialog = await screen.findByRole('dialog');
     const backdrop = document.querySelector<HTMLElement>('[class*="fui-DialogSurface__backdrop"]');
     expect(backdrop).toBeTruthy();
+    const backdropDialogRemoved = waitForElementToBeRemoved(backdropDialog);
     fireEvent.click(backdrop!);
 
+    await backdropDialogRemoved;
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).toBeNull();
       expect(document.activeElement).toBe(trigger);
-    }, { timeout: 4000 });
+    });
   });
 
   it('cancels an in-flight preview when the dialog closes', async () => {
