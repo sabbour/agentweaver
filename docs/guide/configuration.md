@@ -94,6 +94,22 @@ after GitHub permissions are corrected.
 Installation tokens are scoped to Agentweaver's server-declared unattended repository
 permissions and never inherit unrelated installation permissions.
 
+#### Purpose-bound broker
+
+The trusted run lifecycle captures and revalidates immutable, purpose-specific snapshots for
+root launches, child launches, retries, and resumes. Interactive repository snapshots are bound
+to the initiating Entra subject and exact live Repo App user authorization; they do **not**
+require an installation or repository grant. Unattended repository snapshots remain bound to an
+active installation, canonical repository grant, and unchanged permission digest. No API, MCP,
+or sandbox route exposes the broker. Repository and Copilot adapter delivery is owned by #947;
+this broker layer never configures a sandbox or model process.
+
+Two-App credential reads use current secret versions only. Revocation writes a tombstone before
+deleting the current value. Azure Key Vault soft-delete and purge protection can retain older
+provider versions for the configured retention period; this is an accepted recovery risk,
+mitigated by retention policy and least-privilege Key Vault RBAC that forbids versioned reads
+outside the API credential vault.
+
 #### Project Copilot App binding
 
 An Entra-authenticated **explicit Project Owner** starts a project-specific Copilot App

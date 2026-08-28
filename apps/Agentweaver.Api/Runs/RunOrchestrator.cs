@@ -1,4 +1,5 @@
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -155,6 +156,7 @@ public sealed class RunOrchestrator
 
     public async Task StartRunAsync(Run run, CancellationToken ct)
     {
+        await PrepareGitHubCapabilitySnapshotsAsync(run, ct).ConfigureAwait(false);
         WorktreeInfo worktreeInfo;
         try
         {
@@ -243,6 +245,8 @@ public sealed class RunOrchestrator
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
 
+        await PrepareGitHubCapabilitySnapshotsAsync(run, ct).ConfigureAwait(false);
+
         // Provision a per-child worktree. For dependent subtasks the dispatch loop sets
         // OriginatingBranch to the coordinator integration branch, which already contains completed
         // dependency outputs; independent siblings never share a mutable git index.
@@ -322,6 +326,7 @@ public sealed class RunOrchestrator
     /// </summary>
     public async Task StartReservedProjectRunAsync(Run run, CancellationToken ct)
     {
+        await PrepareGitHubCapabilitySnapshotsAsync(run, ct).ConfigureAwait(false);
         WorktreeInfo worktreeInfo;
         try
         {
@@ -427,6 +432,8 @@ public sealed class RunOrchestrator
         if (string.IsNullOrEmpty(run.WorktreeBranch))
             throw new InvalidOperationException($"Run {run.Id} has no worktree branch; cannot start revision.");
 
+        await PrepareGitHubCapabilitySnapshotsAsync(run, ct).ConfigureAwait(false);
+
         // Reuse the existing stream entry so prior events are preserved for replay.
         var entry = _streamStore.Get(run.Id.ToString())
             ?? _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
@@ -491,6 +498,8 @@ public sealed class RunOrchestrator
         if (string.IsNullOrWhiteSpace(feedback.PriorWorktreeBranch))
             throw new InvalidOperationException(
                 $"Handoff for run {newAgentRun.Id} requires a non-empty PriorWorktreeBranch to preserve prior work.");
+
+        await PrepareGitHubCapabilitySnapshotsAsync(newAgentRun, ct).ConfigureAwait(false);
 
         // Prompt-ready accumulated guidance (all prior rejection rounds). Prefer the coordinator's
         // deterministic rendering; fall back to rendering the bundle if the producer left it null.
@@ -644,6 +653,18 @@ public sealed class RunOrchestrator
             _registry.Abandon(runId);
         else
             runCts.Dispose();
+    }
+
+    private async Task PrepareGitHubCapabilitySnapshotsAsync(Run run, CancellationToken ct)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var lifecycle = scope.ServiceProvider.GetService<RunGitHubCapabilitySnapshotLifecycle>();
+        if (lifecycle is null)
+            return;
+
+        if (!await lifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
     }
 
     private async Task<Microsoft.Agents.AI.Workflows.StreamingRun> StartWorkflowOrFailAsync(

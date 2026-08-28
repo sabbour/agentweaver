@@ -260,6 +260,10 @@ builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
 builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
 builder.Services.AddScoped<TwoAppPersistenceStore>();
+builder.Services.AddScoped<ITwoAppCredentialVault, TwoAppCredentialVault>();
+builder.Services.AddScoped<Agentweaver.Api.Webhooks.RepoAppInstallationTokenService>();
+builder.Services.AddScoped<GitHubCapabilityBroker>();
+builder.Services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
 builder.Services.AddScoped<ProjectGitHubIdentityService>();
 builder.Services.AddScoped<LinkedGitHubAccountService>();
 builder.Services.AddSingleton<Agentweaver.Api.Webhooks.IGitHubWebhookProvisioningService,

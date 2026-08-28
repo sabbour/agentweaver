@@ -1,6 +1,7 @@
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
 using FluentAssertions;
+using System.Reflection;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -45,6 +46,75 @@ public sealed class TwoAppCredentialArchitectureTests
         methods[0].GetParameters().Should().NotContain(parameter => parameter.IsOptional);
         File.ReadAllText(Path.Combine(FindRepositoryRoot(), "apps", "Agentweaver.Api", "Auth", "GitHubCapabilityBroker.cs"))
             .Should().NotContain("IGitHubTokenScopeProvider").And.NotContain(".Resolve");
+    }
+
+    [Fact]
+    public void InternalBrokerAuthorization_RequiresPurposeAndOpaqueSnapshot()
+    {
+        var authorize = typeof(GitHubCapabilityBroker).GetMethod(
+            "TryAuthorizeAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+
+        authorize.Should().NotBeNull();
+        authorize!.GetParameters().Take(2).Select(parameter => parameter.ParameterType)
+            .Should().Equal(typeof(GitHubCapabilityPurpose), typeof(SnapshotRef));
+        authorize.GetParameters().Should().NotContain(parameter => parameter.IsOptional);
+    }
+
+    [Theory]
+    [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.RepositoryRead, true)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.RepositoryWrite, true)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.CopilotInference, false)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveCopilot, GitHubCapabilityOperation.RepositoryRead, false)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveCopilot, GitHubCapabilityOperation.RepositoryWrite, false)]
+    [InlineData(GitHubCapabilityPurpose.InteractiveCopilot, GitHubCapabilityOperation.CopilotInference, true)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedRepository, GitHubCapabilityOperation.RepositoryRead, true)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedRepository, GitHubCapabilityOperation.RepositoryWrite, true)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedRepository, GitHubCapabilityOperation.CopilotInference, false)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedCopilot, GitHubCapabilityOperation.RepositoryRead, false)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedCopilot, GitHubCapabilityOperation.RepositoryWrite, false)]
+    [InlineData(GitHubCapabilityPurpose.UnattendedCopilot, GitHubCapabilityOperation.CopilotInference, true)]
+    public void PurposeToOperationMapping_IsClosed(
+        GitHubCapabilityPurpose purpose,
+        GitHubCapabilityOperation operation,
+        bool expected) =>
+        GitHubCapabilityBroker.IsOperationAllowed(purpose, operation).Should().Be(expected);
+
+    [Fact]
+    public void SnapshotLifecycleIsRunBoundAndDoesNotReachSandboxCredentialDelivery()
+    {
+        var root = FindRepositoryRoot();
+        var lifecycle = File.ReadAllText(Path.Combine(
+            root, "apps", "Agentweaver.Api", "Auth", "RunGitHubCapabilitySnapshotLifecycle.cs"));
+
+        lifecycle.Should().Contain("GitHubCapabilityBroker")
+            .And.Contain("TryFenceAsync")
+            .And.NotContain("KubernetesSandboxExecutor")
+            .And.NotContain("AgentHost")
+            .And.NotContain("IGitHubTokenStore")
+            .And.NotContain("IGitHubAccessTokenProvider");
+
+        var orchestrator = File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Runs", "RunOrchestrator.cs"));
+        orchestrator
+            .Should().Contain("PrepareGitHubCapabilitySnapshotsAsync(run, ct)")
+            .And.Contain("PrepareGitHubCapabilitySnapshotsAsync(newAgentRun, ct)");
+        File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Coordinator", "CoordinatorRunService.cs"))
+            .Should().Contain("PrepareGitHubCapabilitySnapshotsAsync(run, _appStopping)");
+        File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Program.cs"))
+            .Should().Contain("AddScoped<RunGitHubCapabilitySnapshotLifecycle>");
+        File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Runs", "WorkflowRestartService.cs"))
+            .Should().Contain("PrepareForLaunchAsync(run, ct)");
+    }
+
+    [Fact]
+    public void BrowseAuthorityPersistenceRemainsOwnedByProjectCreationFlow()
+    {
+        var root = FindRepositoryRoot();
+        Directory.EnumerateFiles(Path.Combine(root, "apps"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") &&
+                           !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+            .Where(path => File.ReadAllText(path).Contains("GitHubRepositoryBrowseAuthority", StringComparison.Ordinal))
+            .Should().BeEmpty();
     }
 
     private static bool ContainsReservedCredentialPrefix(string source) =>

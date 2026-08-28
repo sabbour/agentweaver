@@ -40,7 +40,12 @@ public sealed record FencedGitHubCapabilitySnapshot(
     string ProjectId,
     long? RepositoryId,
     long? InstallationId,
-    string GrantDigest);
+    string GrantDigest)
+{
+    // This is an in-process broker-to-vault implementation detail. It is never serializable or
+    // visible outside this assembly's credential boundary.
+    internal TwoAppCredentialLocator? CredentialLocator { get; init; }
+}
 
 public sealed record CapabilitySnapshotBackfillResult(int Migrated, int Unavailable);
 internal sealed record RepoAppAuthorizationTransaction(
@@ -84,7 +89,19 @@ internal sealed class RepoAppCredentialLease(
 /// Persistence boundary for the two GitHub App model. It accepts only opaque credential
 /// references and exposes guarded state transitions rather than mutable entity access.
 /// </summary>
-public sealed class TwoAppPersistenceStore(MemoryDbContext db)
+/// <remarks>
+/// <paramref name="projectStore"/> is the authoritative source for a project's persisted origin
+/// (<see cref="IsIntentionallyBlankOriginProjectAsync"/>). It is intentionally NOT the EF
+/// <c>db.Projects</c> set: under the default SQLite provider, <see cref="MemoryDbContext"/> lives
+/// in a separate companion database file (<c>memory.db</c>) from the main operational database
+/// that <c>SqliteProjectStore</c> writes real project rows to (see
+/// <c>SqliteMemoryDbPathResolver</c>), so <c>db.Projects</c> is structurally always empty for real
+/// projects under SQLite. <paramref name="projectStore"/> is optional only so unit tests exercising
+/// unrelated persistence methods (authorization claims, Copilot bindings, invocation/lifecycle
+/// delivery idempotency, etc.) do not need to wire one; any code path that actually needs to
+/// classify a project's origin requires it and fails closed if it is absent.
+/// </remarks>
+public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? projectStore = null)
 {
     private static readonly Regex CredentialPattern = new(
         @"(?:gh[ups]_|github_pat_|-----BEGIN [A-Z ]+-----|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.)",
@@ -622,17 +639,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
                                x.CredentialReference == snapshot.CredentialReference &&
                                x.CredentialVersion == snapshot.CredentialVersion &&
                                x.GrantDigest == snapshot.GrantDigest &&
-                               x.RevokedAt == null &&
-                               (snapshot.Purpose != GitHubCapabilityPurpose.InteractiveRepository ||
-                                db.GitHubRepositoryGrants.Any(grant =>
-                                    grant.ProjectId == snapshot.ProjectId &&
-                                    grant.RepositoryId == snapshot.RepositoryId &&
-                                    grant.RevokedAt == null &&
-                                    db.GitHubInstallations.Any(installation =>
-                                        installation.InstallationId == grant.InstallationId &&
-                                        installation.AppKind == GitHubAppKind.Repo &&
-                                        installation.ProjectId == snapshot.ProjectId &&
-                                        installation.RevokedAt == null))), ct).ConfigureAwait(false),
+                               x.RevokedAt == null, ct).ConfigureAwait(false),
             GitHubCapabilitySnapshotSourceKind.RepositoryGrant => await db.GitHubRepositoryGrants.AsNoTracking()
                 .AnyAsync(x => x.InstallationId == snapshot.InstallationId &&
                                x.RepositoryId == snapshot.RepositoryId &&
@@ -657,7 +664,95 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
         return !isLive
             ? null
             : new(snapshotRef, snapshot.Purpose, snapshot.AppKind, snapshot.ProjectId,
-                snapshot.RepositoryId, snapshot.InstallationId, snapshot.GrantDigest);
+                snapshot.RepositoryId, snapshot.InstallationId, snapshot.GrantDigest)
+            {
+                CredentialLocator = snapshot.SourceKind switch
+                {
+                    GitHubCapabilitySnapshotSourceKind.UserAuthorization =>
+                        TwoAppCredentialLocator.ForRepoAppUser(snapshot.CredentialReference!),
+                    GitHubCapabilitySnapshotSourceKind.CopilotBinding =>
+                        TwoAppCredentialLocator.ForCopilotProject(snapshot.CredentialReference!),
+                    _ => null,
+                },
+            };
+    }
+
+    internal Task<List<RunGitHubCapabilitySnapshotRecord>> GetCapabilitySnapshotsAsync(
+        string runId,
+        CancellationToken ct = default) =>
+        db.RunGitHubCapabilitySnapshots.AsNoTracking()
+            .Where(snapshot => snapshot.RunId == runId)
+            .OrderBy(snapshot => snapshot.Purpose)
+            .ToListAsync(ct);
+
+    /// <summary>
+    /// Atomically creates fresh opaque references for a child or retry from the exact immutable
+    /// parent snapshot rows. Existing target snapshots are never replaced. An empty parent set is
+    /// only accepted when the project's persisted origin is explicitly
+    /// <see cref="ProjectOriginKind.Blank"/>; otherwise a run that should have inherited real
+    /// capability protection is denied rather than silently launched with none. A missing or
+    /// unparseable <paramref name="projectId"/> can never prove a blank origin — it is denied
+    /// fail-closed rather than treated as an automatic pass. This is the persistence half of the
+    /// fix for the proven defect where a null <c>Run.ProjectId</c> let an empty-source child/retry
+    /// launch with zero GitHub capability snapshots.
+    /// </summary>
+    internal async Task<bool> TryInheritCapabilitySnapshotsAsync(
+        string sourceRunId,
+        string targetRunId,
+        string? projectId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(projectId))
+            return false;
+
+        var source = await GetCapabilitySnapshotsAsync(sourceRunId, ct).ConfigureAwait(false);
+        if (source.Count == 0)
+        {
+            return await IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false);
+        }
+
+        var target = await GetCapabilitySnapshotsAsync(targetRunId, ct).ConfigureAwait(false);
+        if (target.Count != 0)
+            return target.Count == source.Count &&
+                target.Select(snapshot => snapshot.Purpose).SequenceEqual(source.Select(snapshot => snapshot.Purpose));
+
+        var inherited = source.Select(snapshot => new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value,
+            RunId = targetRunId,
+            Purpose = snapshot.Purpose,
+            AppKind = snapshot.AppKind,
+            SourceKind = snapshot.SourceKind,
+            ProjectId = snapshot.ProjectId,
+            EntraObjectId = snapshot.EntraObjectId,
+            SourceAuthorizationId = snapshot.SourceAuthorizationId,
+            SourceBindingId = snapshot.SourceBindingId,
+            InstallationId = snapshot.InstallationId,
+            RepositoryId = snapshot.RepositoryId,
+            CredentialReference = snapshot.CredentialReference,
+            CredentialVersion = snapshot.CredentialVersion,
+            GrantDigest = snapshot.GrantDigest,
+            CapturedAt = snapshot.CapturedAt,
+            SnapshotExpiresAt = snapshot.SnapshotExpiresAt,
+        }).ToList();
+
+        foreach (var snapshot in inherited)
+            EnsureCapabilitySnapshot(snapshot);
+
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            db.RunGitHubCapabilitySnapshots.AddRange(inherited);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            return false;
+        }
     }
 
     /// <summary>
@@ -666,11 +761,14 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
     /// from a replacement authorization or binding.
     /// </summary>
     public async Task<CapabilitySnapshotBackfillResult> BackfillCapabilitySnapshotsAsync(
+        string? runId = null,
         CancellationToken ct = default)
     {
         var migrated = 0;
         var unavailable = 0;
-        var legacySnapshots = await db.RunGitHubIdentitySnapshots.AsNoTracking().ToListAsync(ct)
+        var legacySnapshots = await db.RunGitHubIdentitySnapshots.AsNoTracking()
+            .Where(snapshot => runId == null || snapshot.RunId == runId)
+            .ToListAsync(ct)
             .ConfigureAwait(false);
         foreach (var legacy in legacySnapshots)
         {
@@ -694,6 +792,199 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             migrated++;
         }
         return new(migrated, unavailable);
+    }
+
+    /// <summary>
+    /// True when <paramref name="projectId"/>'s persisted origin is explicitly
+    /// <see cref="ProjectOriginKind.Blank"/>. This is the sole authoritative signal for a project
+    /// that legitimately requires zero capability snapshots. History records (installations,
+    /// grants, bindings) are NOT used here: a <see cref="ProjectOriginKind.FromGitHub"/> project
+    /// that has never completed onboarding, or whose history rows were all removed/never written,
+    /// must still fail closed rather than be classified as blank. A project that cannot be found,
+    /// or whose id is not a well-formed <see cref="ProjectId"/>, is treated as not blank (fail
+    /// closed), since origin cannot be proven. Reads through <see cref="IProjectStore"/> (not the EF
+    /// <c>db.Projects</c> set) so the check is correct for both the SQLite and Postgres providers;
+    /// see the remarks on <see cref="TwoAppPersistenceStore"/> for why the EF set cannot be used here.
+    /// </summary>
+    internal async Task<bool> IsIntentionallyBlankOriginProjectAsync(
+        string projectId,
+        CancellationToken ct = default)
+    {
+        if (projectStore is null)
+            throw new InvalidOperationException(
+                "TwoAppPersistenceStore requires an IProjectStore to classify project origin; none was supplied.");
+        if (!ProjectId.TryParse(projectId, out var id))
+            return false;
+
+        var project = await projectStore.GetAsync(id, ct).ConfigureAwait(false);
+        return project is not null && project.Origin.Kind == ProjectOriginKind.Blank;
+    }
+
+    /// <summary>
+    /// Trusted production root-capture seam. Selects and insert-only creates every currently live
+    /// v2 capability snapshot directly from authoritative sources for a brand-new root run; it
+    /// never reads the finite v1 legacy table. A project whose persisted origin is explicitly
+    /// blank captures zero snapshots by design. A <see cref="ProjectOriginKind.FromGitHub"/>
+    /// project that currently resolves none of the four purposes is reported unavailable so the
+    /// caller fails the launch closed instead of silently proceeding with no capability
+    /// protection.
+    /// </summary>
+    public async Task<CapabilitySnapshotBackfillResult> CaptureRootCapabilitySnapshotsAsync(
+        string runId,
+        string projectId,
+        string entraObjectId,
+        CancellationToken ct = default)
+    {
+        var resolved = new List<RunGitHubCapabilitySnapshotRecord>();
+        var interactiveRepository = await TryResolveInteractiveRepositorySnapshotAsync(runId, projectId, entraObjectId, ct)
+            .ConfigureAwait(false);
+        if (interactiveRepository is not null)
+            resolved.Add(interactiveRepository);
+        var interactiveCopilot = await TryResolveInteractiveCopilotSnapshotAsync(runId, projectId, entraObjectId, ct)
+            .ConfigureAwait(false);
+        if (interactiveCopilot is not null)
+            resolved.Add(interactiveCopilot);
+        var unattendedRepository = await TryResolveUnattendedRepositorySnapshotAsync(runId, projectId, ct)
+            .ConfigureAwait(false);
+        if (unattendedRepository is not null)
+            resolved.Add(unattendedRepository);
+        var unattendedCopilot = await TryResolveUnattendedCopilotSnapshotAsync(runId, projectId, ct)
+            .ConfigureAwait(false);
+        if (unattendedCopilot is not null)
+            resolved.Add(unattendedCopilot);
+
+        if (resolved.Count == 0)
+        {
+            return await IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false)
+                ? new CapabilitySnapshotBackfillResult(0, 0)
+                : new CapabilitySnapshotBackfillResult(0, 1);
+        }
+
+        // All-or-nothing: a partial commit would leave GetCapabilitySnapshotsAsync(runId) non-empty
+        // after a failed attempt, which would make a later resume/retry of this exact run skip
+        // capture entirely and silently fence only the partial set. Roll back completely instead,
+        // so a subsequent attempt re-resolves the full live-source set from scratch.
+        foreach (var snapshot in resolved)
+        {
+            EnsureSafe(snapshot);
+            EnsureCapabilitySnapshot(snapshot);
+        }
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            db.RunGitHubCapabilitySnapshots.AddRange(resolved);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return new CapabilitySnapshotBackfillResult(resolved.Count, 0);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            return new CapabilitySnapshotBackfillResult(0, 1);
+        }
+    }
+
+    private Task<GitHubAppAuthorizationRecord?> FindLiveRepoUserAuthorizationAsync(
+        string entraObjectId,
+        CancellationToken ct) =>
+        db.GitHubAppAuthorizations.AsNoTracking().SingleOrDefaultAsync(x =>
+            x.EntraObjectId == entraObjectId &&
+            x.AppKind == GitHubAppKind.Repo &&
+            x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+            x.RevokedAt == null, ct);
+
+    private async Task<RunGitHubCapabilitySnapshotRecord?> TryResolveInteractiveRepositorySnapshotAsync(
+        string runId,
+        string projectId,
+        string entraObjectId,
+        CancellationToken ct)
+    {
+        var authorization = await FindLiveRepoUserAuthorizationAsync(entraObjectId, ct).ConfigureAwait(false);
+        if (authorization is null)
+            return null;
+        var grants = await db.GitHubRepositoryGrants.AsNoTracking()
+            .Where(x => x.ProjectId == projectId && x.RevokedAt == null)
+            .ToListAsync(ct).ConfigureAwait(false);
+        var grant = grants.OrderByDescending(x => x.GrantedAt).FirstOrDefault();
+        if (grant is null)
+            return null;
+        return new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
+            Purpose = GitHubCapabilityPurpose.InteractiveRepository, AppKind = GitHubAppKind.Repo,
+            SourceKind = GitHubCapabilitySnapshotSourceKind.UserAuthorization, ProjectId = projectId,
+            EntraObjectId = entraObjectId, SourceAuthorizationId = authorization.Id, RepositoryId = grant.RepositoryId,
+            CredentialReference = authorization.CredentialReference, CredentialVersion = authorization.CredentialVersion,
+            GrantDigest = authorization.GrantDigest, CapturedAt = DateTimeOffset.UtcNow,
+        };
+    }
+
+    private async Task<RunGitHubCapabilitySnapshotRecord?> TryResolveInteractiveCopilotSnapshotAsync(
+        string runId,
+        string projectId,
+        string entraObjectId,
+        CancellationToken ct)
+    {
+        var authorization = await FindLiveRepoUserAuthorizationAsync(entraObjectId, ct).ConfigureAwait(false);
+        if (authorization is null)
+            return null;
+        return new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
+            Purpose = GitHubCapabilityPurpose.InteractiveCopilot, AppKind = GitHubAppKind.Repo,
+            SourceKind = GitHubCapabilitySnapshotSourceKind.UserAuthorization, ProjectId = projectId,
+            EntraObjectId = entraObjectId, SourceAuthorizationId = authorization.Id,
+            CredentialReference = authorization.CredentialReference, CredentialVersion = authorization.CredentialVersion,
+            GrantDigest = authorization.GrantDigest, CapturedAt = DateTimeOffset.UtcNow,
+        };
+    }
+
+    private async Task<RunGitHubCapabilitySnapshotRecord?> TryResolveUnattendedRepositorySnapshotAsync(
+        string runId,
+        string projectId,
+        CancellationToken ct)
+    {
+        var grants = await db.GitHubRepositoryGrants.AsNoTracking()
+            .Where(x => x.ProjectId == projectId && x.RevokedAt == null &&
+                        db.GitHubInstallations.Any(installation =>
+                            installation.InstallationId == x.InstallationId &&
+                            installation.AppKind == GitHubAppKind.Repo &&
+                            installation.ProjectId == projectId &&
+                            installation.RevokedAt == null))
+            .ToListAsync(ct).ConfigureAwait(false);
+        var grant = grants.OrderByDescending(x => x.GrantedAt).FirstOrDefault();
+        if (grant is null)
+            return null;
+        return new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
+            Purpose = GitHubCapabilityPurpose.UnattendedRepository, AppKind = GitHubAppKind.Repo,
+            SourceKind = GitHubCapabilitySnapshotSourceKind.RepositoryGrant, ProjectId = projectId,
+            InstallationId = grant.InstallationId, RepositoryId = grant.RepositoryId,
+            GrantDigest = grant.PermissionDigest, CapturedAt = DateTimeOffset.UtcNow,
+        };
+    }
+
+    private async Task<RunGitHubCapabilitySnapshotRecord?> TryResolveUnattendedCopilotSnapshotAsync(
+        string runId,
+        string projectId,
+        CancellationToken ct)
+    {
+        var binding = await db.ProjectCopilotBindings.AsNoTracking().SingleOrDefaultAsync(x =>
+            x.ProjectId == projectId && x.Status == GitHubBindingStatus.Active && x.DeactivatedAt == null, ct)
+            .ConfigureAwait(false);
+        if (binding is null)
+            return null;
+        return new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
+            Purpose = GitHubCapabilityPurpose.UnattendedCopilot, AppKind = GitHubAppKind.Copilot,
+            SourceKind = GitHubCapabilitySnapshotSourceKind.CopilotBinding, ProjectId = projectId,
+            SourceBindingId = binding.Id, CredentialReference = binding.CredentialReference,
+            CredentialVersion = binding.CredentialVersion, GrantDigest = binding.GrantDigest,
+            CapturedAt = DateTimeOffset.UtcNow,
+        };
     }
 
     public async Task AppendAuditAsync(GitHubAuditRecord audit, CancellationToken ct = default)
@@ -785,9 +1076,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
                         x.RevokedAt == null)
             .ToListAsync(ct).ConfigureAwait(false);
         if (matches.Count != 1 ||
-            (purpose == GitHubCapabilityPurpose.InteractiveRepository &&
-             (legacy.RepositoryId is null || !await HasLiveRepositoryScopeAsync(
-                 legacy.ProjectId, legacy.RepositoryId.Value, ct).ConfigureAwait(false))))
+            (purpose == GitHubCapabilityPurpose.InteractiveRepository && legacy.RepositoryId is null))
             return null;
         return new RunGitHubCapabilitySnapshotRecord
         {
@@ -862,4 +1151,5 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db)
             CapturedAt = legacy.CapturedAt,
         };
     }
+
 }

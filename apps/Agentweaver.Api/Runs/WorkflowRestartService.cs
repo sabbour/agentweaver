@@ -2,6 +2,7 @@ using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 
@@ -122,6 +123,25 @@ public sealed class WorkflowRestartService
             // WorktreeBranch mid-iteration; the foreach iteration variable itself can't be reassigned.
             var run = awaitingRun;
             var runIdStr = run.Id.ToString();
+
+            await using var snapshotScope = _scopeFactory.CreateAsyncScope();
+            var snapshotLifecycle = snapshotScope.ServiceProvider.GetService<RunGitHubCapabilitySnapshotLifecycle>();
+            if (snapshotLifecycle is not null &&
+                !await snapshotLifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+            {
+                _logger.LogError(
+                    "Immutable GitHub capability snapshot is unavailable for recovered run {RunId}; failing run",
+                    run.Id);
+                await FailRecoveredRunAsync(
+                        run,
+                        "github_capability_unavailable",
+                        entry: null,
+                        cleanupWorktree: false,
+                        ct: ct)
+                    .ConfigureAwait(false);
+                continue;
+            }
+
             var entry = _streamStore.Create(runIdStr, run.SubmittingUser);
             entry.MarkAwaitingReview();
 
