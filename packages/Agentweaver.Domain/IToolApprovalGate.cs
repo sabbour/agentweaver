@@ -6,10 +6,10 @@ public enum ApprovalScope
     /// <summary>Approve only this specific request.</summary>
     Once,
 
-    /// <summary>Approve all future requests from the same tool+URL combo for this run.</summary>
+    /// <summary>Approve all future requests from this tool for the current orchestration run.</summary>
     Run,
 
-    /// <summary>Persist an eligible-tool policy for future runs owned by the same persisted user.</summary>
+    /// <summary>Persist an eligible-tool policy for future runs in the same project, owned by the same persisted user.</summary>
     Always,
 
     /// <summary>Approve all future requests from this tool (any URL) for this run.</summary>
@@ -85,8 +85,8 @@ public interface IToolApprovalGate
     bool Deny(string runId, string requestId);
 
     /// <summary>
-    /// Returns <see langword="true"/> if the tool is covered by an owner-bound run-scoped policy
-    /// or an eligible owner-bound always policy, meaning no HITL card should be shown.
+    /// Returns <see langword="true"/> if the tool is covered by a run-scoped policy or an eligible
+    /// project- and owner-bound always policy, meaning no HITL card should be shown.
     /// </summary>
     bool IsAutoApproved(string runId, string toolName, string? url);
 
@@ -115,7 +115,8 @@ public interface IToolApprovalGate
 
     /// <summary>
     /// Registers a parent–child relationship so that run-scoped policies granted on a child run
-    /// are also visible to its sibling child runs (i.e. stored under the parent run ID too).
+    /// are also visible to its sibling child runs within the same orchestration (i.e. stored under
+    /// the real parent run ID too).
     /// Call this once when a coordinator child run is dispatched.
     /// </summary>
     void RegisterParentRun(string childRunId, string parentRunId);

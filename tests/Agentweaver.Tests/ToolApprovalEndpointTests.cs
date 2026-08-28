@@ -220,7 +220,7 @@ public sealed class ToolApprovalEndpointTests
     }
 
     [Fact]
-    public async Task ApproveAlways_AffectsOnlyPersistedInitiatingOwner()
+    public async Task ApproveAlways_AffectsOnlyPersistedInitiatingOwnerInTheSameProject()
     {
         using var factory = new CoordinatorWebApplicationFactory();
         using var ownerClient = factory.CreateOwnerClient();
@@ -229,15 +229,28 @@ public sealed class ToolApprovalEndpointTests
         var source = RunId.New();
         var ownerFuture = RunId.New();
         var otherFuture = RunId.New();
+        var projectResponse = await ownerClient.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Approval scope {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        projectResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = ProjectId.Parse(
+            (await projectResponse.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>())
+            .GetProperty("project_id").GetString()!);
         await InsertRunAsync(
             runStore, source, RunStatus.InProgress,
-            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser,
+            projectId: project);
         await InsertRunAsync(
             runStore, ownerFuture, RunStatus.InProgress,
-            submittingUser: CoordinatorWebApplicationFactory.OwnerUser);
+            submittingUser: CoordinatorWebApplicationFactory.OwnerUser,
+            projectId: project);
         await InsertRunAsync(
             runStore, otherFuture, RunStatus.InProgress,
-            submittingUser: CoordinatorWebApplicationFactory.OtherUser);
+            submittingUser: CoordinatorWebApplicationFactory.OtherUser,
+            projectId: project);
         var pending = approvalGate.WaitForApprovalAsync(
             source.ToString(), "owner-always", "web_fetch", "https://example.test",
             TimeSpan.FromMinutes(1), CancellationToken.None);
@@ -303,7 +316,8 @@ public sealed class ToolApprovalEndpointTests
         RunId id,
         RunStatus status,
         string? parentRunId = null,
-        string? submittingUser = null) =>
+        string? submittingUser = null,
+        ProjectId? projectId = null) =>
         runStore.InsertAsync(new Run
         {
             Id = id,
@@ -317,5 +331,6 @@ public sealed class ToolApprovalEndpointTests
             ParentRunId = parentRunId,
             AgentName = parentRunId is null ? "Coordinator" : "Researcher",
             SubtaskId = parentRunId is null ? null : "1",
+            ProjectId = projectId,
         });
 }

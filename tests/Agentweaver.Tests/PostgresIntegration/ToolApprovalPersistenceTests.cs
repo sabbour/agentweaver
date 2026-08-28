@@ -14,17 +14,20 @@ namespace Agentweaver.Tests.PostgresIntegration;
 public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
 {
     [PostgresFact]
-    public async Task OwnerScopedAlwaysGrant_IsReplicaSafeAndRejectsLegacyAndOtherOwner()
+    public async Task ProjectScopedAlwaysGrant_IsReplicaSafeAndRejectsLegacyOtherOwnerAndOtherProject()
     {
         var suffix = Guid.NewGuid().ToString("N");
         var alice = $"alice-{suffix}";
         var bob = $"bob-{suffix}";
-        var sourceA = NewRun(alice);
-        var sourceB = NewRun(alice);
-        var aliceFuture = NewRun(alice);
-        var bobFuture = NewRun(bob);
+        var project = ProjectId.New();
+        var otherProject = ProjectId.New();
+        var sourceA = NewRun(alice, project);
+        var sourceB = NewRun(alice, project);
+        var aliceFuture = NewRun(alice, project);
+        var bobFuture = NewRun(bob, project);
+        var otherProjectFuture = NewRun(alice, otherProject);
         var runStore = new EfRunStore(pg.Factory);
-        foreach (var run in new[] { sourceA, sourceB, aliceFuture, bobFuture })
+        foreach (var run in new[] { sourceA, sourceB, aliceFuture, bobFuture, otherProjectFuture })
             await runStore.InsertAsync(run);
 
         var services = new ServiceCollection();
@@ -45,7 +48,7 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
             "tool.approval_policy_granted",
             new { policyKey = "web_fetch:" });
         stateB.Append(
-            DurableToolApprovalGate.OwnerPolicyBucket(bob),
+            DurableToolApprovalGate.ProjectPolicyBucket(project, bob),
             "tool.approval_policy_granted",
             new { policyKey = "web_fetch:" });
 
@@ -67,9 +70,11 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
             .Should().BeTrue();
         gateA.IsAutoApproved(bobFuture.Id.ToString(), "web_fetch", "https://bob.test")
             .Should().BeFalse();
+        gateA.IsAutoApproved(otherProjectFuture.Id.ToString(), "web_fetch", "https://other-project.test")
+            .Should().BeFalse();
     }
 
-    private static Run NewRun(string owner) => new()
+    private static Run NewRun(string owner, ProjectId projectId) => new()
     {
         Id = RunId.New(),
         RepositoryPath = "postgres-tool-approval-test",
@@ -79,5 +84,6 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
         SubmittingUser = owner,
         Status = RunStatus.InProgress,
         StartedAt = DateTimeOffset.UtcNow,
+        ProjectId = projectId,
     };
 }

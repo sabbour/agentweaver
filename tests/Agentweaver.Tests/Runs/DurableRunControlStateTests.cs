@@ -117,8 +117,9 @@ public sealed class DurableRunControlStateTests : IDisposable
     {
         var owner = NewApprovalGate();
         var secondary = NewApprovalGate();
-        var sourceRun = await InsertOwnedRunAsync("alice");
-        var futureRun = await InsertOwnedRunAsync("alice");
+        var project = ProjectId.New();
+        var sourceRun = await InsertOwnedRunAsync("alice", project);
+        var futureRun = await InsertOwnedRunAsync("alice", project);
         var sourceId = sourceRun.Id.ToString();
 
         var wait = owner.WaitForApprovalAsync(
@@ -136,8 +137,9 @@ public sealed class DurableRunControlStateTests : IDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         IRunStore runStore = new SqliteRunStore(testDb.Db);
-        var aliceRun = NewOwnedRun("alice");
-        var bobRun = NewOwnedRun("bob");
+        var project = ProjectId.New();
+        var aliceRun = NewOwnedRun("alice", project);
+        var bobRun = NewOwnedRun("bob", project);
         await runStore.InsertAsync(aliceRun);
         await runStore.InsertAsync(bobRun);
 
@@ -158,22 +160,23 @@ public sealed class DurableRunControlStateTests : IDisposable
     [Fact]
     public async Task LegacyGlobalAndUnscopedOwnerBucketGrants_AuthorizeNobody()
     {
-        var aliceRun = await InsertOwnedRunAsync("alice");
+        var project = ProjectId.New();
+        var aliceRun = await InsertOwnedRunAsync("alice", project);
         var state = NewState();
         state.Append(
             "__agentweaver_tool_approvals__",
             "tool.approval_policy_granted",
             new { policyKey = "web_fetch:" });
         state.Append(
-            DurableToolApprovalGate.OwnerPolicyBucket("alice"),
+            "__agentweaver_tool_approvals_owner_sha256_v1__legacy",
             "tool.approval_policy_granted",
             new { policyKey = "web_fetch:" });
         state.Append(
-            DurableToolApprovalGate.OwnerPolicyBucket("alice"),
+            "__agentweaver_tool_approvals_owner_sha256_v1__legacy",
             "tool.approval_policy_granted",
             new { owner = "alice", toolId = "web_fetch", riskSemantics = "network-write/v1" });
         state.Append(
-            DurableToolApprovalGate.OwnerPolicyBucket("alice"),
+            "__agentweaver_tool_approvals_owner_sha256_v1__legacy",
             "tool.approval_policy_granted",
             new { owner = "Alice", toolId = "web_fetch", riskSemantics = "network-read/v1" });
 
@@ -210,8 +213,9 @@ public sealed class DurableRunControlStateTests : IDisposable
     [InlineData("Web_Fetch")]
     public async Task AlwaysApproval_NonEligibleTool_RemainsGatedAcrossRuns(string toolName)
     {
-        var sourceRun = await InsertOwnedRunAsync("alice");
-        var futureRun = await InsertOwnedRunAsync("alice");
+        var project = ProjectId.New();
+        var sourceRun = await InsertOwnedRunAsync("alice", project);
+        var futureRun = await InsertOwnedRunAsync("alice", project);
         var gate = NewApprovalGate();
         var requestId = $"req-{toolName}";
         var wait = gate.WaitForApprovalAsync(
@@ -229,9 +233,10 @@ public sealed class DurableRunControlStateTests : IDisposable
     [Fact]
     public async Task ConcurrentAlwaysGrants_AcrossReplicas_AppendAndReadSameOwnerPolicy()
     {
-        var sourceA = await InsertOwnedRunAsync("alice");
-        var sourceB = await InsertOwnedRunAsync("alice");
-        var future = await InsertOwnedRunAsync("alice");
+        var project = ProjectId.New();
+        var sourceA = await InsertOwnedRunAsync("alice", project);
+        var sourceB = await InsertOwnedRunAsync("alice", project);
+        var future = await InsertOwnedRunAsync("alice", project);
         var replicaA = NewApprovalGate();
         var replicaB = NewApprovalGate();
         var waitA = replicaA.WaitForApprovalAsync(
@@ -250,6 +255,60 @@ public sealed class DurableRunControlStateTests : IDisposable
         (await waitB).Should().BeTrue();
         replicaA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test")
             .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AlwaysApproval_DoesNotCrossProjectBoundary()
+    {
+        var sourceProject = ProjectId.New();
+        var otherProject = ProjectId.New();
+        var source = await InsertOwnedRunAsync("alice", sourceProject);
+        var sameProject = await InsertOwnedRunAsync("alice", sourceProject);
+        var otherProjectRun = await InsertOwnedRunAsync("alice", otherProject);
+        var gate = NewApprovalGate();
+
+        var wait = gate.WaitForApprovalAsync(
+            source.Id.ToString(), "project-boundary", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        await WaitUntilAsync(() =>
+            gate.GrantAsync(source.Id.ToString(), "project-boundary", ApprovalScope.Always));
+
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved(sameProject.Id.ToString(), "web_fetch", "https://same-project.test")
+            .Should().BeTrue();
+        gate.IsAutoApproved(otherProjectRun.Id.ToString(), "web_fetch", "https://other-project.test")
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SessionApproval_DoesNotCrossOrchestrationBoundary_AndClearsWithTheSession()
+    {
+        var project = ProjectId.New();
+        var session = await InsertOwnedRunAsync("alice", project);
+        var child = await InsertOwnedRunAsync("alice", project);
+        var sibling = await InsertOwnedRunAsync("alice", project);
+        var otherSession = await InsertOwnedRunAsync("alice", project);
+        var otherChild = await InsertOwnedRunAsync("alice", project);
+        var gate = NewApprovalGate();
+        gate.RegisterParentRun(child.Id.ToString(), session.Id.ToString());
+        gate.RegisterParentRun(sibling.Id.ToString(), session.Id.ToString());
+        gate.RegisterParentRun(otherChild.Id.ToString(), otherSession.Id.ToString());
+
+        var wait = gate.WaitForApprovalAsync(
+            child.Id.ToString(), "session-scope", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        await WaitUntilAsync(() =>
+            gate.GrantAsync(child.Id.ToString(), "session-scope", ApprovalScope.Run));
+
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://sibling.test")
+            .Should().BeTrue("a session approval covers other work in the same orchestration");
+        gate.IsAutoApproved(otherChild.Id.ToString(), "web_fetch", "https://other-session.test")
+            .Should().BeFalse("a session approval must not escape to another orchestration");
+
+        gate.Clear(session.Id.ToString());
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://after-clear.test")
+            .Should().BeFalse("ending a session removes its session-only approval");
     }
 
     [Fact]
@@ -346,14 +405,14 @@ public sealed class DurableRunControlStateTests : IDisposable
         return provider;
     }
 
-    private async Task<Run> InsertOwnedRunAsync(string submittingUser)
+    private async Task<Run> InsertOwnedRunAsync(string submittingUser, ProjectId? projectId = null)
     {
-        var run = NewOwnedRun(submittingUser);
+        var run = NewOwnedRun(submittingUser, projectId);
         await _runStore.InsertAsync(run);
         return run;
     }
 
-    private static Run NewOwnedRun(string submittingUser) => new()
+    private static Run NewOwnedRun(string submittingUser, ProjectId? projectId = null) => new()
     {
         Id = RunId.New(),
         RepositoryPath = "approval-scope-test",
@@ -363,6 +422,7 @@ public sealed class DurableRunControlStateTests : IDisposable
         SubmittingUser = submittingUser,
         Status = RunStatus.InProgress,
         StartedAt = DateTimeOffset.UtcNow,
+        ProjectId = projectId,
     };
 
     private static async Task WaitUntilAsync(Func<Task<bool>> action)

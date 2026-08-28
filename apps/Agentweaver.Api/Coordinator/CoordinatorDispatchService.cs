@@ -847,11 +847,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // Autopilot. Seeded before the child run starts so its first tool call reads the inherited value.
         CascadeOptionsToChild(context.CoordinatorRunId, childRunId.ToString());
 
-        // Scope child approval-policy inheritance to this exact project/run/subtask so sibling
-        // children never inherit each other's run-scoped approvals.
+        // Scope child approval-policy inheritance to the coordinator run. The policy is intentionally
+        // shared by its children: "Allow for session" means this orchestration session, not one
+        // subtask. DurableToolApprovalGate verifies the persisted project and owner before matching.
         _approvalGate?.RegisterParentRun(
             childRunId.ToString(),
-            ApprovalScopeKey(context.ProjectId?.Value.ToString(), context.CoordinatorRunId, subtaskId));
+            context.CoordinatorRunId);
 
         try
         {
@@ -2828,9 +2829,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var compact = value.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ').Trim();
         return compact.Length <= maxChars ? compact : compact[..maxChars] + "…";
     }
-
-    private static string ApprovalScopeKey(string? projectId, string coordinatorRunId, int subtaskId) =>
-        $"{projectId ?? "no-project"}:{coordinatorRunId}:subtask:{subtaskId}";
 
     /// <summary>
     /// Returns true when the candidate subtask conflicts with at least one of the currently in-flight

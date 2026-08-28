@@ -14,7 +14,7 @@ public sealed class DurableToolApprovalGate(
     ILogger<DurableToolApprovalGate>? logger = null,
     IRunStore? runStore = null) : IToolApprovalGate
 {
-    private const string OwnerPolicyBucketPrefix = "__agentweaver_tool_approvals_owner_sha256_v1__";
+    private const string ProjectPolicyBucketPrefix = "__agentweaver_tool_approvals_project_owner_sha256_v1__";
     private const string RequestContext = "tool.approval_context";
     private const string RequestResolved = "tool.approval_resolved";
     private const string PolicyGranted = "tool.approval_policy_granted";
@@ -73,18 +73,25 @@ public sealed class DurableToolApprovalGate(
 
         if (scope != ApprovalScope.Once && !string.IsNullOrWhiteSpace(context.ToolName))
         {
-            var owner = await OwnerOfAsync(runId).ConfigureAwait(false);
-            if (owner is not null)
+            var subject = await SubjectOfAsync(runId).ConfigureAwait(false);
+            if (subject is not null)
             {
                 var policy = new PolicyGrant(
-                    owner,
+                    subject.ProjectId?.ToString(),
+                    subject.Owner,
                     context.ToolName,
                     ToolApprovalPolicySemantics.RiskFor(context.ToolName));
 
                 if (scope == ApprovalScope.Always)
                 {
-                    if (ToolApprovalPolicySemantics.IsAlwaysEligible(context.ToolName))
-                        _state.Append(OwnerPolicyBucket(owner), PolicyGranted, policy);
+                    // A durable "always" grant must have a real project boundary. Legacy runs
+                    // without one still resolve the current request, but cannot create a policy
+                    // that could accidentally apply outside their intended project.
+                    if (subject.ProjectId is not null &&
+                        ToolApprovalPolicySemantics.IsAlwaysEligible(context.ToolName))
+                    {
+                        _state.Append(ProjectPolicyBucket(subject.ProjectId.Value, subject.Owner), PolicyGranted, policy);
+                    }
                 }
                 else
                 {
@@ -92,9 +99,8 @@ public sealed class DurableToolApprovalGate(
 
                     if (ParentOf(runId) is { } parentId)
                     {
-                        var parentOwner = await OwnerOfAsync(parentId).ConfigureAwait(false);
-                        if (parentOwner is not null &&
-                            string.Equals(parentOwner, owner, StringComparison.Ordinal))
+                        var parentSubject = await SubjectOfAsync(parentId).ConfigureAwait(false);
+                        if (parentSubject == subject)
                         {
                             _state.Append(parentId, PolicyGranted, policy);
                         }
@@ -129,25 +135,25 @@ public sealed class DurableToolApprovalGate(
         if (string.IsNullOrWhiteSpace(toolName))
             return false;
 
-        var owner = OwnerOf(runId);
-        if (owner is null)
+        var subject = SubjectOf(runId);
+        if (subject is null)
             return false;
 
         var risk = ToolApprovalPolicySemantics.RiskFor(toolName);
         if (ToolApprovalPolicySemantics.IsAlwaysEligible(toolName) &&
-            HasPolicy(OwnerPolicyBucket(owner), owner, toolName, risk))
+            subject.ProjectId is not null &&
+            HasPolicy(ProjectPolicyBucket(subject.ProjectId.Value, subject.Owner), subject, toolName, risk))
             return true;
 
-        if (HasPolicy(runId, owner, toolName, risk))
+        if (HasPolicy(runId, subject, toolName, risk))
             return true;
 
         if (ParentOf(runId) is not { } parentId)
             return false;
 
-        var parentOwner = OwnerOf(parentId);
-        return parentOwner is not null
-            && string.Equals(parentOwner, owner, StringComparison.Ordinal)
-            && HasPolicy(parentId, parentOwner, toolName, risk);
+        var parentSubject = SubjectOf(parentId);
+        return parentSubject == subject
+            && HasPolicy(parentId, parentSubject, toolName, risk);
     }
 
     public bool IsKnownRequest(string runId, string requestId) =>
@@ -219,7 +225,7 @@ public sealed class DurableToolApprovalGate(
             .LastOrDefault()
             ?.ParentRunId;
 
-    private bool HasPolicy(string bucketRunId, string owner, string toolName, string risk)
+    private bool HasPolicy(string bucketRunId, ApprovalSubject subject, string toolName, string risk)
     {
         foreach (var record in _state.Load(bucketRunId, PolicyGranted, RunCleared)
                      .TakeLastAfterClear()
@@ -231,7 +237,8 @@ public sealed class DurableToolApprovalGate(
                     record.PayloadJson,
                     JsonDefaults.Options);
                 if (policy is not null
-                    && string.Equals(policy.Owner, owner, StringComparison.Ordinal)
+                    && string.Equals(policy.ProjectId, subject.ProjectId?.ToString(), StringComparison.Ordinal)
+                    && string.Equals(policy.Owner, subject.Owner, StringComparison.Ordinal)
                     && string.Equals(policy.ToolId, toolName, StringComparison.Ordinal)
                     && string.Equals(policy.RiskSemantics, risk, StringComparison.Ordinal))
                 {
@@ -247,7 +254,7 @@ public sealed class DurableToolApprovalGate(
         return false;
     }
 
-    private async Task<string?> OwnerOfAsync(string runId)
+    private async Task<ApprovalSubject?> SubjectOfAsync(string runId)
     {
         if (runStore is null || !RunId.TryParse(runId, out var id))
             return null;
@@ -255,16 +262,18 @@ public sealed class DurableToolApprovalGate(
         try
         {
             var run = await runStore.GetAsync(id).ConfigureAwait(false);
-            return string.IsNullOrWhiteSpace(run?.SubmittingUser) ? null : run.SubmittingUser;
+            return string.IsNullOrWhiteSpace(run?.SubmittingUser)
+                ? null
+                : new ApprovalSubject(run.SubmittingUser, run.ProjectId);
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Unable to resolve tool-approval owner for run {RunId}", runId);
+            logger?.LogWarning(ex, "Unable to resolve tool-approval subject for run {RunId}", runId);
             return null;
         }
     }
 
-    private string? OwnerOf(string runId)
+    private ApprovalSubject? SubjectOf(string runId)
     {
         if (runStore is null || !RunId.TryParse(runId, out var id))
             return null;
@@ -272,25 +281,28 @@ public sealed class DurableToolApprovalGate(
         try
         {
             var run = runStore.GetAsync(id).ConfigureAwait(false).GetAwaiter().GetResult();
-            return string.IsNullOrWhiteSpace(run?.SubmittingUser) ? null : run.SubmittingUser;
+            return string.IsNullOrWhiteSpace(run?.SubmittingUser)
+                ? null
+                : new ApprovalSubject(run.SubmittingUser, run.ProjectId);
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Unable to resolve tool-approval owner for run {RunId}", runId);
+            logger?.LogWarning(ex, "Unable to resolve tool-approval subject for run {RunId}", runId);
             return null;
         }
     }
 
-    internal static string OwnerPolicyBucket(string owner)
+    internal static string ProjectPolicyBucket(ProjectId projectId, string owner)
     {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(owner));
-        return OwnerPolicyBucketPrefix + Convert.ToHexString(hash);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{projectId}:{owner}"));
+        return ProjectPolicyBucketPrefix + Convert.ToHexString(hash);
     }
 
     private sealed record ApprovalContext(string RequestId, string ToolName, string? Url);
     private sealed record ApprovalResolution(string RequestId, bool Approved, bool Expired = false);
-    private sealed record PolicyGrant(string? Owner, string? ToolId, string? RiskSemantics);
+    private sealed record PolicyGrant(string? ProjectId, string? Owner, string? ToolId, string? RiskSemantics);
     private sealed record ParentRegistration(string ParentRunId);
+    private sealed record ApprovalSubject(string Owner, ProjectId? ProjectId);
 }
 
 file static class DurableRunControlEventExtensions
