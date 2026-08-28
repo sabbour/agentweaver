@@ -22,19 +22,16 @@ internal sealed class RunCommandTool : ISandboxTool
                 IReadOnlyList<string>? credentialArguments = null;
                 var approvalCommand = command;
                 var commandHash = ComputeCommandHash(command);
-                if (!string.IsNullOrWhiteSpace(ctx.Options.RepositoryAccessToken))
+                if (!string.IsNullOrWhiteSpace(ctx.Options.RepositoryAccessToken) &&
+                    BeginsCredentialBearingCommand(command))
                 {
                     if (!TryParseCommand(command, out credentialArguments, out var credentialParseError))
                         return credentialParseError!;
 
-                    if (credentialArguments.Count > 0 &&
-                        (credentialArguments[0] == "git" || credentialArguments[0] == "gh"))
-                    {
-                        // Approval must describe and identify the exact argv that receives the
-                        // credential, rather than the shell spelling the model originally sent.
-                        approvalCommand = FormatParsedCommand(credentialArguments);
-                        commandHash = ComputeCommandHash(credentialArguments);
-                    }
+                    // Approval must describe and identify the exact argv that receives the
+                    // credential, rather than the shell spelling the model originally sent.
+                    approvalCommand = FormatParsedCommand(credentialArguments);
+                    commandHash = ComputeCommandHash(credentialArguments);
                 }
 
                 var destructive = IsDestructivePattern(approvalCommand, ctx.Options.DestructiveCommandPatterns);
@@ -230,8 +227,10 @@ internal sealed class RunCommandTool : ISandboxTool
         if (string.IsNullOrWhiteSpace(accessToken))
             return true;
 
+        // Commands that do not begin with git or gh retain the ordinary sandbox shell path.
+        // They receive no repository credential data.
         if (arguments is null)
-            throw new InvalidOperationException("Credential-bearing command arguments must be parsed before execution.");
+            return true;
         if (arguments.Count == 0 ||
             (arguments[0] != "git" && arguments[0] != "gh"))
             return true;
@@ -423,6 +422,23 @@ internal sealed class RunCommandTool : ISandboxTool
     private static bool IsGhIdentifier(string argument) =>
         !string.IsNullOrWhiteSpace(argument) &&
         !argument.StartsWith("-", StringComparison.Ordinal);
+
+    private static bool BeginsCredentialBearingCommand(string command) =>
+        HasCredentialCommandPrefix(command.TrimStart(), "git") ||
+        HasCredentialCommandPrefix(command.TrimStart(), "gh");
+
+    private static bool HasCredentialCommandPrefix(string command, string executable)
+    {
+        if (!command.StartsWith(executable, StringComparison.Ordinal))
+            return false;
+        if (command.Length == executable.Length)
+            return true;
+
+        var next = command[executable.Length];
+        return char.IsWhiteSpace(next) ||
+            next is '\0' or ';' or '|' or '&' or '`' or '$' or '<' or '>' or '(' or ')' or
+                '{' or '}' or '[' or ']' or '*' or '?' or '!' or '~';
+    }
 
     private static bool TryParseCommand(
         string command,

@@ -202,6 +202,35 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             pair => pair.Value == "repository-access-token");
     }
 
+    [Theory]
+    [InlineData("npm test && npm run lint")]
+    [InlineData("npm test -- tests/*.cs")]
+    [InlineData("npm test > test-output.txt")]
+    public async Task Controlled_run_command_keeps_normal_shell_syntax_uncredentialed(
+        string command)
+    {
+        const string sentinel = "repository-access-token";
+        SandboxCommand? observed = null;
+        var executor = new CapturingExecutor(candidate => observed = candidate);
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker, repositoryAccessToken: sentinel),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        result?.ToString().Should().Contain("exit_code: 0");
+        observed.Should().NotBeNull();
+        observed!.CommandLine.Should().Be(command);
+        observed.DirectExecution.Should().BeNull(
+            "only direct, allowlisted git or gh commands may receive repository credentials");
+        observed.Environment.Should().NotContainKey("GH_TOKEN")
+            .And.NotContainKey("GITHUB_TOKEN")
+            .And.NotContainKey("GIT_CONFIG_PARAMETERS");
+        observed.Environment.Should().NotContain(pair => pair.Value == sentinel);
+    }
+
     [Fact]
     public async Task Controlled_run_command_redacts_repository_credential_from_command_output()
     {
@@ -219,10 +248,11 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
 
     [Theory]
     [InlineData("git status; whoami")]
-    [InlineData("gh repo view > output.txt")]
+    [InlineData("git status && npm test")]
+    [InlineData("gh api /user > output.txt")]
     [InlineData("git $(echo status)")]
     [InlineData("gh repo view\r\nwhoami")]
-    public async Task Controlled_run_command_rejects_compound_credentialed_commands(string command)
+    public async Task Controlled_run_command_rejects_shell_syntax_for_credentialed_commands(string command)
     {
         var executor = new CountingExecutor();
         using var tracker = new ShellExecutionTracker();

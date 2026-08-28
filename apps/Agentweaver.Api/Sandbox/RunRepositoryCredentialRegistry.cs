@@ -21,7 +21,17 @@ public sealed class RunRepositoryCredentialRegistry
     private readonly ConcurrentDictionary<string, RepositoryCredential> _entries = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, RetainedRevocation> _retainedRevocations =
         new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _mintLocks = new(StringComparer.Ordinal);
+    private readonly object _mintLockGate = new();
+    private readonly Dictionary<string, RunCredentialLock> _mintLocks = new(StringComparer.Ordinal);
+
+    internal int ActiveRunLockCount
+    {
+        get
+        {
+            lock (_mintLockGate)
+                return _mintLocks.Count;
+        }
+    }
 
     public RunRepositoryCredentialRegistry(IServiceScopeFactory scopeFactory)
         : this(new RunRepositoryCredentialMinter(scopeFactory))
@@ -38,8 +48,8 @@ public sealed class RunRepositoryCredentialRegistry
 
     public async Task<string?> MintAsync(string runId, CancellationToken ct = default)
     {
-        var mintLock = _mintLocks.GetOrAdd(runId, static _ => new SemaphoreSlim(1, 1));
-        await mintLock.WaitAsync(ct).ConfigureAwait(false);
+        using var mintLockLease = AcquireMintLock(runId);
+        await mintLockLease.Semaphore.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var now = _timeProvider.GetUtcNow();
@@ -67,7 +77,7 @@ public sealed class RunRepositoryCredentialRegistry
         }
         finally
         {
-            mintLock.Release();
+            mintLockLease.Semaphore.Release();
         }
     }
 
@@ -76,8 +86,8 @@ public sealed class RunRepositoryCredentialRegistry
         if (string.IsNullOrWhiteSpace(runId))
             return;
 
-        var mintLock = _mintLocks.GetOrAdd(runId, static _ => new SemaphoreSlim(1, 1));
-        await mintLock.WaitAsync(ct).ConfigureAwait(false);
+        using var mintLockLease = AcquireMintLock(runId);
+        await mintLockLease.Semaphore.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var now = _timeProvider.GetUtcNow();
@@ -103,7 +113,7 @@ public sealed class RunRepositoryCredentialRegistry
         }
         finally
         {
-            mintLock.Release();
+            mintLockLease.Semaphore.Release();
         }
     }
 
@@ -120,8 +130,8 @@ public sealed class RunRepositoryCredentialRegistry
         {
             ct.ThrowIfCancellationRequested();
 
-            var mintLock = _mintLocks.GetOrAdd(runId, static _ => new SemaphoreSlim(1, 1));
-            await mintLock.WaitAsync(ct).ConfigureAwait(false);
+            using var mintLockLease = AcquireMintLock(runId);
+            await mintLockLease.Semaphore.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 if (!_retainedRevocations.TryGetValue(runId, out var retained))
@@ -156,11 +166,48 @@ public sealed class RunRepositoryCredentialRegistry
             }
             finally
             {
-                mintLock.Release();
+                mintLockLease.Semaphore.Release();
             }
         }
 
         return failures;
+    }
+
+    private RunCredentialLockLease AcquireMintLock(string runId)
+    {
+        lock (_mintLockGate)
+        {
+            if (!_mintLocks.TryGetValue(runId, out var mintLock))
+            {
+                mintLock = new RunCredentialLock();
+                _mintLocks.Add(runId, mintLock);
+            }
+
+            mintLock.ActiveOperations++;
+            return new RunCredentialLockLease(this, runId, mintLock);
+        }
+    }
+
+    private void ReleaseMintLock(string runId, RunCredentialLock mintLock)
+    {
+        lock (_mintLockGate)
+        {
+            if (mintLock.ActiveOperations <= 0)
+                throw new InvalidOperationException("Run credential lock lease was released more than once.");
+
+            mintLock.ActiveOperations--;
+            if (mintLock.ActiveOperations != 0 ||
+                _entries.ContainsKey(runId) ||
+                _retainedRevocations.ContainsKey(runId) ||
+                !_mintLocks.TryGetValue(runId, out var current) ||
+                !ReferenceEquals(current, mintLock))
+            {
+                return;
+            }
+
+            _mintLocks.Remove(runId);
+            mintLock.Dispose();
+        }
     }
 
     private async Task RevokeAndRemoveAsync(
@@ -210,6 +257,30 @@ public sealed class RunRepositoryCredentialRegistry
         DateTimeOffset ExpiresAt,
         int FailureCount,
         DateTimeOffset NextAttemptAt);
+
+    private sealed class RunCredentialLock : IDisposable
+    {
+        public SemaphoreSlim Semaphore { get; } = new(1, 1);
+        public int ActiveOperations { get; set; }
+
+        public void Dispose() => Semaphore.Dispose();
+    }
+
+    private sealed class RunCredentialLockLease(
+        RunRepositoryCredentialRegistry registry,
+        string runId,
+        RunCredentialLock mintLock) : IDisposable
+    {
+        private RunRepositoryCredentialRegistry? _registry = registry;
+
+        public SemaphoreSlim Semaphore => mintLock.Semaphore;
+
+        public void Dispose()
+        {
+            var registry = Interlocked.Exchange(ref _registry, null);
+            registry?.ReleaseMintLock(runId, mintLock);
+        }
+    }
 }
 
 internal sealed record FailedRepositoryCredentialRevocation(string RunId, Exception Exception);
