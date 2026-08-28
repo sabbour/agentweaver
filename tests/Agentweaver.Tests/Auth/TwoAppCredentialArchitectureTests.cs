@@ -16,6 +16,24 @@ public sealed class TwoAppCredentialArchitectureTests
     ];
 
     [Fact]
+    public void TwoAppContract_HasOnlyPurposeBoundRepoAndCopilotAppCapabilities()
+    {
+        Enum.GetValues<GitHubAppKind>().Should().Equal(
+            GitHubAppKind.Repo,
+            GitHubAppKind.Copilot);
+        Enum.GetValues<GitHubAuthorizationPurpose>().Should().Equal(
+            GitHubAuthorizationPurpose.InteractiveRepository,
+            GitHubAuthorizationPurpose.InteractiveCopilot,
+            GitHubAuthorizationPurpose.UnattendedRepository,
+            GitHubAuthorizationPurpose.UnattendedCopilot);
+        Enum.GetValues<GitHubCapabilityPurpose>().Should().Equal(
+            GitHubCapabilityPurpose.InteractiveRepository,
+            GitHubCapabilityPurpose.InteractiveCopilot,
+            GitHubCapabilityPurpose.UnattendedRepository,
+            GitHubCapabilityPurpose.UnattendedCopilot);
+    }
+
+    [Fact]
     public void ReservedCredentialPrefixes_AppearOnlyInTheExplicitShrinkOnlyOwnerList()
     {
         const int expectedOwnerCount = 4;
