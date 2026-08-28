@@ -101,6 +101,59 @@ public sealed class AutomationInvocationServiceTests
             "publication recovery may release a binding only after that exact provisional task was deleted");
     }
 
+    [Fact]
+    public async Task ScheduleReservation_RemainsDiscoverableUntilItsExactTaskIsPublished()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var activation = await ActivateAsync(db);
+        var project = ProjectId.Parse(activation.ProjectId);
+        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        const string occurrence = "workflow-schedule-trigger:triage:2026-08-01";
+
+        var claim = await service.TryClaimForProjectAsync(project, occurrence, null, "schedule");
+        claim.Should().NotBeNull();
+        (await service.TryClaimForProjectAsync(project, occurrence, null, "schedule")).Should().NotBeNull(
+            "a retry must resume the same durable invocation rather than treating its claim as a duplicate");
+
+        var reservation = await service.TryReserveBacklogTaskAsync(claim!.InvocationId, project);
+        reservation.Should().NotBeNull();
+        (await service.ListOutstandingScheduleInvocationsAsync(
+            project, "workflow-schedule-trigger:triage:", maximumCount: 1))
+            .Should().ContainSingle(x => x.InvocationId == claim.InvocationId && x.OccurrenceKey == occurrence);
+
+        (await service.TryBindBacklogTaskAsync(claim.InvocationId, project, reservation!.BacklogTaskId)).Should().BeTrue();
+        (await service.ListOutstandingScheduleInvocationsAsync(
+            project, "workflow-schedule-trigger:triage:", maximumCount: 1))
+            .Should().ContainSingle("a bound but unpublished task must survive schedule period rollover");
+
+        (await service.TryCompleteBacklogTaskReservationAsync(
+            claim.InvocationId, project, reservation.BacklogTaskId)).Should().BeTrue();
+        (await service.ListOutstandingScheduleInvocationsAsync(
+            project, "workflow-schedule-trigger:triage:", maximumCount: 1))
+            .Should().BeEmpty("completed publications must not grow each trigger's bounded reconciliation set");
+    }
+
+    [Fact]
+    public async Task OutstandingScheduleReservation_RefusesToSilentlyTruncate()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var activation = await ActivateAsync(db);
+        var project = ProjectId.Parse(activation.ProjectId);
+        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+
+        foreach (var key in new[] { "one", "two" })
+        {
+            var claim = await service.TryClaimForProjectAsync(
+                project, $"workflow-schedule-trigger:triage:{key}", null, "schedule");
+            (await service.TryReserveBacklogTaskAsync(claim!.InvocationId, project)).Should().NotBeNull();
+        }
+
+        await FluentActions.Invoking(() => service.ListOutstandingScheduleInvocationsAsync(
+                project, "workflow-schedule-trigger:triage:", maximumCount: 1))
+            .Should().ThrowAsync<InvalidOperationException>(
+                "the scheduler must fail safely instead of overlooking a valid reserved occurrence");
+    }
+
     private static async Task<FencedAutomationActivation> ActivateAsync(MemoryDbContext db, ProjectId? projectId = null)
     {
         var project = projectId ?? ProjectId.New();

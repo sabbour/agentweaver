@@ -86,10 +86,11 @@ public sealed class WorkflowEventTriggerService
 
             if (!string.IsNullOrWhiteSpace(dedupeKey))
             {
-                var alreadyFired = await _backlogStore
-                    .GetExistingTitlesFromSourceAsync(project.Id, idempotencyKey, ct)
-                    .ConfigureAwait(false);
-                if (alreadyFired.Count > 0)
+                var alreadyPublished = (await _backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false))
+                    .Any(task => string.Equals(task.SourceFilePath, idempotencyKey, StringComparison.Ordinal) &&
+                                 task.State == BacklogTaskState.Ready &&
+                                 !task.IsAutomationInvocationPending);
+                if (alreadyPublished)
                     continue;   // already fired for this dedupe key
             }
 
@@ -103,30 +104,11 @@ public sealed class WorkflowEventTriggerService
                 continue;
             }
 
-            var task = await WorkflowTriggerBacklogFactory.CreateProvisionalAutomationTaskAsync(
-                _backlogStore,
-                project,
-                def,
+            var task = await WorkflowTriggerBacklogFactory.RecoverAndPublishAutomationTaskAsync(
+                _backlogStore, invocations, invocation, project, def,
                 title: $"Event run: {def.Name}",
                 description: $"Automatically triggered by event '{eventName}' for the '{def.Id}' workflow.",
-                capturedBy: CapturedBy,
-                idempotencyKey: idempotencyKey,
-                now: now,
-                ct: ct).ConfigureAwait(false);
-            try
-            {
-                if (!await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
-                        .ConfigureAwait(false))
-                    throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
-                if (!await WorkflowTriggerBacklogFactory.TryPublishAsync(_backlogStore, project, task, now, ct)
-                        .ConfigureAwait(false))
-                    throw new InvalidOperationException("Unable to publish trusted automation invocation backlog task.");
-            }
-            catch
-            {
-                await DiscardUnpublishedTaskAsync(invocations, invocation, project, task).ConfigureAwait(false);
-                throw;
-            }
+                capturedBy: CapturedBy, idempotencyKey: idempotencyKey, now: now, ct: ct).ConfigureAwait(false);
 
             _logger.LogInformation(
                 "Workflow event trigger: fired workflow {WorkflowId} for project {ProjectId} on event {EventName} (task {TaskId})",
@@ -135,22 +117,5 @@ public sealed class WorkflowEventTriggerService
         }
 
         return fired;
-    }
-
-    private async Task DiscardUnpublishedTaskAsync(
-        IAutomationInvocationService invocations,
-        AutomationInvocationClaim invocation,
-        Project project,
-        BacklogTask task)
-    {
-        var deleted = await _backlogStore.TryDeleteProvisionalAutomationTaskAsync(project.Id, task.Id, CancellationToken.None)
-            .ConfigureAwait(false);
-        if (!deleted)
-            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
-        var released = await invocations.TryDiscardInvocationForTaskAsync(
-                invocation.InvocationId, project.Id, task.Id, CancellationToken.None)
-            .ConfigureAwait(false);
-        if (!released)
-            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
     }
 }

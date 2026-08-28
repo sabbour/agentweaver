@@ -171,6 +171,11 @@ public sealed class AutomationInvocationRecord
     /// populated from a client backlog request or a user-controlled idempotency key.
     /// </summary>
     public string? BacklogTaskId { get; set; }
+    /// <summary>
+    /// Server-owned identity reserved before provisional task insertion. The value remains until
+    /// publication completes, so a later scheduler period can resume an interrupted handoff.
+    /// </summary>
+    public string? PendingBacklogTaskId { get; set; }
     public string OccurrenceKey { get; set; } = "";
     public string? DeliveryId { get; set; }
     public string? EventName { get; set; }

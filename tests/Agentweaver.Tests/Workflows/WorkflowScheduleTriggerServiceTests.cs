@@ -131,6 +131,53 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
               - has_label: { label: "roadmap-review" }
         """;
 
+    private const string DailyYaml = """
+        id: scheduled-triage
+        name: Scheduled Triage
+        start: work
+        nodes:
+          - id: work
+            type: prompt
+            label: Work
+            role: backend-engineer
+            prompt: "Triage new issues."
+          - id: done
+            type: terminal
+            label: Done
+            role: plumbing
+        edges:
+          - from: work
+            to: done
+        trigger:
+          type: schedule
+          interval: daily
+          time_of_day: "09:00"
+        """;
+
+    private const string MonthlyFirstNineAmYaml = """
+        id: scheduled-triage
+        name: Scheduled Triage
+        start: work
+        nodes:
+          - id: work
+            type: prompt
+            label: Work
+            role: backend-engineer
+            prompt: "Triage new issues."
+          - id: done
+            type: terminal
+            label: Done
+            role: plumbing
+        edges:
+          - from: work
+            to: done
+        trigger:
+          type: schedule
+          interval: monthly
+          day_of_month: 1
+          time_of_day: "09:00"
+        """;
+
     [Fact]
     public async Task RunTick_WhenOccurrenceDue_CreatesReadyBacklogTaskBoundToWorkflow()
     {
@@ -216,6 +263,38 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
             because: "the occurrence already fired for this week — repeated ticks must not pile up runs");
     }
 
+    [Theory]
+    [InlineData("claim-before-stage")]
+    [InlineData("stage-before-bind")]
+    [InlineData("bind-before-publish")]
+    public async Task RunTick_DailyRollover_RecoversEveryInterruptedHandoffExactlyOnce(string interruption)
+    {
+        await AssertRolloverRecoveryAsync(
+            DailyYaml,
+            new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 7, 14, 9, 0, 0, TimeSpan.Zero),
+            "2026-07-13",
+            interruption);
+    }
+
+    [Fact]
+    public Task RunTick_WeeklyRollover_RecoversPriorProvisionalInvocationBeforeNewOccurrence() =>
+        AssertRolloverRecoveryAsync(
+            WeeklyMondayNineAmYaml,
+            new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 7, 20, 9, 0, 0, TimeSpan.Zero),
+            "2026-07-13",
+            "stage-before-bind");
+
+    [Fact]
+    public Task RunTick_MonthlyRollover_RecoversPriorBoundInvocationBeforeNewOccurrence() =>
+        AssertRolloverRecoveryAsync(
+            MonthlyFirstNineAmYaml,
+            new DateTimeOffset(2026, 8, 1, 9, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 9, 1, 9, 0, 0, TimeSpan.Zero),
+            "2026-08",
+            "bind-before-publish");
+
     [Fact]
     public async Task RunTick_NextOccurrence_FiresAgain()
     {
@@ -273,4 +352,81 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
 
         (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty();
     }
+
+    private async Task AssertRolloverRecoveryAsync(
+        string workflowYaml,
+        DateTimeOffset interruptedAt,
+        DateTimeOffset restartAt,
+        string interruptedPeriodKey,
+        string interruption)
+    {
+        var project = await SeedProjectAsync(workflowYaml);
+        var invocations = new RecoverableAutomationInvocationService();
+        await using var provider = CreateRecoveryProvider(invocations);
+        var service = CreateRecoveryService(provider);
+        var occurrenceKey = WorkflowScheduleTriggerService.BuildIdempotencyKey("scheduled-triage", interruptedPeriodKey);
+        BacklogTaskId? interruptedTaskId;
+
+        switch (interruption)
+        {
+            case "claim-before-stage":
+                using (var cancellation = new CancellationTokenSource())
+                {
+                    invocations.CancelOnNextReservation = cancellation;
+                    await FluentActions.Invoking(() => service.RunTickAsync(interruptedAt, cancellation.Token))
+                        .Should().ThrowAsync<OperationCanceledException>();
+                }
+                interruptedTaskId = invocations.ReservedTaskId;
+                break;
+
+            case "stage-before-bind":
+                invocations.ThrowOnNextBind = true;
+                await service.RunTickAsync(interruptedAt, CancellationToken.None);
+                interruptedTaskId = invocations.ReservedTaskId;
+                break;
+
+            case "bind-before-publish":
+                interruptedTaskId = invocations.ReserveOutstandingScheduleInvocation(occurrenceKey, isBound: true);
+                await _backlog.InsertAsync(new BacklogTask
+                {
+                    Id = interruptedTaskId.Value,
+                    ProjectId = project.Id,
+                    Title = "Scheduled run: Scheduled Triage",
+                    Description = "interrupted after binding",
+                    State = BacklogTaskState.Backlog,
+                    OrderKey = "n",
+                    CapturedBy = WorkflowScheduleTriggerService.CapturedBy,
+                    CreatedAt = interruptedAt,
+                    SourceFilePath = occurrenceKey,
+                    WorkflowOverrideId = "scheduled-triage",
+                    IsAutomationInvocationPending = true,
+                });
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(interruption));
+        }
+
+        await service.RunTickAsync(restartAt, CancellationToken.None);
+        await service.RunTickAsync(restartAt, CancellationToken.None);
+
+        var tasks = await _backlog.ListByProjectAsync(project.Id);
+        tasks.Should().HaveCount(2, "recovery publishes the old occurrence before the new period fires once");
+        tasks.Should().OnlyContain(task => task.State == BacklogTaskState.Ready && !task.IsAutomationInvocationPending);
+        tasks.Should().Contain(task => task.Id == interruptedTaskId.Value);
+    }
+
+    private ServiceProvider CreateRecoveryProvider(IAutomationInvocationService invocations) =>
+        new ServiceCollection()
+            .AddSingleton<IProjectStore>(_projects)
+            .AddSingleton<IBacklogTaskStore>(_backlog)
+            .AddSingleton(_registry)
+            .AddScoped<IAutomationInvocationService>(_ => invocations)
+            .BuildServiceProvider();
+
+    private static WorkflowScheduleTriggerService CreateRecoveryService(ServiceProvider provider) =>
+        new(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            new ConfigurationBuilder().Build(),
+            NullLogger<WorkflowScheduleTriggerService>.Instance);
 }

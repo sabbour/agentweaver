@@ -275,7 +275,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task FireEvent_WhenBindingFails_RemovesUnpublishedTaskSoDeliveryCanRetry()
+    public async Task FireEvent_WhenBindingFails_PreservesProvisionalTaskSoDeliveryCanRecover()
     {
         var project = await SeedProjectAsync(IssueOpenedEventYaml);
         var invocations = new FailFirstBindingInvocationService();
@@ -289,9 +289,11 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
         await FluentActions.Invoking(() => service.FireEventAsync(
                 project, "issue.opened", "retry-delivery", null, CancellationToken.None))
             .Should().ThrowAsync<InvalidOperationException>();
-        (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty(
-            "a failed binding must not leave a task that a coordinator can claim or that suppresses the retry");
-        invocations.ReleasedUnboundClaims.Should().Be(1);
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.Should().Match<BacklogTask>(task =>
+                task.State == BacklogTaskState.Backlog && task.IsAutomationInvocationPending,
+                "a failed binding remains unavailable to coordinator pickup until its delivery recovers");
+        invocations.ReleasedUnboundClaims.Should().Be(0);
 
         var retried = await service.FireEventAsync(
             project, "issue.opened", "retry-delivery", null, CancellationToken.None);
@@ -465,6 +467,7 @@ file sealed class LoggerAdapter<TCategory>(CapturingLogger inner) : Microsoft.Ex
 file sealed class FailFirstBindingInvocationService : Agentweaver.Api.Auth.IAutomationInvocationService
 {
     private int _bindings;
+    private BacklogTaskId? _reservation;
 
     public int ReleasedUnboundClaims { get; private set; }
 
@@ -475,6 +478,22 @@ file sealed class FailFirstBindingInvocationService : Agentweaver.Api.Auth.IAuto
     public Task<bool> TryBindBacklogTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
         Task.FromResult(Interlocked.Increment(ref _bindings) != 1);
+
+    public Task<Agentweaver.Api.Auth.AutomationInvocationTaskReservation?> TryReserveBacklogTaskAsync(
+        string invocationId, ProjectId projectId, CancellationToken ct = default)
+    {
+        _reservation ??= BacklogTaskId.New();
+        return Task.FromResult<Agentweaver.Api.Auth.AutomationInvocationTaskReservation?>(
+            new(_reservation.Value, IsBound: _bindings > 1));
+    }
+
+    public Task<IReadOnlyList<Agentweaver.Api.Auth.OutstandingScheduleInvocation>> ListOutstandingScheduleInvocationsAsync(
+        ProjectId projectId, string occurrenceKeyPrefix, int maximumCount, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<Agentweaver.Api.Auth.OutstandingScheduleInvocation>>([]);
+
+    public Task<bool> TryCompleteBacklogTaskReservationAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
 
     public Task<bool> TryDiscardInvocationForTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default)
