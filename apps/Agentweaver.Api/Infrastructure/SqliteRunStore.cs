@@ -23,13 +23,13 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
-                              submitting_user, status, started_at, ended_at, result,
+                              submitting_user, status, approval_generation, started_at, ended_at, result,
                               worktree_path, worktree_branch, project_id, model_id,
                               agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id,
                               origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
                               sandbox_pod_name, sandbox_namespace, workflow_selection_reason)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
-                    $user, $status, $startedAt, $endedAt, $result,
+                    $user, $status, $approvalGeneration, $startedAt, $endedAt, $result,
                     $worktreePath, $worktreeBranch, $projectId, $modelId,
                     $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId,
                     $origin, $retriedFrom, $archivedAt, $sandboxBackend, $sandboxClaimName,
@@ -42,6 +42,7 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$task", run.Task);
         command.Parameters.AddWithValue("$user", run.SubmittingUser);
         command.Parameters.AddWithValue("$status", run.Status.ToApiString());
+        command.Parameters.AddWithValue("$approvalGeneration", run.ApprovalGeneration);
         command.Parameters.AddWithValue("$startedAt", Ts(run.StartedAt));
         command.Parameters.AddWithValue("$endedAt", NullableTs(run.EndedAt));
         command.Parameters.AddWithValue("$result", (object?)run.Result ?? DBNull.Value);
@@ -93,7 +94,13 @@ public sealed class SqliteRunStore : IRunStore
     public async Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default)
     {
         var rows = await ExecuteNonQueryAsync(
-            "UPDATE runs SET status = $status, ended_at = $endedAt WHERE run_id = $runId;",
+            """
+            UPDATE runs
+               SET status = $status, ended_at = $endedAt,
+                   approval_generation = approval_generation +
+                       CASE WHEN status = 'in_progress' AND $status <> 'in_progress' THEN 1 ELSE 0 END
+             WHERE run_id = $runId;
+            """,
             cmd =>
             {
                 cmd.Parameters.AddWithValue("$status", status.ToApiString());
@@ -106,7 +113,13 @@ public sealed class SqliteRunStore : IRunStore
     public async Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default)
     {
         var rows = await ExecuteNonQueryAsync(
-            "UPDATE runs SET status = $status, ended_at = $endedAt, result = $result WHERE run_id = $runId;",
+            """
+            UPDATE runs
+               SET status = $status, ended_at = $endedAt, result = $result,
+                   approval_generation = approval_generation +
+                       CASE WHEN status = 'in_progress' AND $status <> 'in_progress' THEN 1 ELSE 0 END
+             WHERE run_id = $runId;
+            """,
             cmd =>
             {
                 cmd.Parameters.AddWithValue("$status", status.ToApiString());
@@ -125,7 +138,9 @@ public sealed class SqliteRunStore : IRunStore
         var rows = await ExecuteNonQueryAsync(
             """
             UPDATE runs
-               SET tree_hash = $treeHash, diff = $diff, status = $status, review_ready_at = $now
+               SET tree_hash = $treeHash, diff = $diff, status = $status, review_ready_at = $now,
+                   approval_generation = approval_generation +
+                       CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END
              WHERE run_id = $runId
                AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
             """,
@@ -338,6 +353,8 @@ public sealed class SqliteRunStore : IRunStore
             UPDATE runs
                SET status = 'assemble_ready', tree_hash = $treeHash,
                    worktree_branch = $worktreeBranch, diff = $diff, ended_at = $endedAt
+                   , approval_generation = approval_generation +
+                       CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END
              WHERE run_id = $runId
                AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
             """;
@@ -358,7 +375,9 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             UPDATE runs
-               SET status = $toStatus, ended_at = $endedAt, result = $result
+               SET status = $toStatus, ended_at = $endedAt, result = $result,
+                   approval_generation = approval_generation +
+                       CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END
              WHERE run_id = $runId
                AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
             """;
@@ -378,7 +397,7 @@ public sealed class SqliteRunStore : IRunStore
         var rows = await ExecuteNonQueryAsync(
             """
             UPDATE runs
-               SET status = $idle
+               SET status = $idle, approval_generation = approval_generation + 1
              WHERE run_id = $runId AND status = 'in_progress';
             """,
             cmd =>
@@ -661,16 +680,16 @@ public sealed class SqliteRunStore : IRunStore
     }
 
     // Ordinals: 0=run_id 1=repository_path 2=originating_branch 3=model_source 4=task
-    //           5=submitting_user 6=status 7=started_at 8=ended_at 9=result
-    //           10=worktree_path 11=worktree_branch 12=tree_hash 13=diff 14=merge_conflicts
-    //           15=project_id 16=model_id 17=agent_name 18=agent_charter 19=reviewed_by
-    //           20=workflow_run_id 21=merged_commit_hash 22=parent_run_id 23=subtask_id
-    //           24=origin 25=retried_from 26=archived_at 27=sandbox_backend 28=sandbox_claim_name
-    //           29=sandbox_pod_name 30=sandbox_namespace 31=workflow_selection_reason
+    //           5=submitting_user 6=status 7=approval_generation 8=started_at 9=ended_at 10=result
+    //           11=worktree_path 12=worktree_branch 13=tree_hash 14=diff 15=merge_conflicts
+    //           16=project_id 17=model_id 18=agent_name 19=agent_charter 20=reviewed_by
+    //           21=workflow_run_id 22=merged_commit_hash 23=parent_run_id 24=subtask_id
+    //           25=origin 26=retried_from 27=archived_at 28=sandbox_backend 29=sandbox_claim_name
+    //           30=sandbox_pod_name 31=sandbox_namespace 32=workflow_selection_reason
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
-               submitting_user, status, started_at, ended_at, result,
+               submitting_user, status, approval_generation, started_at, ended_at, result,
                worktree_path, worktree_branch, tree_hash, diff, merge_conflicts,
                project_id, model_id, agent_name, agent_charter, reviewed_by,
                workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
@@ -688,32 +707,33 @@ public sealed class SqliteRunStore : IRunStore
         Task             = r.GetString(4),
         SubmittingUser   = r.GetString(5),
         Status           = RunStatusExtensions.ParseStatus(r.GetString(6)),
-        StartedAt        = DateTimeOffset.Parse(r.GetString(7), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        EndedAt          = r.IsDBNull(8)  ? null : DateTimeOffset.Parse(r.GetString(8),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        Result           = r.IsDBNull(9)  ? null : r.GetString(9),
-        WorktreePath     = r.IsDBNull(10) ? null : r.GetString(10),
-        WorktreeBranch   = r.IsDBNull(11) ? null : r.GetString(11),
-        TreeHash         = r.IsDBNull(12) ? null : r.GetString(12),
+        ApprovalGeneration = r.GetInt32(7),
+        StartedAt        = DateTimeOffset.Parse(r.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        EndedAt          = r.IsDBNull(9)  ? null : DateTimeOffset.Parse(r.GetString(9),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        Result           = r.IsDBNull(10) ? null : r.GetString(10),
+        WorktreePath     = r.IsDBNull(11) ? null : r.GetString(11),
+        WorktreeBranch   = r.IsDBNull(12) ? null : r.GetString(12),
+        TreeHash         = r.IsDBNull(13) ? null : r.GetString(13),
         StepCount        = 0,
-        Diff             = r.IsDBNull(13) ? null : r.GetString(13),
-        MergeConflicts   = r.IsDBNull(14) ? null : r.GetString(14),
-        ProjectId        = r.IsDBNull(15) ? null : ProjectId.Parse(r.GetString(15)),
-        ModelId          = r.IsDBNull(16) ? null : r.GetString(16),
-        AgentName        = r.IsDBNull(17) ? null : r.GetString(17),
-        AgentCharter     = r.IsDBNull(18) ? null : r.GetString(18),
-        ReviewedBy       = r.IsDBNull(19) ? null : r.GetString(19),
-        WorkflowRunId    = r.IsDBNull(20) ? null : r.GetString(20),
-        MergedCommitHash = r.IsDBNull(21) ? null : r.GetString(21),
-        ParentRunId      = r.IsDBNull(22) ? null : r.GetString(22),
-        SubtaskId        = r.IsDBNull(23) ? null : r.GetString(23),
-        Origin           = RunOriginExtensions.ParseOrigin(r.IsDBNull(24) ? null : r.GetString(24)),
-        RetriedFrom      = r.IsDBNull(25) ? null : r.GetString(25),
-        ArchivedAt       = r.IsDBNull(26) ? null : DateTimeOffset.Parse(r.GetString(26), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        SandboxBackend   = r.IsDBNull(27) ? null : r.GetString(27),
-        SandboxClaimName = r.IsDBNull(28) ? null : r.GetString(28),
-        SandboxPodName   = r.IsDBNull(29) ? null : r.GetString(29),
-        SandboxNamespace = r.IsDBNull(30) ? null : r.GetString(30),
-        WorkflowSelectionReason = r.IsDBNull(31) ? null : r.GetString(31),
+        Diff             = r.IsDBNull(14) ? null : r.GetString(14),
+        MergeConflicts   = r.IsDBNull(15) ? null : r.GetString(15),
+        ProjectId        = r.IsDBNull(16) ? null : ProjectId.Parse(r.GetString(16)),
+        ModelId          = r.IsDBNull(17) ? null : r.GetString(17),
+        AgentName        = r.IsDBNull(18) ? null : r.GetString(18),
+        AgentCharter     = r.IsDBNull(19) ? null : r.GetString(19),
+        ReviewedBy       = r.IsDBNull(20) ? null : r.GetString(20),
+        WorkflowRunId    = r.IsDBNull(21) ? null : r.GetString(21),
+        MergedCommitHash = r.IsDBNull(22) ? null : r.GetString(22),
+        ParentRunId      = r.IsDBNull(23) ? null : r.GetString(23),
+        SubtaskId        = r.IsDBNull(24) ? null : r.GetString(24),
+        Origin           = RunOriginExtensions.ParseOrigin(r.IsDBNull(25) ? null : r.GetString(25)),
+        RetriedFrom      = r.IsDBNull(26) ? null : r.GetString(26),
+        ArchivedAt       = r.IsDBNull(27) ? null : DateTimeOffset.Parse(r.GetString(27), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        SandboxBackend   = r.IsDBNull(28) ? null : r.GetString(28),
+        SandboxClaimName = r.IsDBNull(29) ? null : r.GetString(29),
+        SandboxPodName   = r.IsDBNull(30) ? null : r.GetString(30),
+        SandboxNamespace = r.IsDBNull(31) ? null : r.GetString(31),
+        WorkflowSelectionReason = r.IsDBNull(32) ? null : r.GetString(32),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

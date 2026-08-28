@@ -13,6 +13,11 @@ public sealed record Run
     public required string Task { get; init; }
     public required string SubmittingUser { get; init; }
     public required RunStatus Status { get; init; }
+    /// <summary>
+    /// Monotonically advances whenever the run leaves InProgress. Run-scoped approval policies
+    /// are bound to this lifecycle generation so they cannot become valid after recovery.
+    /// </summary>
+    public int ApprovalGeneration { get; init; } = 1;
     public required DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset? EndedAt { get; init; }
     public string? Result { get; init; }

@@ -27,6 +27,28 @@ public sealed class AgentHostApprovalHttpClientTests
     }
 
     [Fact]
+    public async Task GrantScoped_SendsApiCreatedGrantIdAndExpiry()
+    {
+        var handler = new CapturingHandler(
+            """{"resolved":true,"applied":true,"state":"approved","scopeGrantId":"provisional-grant"}""");
+        var client = CreateClient(handler, Origin);
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var result = await client.GrantScopedAsync(
+            "child-run",
+            "request-1",
+            "run",
+            "provisional-grant",
+            expiresAt,
+            "pod-bearer",
+            CancellationToken.None);
+
+        result.ScopeGrantId.Should().Be("provisional-grant");
+        handler.Body.Should().Contain("\"scopeGrantId\":\"provisional-grant\"");
+        handler.Body.Should().Contain("\"scopeExpiresAt\"");
+    }
+
+    [Fact]
     public async Task NullOrigin_ReturnsUnreachable()
     {
         var handler = new CapturingHandler("""{"resolved":true,"state":"approved"}""");
@@ -52,6 +74,47 @@ public sealed class AgentHostApprovalHttpClientTests
         result.Should().Be(new AgentHostApprovalOutcome(false, "pending", false, 409));
         handler.LastRequest!.RequestUri!.ToString().Should().Be($"{Origin}/tool-denials");
         handler.Body.Should().NotContain("\"scope\"");
+    }
+
+    [Fact]
+    public async Task GetPendingContext_TargetsRequestPathWithoutResolvingIt()
+    {
+        var handler = new CapturingHandler(
+            """{"resolved":false,"state":"pending","toolName":"web_fetch","url":"https://example.test"}""");
+        var client = CreateClient(handler, Origin);
+
+        var result = await client.GetPendingContextAsync(
+            "child-run", "request/1", "pod-bearer", CancellationToken.None);
+
+        result.Should().Be(new AgentHostApprovalOutcome(
+            false,
+            "pending",
+            false,
+            200,
+            ToolName: "web_fetch",
+            Url: "https://example.test"));
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        handler.LastRequest.RequestUri!.ToString().Should().Be($"{Origin}/tool-approvals/request%2F1");
+        handler.Body.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RollbackScope_TargetsRequestPathWithExactScopeGrantId()
+    {
+        var handler = new CapturingHandler(
+            """{"resolved":false,"state":"rolled_back","rolledBack":true}""");
+        var client = CreateClient(handler, Origin);
+
+        var result = await client.RollbackScopeAsync(
+            "child-run", "request/1", "provisional-grant", "pod-bearer", CancellationToken.None);
+
+        result.RolledBack.Should().BeTrue();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be($"{Origin}/tool-approvals/request%2F1/rollback");
+        handler.Body.Should().Contain("\"runId\":\"child-run\"");
+        handler.Body.Should().Contain("\"requestId\":\"request/1\"");
+        handler.Body.Should().Contain("\"scopeGrantId\":\"provisional-grant\"");
     }
 
     private static AgentHostApprovalHttpClient CreateClient(HttpMessageHandler handler, string? origin) =>

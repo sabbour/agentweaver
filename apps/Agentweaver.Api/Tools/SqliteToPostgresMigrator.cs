@@ -769,16 +769,20 @@ public sealed class SqliteToPostgresMigrator
     private static async Task<List<RunRecord>> ReadRunsAsync(SqliteConnection conn, CancellationToken ct)
     {
         var results = new List<RunRecord>();
+        var approvalGenerationColumn = await HasColumnAsync(conn, "runs", "approval_generation", ct)
+            ? "COALESCE(approval_generation, 1)"
+            : "1";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
-            """
+            $"""
             SELECT run_id, repository_path, originating_branch, model_source, task,
                   submitting_user, status, started_at, ended_at, result,
                   worktree_path, worktree_branch, tree_hash, diff,
                   merge_conflicts, project_id, model_id, agent_name, agent_charter,
                   reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                   COALESCE(origin,'interactive'), retried_from, review_ready_at, archived_at,
-                  sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace
+                  sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace,
+                  {approvalGenerationColumn}
               FROM runs;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -818,6 +822,7 @@ public sealed class SqliteToPostgresMigrator
                 SandboxClaimName = reader.IsDBNull(29) ? null : reader.GetString(29),
                 SandboxPodName = reader.IsDBNull(30) ? null : reader.GetString(30),
                 SandboxNamespace = reader.IsDBNull(31) ? null : reader.GetString(31),
+                ApprovalGeneration = reader.GetInt32(32),
             });
         }
         return results;

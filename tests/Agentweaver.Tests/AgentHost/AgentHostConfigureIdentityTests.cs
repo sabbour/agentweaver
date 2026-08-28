@@ -52,4 +52,25 @@ public sealed class AgentHostConfigureIdentityTests
         state.ProjectId.Should().Be("project-335");
         state.AgentName.Should().Be("Stark");
     }
+
+    [Fact]
+    public void TryConfigure_uses_run_capability_for_durable_approval_policy_access()
+    {
+        var state = new AgentHostRuntimeState();
+
+        state.TryConfigure(new AgentHostRunConfiguration(
+            RunId: "run-approval-policy",
+            UserId: "sabbour",
+            TurnBearerToken: "per-run-capability",
+            KvUserSecretName: null,
+            GitHubAccessToken: null,
+            PreviewRunnerCredential: null,
+            SharedWorkingDirectory: "/workspace/run-approval-policy",
+            ToolApprovalApiBaseUrl: "https://agentweaver-api.internal")).Should().BeTrue();
+
+        state.ToolApprovalApiAccess.Should().NotBeNull();
+        state.ToolApprovalApiAccess!.BaseUrl.Should().Be("https://agentweaver-api.internal");
+        state.ToolApprovalApiAccess.BearerToken.Should().Be("per-run-capability",
+            "warm-pool policy reads must use the run-bound capability, never a broad API key");
+    }
 }
