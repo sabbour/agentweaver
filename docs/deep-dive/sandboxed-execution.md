@@ -83,6 +83,9 @@ The API (`GET /api/sandbox-policy`, `PUT /api/sandbox-policy`) reads and writes 
 | `MaxOutputBytes` | `int` | `4194304` (4 MB) | Output cap. Results exceeding this are truncated and marked with `OutputTruncated: true`. |
 
 The policy is read through `ISandboxPolicyStore.GetPolicyAsync` and is configurable via the API at `GET /api/sandbox-policy` and `PUT /api/sandbox-policy`. See [sandbox-setup.md](../reference/sandbox-setup.md) for operator instructions.
+When the settings file has no `sandbox` section, or its `sandbox` section omits
+`destructive_command_patterns`, the canonical default approval patterns apply. An explicit list,
+including `[]`, is an intentional override.
 
 The API sends one short-lived installation credential for the selected repository and run. When
 that credential is used, the sandbox parses the command and starts the approved `git` or `gh`

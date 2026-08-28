@@ -3,9 +3,17 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentTools;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
+using Agentweaver.SandboxFs;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Sandbox;
@@ -179,6 +187,56 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplic
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Fact]
+    public async Task GetPolicy_FileWithoutSandboxSection_UsesCanonicalApprovalPatterns()
+    {
+        await WriteSettingsAsync(
+            """
+            project:
+              name: policy-test
+            """);
+
+        var policy = await _factory.Services.GetRequiredService<ISandboxPolicyStore>()
+            .GetPolicyAsync(_repoPath);
+
+        AssertCanonicalPatternDefaults(policy, _repoPath);
+        await AssertCanonicalCommandsRequireApprovalAsync(policy);
+    }
+
+    [Fact]
+    public async Task GetPolicy_SandboxWithoutDestructivePatterns_UsesCanonicalApprovalPatterns()
+    {
+        await WriteSettingsAsync(
+            """
+            sandbox:
+              shell_enabled: true
+              network_enabled: false
+            """);
+
+        var policy = await _factory.Services.GetRequiredService<ISandboxPolicyStore>()
+            .GetPolicyAsync(_repoPath);
+
+        policy.NetworkEnabled.Should().BeFalse();
+        AssertCanonicalPatternDefaults(policy, _repoPath);
+        await AssertCanonicalCommandsRequireApprovalAsync(policy);
+    }
+
+    [Fact]
+    public async Task GetPolicy_ExplicitDestructivePatterns_RemainsAnIntentionalOverride()
+    {
+        await WriteSettingsAsync(
+            """
+            sandbox:
+              destructive_command_patterns:
+                - user-defined-command
+            """);
+
+        var policy = await _factory.Services.GetRequiredService<ISandboxPolicyStore>()
+            .GetPolicyAsync(_repoPath);
+
+        policy.DestructiveCommandPatterns.Should().Equal("user-defined-command");
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private async Task SeedFullPolicyAsync()
@@ -220,4 +278,85 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplic
 
     private static string[] Roots(JsonElement body, string property) =>
         body.GetProperty(property).EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+    private static void AssertCanonicalPatternDefaults(SandboxPolicy policy, string repositoryPath) =>
+        policy.DestructiveCommandPatterns.Should().Equal(
+            SandboxPolicy.Default(repositoryPath).DestructiveCommandPatterns);
+
+    private Task WriteSettingsAsync(string yaml)
+    {
+        var settingsDirectory = Path.Combine(_repoPath, ".agentweaver");
+        Directory.CreateDirectory(settingsDirectory);
+        File.WriteAllText(Path.Combine(settingsDirectory, "settings.yml"), yaml);
+        return Task.CompletedTask;
+    }
+
+    private static async Task AssertCanonicalCommandsRequireApprovalAsync(SandboxPolicy policy)
+    {
+        var executor = new ApprovalRequiredExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var context = new SandboxToolContext(
+            AgentId: "agent",
+            WorkingDirectory: policy.RepositoryPath,
+            SandboxRoot: policy.RepositoryPath,
+            Executor: executor,
+            FileTools: new SandboxedFileTools(policy.RepositoryPath),
+            SearchTools: new SandboxedSearchTools(policy.RepositoryPath),
+            Redactor: SandboxOutputRedactor.Default,
+            Options: new SandboxToolOptions(ShellEnabled: true)
+            {
+                DestructiveCommandPatterns = [.. policy.DestructiveCommandPatterns],
+            },
+            Logger: NullLogger.Instance,
+            ShellExecutionTracker: tracker);
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(tool => tool.Name == "run_command");
+
+        foreach (var command in new[]
+                 {
+                     "gh api /user",
+                     "git push origin main",
+                     "gh auth login",
+                     "gh auth logout",
+                     "gh pr create --title test --body test",
+                     "gh pr merge 1",
+                     "gh pr close 1",
+                     "gh repo delete example/repo",
+                     "gh repo archive example/repo",
+                 })
+        {
+            var result = await tool.InvokeAsync(new AIFunctionArguments(
+                new Dictionary<string, object?> { ["command"] = command }));
+            result?.ToString().Should().Contain("requires operator approval");
+        }
+
+        executor.ExecuteCalls.Should().Be(0);
+    }
+
+    private sealed class ApprovalRequiredExecutor : ISandboxExecutor
+    {
+        public int ExecuteCalls { get; private set; }
+        public bool IsRealIsolation => true;
+        public string BackendName => "test";
+        public string SelectionReason => "test";
+        public bool HasNetworkWarning => false;
+        public string? NetworkWarningMessage => null;
+
+        public Task<SandboxExecResult> ExecuteAsync(
+            SandboxCommand command,
+            CancellationToken ct = default)
+        {
+            ExecuteCalls++;
+            return Task.FromResult(new SandboxExecResult(0, "", "", false, false));
+        }
+
+        public async IAsyncEnumerable<SandboxOutputChunk> StreamAsync(
+            SandboxCommand command,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+    }
 }
