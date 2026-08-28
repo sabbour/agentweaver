@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
@@ -59,6 +60,43 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
             "with no signed-in GitHub identity, CapturedBy falls back to the API-key Auth:User");
     }
 
+    [Theory]
+    [InlineData("external_id", "automation-invocation:forged")]
+    [InlineData("client_request_id", "workflow-event-trigger:forged")]
+    public async Task Capture_ReservedAutomationExternalIds_AreRejected(string propertyName, string externalId)
+    {
+        var projectId = await CreateProjectAsync();
+        var body = propertyName == "external_id"
+            ? new Dictionary<string, string> { ["title"] = "forged automation", ["external_id"] = externalId }
+            : new Dictionary<string, string> { ["title"] = "forged automation", ["client_request_id"] = externalId };
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/backlog/tasks", body);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "only the server-side trusted trigger path may associate a task with automation");
+    }
+
+    [Fact]
+    public async Task Capture_IgnoresClientSuppliedProvisionalAutomationMarker()
+    {
+        var projectId = await CreateProjectAsync();
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/backlog/tasks", new
+        {
+            title = "ordinary task",
+            is_automation_invocation_pending = true,
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var taskId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("task_id").GetString()!;
+        var task = await _factory.Services.GetRequiredService<IBacklogTaskStore>()
+            .GetAsync(ProjectId.Parse(projectId), BacklogTaskId.Parse(taskId));
+        task!.IsAutomationInvocationPending.Should().BeFalse(
+            "the provisional marker is never accepted from a contributor request");
+        (await _client.PostAsync($"/api/projects/{projectId}/backlog/tasks/{taskId}/ready", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.OK,
+                "ordinary contributor backlog work must remain promotable");
+    }
+
     // =========================================================================
     // READY-ALL: bulk promote Backlog -> Ready.
     // =========================================================================
@@ -89,6 +127,44 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
         var resp = await _client.PostAsync($"/api/projects/{projectId}/backlog/ready-all", content: null);
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("moved").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Ready_ProvisionalAutomationTask_IsNotPromotedByContributorEndpoint()
+    {
+        var projectId = await CreateProjectAsync();
+        var provisional = await CreateProvisionalAutomationTaskAsync(projectId);
+
+        var response = await _client.PostAsync(
+            $"/api/projects/{projectId}/backlog/tasks/{provisional.Id}/ready", content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var persisted = await _factory.Services.GetRequiredService<IBacklogTaskStore>()
+            .GetAsync(ProjectId.Parse(projectId), provisional.Id);
+        persisted.Should().NotBeNull();
+        persisted!.State.Should().Be(BacklogTaskState.Backlog);
+        persisted.IsAutomationInvocationPending.Should().BeTrue(
+            "only the trusted trigger publication path may release its provisional task");
+    }
+
+    [Fact]
+    public async Task ReadyAll_LeavesProvisionalAutomationTaskInBacklog()
+    {
+        var projectId = await CreateProjectAsync();
+        var provisional = await CreateProvisionalAutomationTaskAsync(projectId);
+        await CaptureAsync(projectId, "ordinary contributor task");
+
+        var response = await _client.PostAsync($"/api/projects/{projectId}/backlog/ready-all", content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("moved").GetInt32().Should().Be(1);
+        var tasks = await _factory.Services.GetRequiredService<IBacklogTaskStore>()
+            .ListByProjectAsync(ProjectId.Parse(projectId));
+        tasks.Should().ContainSingle(t => t.Id == provisional.Id
+            && t.State == BacklogTaskState.Backlog
+            && t.IsAutomationInvocationPending);
+        tasks.Should().ContainSingle(t => t.Title == "ordinary contributor task"
+            && t.State == BacklogTaskState.Ready);
     }
 
     [Fact]
@@ -149,6 +225,23 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
             $"/api/projects/{projectId}/backlog/tasks", new { title });
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "capturing a task must return 201");
         return await resp.Content.ReadFromJsonAsync<JsonElement>();
+    }
+
+    private async Task<BacklogTask> CreateProvisionalAutomationTaskAsync(string projectId)
+    {
+        var task = new BacklogTask
+        {
+            Id = BacklogTaskId.New(),
+            ProjectId = ProjectId.Parse(projectId),
+            Title = "trusted automation invocation",
+            State = BacklogTaskState.Backlog,
+            OrderKey = "n",
+            CapturedBy = "automation:test",
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsAutomationInvocationPending = true,
+        };
+        await _factory.Services.GetRequiredService<IBacklogTaskStore>().InsertAsync(task);
+        return task;
     }
 
     private static int CountCardsInColumn(JsonElement board, string columnId) =>

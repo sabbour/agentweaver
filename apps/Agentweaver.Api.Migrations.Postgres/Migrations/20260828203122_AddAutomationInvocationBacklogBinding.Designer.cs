@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Api.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260828203122_AddAutomationInvocationBacklogBinding")]
+    partial class AddAutomationInvocationBacklogBinding
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -567,10 +570,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("backlog_task_id");
 
-                    b.Property<string>("PendingBacklogTaskId")
-                        .HasColumnType("text")
-                        .HasColumnName("pending_backlog_task_id");
-
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
@@ -620,11 +619,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsUnique()
                         .HasDatabaseName("UX_automation_invocations_delivery_id")
                         .HasFilter("delivery_id IS NOT NULL");
-
-                    b.HasIndex("PendingBacklogTaskId")
-                        .IsUnique()
-                        .HasDatabaseName("UX_automation_invocations_pending_backlog_task_id")
-                        .HasFilter("pending_backlog_task_id IS NOT NULL");
 
                     b.HasIndex("ProjectId");
 
@@ -698,12 +692,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("text")
                         .HasColumnName("description");
-
-                    b.Property<bool>("IsAutomationInvocationPending")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false)
-                        .HasColumnName("automation_invocation_pending");
 
                     b.Property<string>("OrderKey")
                         .IsRequired()

@@ -271,6 +271,8 @@ builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlem
 builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
 builder.Services.AddScoped<TwoAppPersistenceStore>();
 builder.Services.AddScoped<AutomationActivationSnapshotService>();
+builder.Services.AddScoped<AutomationInvocationService>();
+builder.Services.AddScoped<IAutomationInvocationService>(sp => sp.GetRequiredService<AutomationInvocationService>());
 builder.Services.AddScoped<ITwoAppCredentialVault, TwoAppCredentialVault>();
 builder.Services.AddScoped<GitHubRepositorySelectionClient>();
 builder.Services.AddScoped<GitHubRepositorySelectionBroker>();

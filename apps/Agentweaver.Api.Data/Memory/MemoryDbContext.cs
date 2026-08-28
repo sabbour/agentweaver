@@ -433,6 +433,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.ParentPrdRunId).HasColumnName("parent_prd_run_id");
             e.Property(t => t.PromotionKey).HasColumnName("promotion_key");
             e.Property(t => t.PromotionReason).HasColumnName("promotion_reason");
+            e.Property(t => t.IsAutomationInvocationPending)
+                .HasColumnName("automation_invocation_pending")
+                .HasDefaultValue(false);
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })
                 .HasDatabaseName("IX_backlog_tasks_project_state_orderkey");
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })
@@ -709,6 +712,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.Id).HasColumnName("id");
             e.Property(x => x.ProjectId).HasColumnName("project_id");
             e.Property(x => x.ActivationId).HasColumnName("activation_id");
+            e.Property(x => x.BacklogTaskId).HasColumnName("backlog_task_id");
+            e.Property(x => x.PendingBacklogTaskId).HasColumnName("pending_backlog_task_id");
             e.Property(x => x.OccurrenceKey).HasColumnName("occurrence_key");
             e.Property(x => x.DeliveryId).HasColumnName("delivery_id");
             e.Property(x => x.EventName).HasColumnName("event_name");
@@ -718,6 +723,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ReceivedAt).HasColumnName("received_at");
             e.Property(x => x.CompletedAt).HasColumnName("completed_at");
             e.HasIndex(x => new { x.ActivationId, x.OccurrenceKey }).IsUnique();
+            e.HasIndex(x => x.BacklogTaskId).IsUnique().HasFilter("backlog_task_id IS NOT NULL")
+                .HasDatabaseName("UX_automation_invocations_backlog_task_id");
+            e.HasIndex(x => x.PendingBacklogTaskId).IsUnique().HasFilter("pending_backlog_task_id IS NOT NULL")
+                .HasDatabaseName("UX_automation_invocations_pending_backlog_task_id");
             e.HasIndex(x => x.DeliveryId).IsUnique().HasFilter("delivery_id IS NOT NULL")
                 .HasDatabaseName("UX_automation_invocations_delivery_id");
             e.HasOne<AutomationActivationRecord>().WithMany().HasForeignKey(x => x.ActivationId)

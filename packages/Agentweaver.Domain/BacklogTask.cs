@@ -65,4 +65,11 @@ public sealed record BacklogTask
     /// Null for manually captured and legacy backlog tasks.
     /// </summary>
     public string? PromotionReason { get; init; }
+
+    /// <summary>
+    /// Server-owned gate for a trusted automation trigger whose invocation is being bound. A
+    /// provisional task remains in Backlog but cannot be published or otherwise mutated through
+    /// contributor backlog operations.
+    /// </summary>
+    public bool IsAutomationInvocationPending { get; init; }
 }

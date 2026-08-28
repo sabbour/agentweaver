@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Agentweaver.Api.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260828203038_AddAutomationInvocationBacklogBinding")]
+    partial class AddAutomationInvocationBacklogBinding
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.7");
@@ -548,10 +551,6 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("backlog_task_id");
 
-                    b.Property<string>("PendingBacklogTaskId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("pending_backlog_task_id");
-
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("TEXT")
                         .HasColumnName("completed_at");
@@ -601,11 +600,6 @@ namespace Agentweaver.Api.Migrations
                         .IsUnique()
                         .HasDatabaseName("UX_automation_invocations_delivery_id")
                         .HasFilter("delivery_id IS NOT NULL");
-
-                    b.HasIndex("PendingBacklogTaskId")
-                        .IsUnique()
-                        .HasDatabaseName("UX_automation_invocations_pending_backlog_task_id")
-                        .HasFilter("pending_backlog_task_id IS NOT NULL");
 
                     b.HasIndex("ProjectId");
 

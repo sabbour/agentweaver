@@ -53,6 +53,8 @@ public static class BacklogEndpoints
             var capturedBy = login ?? caller.User;
 
             var externalId = FirstNonEmpty(request.ExternalId, request.ClientRequestId);
+            if (IsReservedAutomationSource(externalId))
+                return Results.BadRequest(new { error = "external_id uses a reserved automation source." });
             var existing = await backlogStore.ListByProjectAsync(pid, ct);
             if (externalId is not null)
             {
@@ -61,6 +63,7 @@ public static class BacklogEndpoints
                 if (existingTask is not null)
                     return Results.Ok(await readModelFactory.BuildTaskDtoAsync(existingTask, ct));
             }
+
             var orderKey = KeyForIndex(BucketKeys(existing, BacklogTaskState.Backlog), targetIndex: null, movingTaskId: null);
 
             var task = new BacklogTask
@@ -463,4 +466,9 @@ public static class BacklogEndpoints
     private static string? FirstNonEmpty(params string?[] values) =>
         values.Select(v => string.IsNullOrWhiteSpace(v) ? null : v.Trim())
             .FirstOrDefault(v => v is not null);
+
+    private static bool IsReservedAutomationSource(string? value) =>
+        value?.StartsWith("automation-invocation:", StringComparison.Ordinal) == true ||
+        value?.StartsWith("workflow-schedule-trigger:", StringComparison.Ordinal) == true ||
+        value?.StartsWith("workflow-event-trigger:", StringComparison.Ordinal) == true;
 }
