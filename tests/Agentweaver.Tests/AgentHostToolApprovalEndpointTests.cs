@@ -277,6 +277,46 @@ public sealed class AgentHostToolApprovalEndpointTests
             "a response that cannot be finalized by the API must not leave a usable local scope");
     }
 
+    [Theory]
+    [InlineData("run")]
+    [InlineData("tool")]
+    [InlineData("always")]
+    public async Task FinalizedLocalScope_RequiresDurablePolicyAfterCancellation_WhenPodReaperIsDelayed(
+        string scope)
+    {
+        var state = ConfiguredState();
+        var policyClient = new RecordingPolicyClient(autoApproved: true);
+        var gate = new AgentHostDurableToolApprovalGate(state, policyClient);
+        var requestId = $"req-finalized-{scope}";
+        var pending = gate.WaitForApprovalAsync(
+            "run-1", requestId, "web_fetch", "https://first.test",
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        var grant = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = requestId,
+                Scope = scope,
+                ScopeGrantId = $"scope-finalized-{scope}",
+                ScopeExpiresAt = DateTimeOffset.UtcNow.AddMinutes(1),
+            },
+            gate,
+            state);
+        Status(grant).Should().Be(StatusCodes.Status200OK);
+        (await pending).Should().BeTrue();
+        gate.FinalizeScopeGrant("run-1", requestId, $"scope-finalized-{scope}").Should().BeTrue();
+
+        gate.IsAutoApproved("run-1", "web_fetch", "https://before-cancellation.test").Should().BeTrue();
+        policyClient.AutoApproved = false;
+
+        gate.IsAutoApproved("run-1", "web_fetch", "https://after-cancellation.test").Should().BeFalse(
+            "a terminalized run must not use a finalized local scope while its detached pod awaits reaping");
+        policyClient.Requests.Should().HaveCount(2,
+            "each finalized local-scope decision must be validated by the lifecycle-aware API");
+    }
+
     [Fact]
     public void FreshPod_UsesApiBackedPolicyForItsConfiguredRun()
     {
@@ -419,6 +459,7 @@ public sealed class AgentHostToolApprovalEndpointTests
     private sealed class RecordingPolicyClient(bool autoApproved) : IAgentHostToolApprovalPolicyClient
     {
         public List<(string RunId, string ToolName)> Requests { get; } = [];
+        public bool AutoApproved { get; set; } = autoApproved;
 
         public Task<bool> IsAutoApprovedAsync(
             string runId,
@@ -427,7 +468,7 @@ public sealed class AgentHostToolApprovalEndpointTests
             CancellationToken ct)
         {
             Requests.Add((runId, toolName));
-            return Task.FromResult(autoApproved);
+            return Task.FromResult(AutoApproved);
         }
     }
 

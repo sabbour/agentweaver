@@ -214,6 +214,34 @@ public sealed class ToolApprovalGateTests
         result.Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData(ApprovalScope.Run)]
+    [InlineData(ApprovalScope.Tool)]
+    [InlineData(ApprovalScope.Always)]
+    public async Task Clear_RevokesFinalizedLocalScopePolicies(ApprovalScope scope)
+    {
+        var gate = CreateGate();
+        const string runId = "run-finalized-clear";
+        const string requestId = "req-finalized-clear";
+        const string scopeGrantId = "scope-finalized-clear";
+
+        var pending = Register(gate, runId, requestId);
+        (await gate.GrantProvisionalScopeAsync(
+            runId,
+            requestId,
+            scope,
+            scopeGrantId,
+            DateTimeOffset.UtcNow.AddMinutes(1))).Should().BeTrue();
+        (await pending).Should().BeTrue();
+        gate.FinalizeScopeGrant(runId, requestId, scopeGrantId).Should().BeTrue();
+        gate.IsAutoApproved(runId, "web_fetch", "https://before-clear.test").Should().BeTrue();
+
+        gate.Clear(runId);
+
+        gate.IsAutoApproved(runId, "web_fetch", "https://after-clear.test").Should().BeFalse(
+            "finalized pod-local scopes remain lifecycle-bound and must be withdrawn with their run");
+    }
+
     // ── Sibling propagation (RegisterParentRun, commit cb7fbbf) ───────────────────
 
     [Fact]

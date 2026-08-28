@@ -58,6 +58,7 @@ public sealed class DataMigratorTests : IDisposable
         var workflowRuns = await db.WorkflowRuns.CountAsync();
         var backlogTasks = await db.BacklogTasks.CountAsync();
         var seededProject = await db.Projects.SingleAsync(project => project.ProjectId == _seededProjectId);
+        var recoveredRun = await db.Runs.SingleAsync(run => run.Task == "task2");
         var packageVersions = await db.BlueprintPackageVersions
             .Where(version => version.PackageId == _seededPackageId)
             .ToListAsync();
@@ -75,6 +76,8 @@ public sealed class DataMigratorTests : IDisposable
         seededProject.TeamRevision.Should().Be(7, "team mutation concurrency state must survive provider migration");
         seededProject.WebhookSecret.Should().Be("github-webhook:seed",
             "the per-project webhook secret-store reference must survive provider migration");
+        recoveredRun.ApprovalGeneration.Should().Be(2,
+            "a recovered run must retain its lifecycle generation so pre-recovery approval policies cannot match");
         packageVersions.Should().ContainSingle();
         packageVersions.Single().CanonicalVersionKey.Should().Be(
             BlueprintPackageLibraryLimits.CanonicalVersionKey(packageVersions.Single().CanonicalVersion));
@@ -261,8 +264,8 @@ public sealed class DataMigratorTests : IDisposable
 
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result, project_id)
                 VALUES ('{rid1}','/repo','main','github_copilot','task1','alice','completed','{now}','{now}','ok','{pid1}');
-            INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, project_id)
-                VALUES ('{rid2}','/repo','main','github_copilot','task2','bob','in_progress','{now}','{pid1}');
+            INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, project_id, approval_generation)
+                VALUES ('{rid2}','/repo','main','github_copilot','task2','bob','in_progress','{now}','{pid1}',2);
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result, project_id)
                 VALUES ('{rid3}','/repo','main','github_copilot','task3','alice','failed','{now}','{now}','err','{pid2}');
 

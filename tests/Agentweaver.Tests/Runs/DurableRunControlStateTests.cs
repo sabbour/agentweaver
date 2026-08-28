@@ -177,6 +177,32 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task RecoveredGenerationTwoRun_DoesNotMatchGenerationOnePolicy()
+    {
+        var project = ProjectId.New();
+        var recoveredRun = NewOwnedRun("owner", project, approvalGeneration: 2);
+        await _runStore.InsertAsync(recoveredRun);
+        var state = NewState();
+        state.Append(
+            recoveredRun.Id.ToString(),
+            "tool.approval_policy_granted",
+            new
+            {
+                projectId = project.ToString(),
+                owner = "owner",
+                toolId = "web_fetch",
+                riskSemantics = "network-read/v1",
+                approvalGeneration = 1,
+            });
+
+        var gate = NewApprovalGate();
+
+        gate.IsAutoApproved(recoveredRun.Id.ToString(), "web_fetch", "https://recovered.test")
+            .Should().BeFalse(
+                "recovery must retain generation 2 so a policy from generation 1 cannot authorize it");
+    }
+
+    [Fact]
     public async Task RunScopedApproval_OnChild_FailsWhenParentIsNoLongerActive()
     {
         var parent = await InsertOwnedRunAsync("owner");
@@ -649,7 +675,10 @@ public sealed class DurableRunControlStateTests : IDisposable
         return run;
     }
 
-    private static Run NewOwnedRun(string submittingUser, ProjectId? projectId = null) => new()
+    private static Run NewOwnedRun(
+        string submittingUser,
+        ProjectId? projectId = null,
+        int approvalGeneration = 1) => new()
     {
         Id = RunId.New(),
         RepositoryPath = "approval-scope-test",
@@ -660,6 +689,7 @@ public sealed class DurableRunControlStateTests : IDisposable
         Status = RunStatus.InProgress,
         StartedAt = DateTimeOffset.UtcNow,
         ProjectId = projectId,
+        ApprovalGeneration = approvalGeneration,
     };
 
     private static async Task WaitUntilAsync(Func<Task<bool>> action)
