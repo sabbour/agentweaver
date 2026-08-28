@@ -113,6 +113,37 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task TimeoutLosingClaim_ReturnsWinningApproval()
+    {
+        var owner = NewApprovalGate();
+        var secondary = NewApprovalGate();
+        var wait = owner.WaitForApprovalAsync(
+            "run-timeout-grant", "req-timeout-grant", "web_fetch", "https://example.test",
+            TimeSpan.FromMilliseconds(200), default);
+
+        await WaitUntilAsync(() =>
+            secondary.GrantAsync("run-timeout-grant", "req-timeout-grant", ApprovalScope.Once));
+
+        (await wait).Should().BeTrue("a timeout loser must return the winning approval resolution");
+        owner.GetRequestState("run-timeout-grant", "req-timeout-grant")
+            .Should().Be(ToolApprovalRequestState.Approved);
+    }
+
+    [Fact]
+    public async Task TimedOutApproval_RemainsDeniedAndExpired()
+    {
+        var gate = NewApprovalGate();
+
+        var approved = await gate.WaitForApprovalAsync(
+            "run-timeout-deny", "req-timeout-deny", "web_fetch", "https://example.test",
+            TimeSpan.FromMilliseconds(50), default);
+
+        approved.Should().BeFalse();
+        gate.GetRequestState("run-timeout-deny", "req-timeout-deny")
+            .Should().Be(ToolApprovalRequestState.Expired);
+    }
+
+    [Fact]
     public async Task AlwaysApproval_IsVisibleToFutureRunForSameOwner_AfterSourceClear()
     {
         var owner = NewApprovalGate();

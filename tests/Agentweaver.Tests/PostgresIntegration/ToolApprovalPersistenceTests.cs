@@ -166,6 +166,54 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
             .Should().BeFalse("a denied request must not leave an Always policy behind");
     }
 
+    [PostgresFact]
+    public async Task TimeoutLosingClaim_ReturnsConcurrentGrantResolution()
+    {
+        var source = NewRun($"alice-{Guid.NewGuid():N}", ProjectId.New());
+        var runStore = new EfRunStore(pg.Factory);
+        await runStore.InsertAsync(source);
+
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(options =>
+            options.UseNpgsql(
+                pg.ConnectionString,
+                npgsql => npgsql.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
+        using var provider = services.BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var stateA = new DurableRunControlState(scopeFactory, eventStream);
+        var stateB = new DurableRunControlState(scopeFactory, eventStream);
+        var gateA = new DurableToolApprovalGate(stateA, runStore: runStore);
+        var gateB = new DurableToolApprovalGate(stateB, runStore: runStore);
+        var runId = source.Id.ToString();
+        var requestId = "timeout-grant-race";
+        var wait = gateA.WaitForApprovalAsync(
+            runId, requestId, "web_fetch", "https://source.test",
+            TimeSpan.FromMilliseconds(100), default);
+
+        await WaitUntilAsync(() => gateA.IsKnownRequest(runId, requestId));
+        var lockHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLock = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blocker = stateA.ExecuteExclusivelyAsync(
+            [runId],
+            async (_, _) =>
+            {
+                lockHeld.SetResult();
+                await releaseLock.Task;
+                return true;
+            });
+        await lockHeld.Task;
+
+        var grant = gateB.GrantAsync(runId, requestId, ApprovalScope.Once);
+        await Task.Delay(200);
+        releaseLock.SetResult();
+
+        (await grant).Should().BeTrue("the grant acquired the request lock before the timeout claim");
+        await blocker;
+        (await wait).Should().BeTrue("a timeout loser must return the winning approval resolution");
+        gateA.GetRequestState(runId, requestId).Should().Be(ToolApprovalRequestState.Approved);
+    }
+
     private static Run NewRun(string owner, ProjectId projectId) => new()
     {
         Id = RunId.New(),
@@ -178,4 +226,16 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
         StartedAt = DateTimeOffset.UtcNow,
         ProjectId = projectId,
     };
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        for (var i = 0; i < 40; i++)
+        {
+            if (condition())
+                return;
+            await Task.Delay(50);
+        }
+
+        false.Should().BeTrue("the pending approval context should become visible");
+    }
 }

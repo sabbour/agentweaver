@@ -55,9 +55,12 @@ public sealed class DurableToolApprovalGate(
                 "Tool approval timed out: runId={RunId} requestId={DisplayId}",
                 runId, requestId.Length >= 8 ? requestId[..8] : requestId);
             EmitResolved(runId, requestId, approved: false, expired: true);
+            return false;
         }
 
-        return false;
+        // A concurrent grant or denial won the durable claim while this timeout was pending.
+        // Read its terminal resolution so an approved request is not denied after timing out.
+        return LatestResolution(runId, requestId) ?? false;
     }
 
     public async Task<bool> GrantAsync(string runId, string requestId, ApprovalScope scope)
