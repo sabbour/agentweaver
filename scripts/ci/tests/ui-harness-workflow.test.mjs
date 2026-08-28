@@ -62,6 +62,12 @@ test(".NET tests run as stable independent shards", () => {
   const jobs = workflowSection("  dotnet-test-plan:\n", "\n  node-toolchain-tests:\n");
   const dotnetFilter = workflowSection("            dotnet:\n", "            web:\n");
 
+  assert.match(jobs, /if: needs\.changes\.outputs\.dotnet == 'true'/);
+  assert.doesNotMatch(
+    jobs,
+    /github\.event\.pull_request\.draft/,
+    ".NET checks must validate .NET-relevant stacked draft PRs",
+  );
   assert.match(dotnetFilter, /- 'scripts\/ci\/dotnet-test-shards\.mjs'/);
   assert.match(dotnetFilter, /- 'scripts\/ci\/tests\/dotnet-test-shards\.test\.mjs'/);
   assert.match(dotnetFilter, /- 'tests\/Agentweaver\.Tests\/process-environment\.runsettings'/);
