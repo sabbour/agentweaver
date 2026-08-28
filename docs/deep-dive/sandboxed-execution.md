@@ -40,6 +40,19 @@ The selected executor is injected into the per-run governance context and both a
 
 The executor selection decision, backend name, and probe reason are emitted as a `sandbox.selected` event when a run starts.
 
+## Command timeouts
+
+`run_command` uses a five-minute timeout when the caller does not provide `timeout_ms`.
+An explicit caller timeout is used as requested unless the active runtime policy has a
+minimum or maximum limit. The controlled Build/Test shell keeps its ten-minute minimum
+and maximum limit.
+
+The streaming watchdog adds a separate five-minute grace period after the effective
+command timeout. The executor cancels the command first and returns `timed_out: true`.
+The watchdog stops the agent turn only when the process still has not exited after that
+grace period. This extra time is important for Kata VM pods, where process termination
+can take longer while the Kata agent relays the signal.
+
 ## Tool architecture
 
 Both agent runners (GitHub Copilot and Microsoft Foundry) register the same set of custom `AIFunction` tools assembled by `SandboxToolRegistry.Build`. There are nine tool names total:
