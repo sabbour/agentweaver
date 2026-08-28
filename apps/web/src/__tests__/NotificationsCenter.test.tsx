@@ -3,7 +3,7 @@ import { AzureFluentProvider } from '../copilot-fluent-system';
 import { NotificationBell } from '../components/shell/NotificationBell';
 import { NotificationsProvider } from '../notifications/NotificationsProvider';
 import { getNotificationsMuted, setNotificationsMuted } from '../notifications/sound';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -222,6 +222,153 @@ describe('NotificationBell + NotificationsProvider', () => {
       .mockResolvedValueOnce(respond([approval]))
       .mockImplementationOnce(() => validationResponse)
       .mockResolvedValueOnce(respond([]));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    renderBell(1000);
+
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    await user.click(await screen.findByText('Review now'));
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(screen.queryByText('Review now')).toBeNull());
+
+    await act(async () => {
+      resolveValidation(respond([approval]));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('current-location').textContent).toBe('/');
+    expect(await screen.findByText('This approval no longer has a run to review.')).toBeTruthy();
+  });
+
+  it('keeps two approval CTAs independent while both validations are pending', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const firstApproval = makeNotification({
+      id: 'notif-first-approval',
+      type: 'tool_approval',
+      run_id: 'first-approval-run',
+      title: 'Approval needed for first run',
+    });
+    const secondApproval = makeNotification({
+      id: 'notif-second-approval',
+      type: 'tool_approval',
+      run_id: 'second-approval-run',
+      title: 'Approval needed for second run',
+    });
+    let resolveFirstValidation!: (response: NotificationsResponseDto) => void;
+    const firstValidation = new Promise<NotificationsResponseDto>((resolve) => {
+      resolveFirstValidation = resolve;
+    });
+    const secondValidation = new Promise<NotificationsResponseDto>(() => {});
+    vi.mocked(apiClient.getNotifications)
+      .mockResolvedValueOnce(respond([]))
+      .mockResolvedValueOnce(respond([firstApproval, secondApproval]))
+      .mockImplementationOnce(() => firstValidation)
+      .mockImplementationOnce(() => secondValidation);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    renderBell(100_000);
+
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      vi.advanceTimersByTime(100_000);
+      await Promise.resolve();
+    });
+    const firstToast = (await screen.findByText(firstApproval.title)).closest('[role="listitem"]');
+    const secondToast = (await screen.findByText(secondApproval.title)).closest('[role="listitem"]');
+    expect(firstToast).not.toBeNull();
+    expect(secondToast).not.toBeNull();
+    await user.click(within(firstToast!).getByText('Review now'));
+    await user.click(within(secondToast!).getByText('Review now'));
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(4));
+
+    await act(async () => {
+      resolveFirstValidation(respond([firstApproval, secondApproval]));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByTestId('current-location').textContent)
+      .toBe('/projects/proj-1/orchestrations/first-approval-run'));
+
+    expect(screen.queryByText('This approval no longer has a run to review.')).toBeNull();
+  });
+
+  it('navigates when a newer accepted poll confirms a pending CTA source is still active', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const approval = makeNotification({
+      type: 'tool_approval',
+      title: 'Approval needed to run "start_preview"',
+    });
+    let resolveValidation!: (response: NotificationsResponseDto) => void;
+    let resolvePoll!: (response: NotificationsResponseDto) => void;
+    const validationResponse = new Promise<NotificationsResponseDto>((resolve) => {
+      resolveValidation = resolve;
+    });
+    const pollResponse = new Promise<NotificationsResponseDto>((resolve) => {
+      resolvePoll = resolve;
+    });
+    vi.mocked(apiClient.getNotifications)
+      .mockResolvedValueOnce(respond([]))
+      .mockResolvedValueOnce(respond([approval]))
+      .mockImplementationOnce(() => validationResponse)
+      .mockImplementationOnce(() => pollResponse);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    renderBell(1000);
+
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    await user.click(await screen.findByText('Review now'));
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(4));
+    await act(async () => {
+      resolvePoll(respond([approval]));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolveValidation(respond([approval]));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('current-location').textContent)
+      .toBe('/projects/proj-1/orchestrations/run-1');
+    expect(screen.queryByText('This approval no longer has a run to review.')).toBeNull();
+  });
+
+  it('blocks an older CTA response after a newer poll changes a reused notification id', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const approval = makeNotification({
+      id: 'reused-notification-id',
+      type: 'tool_approval',
+      run_id: 'original-approval-run',
+      title: 'Approval needed to run "start_preview"',
+    });
+    const changedApproval = { ...approval, run_id: 'replacement-approval-run' };
+    let resolveValidation!: (response: NotificationsResponseDto) => void;
+    const validationResponse = new Promise<NotificationsResponseDto>((resolve) => {
+      resolveValidation = resolve;
+    });
+    vi.mocked(apiClient.getNotifications)
+      .mockResolvedValueOnce(respond([]))
+      .mockResolvedValueOnce(respond([approval]))
+      .mockImplementationOnce(() => validationResponse)
+      .mockResolvedValueOnce(respond([changedApproval]));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
     renderBell(1000);

@@ -39,6 +39,11 @@ function hasSameNotificationSource(current: NotificationDto, announced: Notifica
     && current.run_id === announced.run_id;
 }
 
+interface AcceptedNotificationSource {
+  requestVersion: number;
+  source: NotificationDto | undefined;
+}
+
 export interface NotificationsProviderProps {
   children: ReactNode;
   /** Test seam — override the poll interval so tests don't wait out the real 20s default. */
@@ -60,12 +65,18 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
   const knownIdsRef = useRef<Set<string> | null>(null);
   const activeApprovalToastsRef = useRef<Map<string, NotificationDto>>(new Map());
   const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
-  const notificationRequestGenerationRef = useRef(0);
+  const notificationRequestVersionRef = useRef(0);
+  const latestPollRequestVersionRef = useRef(0);
+  const acceptedSourcesRef = useRef<Map<string, AcceptedNotificationSource>>(new Map());
 
-  const reconcileApprovalToasts = useCallback((items: NotificationDto[]) => {
+  const reconcileApprovalToasts = useCallback((items: NotificationDto[], requestVersion: number) => {
     const currentById = new Map(items.map((notification) => [notification.id, notification]));
     for (const [id, announced] of activeApprovalToastsRef.current) {
       const current = currentById.get(id);
+      const accepted = acceptedSourcesRef.current.get(id);
+      if (!accepted || requestVersion > accepted.requestVersion) {
+        acceptedSourcesRef.current.set(id, { requestVersion, source: current });
+      }
       if (!current || !hasSameNotificationSource(current, announced)) {
         dismissToast(`notif-${id}`);
         activeApprovalToastsRef.current.delete(id);
@@ -73,9 +84,26 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     }
   }, [dismissToast]);
 
+  const acceptValidationSource = useCallback((
+    notification: NotificationDto,
+    items: NotificationDto[],
+    requestVersion: number,
+  ): NotificationDto | undefined => {
+    const current = items.find((item) => item.id === notification.id);
+    const accepted = acceptedSourcesRef.current.get(notification.id);
+    if (!accepted || requestVersion > accepted.requestVersion) {
+      acceptedSourcesRef.current.set(notification.id, { requestVersion, source: current });
+      return current;
+    }
+    return accepted.source;
+  }, []);
+
   const showUnavailableTarget = useCallback((notification: NotificationDto, toastId: string) => {
-    dismissToast(toastId);
-    activeApprovalToastsRef.current.delete(notification.id);
+    const active = activeApprovalToastsRef.current.get(notification.id);
+    if (!active || hasSameNotificationSource(active, notification)) {
+      dismissToast(toastId);
+      activeApprovalToastsRef.current.delete(notification.id);
+    }
     const copy = TOAST_COPY[notification.type] ?? FALLBACK_TOAST_COPY;
     dispatchToast(
       <Toast>
@@ -99,43 +127,31 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
       return;
     }
 
-    let current: NotificationDto | undefined;
-    const requestGeneration = ++notificationRequestGenerationRef.current;
+    const requestVersion = ++notificationRequestVersionRef.current;
     try {
       // Confirm the source is still available immediately before navigating. Polling can otherwise
       // leave a short window where a permanent approval toast points at a deleted or inaccessible run.
       const response = await apiClient.getNotifications();
-      if (requestGeneration !== notificationRequestGenerationRef.current) {
+      const current = acceptValidationSource(notification, response.notifications, requestVersion);
+      if (!current || !hasSameNotificationSource(current, notification)) {
         showUnavailableTarget(notification, toastId);
         return;
       }
 
-      const items = response.notifications;
-      setNotifications(items);
-      setLoading(false);
-      setUnreadCount((count) => Math.min(count, items.length));
-      knownIdsRef.current = new Set(items.map((item) => item.id));
-      reconcileApprovalToasts(items);
-      current = items.find((item) => item.id === notification.id);
+      const targetPath = notificationTargetPath(current);
+      if (!targetPath) {
+        showUnavailableTarget(current, toastId);
+        return;
+      }
+
+      dismissToast(toastId);
+      activeApprovalToastsRef.current.delete(notification.id);
+      navigate(targetPath);
     } catch {
-      // Without a current server response, navigating could turn an expired approval into a 404.
+      // Do not navigate without proof that this exact source is still present. Keep the CTA so
+      // a transient request failure does not turn into a false "unavailable" result.
     }
-
-    if (!current || !hasSameNotificationSource(current, notification)) {
-      showUnavailableTarget(current ?? notification, toastId);
-      return;
-    }
-
-    const targetPath = notificationTargetPath(current);
-    if (!targetPath) {
-      showUnavailableTarget(current, toastId);
-      return;
-    }
-
-    dismissToast(toastId);
-    activeApprovalToastsRef.current.delete(notification.id);
-    navigate(targetPath);
-  }, [dismissToast, navigate, reconcileApprovalToasts, showUnavailableTarget]);
+  }, [acceptValidationSource, dismissToast, navigate, showUnavailableTarget]);
 
   const announce = useCallback((notification: NotificationDto) => {
     const toastId = `notif-${notification.id}`;
@@ -166,15 +182,16 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
   }, [dispatchToast, handleCta]);
 
   const poll = useCallback(async () => {
-    const requestGeneration = ++notificationRequestGenerationRef.current;
+    const requestVersion = ++notificationRequestVersionRef.current;
+    latestPollRequestVersionRef.current = requestVersion;
     try {
       const response = await apiClient.getNotifications();
-      if (requestGeneration !== notificationRequestGenerationRef.current) return;
+      if (requestVersion !== latestPollRequestVersionRef.current) return;
 
       const items = response.notifications;
       setNotifications(items);
       setLoading(false);
-      reconcileApprovalToasts(items);
+      reconcileApprovalToasts(items, requestVersion);
 
       const currentIds = new Set(items.map((n) => n.id));
       const previousIds = knownIdsRef.current;
