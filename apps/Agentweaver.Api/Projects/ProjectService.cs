@@ -17,29 +17,17 @@ public sealed class ProjectService
     private readonly IProjectStore _store;
     private readonly IProjectWorkspaceProvider _workspace;
     private readonly ProjectGitInitializer _gitInit;
-    private readonly IGitHubTokenStore _tokenStore;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
-    private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
-    private readonly IGitHubRepositoryClient? _repositoryClient;
     private readonly ILogger<ProjectService> _logger;
 
     public ProjectService(
         IProjectStore store,
         IProjectWorkspaceProvider workspace,
         ProjectGitInitializer gitInit,
-        IGitHubTokenStore tokenStore,
-        IGitHubTokenScopeProvider scopeProvider,
-        ILogger<ProjectService> logger,
-        IGitHubAccessTokenProvider? accessTokenProvider = null,
-        IGitHubRepositoryClient? repositoryClient = null)
+        ILogger<ProjectService> logger)
     {
         _store = store;
         _workspace = workspace;
         _gitInit = gitInit;
-        _tokenStore = tokenStore;
-        _scopeProvider = scopeProvider;
-        _accessTokenProvider = accessTokenProvider;
-        _repositoryClient = repositoryClient;
         _logger = logger;
     }
 
@@ -132,8 +120,8 @@ public sealed class ProjectService
         string? defaultModelCopilot,
         string? defaultModelFoundry,
         string owner,
-        CancellationToken ct = default,
-        string? accessTokenOverride = null)
+        string accessToken,
+        CancellationToken ct = default)
     {
         ValidateName(name);
         if (string.IsNullOrWhiteSpace(sourceRepository))
@@ -145,25 +133,9 @@ public sealed class ProjectService
             .ConfigureAwait(false);
         EnsureEmptyOrCreatable(workingDir);
 
-        // Project creation through a Repo App selection code supplies an ephemeral, server-only
-        // credential. Existing non-selection callers retain the legacy refresh-aware resolution.
-        var accessToken = accessTokenOverride;
-        if (string.IsNullOrWhiteSpace(accessToken))
-        {
-            var scope = _scopeProvider.Resolve(owner);
-            if (_accessTokenProvider is not null)
-            {
-                accessToken = await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
-            }
-            else
-            {
-                var tokenEntry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
-                accessToken = tokenEntry.Status == GitHubTokenStatus.SignedIn ? tokenEntry.AccessToken : null;
-            }
-        }
         if (string.IsNullOrWhiteSpace(accessToken))
             throw new InvalidOperationException(
-                "GitHub sign-in is required to create a project from a GitHub repository. Sign in with 'agentweaver github sign-in'.");
+                "A live Repo App authorization is required to create a project from a GitHub repository.");
 
         var providerSettings = BuildProviderSettings(defaultProvider, defaultModelCopilot, defaultModelFoundry);
 
@@ -177,7 +149,7 @@ public sealed class ProjectService
             defaultBranch = _gitInit.Clone(
                 workingDir,
                 sourceRepository,
-                accessToken!,
+                accessToken,
                 GitClonePurpose.ProjectCreation);
         }
         catch
@@ -226,114 +198,6 @@ public sealed class ProjectService
         }
 
         return project;
-    }
-
-    // -----------------------------------------------------------------------
-    // Post-creation GitHub connection (issue: allow creating a GitHub repository for a
-    // project that has none connected)
-    // -----------------------------------------------------------------------
-
-    /// <summary>
-    /// Lists the accounts (the caller's own GitHub login, plus orgs they belong to) that a new
-    /// repository could be created under, so the caller can be asked to pick one rather than the
-    /// platform auto-selecting an owner.
-    /// </summary>
-    public async Task<IReadOnlyList<GitHubRepositoryOwner>> ListRepositoryOwnersAsync(
-        string owner,
-        CancellationToken ct = default,
-        ProjectId? projectId = null)
-    {
-        if (_repositoryClient is null)
-            throw new InvalidOperationException("No GitHub repository client is configured.");
-
-        var accessToken = await ResolveAccessTokenAsync(owner, projectId, ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(accessToken))
-            throw new InvalidOperationException(
-                "GitHub sign-in is required to list repository owners. Sign in with 'agentweaver github sign-in'.");
-
-        return await _repositoryClient.ListRepositoryOwnersAsync(accessToken!, ct).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Creates a brand-new GitHub repository under <paramref name="repositoryOwner"/> and connects it
-    /// to a currently-unconnected (<c>Blank</c>-origin) project: pushes the project's existing local
-    /// git history so the new repository isn't left empty, then persists the connection via
-    /// <see cref="IProjectStore.UpdateOriginAsync"/>. Throws <see cref="InvalidOperationException"/> if
-    /// the project already has a connected repository — this method is for connecting an unconnected
-    /// project only, it never silently overwrites an existing connection.
-    /// </summary>
-    public async Task<Project> CreateAndConnectRepositoryAsync(
-        ProjectId id,
-        string repositoryOwner,
-        string? repoNameOverride,
-        bool isPrivate,
-        string caller,
-        CancellationToken ct = default)
-    {
-        if (_repositoryClient is null)
-            throw new InvalidOperationException("No GitHub repository client is configured.");
-        if (string.IsNullOrWhiteSpace(repositoryOwner))
-            throw new ArgumentException("Repository owner must not be empty.", nameof(repositoryOwner));
-
-        var project = await _store.GetAsync(id, ct).ConfigureAwait(false)
-            ?? throw new KeyNotFoundException($"Project '{id}' was not found.");
-        if (project.Origin.Kind != ProjectOriginKind.Blank)
-            throw new InvalidOperationException(
-                $"Project '{id}' already has a connected repository ('{project.Origin.SourceRepository}'). " +
-                "This operation only connects a currently-unconnected project.");
-
-        var accessToken = await ResolveAccessTokenAsync(caller, id, ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(accessToken))
-            throw new InvalidOperationException(
-                "GitHub sign-in is required to create a repository. Sign in with 'agentweaver github sign-in'.");
-
-        var repoName = string.IsNullOrWhiteSpace(repoNameOverride) ? SlugifyRepoName(project.Name) : repoNameOverride.Trim();
-
-        var creation = await _repositoryClient.CreateRepositoryAsync(
-            repositoryOwner, repoName, isPrivate, accessToken!, ct).ConfigureAwait(false);
-        if (!creation.Success)
-            throw new InvalidOperationException(creation.ErrorMessage ?? "Failed to create the GitHub repository.");
-
-        _gitInit.PushToNewRemote(project.WorkingDirectory, creation.CloneUrl!, project.DefaultBranch, accessToken!);
-
-        var now = DateTimeOffset.UtcNow;
-        var origin = ProjectOrigin.FromGitHub(creation.FullName!);
-        await _store.UpdateOriginAsync(id, origin, now, ct).ConfigureAwait(false);
-
-        _logger.LogInformation(
-            "Connected project {ProjectId} to newly created GitHub repository {Repository}", id, creation.FullName);
-
-        return project with { Origin = origin, UpdatedAt = now };
-    }
-
-    private async Task<string?> ResolveAccessTokenAsync(
-        string owner,
-        ProjectId? projectId,
-        CancellationToken ct)
-    {
-        var scope = await _scopeProvider
-            .ResolveAsync(owner, projectId?.ToString(), ct)
-            .ConfigureAwait(false);
-        if (_accessTokenProvider is not null)
-            return await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
-
-        var tokenEntry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
-        return tokenEntry.Status == GitHubTokenStatus.SignedIn ? tokenEntry.AccessToken : null;
-    }
-
-    /// <summary>Derives a kebab-case repository name from a project name, e.g. "My Project" -> "my-project".</summary>
-    internal static string SlugifyRepoName(string projectName)
-    {
-        var sb = new System.Text.StringBuilder(projectName.Length);
-        foreach (var c in projectName.Trim().ToLowerInvariant())
-        {
-            if (char.IsLetterOrDigit(c)) sb.Append(c);
-            else if (c is ' ' or '-' or '_' or '.') sb.Append('-');
-        }
-        var slug = sb.ToString().Trim('-');
-        while (slug.Contains("--", StringComparison.Ordinal))
-            slug = slug.Replace("--", "-");
-        return slug.Length == 0 ? "project" : slug;
     }
 
     // -----------------------------------------------------------------------

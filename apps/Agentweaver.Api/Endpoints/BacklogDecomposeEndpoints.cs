@@ -158,10 +158,6 @@ public static class BacklogDecomposeEndpoints
                 var run = await runStore.GetAsync(parsedRunId, ct);
                 if (run is null || run.ProjectId != projectId)
                     return Results.NotFound(new { error = "Coordinator run not found for this project." });
-                if (AuthModeResolver.Resolve(httpContext.RequestServices.GetRequiredService<IConfiguration>()) == AuthMode.GitHubLegacy
-                    && !caller.Owns(run.SubmittingUser))
-                    return Results.StatusCode(StatusCodes.Status403Forbidden);
-
                 var spec = await db.OutcomeSpecs
                     .AsNoTracking()
                     .FirstOrDefaultAsync(s => s.CoordinatorRunId == runId && s.ProjectId == projectId.ToString(), ct);

@@ -52,37 +52,12 @@ public sealed class EntraSignInEndpointsTests
         setCookie.Should().NotBeNull("authorize must arm the browser-bound state cookie");
         setCookie.Should().Contain("httponly").And.Contain("samesite=lax").And.Contain("path=/auth/entra");
 
-        var stateInUrl = OAuthStateCookie.ExtractState(location);
+        var stateInUrl = EntraOAuthStateCookie.ExtractState(location);
         stateInUrl.Should().NotBeNullOrEmpty();
         setCookie!.Should().Contain($"{EntraOAuthStateCookie.Name}={stateInUrl}");
     }
 
     // -------------------------------------------------------------------------
-    // /auth/entra/authorize while running GitHubLegacy mode → 503 (Entra sign-in disabled),
-    // never reaching Microsoft.
-    // -------------------------------------------------------------------------
-    [Fact]
-    public async Task Authorize_WhenNotEntraMode_Returns503()
-    {
-        await using var factory = new OAuthWebApplicationFactory();
-        var client = factory.CreateClient(NoRedirectNoCookies);
-
-        var resp = await client.GetAsync("/auth/entra/authorize");
-
-        resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
-    }
-
-    [Fact]
-    public async Task Callback_WhenNotEntraMode_Returns503()
-    {
-        await using var factory = new OAuthWebApplicationFactory();
-        var client = factory.CreateClient(NoRedirectNoCookies);
-
-        var resp = await client.GetAsync("/auth/entra/callback?code=x&state=y");
-
-        resp.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
-    }
-
     // -------------------------------------------------------------------------
     // /auth/entra/callback with a MISMATCHED (or absent) state cookie → rejected as state_mismatch
     // BEFORE any code redemption (login-CSRF: the victim's browser never held a cookie for the
@@ -131,7 +106,7 @@ public sealed class EntraSignInEndpointsTests
         // 1. Arm the CSRF/PKCE state (persists the verifier server-side, sets the state cookie).
         var authorizeResp = await client.GetAsync("/auth/entra/authorize");
         authorizeResp.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        var state = OAuthStateCookie.ExtractState(authorizeResp.Headers.Location!.ToString());
+        var state = EntraOAuthStateCookie.ExtractState(authorizeResp.Headers.Location!.ToString());
         state.Should().NotBeNullOrEmpty();
 
         // 2. Microsoft redirects back with the code; the browser carries the bound state cookie.
@@ -187,7 +162,7 @@ public sealed class EntraSignInEndpointsTests
 
         var authorizeResp = await client.GetAsync("/auth/entra/authorize");
         authorizeResp.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        var state = OAuthStateCookie.ExtractState(authorizeResp.Headers.Location!.ToString());
+        var state = EntraOAuthStateCookie.ExtractState(authorizeResp.Headers.Location!.ToString());
         state.Should().NotBeNullOrEmpty();
 
         var callbackReq = new HttpRequestMessage(HttpMethod.Get,

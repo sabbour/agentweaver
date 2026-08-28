@@ -12,8 +12,7 @@ namespace Agentweaver.Tests.Casting;
 
 /// <summary>
 /// Web application factory for casting-related integration tests.
-/// Replaces OsCredentialStoreGitHubTokenStore with InMemoryGitHubTokenStore,
-/// uses LocalFilesystemWorkspaceProvider pointed at an isolated temp directory,
+/// Uses LocalFilesystemWorkspaceProvider pointed at an isolated temp directory,
 /// and stubs out ProjectGitInitializer to skip real git operations.
 /// </summary>
 public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program>
@@ -26,8 +25,6 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
     private readonly string _worktreesPath;
     private readonly string _checkpointsPath;
     private readonly string _coordinatorCheckpointsPath;
-
-    public InMemoryGitHubTokenStore TokenStore { get; } = new();
 
     public CastingWebApplicationFactory()
     {
@@ -95,7 +92,6 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
                 ["Worktrees:BasePath"]                    = _worktreesPath,
                 ["Checkpoints:Path"]                      = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
-                ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Auth:ApiKey"]                           = TestApiKey,
                 ["Auth:User"]                             = TestUser,
                 ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
@@ -115,10 +111,6 @@ public sealed class CastingWebApplicationFactory : WebApplicationFactory<Program
 
         builder.ConfigureServices(services =>
         {
-            // Replace OS credential store with in-memory store for tests.
-            RemoveService<IGitHubTokenStore>(services);
-            services.AddSingleton<IGitHubTokenStore>(TokenStore);
-
             // Replace ProjectGitInitializer with a no-op stub.
             RemoveService<ProjectGitInitializer>(services);
             services.AddSingleton<ProjectGitInitializer, NoOpProjectGitInitializerForCasting>();

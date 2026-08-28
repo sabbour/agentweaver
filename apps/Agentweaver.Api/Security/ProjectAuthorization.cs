@@ -6,8 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Centralized project authorization for project-scoped endpoints. In GitHubLegacy mode this
-/// preserves the legacy owner-or-internal-service check; in Entra mode it defers to the Tier-2
+/// Centralized Entra project authorization for project-scoped endpoints. It defers to the Tier-2
 /// project-role service so viewer/contributor/owner semantics stay consistent across endpoints.
 ///
 /// SECURITY (broken access control + stored XPIA): without an ownership check, any authenticated
@@ -73,12 +72,6 @@ public static class ProjectAuthorization
         var caller = GitHubTokenAuthMiddleware.GetCaller(httpContext);
         if (!allowInternalService && IsDedicatedInternalServiceCaller(httpContext, caller))
             return Results.StatusCode(StatusCodes.Status403Forbidden);
-
-        if (AuthModeResolver.Resolve(configuration) == AuthMode.GitHubLegacy)
-            return caller.Owns(project.Owner)
-                || (allowInternalService && IsInternalServiceCaller(caller, configuration))
-                ? null
-                : Results.StatusCode(StatusCodes.Status403Forbidden);
 
         if (allowInternalService && IsInternalServiceCaller(caller, configuration))
             return null;

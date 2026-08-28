@@ -46,6 +46,8 @@ public sealed class SqliteToPostgresMigrator
         // Migrate agentweaver.db tables
         await MigrateAgentweaverDbAsync(agentweaverDbPath, db, ct);
 
+        // Legacy GitHub OAuth, linked-identity, and MCP broker state is intentionally not
+        // transferred. Only two-App records below remain valid after the Entra-only cutover.
         await MigrateTwoAppRecordsAsync(memoryDbPath, db, ct);
 
         _logger.LogInformation("Migration complete.");

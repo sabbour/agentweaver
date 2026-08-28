@@ -41,7 +41,7 @@ public static class GitHubRepositorySelectionEndpoints
         .WithTags("GitHub", "Projects")
         .AddOpenApiOperationTransformer((operation, _, _) =>
         {
-            operation.Description = "Lists bounded metadata-only repositories from the signed-in caller's active GitHub authorization. In Entra mode this is the human's Repo App authorization; GitHubLegacy uses its caller-scoped legacy credential. The response is not repository authority.";
+            operation.Description = "Lists bounded metadata-only repositories from the signed-in human's active Repo App authorization. The response is not repository authority.";
             return Task.CompletedTask;
         });
 
@@ -82,16 +82,8 @@ public static class GitHubRepositorySelectionEndpoints
 
     private static IResult? RejectUnauthorizedSelectionCaller(HttpContext httpContext, CallerContext caller)
     {
-        if (AuthModeResolver.Resolve(httpContext.RequestServices.GetRequiredService<IConfiguration>()) == AuthMode.Entra)
-        {
-            return HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) == HumanEntraSubjectState.Allowed
-                ? null
-                : Results.Conflict(new { error = "human_entra_subject_required" });
-        }
-
-        return string.IsNullOrWhiteSpace(caller.User) ||
-               httpContext.User.HasClaim("agentweaver_internal", "true")
-            ? Results.StatusCode(StatusCodes.Status403Forbidden)
-            : null;
+        return HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) == HumanEntraSubjectState.Allowed
+            ? null
+            : Results.Conflict(new { error = "human_entra_subject_required" });
     }
 }

@@ -12,8 +12,7 @@ namespace Agentweaver.Mcp;
 /// It is retained only for genuine in-process/service callers and as a last-resort fallback.
 /// </param>
 /// <param name="UserToken">
-/// The caller's OWN per-user bearer (<c>AGENTWEAVER_TOKEN</c>) — an Agentweaver-minted OAuth
-/// access token or a GitHub token (e.g. <c>gh auth token</c>). When set, it is forwarded to the
+/// The caller's own Microsoft Entra bearer (<c>AGENTWEAVER_TOKEN</c>). When set, it is forwarded to the
 /// backend so the API attributes calls to the real user and enforces project ownership normally,
 /// rather than collapsing onto the shared service identity. This is the credential stdio MCP
 /// clients should use (#474).

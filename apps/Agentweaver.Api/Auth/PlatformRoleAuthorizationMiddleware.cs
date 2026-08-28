@@ -3,8 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 namespace Agentweaver.Api.Auth;
 
 /// <summary>
-/// Enforces platform-role presence on every API request when Auth:Mode=Entra.
-/// GitHubLegacy deployments skip this middleware entirely.
+/// Enforces platform-role presence on every API request.
 /// </summary>
 public sealed class PlatformRoleAuthorizationMiddleware
 {
@@ -33,7 +32,6 @@ public sealed class PlatformRoleAuthorizationMiddleware
         // identity/roles back — otherwise they hit a 403 brick wall with no way to see what
         // Entra actually sent, and no way to self-diagnose or report the right details to an admin.
         "/api/auth/session",
-        "/oauth",
         "/.well-known",
         "/openapi",
         "/mcp",
