@@ -32,6 +32,13 @@ const TOAST_COPY: Record<string, { title: string; cta: string }> = {
 };
 const FALLBACK_TOAST_COPY = { title: 'Action needed', cta: 'Open' };
 
+function hasSameNotificationSource(current: NotificationDto, announced: NotificationDto): boolean {
+  return current.id === announced.id
+    && current.type === announced.type
+    && current.project_id === announced.project_id
+    && current.run_id === announced.run_id;
+}
+
 export interface NotificationsProviderProps {
   children: ReactNode;
   /** Test seam — override the poll interval so tests don't wait out the real 20s default. */
@@ -51,13 +58,77 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
   // null until the first successful poll completes — distinguishes "nothing arrived yet" (initial
   // load, don't toast the whole backlog) from "this really is new since last poll" (toast it).
   const knownIdsRef = useRef<Set<string> | null>(null);
+  const activeApprovalToastsRef = useRef<Map<string, NotificationDto>>(new Map());
   const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
-  const handleCta = useCallback((notification: NotificationDto, toastId: string) => {
+  const reconcileApprovalToasts = useCallback((items: NotificationDto[]) => {
+    const currentById = new Map(items.map((notification) => [notification.id, notification]));
+    for (const [id, announced] of activeApprovalToastsRef.current) {
+      const current = currentById.get(id);
+      if (!current || !hasSameNotificationSource(current, announced)) {
+        dismissToast(`notif-${id}`);
+        activeApprovalToastsRef.current.delete(id);
+      }
+    }
+  }, [dismissToast]);
+
+  const showUnavailableTarget = useCallback((notification: NotificationDto, toastId: string) => {
     dismissToast(toastId);
-    const targetPath = notificationTargetPath(notification);
-    if (targetPath) navigate(targetPath);
-  }, [dismissToast, navigate]);
+    activeApprovalToastsRef.current.delete(notification.id);
+    const copy = TOAST_COPY[notification.type] ?? FALLBACK_TOAST_COPY;
+    dispatchToast(
+      <Toast>
+        <ToastTitle>{copy.title}</ToastTitle>
+        <ToastBody subtitle={notification.project_name ?? undefined}>{notification.title}</ToastBody>
+        <ToastFooter><span>{unavailableNotificationTargetMessage(notification)}</span></ToastFooter>
+      </Toast>,
+      {
+        toastId: `${toastId}-unavailable`,
+        intent: notification.type === 'tool_approval' ? 'warning' : 'info',
+        timeout: 12000,
+      },
+    );
+  }, [dismissToast, dispatchToast]);
+
+  const handleCta = useCallback(async (notification: NotificationDto, toastId: string) => {
+    if (notification.type !== 'tool_approval') {
+      dismissToast(toastId);
+      const targetPath = notificationTargetPath(notification);
+      if (targetPath) navigate(targetPath);
+      return;
+    }
+
+    let current: NotificationDto | undefined;
+    try {
+      // Confirm the source is still available immediately before navigating. Polling can otherwise
+      // leave a short window where a permanent approval toast points at a deleted or inaccessible run.
+      const response = await apiClient.getNotifications();
+      const items = response.notifications;
+      setNotifications(items);
+      setLoading(false);
+      setUnreadCount((count) => Math.min(count, items.length));
+      knownIdsRef.current = new Set(items.map((item) => item.id));
+      reconcileApprovalToasts(items);
+      current = items.find((item) => item.id === notification.id);
+    } catch {
+      // Without a current server response, navigating could turn an expired approval into a 404.
+    }
+
+    if (!current || !hasSameNotificationSource(current, notification)) {
+      showUnavailableTarget(current ?? notification, toastId);
+      return;
+    }
+
+    const targetPath = notificationTargetPath(current);
+    if (!targetPath) {
+      showUnavailableTarget(current, toastId);
+      return;
+    }
+
+    dismissToast(toastId);
+    activeApprovalToastsRef.current.delete(notification.id);
+    navigate(targetPath);
+  }, [dismissToast, navigate, reconcileApprovalToasts, showUnavailableTarget]);
 
   const announce = useCallback((notification: NotificationDto) => {
     const toastId = `notif-${notification.id}`;
@@ -78,9 +149,12 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
         intent: notification.type === 'tool_approval' ? 'warning' : 'info',
         // Approval requests are safety gates, not transient FYIs. Keep their toast visible until
         // the operator follows the CTA or dismisses it; the global bell remains the durable backup.
-        timeout: notification.type === 'tool_approval' ? -1 : 12000,
+        timeout: notification.type === 'tool_approval' && targetPath ? -1 : 12000,
       },
     );
+    if (notification.type === 'tool_approval') {
+      activeApprovalToastsRef.current.set(notification.id, notification);
+    }
     playNotificationChime();
   }, [dispatchToast, handleCta]);
 
@@ -90,6 +164,7 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
       const items = response.notifications;
       setNotifications(items);
       setLoading(false);
+      reconcileApprovalToasts(items);
 
       const currentIds = new Set(items.map((n) => n.id));
       const previousIds = knownIdsRef.current;
@@ -100,8 +175,8 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
         setUnreadCount(items.length);
       } else {
         const freshlyArrived = items.filter((n) => !previousIds.has(n.id));
+        setUnreadCount((count) => Math.min(items.length, count + freshlyArrived.length));
         if (freshlyArrived.length > 0) {
-          setUnreadCount((count) => count + freshlyArrived.length);
           freshlyArrived.forEach(announce);
         }
       }
@@ -111,7 +186,7 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
       // the badge doesn't update this tick; it retries on the next interval, no state is lost.
       setLoading(false);
     }
-  }, [announce]);
+  }, [announce, reconcileApprovalToasts]);
 
   useEffect(() => armAudioUnlock(), []);
 
@@ -136,13 +211,15 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
 
   const markAllSeen = useCallback(() => setUnreadCount(0), []);
   const dismissNotification = useCallback((id: string) => {
+    dismissToast(`notif-${id}`);
+    activeApprovalToastsRef.current.delete(id);
     setNotifications((current) => {
       const next = current.filter((notification) => notification.id !== id);
       setUnreadCount((count) => Math.min(count, next.length));
       return next;
     });
     void apiClient.dismissNotification(id);
-  }, []);
+  }, [dismissToast]);
   const refresh = useCallback(() => { void poll(); }, [poll]);
 
   return (
