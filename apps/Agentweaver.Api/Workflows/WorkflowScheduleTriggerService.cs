@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Workflows;
@@ -82,6 +83,7 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
         var projectStore = sp.GetRequiredService<IProjectStore>();
         var backlogStore = sp.GetRequiredService<IBacklogTaskStore>();
         var registry = sp.GetRequiredService<WorkflowRegistry>();
+        var invocations = sp.GetRequiredService<IAutomationInvocationService>();
 
         IReadOnlyList<Project> projects = await projectStore.ListAsync(ct).ConfigureAwait(false);
         foreach (var project in projects)
@@ -92,7 +94,7 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
 
             try
             {
-                await TickProjectAsync(project, now, registry, backlogStore, ct).ConfigureAwait(false);
+                await TickProjectAsync(project, now, registry, backlogStore, invocations, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -111,6 +113,7 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
         DateTimeOffset now,
         WorkflowRegistry registry,
         IBacklogTaskStore backlogStore,
+        IAutomationInvocationService invocations,
         CancellationToken ct)
     {
         var set = registry.GetOrLoad(project);
@@ -138,6 +141,16 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
                 if (alreadyFired.Count > 0)
                     continue;
 
+                var invocation = await invocations.TryClaimForProjectAsync(
+                    project.Id, idempotencyKey, deliveryId: null, eventName: "schedule", ct).ConfigureAwait(false);
+                if (invocation is null)
+                {
+                    _logger.LogWarning(
+                        "Workflow schedule trigger refused workflow {WorkflowId} for project {ProjectId}: automation activation unavailable",
+                        def.Id, project.Id);
+                    continue;
+                }
+
                 var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
                     backlogStore,
                     project,
@@ -148,6 +161,9 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
                     idempotencyKey: idempotencyKey,
                     now: now,
                     ct: ct).ConfigureAwait(false);
+                if (!await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
+                        .ConfigureAwait(false))
+                    throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
 
                 _logger.LogInformation(
                     "Workflow schedule trigger: fired workflow {WorkflowId} for project {ProjectId} (task {TaskId}, occurrence {PeriodKey})",

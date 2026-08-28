@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Webhooks;
 using Agentweaver.Api.Workflows;
@@ -24,14 +25,19 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
     private readonly WorkflowEventTriggerService _service;
     private readonly CapturingLogger _logger = new();
     private readonly string _workingDir;
+    private readonly ServiceProvider _serviceProvider;
 
     public WorkflowEventTriggerServiceTests()
     {
         _testDb = TestSqliteDb.CreateAsync().GetAwaiter().GetResult();
         _projects = new SqliteProjectStore(_testDb.Db);
         _backlog = new SqliteBacklogTaskStore(_testDb.Db);
+        var services = new ServiceCollection();
+        services.AddScoped<Agentweaver.Api.Auth.IAutomationInvocationService, AlwaysAvailableAutomationInvocationService>();
+        _serviceProvider = services.BuildServiceProvider();
         _service = new WorkflowEventTriggerService(
-            _backlog, _registry, new LoggerAdapter<WorkflowEventTriggerService>(_logger));
+            _backlog, _registry, new LoggerAdapter<WorkflowEventTriggerService>(_logger),
+            _serviceProvider.GetRequiredService<IServiceScopeFactory>());
 
         _workingDir = Path.Combine(Path.GetTempPath(), $"agentweaver-event-trigger-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(_workingDir, ".agentweaver", "workflows"));
@@ -50,6 +56,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _testDb.DisposeAsync();
+        await _serviceProvider.DisposeAsync();
         try { Directory.Delete(_workingDir, recursive: true); } catch { /* best effort */ }
     }
 
