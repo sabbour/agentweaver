@@ -189,6 +189,7 @@ internal sealed class AgentHostRuntimeState
         ProjectId = configuration.ProjectId;
         AgentName = configuration.AgentName;
         EffectiveWorkingDirectory = configuration.SharedWorkingDirectory;
+        SetToolApprovalApiAccess(configuration.ToolApprovalApiBaseUrl, TurnBearerToken);
         return true;
     }
 
@@ -243,4 +244,5 @@ internal sealed record AgentHostRunConfiguration(
     string? ProjectId = null,
     string? AgentName = null,
     string? CallerBearerToken = null,
-    string? RepositoryAccessToken = null);
+    string? RepositoryAccessToken = null,
+    string? ToolApprovalApiBaseUrl = null);

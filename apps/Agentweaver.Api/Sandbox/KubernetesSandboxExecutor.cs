@@ -104,6 +104,12 @@ public sealed class KubernetesSandboxOptions
     /// null/empty the env var is omitted and the pod falls back to the CSI file-mount path.
     /// </summary>
     public string? KvUri { get; init; }
+
+    /// <summary>
+    /// Internal API base URL delivered to a warm AgentHost for its per-run approval-policy reader.
+    /// The matching credential is the run's capability token, not a static service credential.
+    /// </summary>
+    public string? ToolApprovalApiBaseUrl { get; init; }
 }
 
 /// <summary>
@@ -1048,6 +1054,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             gitHubAccessToken,
             repositoryAccessToken,
             callerBearerToken = launchContext.CallerBearerToken,
+            toolApprovalApiBaseUrl = _options.ToolApprovalApiBaseUrl,
             // Keep the legacy property during rolling upgrades; new AgentHosts prefer the explicit
             // sharedWorkingDirectory descriptor and create any local workspace inside the pod.
             workingDirectory = sharedWorkingDirectory,

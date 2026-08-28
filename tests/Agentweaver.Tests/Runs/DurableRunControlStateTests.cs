@@ -138,6 +138,8 @@ public sealed class DurableRunControlStateTests : IDisposable
 
         await _runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
 
+        gate.IsAutoApproved(childId, "web_fetch", "https://approving-child-after-failure.test").Should().BeFalse(
+            "the approving child must not retain its local copy of a run scope after its coordinator fails");
         (await _runStore.GetAsync(sibling.Id))!.Status.Should().Be(RunStatus.InProgress);
         gate.IsAutoApproved(siblingId, "web_fetch", "https://after-failure.test").Should().BeFalse(
             "an active sibling must not inherit a failed coordinator's stale policy");

@@ -173,6 +173,9 @@ public sealed class DurableToolApprovalGate(
                         ct).ConfigureAwait(false);
                     if (!activeSubjects.TryGetValue(runId, out var subject))
                         return false;
+                    var parentLifecycleActive = parentId is null ||
+                        (activeSubjects.TryGetValue(parentId, out var activeParentSubject)
+                         && SamePrincipal(activeParentSubject, subject));
 
                     var risk = ToolApprovalPolicySemantics.RiskFor(toolName);
                     if (ToolApprovalPolicySemantics.IsAlwaysEligible(toolName) &&
@@ -189,7 +192,15 @@ public sealed class DurableToolApprovalGate(
                         return true;
                     }
 
-                    if (await HasPolicyAsync(db, runId, subject, toolName, risk, lifecycleScoped: true, ct).ConfigureAwait(false))
+                    if (await HasPolicyAsync(
+                            db,
+                            runId,
+                            subject,
+                            toolName,
+                            risk,
+                            lifecycleScoped: true,
+                            ct: ct,
+                            parentLifecycleActive: parentLifecycleActive).ConfigureAwait(false))
                         return true;
 
                     return parentId is not null
@@ -521,14 +532,14 @@ public sealed class DurableToolApprovalGate(
                 ? [new PolicyDestination(
                     ProjectPolicyBucket(subject.ProjectId.Value, subject.Owner),
                     new PolicyGrant(subject.ProjectId?.ToString(), subject.Owner, toolName,
-                        ToolApprovalPolicySemantics.RiskFor(toolName), ApprovalGeneration: null))]
+                        ToolApprovalPolicySemantics.RiskFor(toolName), ApprovalGeneration: null, scope))]
                 : [];
         }
 
         var destinations = new List<PolicyDestination>
         {
             new(runId, new PolicyGrant(subject.ProjectId?.ToString(), subject.Owner, toolName,
-                ToolApprovalPolicySemantics.RiskFor(toolName), subject.ApprovalGeneration))
+                ToolApprovalPolicySemantics.RiskFor(toolName), subject.ApprovalGeneration, scope))
         };
         if (scope == ApprovalScope.Run &&
             parentId is not null &&
@@ -536,7 +547,7 @@ public sealed class DurableToolApprovalGate(
             SamePrincipal(parent, subject))
             destinations.Add(new PolicyDestination(parentId,
                 new PolicyGrant(parent.ProjectId?.ToString(), parent.Owner, toolName,
-                    ToolApprovalPolicySemantics.RiskFor(toolName), parent.ApprovalGeneration)));
+                    ToolApprovalPolicySemantics.RiskFor(toolName), parent.ApprovalGeneration, scope)));
         return destinations;
     }
 
@@ -693,7 +704,8 @@ public sealed class DurableToolApprovalGate(
         string toolName,
         string risk,
         bool lifecycleScoped,
-        CancellationToken ct) =>
+        CancellationToken ct,
+        bool parentLifecycleActive = true) =>
         HasPolicy(
             await db.RunEvents
                 .AsNoTracking()
@@ -705,14 +717,16 @@ public sealed class DurableToolApprovalGate(
             subject,
             toolName,
             risk,
-            lifecycleScoped);
+            lifecycleScoped,
+            parentLifecycleActive);
 
     private static bool HasPolicy(
         IReadOnlyList<RunEventRecord> records,
         ApprovalSubject subject,
         string toolName,
         string risk,
-        bool lifecycleScoped)
+        bool lifecycleScoped,
+        bool parentLifecycleActive)
     {
         foreach (var record in records.TakeLastAfterClear()
                      .Where(e => e.EventType == PolicyGranted))
@@ -727,6 +741,7 @@ public sealed class DurableToolApprovalGate(
                     && string.Equals(policy.Owner, subject.Owner, StringComparison.Ordinal)
                     && string.Equals(policy.ToolId, toolName, StringComparison.Ordinal)
                     && string.Equals(policy.RiskSemantics, risk, StringComparison.Ordinal)
+                    && (parentLifecycleActive || policy.Scope == ApprovalScope.Tool)
                     && (lifecycleScoped
                         ? policy.ApprovalGeneration == subject.ApprovalGeneration
                         : policy.ApprovalGeneration is null))
@@ -806,7 +821,8 @@ public sealed class DurableToolApprovalGate(
         string? Owner,
         string? ToolId,
         string? RiskSemantics,
-        int? ApprovalGeneration);
+        int? ApprovalGeneration,
+        ApprovalScope? Scope = null);
     private sealed record ParentRegistration(string ParentRunId);
     private sealed record ApprovalSubject(string Owner, ProjectId? ProjectId, int ApprovalGeneration);
     private sealed record PolicyDestination(string StreamId, PolicyGrant Policy);

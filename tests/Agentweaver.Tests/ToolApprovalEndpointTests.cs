@@ -461,6 +461,20 @@ public sealed class ToolApprovalEndpointTests
         var response = await client.GetFromJsonAsync<System.Text.Json.JsonElement>(
             $"/api/runs/{future}/tool-approval-policies/web_fetch");
         response.GetProperty("auto_approved").GetBoolean().Should().BeTrue();
+
+        using var capabilityClient = factory.CreateClient();
+        capabilityClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", capabilityToken);
+        capabilityClient.DefaultRequestHeaders.Add(RunAuthorshipHeaders.RunId, future.ToString());
+        capabilityClient.DefaultRequestHeaders.Add(RunAuthorshipHeaders.RunToken, capabilityToken);
+        var capabilityResponse = await capabilityClient.GetFromJsonAsync<System.Text.Json.JsonElement>(
+            $"/api/runs/{future}/tool-approval-policies/web_fetch");
+        capabilityResponse.GetProperty("auto_approved").GetBoolean().Should().BeTrue(
+            "the warm pod's run-bound capability is a narrow credential for its own policy read");
+
+        var broaderRoute = await capabilityClient.GetAsync($"/api/runs/{future}");
+        broaderRoute.StatusCode.Should().Be(HttpStatusCode.Unauthorized,
+            "a per-run approval-policy capability must not authenticate arbitrary API routes");
     }
 
     [Fact]
