@@ -702,11 +702,13 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         string? projectId,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(projectId))
+            return false;
+
         var source = await GetCapabilitySnapshotsAsync(sourceRunId, ct).ConfigureAwait(false);
         if (source.Count == 0)
         {
-            return !string.IsNullOrWhiteSpace(projectId) &&
-                await IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false);
+            return await IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false);
         }
 
         var target = await GetCapabilitySnapshotsAsync(targetRunId, ct).ConfigureAwait(false);

@@ -606,16 +606,55 @@ public sealed class TwoAppPersistenceStoreTests
     }
 
     [Fact]
-    public async Task CapabilitySnapshotLifecycle_ChildAndRetryDenyWhenProjectIdIsMissingEvenWithEmptyParentSnapshots()
+    public async Task CapabilitySnapshotLifecycle_ResumeDeniesWhenSnapshotBearingRootLosesProjectId()
     {
-        // Direct reproduction of Smith's exact bypass without a real project row at all: an
-        // empty-source parent (no captured snapshots) combined with a null child/retry ProjectId
-        // must deny, not be treated as an automatic pass.
         await using var connection = await OpenDatabaseAsync();
-        await using var db = new MemoryDbContext(Options(connection));
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
         var persistence = new TwoAppPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var root = RunForSnapshotLifecycle(projectId);
 
-        (await persistence.TryInheritCapabilitySnapshotsAsync("missing-source-run", "target-run", projectId: null))
+        (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeTrue();
+        var snapshotsBeforeResume = await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString());
+        snapshotsBeforeResume.Should().NotBeEmpty();
+
+        (await lifecycle.PrepareForLaunchAsync(
+            root with { ProjectId = null }, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString()))
+            .Should().BeEquivalentTo(snapshotsBeforeResume);
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_ChildAndRetryDenyWhenSnapshotBearingParentHasMissingProjectId()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        var persistence = new TwoAppPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var parent = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForLaunchAsync(parent, CancellationToken.None)).Should().BeTrue();
+        (await persistence.GetCapabilitySnapshotsAsync(parent.Id.ToString())).Should().NotBeEmpty();
+
+        var child = RunForSnapshotLifecycle(projectId: null) with { ParentRunId = parent.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(child.Id.ToString())).Should().BeEmpty();
+
+        var retry = RunForSnapshotLifecycle(projectId: null) with { RetriedFrom = parent.Id.ToString() };
+        (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeFalse();
+        (await persistence.GetCapabilitySnapshotsAsync(retry.Id.ToString())).Should().BeEmpty();
+
+        (await persistence.TryInheritCapabilitySnapshotsAsync(parent.Id.ToString(), "target-run", projectId: null))
             .Should().BeFalse();
         (await persistence.GetCapabilitySnapshotsAsync("target-run")).Should().BeEmpty();
     }
