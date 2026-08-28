@@ -60,6 +60,7 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
   const knownIdsRef = useRef<Set<string> | null>(null);
   const activeApprovalToastsRef = useRef<Map<string, NotificationDto>>(new Map());
   const timerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const notificationRequestGenerationRef = useRef(0);
 
   const reconcileApprovalToasts = useCallback((items: NotificationDto[]) => {
     const currentById = new Map(items.map((notification) => [notification.id, notification]));
@@ -99,10 +100,16 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     }
 
     let current: NotificationDto | undefined;
+    const requestGeneration = ++notificationRequestGenerationRef.current;
     try {
       // Confirm the source is still available immediately before navigating. Polling can otherwise
       // leave a short window where a permanent approval toast points at a deleted or inaccessible run.
       const response = await apiClient.getNotifications();
+      if (requestGeneration !== notificationRequestGenerationRef.current) {
+        showUnavailableTarget(notification, toastId);
+        return;
+      }
+
       const items = response.notifications;
       setNotifications(items);
       setLoading(false);
@@ -159,8 +166,11 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
   }, [dispatchToast, handleCta]);
 
   const poll = useCallback(async () => {
+    const requestGeneration = ++notificationRequestGenerationRef.current;
     try {
       const response = await apiClient.getNotifications();
+      if (requestGeneration !== notificationRequestGenerationRef.current) return;
+
       const items = response.notifications;
       setNotifications(items);
       setLoading(false);
