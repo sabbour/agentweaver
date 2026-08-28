@@ -11,6 +11,7 @@ using Agentweaver.Domain;
 using k8s;
 using k8s.Autorest;
 using Agentweaver.SandboxExec;
+using Agentweaver.SandboxExec.PodExec;
 using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Sandbox;
@@ -221,6 +222,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Previewable/PreviewActive state and applies all retention or cleanup effects before deciding
     // whether to delete the claim.
     private readonly Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? _previewService;
+    // Persists the AUTHORITATIVE AgentHost claim name (LaunchAgentHostPodAsync's own
+    // SandboxClaimConventions.DeriveAgentHostClaimName derivation) into Run.SandboxClaimName as soon
+    // as the claim is created/reclaimed — before any repository credential can be minted — so
+    // cross-replica liveness reconciliation (RunRepositoryCredentialLiveness) can always resolve this
+    // run's real cluster claim. Null in unit tests → the persistence is skipped (same null-skip
+    // convention as the other optional collaborators above).
+    private readonly IRunStore? _runStore;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -246,7 +254,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IGitHubAccessTokenProvider? accessTokenProvider = null,
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
         IGitHubTokenScopeProvider? tokenScopeProvider = null,
-        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null)
+        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
+        IRunStore? runStore = null)
     {
         _client = client;
         _options = options;
@@ -265,6 +274,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _accessTokenProvider = accessTokenProvider;
         _previewService = previewService;
         _authorshipCapabilityStore = authorshipCapabilityStore;
+        _runStore = runStore;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -499,6 +509,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 }
             }
 
+            // The claim now definitely exists on the cluster — either just created or reclaimed
+            // (reused) above. Persist ITS OWN authoritative claim name into Run.SandboxClaimName
+            // right now, before anything below can mint a repository credential, so cross-replica
+            // liveness reconciliation always has a real claim to check (issue: kata-exec-sidecar
+            // AgentHost runs previously left SandboxClaimName unset, so a replica that minted a
+            // repository credential could never learn that another replica deleted the claim).
+            await PersistAgentHostClaimNameAsync(runId, claimName, ct).ConfigureAwait(false);
+
             var podName = await WaitForBoundWithProvisioningHeartbeatAsync(runId, claimName, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
@@ -610,6 +628,50 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             await RevokeRepositoryCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Persists <see cref="LaunchAgentHostPodAsync(string,AgentHostLaunchContext,CancellationToken)"/>'s
+    /// own authoritative <paramref name="claimName"/> (the SAME value it just created or reclaimed on
+    /// the cluster) into <c>Run.SandboxClaimName</c>/<c>SandboxBackend</c>/<c>SandboxNamespace</c>.
+    ///
+    /// <para>
+    /// This is the ONLY place that should ever write the AgentHost claim identity for a run:
+    /// <see cref="RunRepositoryCredentialLiveness"/> later reads it back from the shared run store to
+    /// confirm a non-terminal run's claim is still present in the cluster's SandboxClaim inventory.
+    /// Without this write (the PR #968 gap), <c>kata-exec-sidecar</c> AgentHost runs never had a
+    /// persisted claim name, so a replica that minted a repository credential could never learn that
+    /// another replica later deleted the claim, and the credential was never revoked.
+    /// </para>
+    ///
+    /// <para>
+    /// Deliberately fails the launch (rather than degrading silently, unlike the other optional
+    /// collaborators in this class) when the run id cannot be parsed: minting a repository credential
+    /// for a run whose claim identity can never be resolved back would make that credential
+    /// unrevocable via cross-replica reconciliation. A null <see cref="_runStore"/> (unit tests) still
+    /// degrades to a no-op, matching this class's established null-skip convention.
+    /// </para>
+    /// </summary>
+    private async Task PersistAgentHostClaimNameAsync(string runId, string claimName, CancellationToken ct)
+    {
+        if (_runStore is null)
+            return;
+
+        if (!RunId.TryParse(runId, out var parsedRunId))
+        {
+            throw new InvalidOperationException(
+                $"Cannot persist AgentHost claim '{claimName}' for run '{runId}': the run id does not " +
+                "parse as a RunId, so cross-replica credential-liveness reconciliation could never " +
+                "resolve this run's claim back from the shared run store.");
+        }
+
+        await _runStore.SetSandboxInfoAsync(
+            parsedRunId,
+            PodExecSandboxClient.ExecutorBackendName,
+            claimName,
+            podName: null,
+            @namespace: _options.Namespace,
+            ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>

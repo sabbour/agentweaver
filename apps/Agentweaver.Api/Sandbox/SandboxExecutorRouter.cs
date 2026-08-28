@@ -33,6 +33,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
     private readonly Preview.ISandboxPreviewService? _previewService;
     private readonly RunRepositoryCredentialRegistry? _repositoryCredentials;
+    private readonly IRunStore? _runStore;
 
     public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
         IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null,
@@ -46,7 +47,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         IGitHubAccessTokenProvider? accessTokenProvider = null,
         Preview.ISandboxPreviewService? previewService = null,
         RunRepositoryCredentialRegistry? repositoryCredentials = null,
-        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null)
+        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
+        IRunStore? runStore = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
@@ -63,6 +65,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _previewService = previewService;
         _repositoryCredentials = repositoryCredentials;
         _authorshipCapabilityStore = authorshipCapabilityStore;
+        _runStore = runStore;
     }
 
     public ISandboxExecutor Resolve()
@@ -150,7 +153,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 _submittingUserResolver, _httpClientFactory, _tokenStore, _secretStore, _runEventStream,
                 _runOptions, _repositoryCredentials, _accessTokenProvider, _previewService,
                 tokenScopeProvider: _tokenScopeProvider,
-                authorshipCapabilityStore: _authorshipCapabilityStore);
+                authorshipCapabilityStore: _authorshipCapabilityStore,
+                runStore: _runStore);
         }
         catch (Exception ex)
         {

@@ -34,8 +34,17 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
         _relayAssembly = relayAssembly ?? System.Reflection.Assembly.GetEntryAssembly()?.Location ?? string.Empty;
     }
 
+    /// <summary>
+    /// Backend identifier this executor reports on every <c>sandbox.selected</c> event for AgentHost
+    /// pod-per-run command execution. Exposed as a constant (not just the instance property below)
+    /// so <c>KubernetesSandboxExecutor.LaunchAgentHostPodAsync</c> can persist the SAME literal into
+    /// <c>Run.SandboxBackend</c> when it creates/reclaims the AgentHost claim, instead of a caller
+    /// re-deriving it from a downstream event/backend label (PR #968 cross-replica repair).
+    /// </summary>
+    public const string ExecutorBackendName = "kata-exec-sidecar";
+
     public bool IsRealIsolation => true;
-    public string BackendName => "kata-exec-sidecar";
+    public string BackendName => ExecutorBackendName;
     public string SelectionReason =>
         "Kata VM plus a dedicated executor sidecar container (own PID/mount namespace) running a fail-closed bubblewrap mount namespace per run.";
     public bool HasNetworkWarning => false;

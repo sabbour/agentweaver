@@ -4,6 +4,7 @@ using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using k8s;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -91,6 +92,109 @@ public sealed class RunRepositoryCredentialReconciliationServiceTests
 
         minter.RevokedTokens.Should().BeEmpty(
             "a non-terminal run whose authoritative AgentHost claim is still present remains live");
+    }
+
+    /// <summary>
+    /// Regression for PR #968's rejected cross-replica repair: the tests above insert a run with
+    /// <c>SandboxClaimName</c> set BY THE TEST, which hid the real production gap — the
+    /// <c>kata-exec-sidecar</c> AgentHost lifecycle (<see cref="KubernetesSandboxExecutor.LaunchAgentHostPodAsync"/>)
+    /// never persisted the claim name it created, so this reconciliation never had anything to check.
+    /// This test drives that REAL lifecycle end-to-end — no manual <c>SandboxClaimName</c> injection —
+    /// against a fake cluster, then simulates a second replica deleting the same claim, and proves the
+    /// first replica revokes its locally held repository credential.
+    /// </summary>
+    [Fact]
+    public async Task ReconcileOnce_RevokesReplicaACredential_WhenReplicaBReleasesTheRealClaimLaunchAgentHostPodAsyncPersisted()
+    {
+        var id = RunId.New();
+        var runId = id.ToString();
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        await using var database = await TestSqliteDb.CreateAsync();
+        var runStore = new SqliteRunStore(database.Db);
+
+        // Deliberately NO SandboxBackend/SandboxClaimName/SandboxNamespace here — proving those are
+        // written by LaunchAgentHostPodAsync itself, not by test setup.
+        var run = new Run
+        {
+            Id = id,
+            RepositoryPath = "real-claim-lifecycle-repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "real AgentHost claim lifecycle",
+            SubmittingUser = "replica-a-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        };
+        await runStore.InsertAsync(run);
+
+        // Fakes the cluster's view of the AgentHost claim/pod once the agent-sandbox controller has
+        // bound it — the same shape KubernetesSandboxExecutor's real WaitForBound polling expects.
+        var kube = new FakeKubeHandler();
+        kube.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-real-claim-pod"}}}""");
+        kube.OnAny(
+            @"^/api/v1/namespaces/agentweaver/pods/agent-real-claim-pod$",
+            """{"kind":"Pod","metadata":{"name":"agent-real-claim-pod"},"status":{"podIP":"10.0.5.9"}}""");
+
+        var k8sClient = new Kubernetes(
+            new KubernetesClientConfiguration { Host = "http://localhost:8080" }, kube);
+        var options = new KubernetesSandboxOptions
+        {
+            Namespace = "agentweaver",
+            WarmPoolRef = "agentweaver-sandbox",
+            AgentHostWarmPoolRef = "agentweaver-agent-host",
+            TimeoutSeconds = 600,
+            RequireMtls = false,
+            AgentHostPort = 8088,
+            AgentHostA2APath = "/a2a/agent",
+            WorkspaceMountPath = "/workspace",
+        };
+
+        // RunStoreSubmittingUserResolver is the REAL production resolver (reads Run.SubmittingUser
+        // back from the same store), not a hand-rolled stub — keeping this launch as close to
+        // production as the fake cluster allows. runStore is wired in so LaunchAgentHostPodAsync can
+        // exercise its own persistence write.
+        var executor = new KubernetesSandboxExecutor(
+            k8sClient,
+            options,
+            NullLogger<KubernetesSandboxExecutor>.Instance,
+            submittingUserResolver: new RunStoreSubmittingUserResolver(runStore),
+            runStore: runStore);
+
+        var endpoint = await executor.LaunchAgentHostPodAsync(runId);
+        endpoint.Should().Contain("10.0.5.9");
+
+        // Proves the fix: production code — not this test — wrote the real claim identity.
+        var persistedRun = await runStore.GetAsync(id);
+        persistedRun.Should().NotBeNull();
+        persistedRun!.SandboxClaimName.Should().Be(claimName);
+        persistedRun.SandboxBackend.Should().Be("kata-exec-sidecar");
+
+        // Replica A mints and locally holds a repository credential for this run (decoupled from the
+        // executor's own minting path, mirroring how the other tests in this file isolate the
+        // registry/reconciliation behavior under test).
+        var minter = new StubCredentialMinter(
+            new RepositoryCredential("replica-a-real-claim-token", DateTimeOffset.UtcNow.AddMinutes(5)));
+        var registry = new RunRepositoryCredentialRegistry(minter);
+        (await registry.MintAsync(runId)).Should().Be("replica-a-real-claim-token");
+
+        // Replica B's cluster view initially matches the claim LaunchAgentHostPodAsync created...
+        var claims = new ReplicaBClaimStore();
+        claims.Add(claimName, runId);
+        using var services = CreateServices(claims);
+        var replicaA = CreateReconciler(registry, runStore, services);
+
+        // ...until replica B performs the normal pod release and deletes it.
+        claims.DeleteClaimFromReplicaB(claimName);
+
+        await replicaA.ReconcileOnceAsync();
+
+        minter.RevokedTokens.Should().ContainSingle().Which.Should().Be("replica-a-real-claim-token",
+            "replica A must revoke its local token once replica B deletes the REAL AgentHost claim " +
+            "that LaunchAgentHostPodAsync itself created and persisted, with no manual " +
+            "SandboxClaimName injection standing in for production behavior");
     }
 
     [Fact]
