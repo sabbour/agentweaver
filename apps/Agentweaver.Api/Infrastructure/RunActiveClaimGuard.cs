@@ -8,8 +8,8 @@ namespace Agentweaver.Api.Infrastructure;
 /// deployment, run records live in a separate SQLite database (<see cref="SqliteRunStore"/>,
 /// its own connection) from the RunEvents/policy store (EF Core <c>MemoryDbContext</c>), so no
 /// single transaction can span both. This guard closes that gap by serializing the interval
-/// between reading a run's active status and committing a durable approval policy against every
-/// guarded run-store status transition for the same run (see
+/// between reading a run's active status and either committing or evaluating a durable approval
+/// policy against every guarded run-store status transition for the same run (see
 /// <see cref="RunActiveClaimGuardedRunStore"/>), so terminalization cannot land in that window.
 ///
 /// This mirrors the established precedent in <c>Agentweaver.Api.Git.RepositoryMergeLock</c>:
@@ -28,8 +28,8 @@ public sealed class RunActiveClaimGuard
 
     /// <summary>
     /// Acquires the exclusive claim for <paramref name="runId"/>, waiting if another operation
-    /// (a policy grant or a guarded status transition) currently holds it. Dispose the returned
-    /// handle to release the claim.
+    /// (a policy grant/evaluation or a guarded status transition) currently holds it. Dispose the
+    /// returned handle to release the claim.
     /// </summary>
     public async Task<IAsyncDisposable> AcquireAsync(Domain.RunId runId, CancellationToken ct)
     {

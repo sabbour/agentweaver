@@ -253,6 +253,55 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
             "a rejected late child grant must not authorize children after the parent resumes");
     }
 
+    [PostgresFact]
+    public async Task RunScopedChildGrant_DoesNotAuthorizeSiblingAfterParentFails()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var project = ProjectId.New();
+        var parent = NewRun($"alice-{suffix}", project);
+        var child = NewRun($"alice-{suffix}", project);
+        var sibling = NewRun($"alice-{suffix}", project);
+        var futureChild = NewRun($"alice-{suffix}", project);
+        var runStore = new EfRunStore(pg.Factory);
+        foreach (var run in new[] { parent, child, sibling, futureChild })
+            await runStore.InsertAsync(run);
+
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(options =>
+            options.UseNpgsql(
+                pg.ConnectionString,
+                npgsql => npgsql.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
+        using var provider = services.BuildServiceProvider();
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var gate = new DurableToolApprovalGate(
+            new DurableRunControlState(provider.GetRequiredService<IServiceScopeFactory>(), eventStream),
+            runStore: runStore);
+        var parentId = parent.Id.ToString();
+        var childId = child.Id.ToString();
+        var siblingId = sibling.Id.ToString();
+        gate.RegisterParentRun(childId, parentId);
+        gate.RegisterParentRun(siblingId, parentId);
+
+        var wait = gate.WaitForApprovalAsync(
+            childId, "failed-parent", "web_fetch", "https://child.test",
+            TimeSpan.FromSeconds(5), default);
+
+        (await gate.GrantAsync(childId, "failed-parent", ApprovalScope.Run)).Should().BeTrue();
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved(siblingId, "web_fetch", "https://before-failure.test").Should().BeTrue(
+            "active coordinators continue to propagate session policies");
+
+        await runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        (await runStore.GetAsync(sibling.Id))!.Status.Should().Be(RunStatus.InProgress);
+        gate.IsAutoApproved(siblingId, "web_fetch", "https://after-failure.test").Should().BeFalse(
+            "a failed coordinator's policy must not authorize an active sibling");
+
+        gate.RegisterParentRun(futureChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(futureChild.Id.ToString(), "web_fetch", "https://future-child.test").Should().BeFalse(
+            "a failed coordinator's policy must not authorize a future child");
+    }
+
     private static Run NewRun(string owner, ProjectId projectId, RunStatus status = RunStatus.InProgress) => new()
     {
         Id = RunId.New(),

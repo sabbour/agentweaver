@@ -8,9 +8,10 @@ namespace Agentweaver.Api.Infrastructure;
 /// method able to move a run's status away from <see cref="RunStatus.InProgress"/> acquires the
 /// same per-run <see cref="RunActiveClaimGuard"/> claim that
 /// <see cref="Runs.DurableToolApprovalGate"/>'s active-run check holds while persisting a
-/// durable non-once approval scope. This closes finding #3 of PR #972's review: on SQLite the
-/// active-run read and the policy-persistence commit cannot share one ACID transaction with the
-/// run store, so a real mutual-exclusion claim -- not another racy pre-read -- is required.
+/// durable non-once approval scope or evaluating a run/session policy. This closes PR #972's
+/// lifecycle races: on SQLite the active-run read and the policy operation cannot share one ACID
+/// transaction with the run store, so a real mutual-exclusion claim -- not another racy pre-read
+/// -- is required.
 ///
 /// Guarded methods are exactly those that can transition a run away from InProgress:
 /// <see cref="UpdateStatusAsync"/>, <see cref="UpdateResultAsync"/>,

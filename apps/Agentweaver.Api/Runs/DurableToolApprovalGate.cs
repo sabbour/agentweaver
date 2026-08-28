@@ -130,30 +130,84 @@ public sealed class DurableToolApprovalGate(
         return true;
     }
 
-    public bool IsAutoApproved(string runId, string toolName, string? url)
+    public bool IsAutoApproved(string runId, string toolName, string? url) =>
+        IsAutoApprovedAsync(runId, toolName).GetAwaiter().GetResult();
+
+    private async Task<bool> IsAutoApprovedAsync(string runId, string toolName)
     {
         if (string.IsNullOrWhiteSpace(toolName))
             return false;
 
-        var subject = SubjectOf(runId);
-        if (subject is null)
+        // Take the SQLite status claims before opening the durable event transaction. This
+        // matches scope persistence's lock order, so a policy lookup cannot pass an active
+        // coordinator just before a guarded terminal transition changes its status.
+        var activeClaims = new List<IAsyncDisposable>();
+        try
+        {
+            var registeredParentId = ParentOf(runId);
+            if (runActiveClaimGuard is not null)
+            {
+                foreach (var claimRunId in ActiveReadClaimRunIds(runId, registeredParentId)
+                             .Distinct()
+                             .OrderBy(id => id.ToString(), StringComparer.Ordinal))
+                {
+                    activeClaims.Add(await runActiveClaimGuard.AcquireAsync(claimRunId, CancellationToken.None)
+                        .ConfigureAwait(false));
+                }
+            }
+
+            return await _state.ExecuteExclusivelyAsync(
+                [runId, registeredParentId ?? string.Empty],
+                async (db, ct) =>
+                {
+                    // Re-read after acquiring the claims. A concurrent clear or replacement of
+                    // the registration fails closed rather than using an unclaimed coordinator.
+                    var parentId = await ParentOfAsync(db, runId, ct).ConfigureAwait(false);
+                    if (!string.Equals(parentId, registeredParentId, StringComparison.Ordinal))
+                        return false;
+
+                    var activeSubjects = await ActiveSubjectsAsync(
+                        db,
+                        parentId is null ? [runId] : [runId, parentId],
+                        ct).ConfigureAwait(false);
+                    if (!activeSubjects.TryGetValue(runId, out var subject))
+                        return false;
+
+                    var risk = ToolApprovalPolicySemantics.RiskFor(toolName);
+                    if (ToolApprovalPolicySemantics.IsAlwaysEligible(toolName) &&
+                        subject.ProjectId is not null &&
+                        await HasPolicyAsync(
+                            db,
+                            ProjectPolicyBucket(subject.ProjectId.Value, subject.Owner),
+                            subject,
+                            toolName,
+                            risk,
+                            ct).ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+
+                    if (await HasPolicyAsync(db, runId, subject, toolName, risk, ct).ConfigureAwait(false))
+                        return true;
+
+                    return parentId is not null
+                        && activeSubjects.TryGetValue(parentId, out var parentSubject)
+                        && parentSubject == subject
+                        && await HasPolicyAsync(db, parentId, parentSubject, toolName, risk, ct)
+                            .ConfigureAwait(false);
+                },
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Unable to evaluate durable tool-approval policy for run {RunId}", runId);
             return false;
-
-        var risk = ToolApprovalPolicySemantics.RiskFor(toolName);
-        if (ToolApprovalPolicySemantics.IsAlwaysEligible(toolName) &&
-            subject.ProjectId is not null &&
-            HasPolicy(ProjectPolicyBucket(subject.ProjectId.Value, subject.Owner), subject, toolName, risk))
-            return true;
-
-        if (HasPolicy(runId, subject, toolName, risk))
-            return true;
-
-        if (ParentOf(runId) is not { } parentId)
-            return false;
-
-        var parentSubject = SubjectOf(parentId);
-        return parentSubject == subject
-            && HasPolicy(parentId, parentSubject, toolName, risk);
+        }
+        finally
+        {
+            foreach (var activeClaim in activeClaims.AsEnumerable().Reverse())
+                await activeClaim.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     public bool IsKnownRequest(string runId, string requestId) =>
@@ -365,6 +419,15 @@ public sealed class DurableToolApprovalGate(
         }
     }
 
+    private static IEnumerable<RunId> ActiveReadClaimRunIds(string runId, string? parentId)
+    {
+        if (RunId.TryParse(runId, out var sourceRunId))
+            yield return sourceRunId;
+
+        if (parentId is not null && RunId.TryParse(parentId, out var parentRunId))
+            yield return parentRunId;
+    }
+
     private static IEnumerable<string> ActivePolicyRunIds(
         string runId,
         IReadOnlyList<PolicyDestination> policyDestinations)
@@ -521,17 +584,115 @@ public sealed class DurableToolApprovalGate(
             .LastOrDefault(r => r?.RequestId == requestId);
 
     private string? ParentOf(string runId) =>
-        _state.Load(runId, ParentRegistered, RunCleared)
+        ParentOf(_state.Load(runId, ParentRegistered, RunCleared));
+
+    private static string? ParentOf(IReadOnlyList<RunEventRecord> records) =>
+        records
             .TakeLastAfterClear()
             .Where(e => e.EventType == ParentRegistered)
             .Select(e => JsonSerializer.Deserialize<ParentRegistration>(e.PayloadJson, JsonDefaults.Options))
             .LastOrDefault()
             ?.ParentRunId;
 
-    private bool HasPolicy(string bucketRunId, ApprovalSubject subject, string toolName, string risk)
+    private static async Task<string?> ParentOfAsync(
+        MemoryDbContext db,
+        string runId,
+        CancellationToken ct) =>
+        ParentOf(await db.RunEvents
+            .AsNoTracking()
+            .Where(e => e.RunId == runId
+                && (e.EventType == ParentRegistered || e.EventType == RunCleared))
+            .OrderBy(e => e.Sequence)
+            .ToListAsync(ct)
+            .ConfigureAwait(false));
+
+    private async Task<Dictionary<string, ApprovalSubject>> ActiveSubjectsAsync(
+        MemoryDbContext db,
+        IEnumerable<string> runIds,
+        CancellationToken ct)
     {
-        foreach (var record in _state.Load(bucketRunId, PolicyGranted, RunCleared)
-                     .TakeLastAfterClear()
+        var subjects = new Dictionary<string, ApprovalSubject>(StringComparer.Ordinal);
+        foreach (var runId in runIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+        {
+            var subject = await ActiveSubjectOfAsync(db, runId, ct).ConfigureAwait(false);
+            if (subject is not null)
+                subjects[runId] = subject;
+        }
+
+        return subjects;
+    }
+
+    private async Task<ApprovalSubject?> ActiveSubjectOfAsync(
+        MemoryDbContext db,
+        string runId,
+        CancellationToken ct)
+    {
+        if (!RunId.TryParse(runId, out _))
+            return null;
+
+        if (db.Database.IsNpgsql())
+        {
+            var run = await db.Runs
+                .FromSqlInterpolated($"SELECT * FROM runs WHERE run_id = {runId} FOR UPDATE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(ct)
+                .ConfigureAwait(false);
+            return ToActiveSubject(run?.SubmittingUser, run?.ProjectId, run?.Status);
+        }
+
+        if (runStore is null || !RunId.TryParse(runId, out var id))
+            return null;
+
+        try
+        {
+            var run = await runStore.GetAsync(id, ct).ConfigureAwait(false);
+            return run?.Status == RunStatus.InProgress && !string.IsNullOrWhiteSpace(run.SubmittingUser)
+                ? new ApprovalSubject(run.SubmittingUser, run.ProjectId)
+                : null;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Unable to resolve tool-approval subject for run {RunId}", runId);
+            return null;
+        }
+    }
+
+    private static ApprovalSubject? ToActiveSubject(string? owner, string? projectId, string? status)
+    {
+        if (status != RunStatus.InProgress.ToApiString() || string.IsNullOrWhiteSpace(owner))
+            return null;
+
+        return new ApprovalSubject(
+            owner,
+            ProjectId.TryParse(projectId, out var parsedProjectId) ? parsedProjectId : null);
+    }
+
+    private static async Task<bool> HasPolicyAsync(
+        MemoryDbContext db,
+        string bucketRunId,
+        ApprovalSubject subject,
+        string toolName,
+        string risk,
+        CancellationToken ct) =>
+        HasPolicy(
+            await db.RunEvents
+                .AsNoTracking()
+                .Where(e => e.RunId == bucketRunId
+                    && (e.EventType == PolicyGranted || e.EventType == RunCleared))
+                .OrderBy(e => e.Sequence)
+                .ToListAsync(ct)
+                .ConfigureAwait(false),
+            subject,
+            toolName,
+            risk);
+
+    private static bool HasPolicy(
+        IReadOnlyList<RunEventRecord> records,
+        ApprovalSubject subject,
+        string toolName,
+        string risk)
+    {
+        foreach (var record in records.TakeLastAfterClear()
                      .Where(e => e.EventType == PolicyGranted))
         {
             try
@@ -565,25 +726,6 @@ public sealed class DurableToolApprovalGate(
         try
         {
             var run = await runStore.GetAsync(id).ConfigureAwait(false);
-            return string.IsNullOrWhiteSpace(run?.SubmittingUser)
-                ? null
-                : new ApprovalSubject(run.SubmittingUser, run.ProjectId);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Unable to resolve tool-approval subject for run {RunId}", runId);
-            return null;
-        }
-    }
-
-    private ApprovalSubject? SubjectOf(string runId)
-    {
-        if (runStore is null || !RunId.TryParse(runId, out var id))
-            return null;
-
-        try
-        {
-            var run = runStore.GetAsync(id).ConfigureAwait(false).GetAwaiter().GetResult();
             return string.IsNullOrWhiteSpace(run?.SubmittingUser)
                 ? null
                 : new ApprovalSubject(run.SubmittingUser, run.ProjectId);

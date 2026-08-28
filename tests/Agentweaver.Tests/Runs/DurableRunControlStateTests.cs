@@ -86,6 +86,40 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task RunScopedApproval_OnChild_DoesNotOutliveFailedParent()
+    {
+        var parent = await InsertOwnedRunAsync("owner");
+        var child = await InsertOwnedRunAsync("owner");
+        var sibling = await InsertOwnedRunAsync("owner");
+        var futureChild = await InsertOwnedRunAsync("owner");
+        var gate = NewApprovalGate();
+        var parentId = parent.Id.ToString();
+        var childId = child.Id.ToString();
+        var siblingId = sibling.Id.ToString();
+        gate.RegisterParentRun(childId, parentId);
+        gate.RegisterParentRun(siblingId, parentId);
+
+        var wait = gate.WaitForApprovalAsync(
+            childId, "failed-parent", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        await WaitUntilAsync(() => gate.GrantAsync(childId, "failed-parent", ApprovalScope.Run));
+
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved(siblingId, "web_fetch", "https://before-failure.test").Should().BeTrue(
+            "an active coordinator propagates its child's session policy to active siblings");
+
+        await _runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        (await _runStore.GetAsync(sibling.Id))!.Status.Should().Be(RunStatus.InProgress);
+        gate.IsAutoApproved(siblingId, "web_fetch", "https://after-failure.test").Should().BeFalse(
+            "an active sibling must not inherit a failed coordinator's stale policy");
+
+        gate.RegisterParentRun(futureChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(futureChild.Id.ToString(), "web_fetch", "https://future-child.test").Should().BeFalse(
+            "a future child must not inherit a failed coordinator's stale policy");
+    }
+
+    [Fact]
     public async Task RunScopedApproval_OnChild_FailsWhenParentIsNoLongerActive()
     {
         var parent = await InsertOwnedRunAsync("owner");
