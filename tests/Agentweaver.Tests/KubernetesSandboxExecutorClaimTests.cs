@@ -1,3 +1,5 @@
+extern alias agenthost;
+
 using System.Reflection;
 using System.Net;
 using System.Net.Sockets;
@@ -11,6 +13,8 @@ using Agentweaver.Domain;
 using FluentAssertions;
 using k8s;
 using Microsoft.Extensions.Logging.Abstractions;
+using AgentHostRuntimeState = agenthost::Agentweaver.AgentHost.AgentHostRuntimeState;
+using ConfigureRequest = agenthost::ConfigureRequest;
 
 namespace Agentweaver.Tests;
 
@@ -36,6 +40,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         AgentHostPort = 8088,
         AgentHostA2APath = "/a2a/agent",
         WorkspaceMountPath = "/workspace",
+        ToolApprovalApiBaseUrl = "https://agentweaver-api.internal",
     };
 
     private static IKubernetes ClientFor(FakeKubeHandler handler) =>
@@ -412,9 +417,21 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("runId").GetString().Should().Be(runId);
         body.GetProperty("userId").GetString().Should().Be("sabbour");
         body.GetProperty("turnBearerToken").GetString().Should().NotBeNullOrEmpty();
+        body.GetProperty("toolApprovalApiBaseUrl").GetString().Should().Be("https://agentweaver-api.internal");
         body.GetProperty("kvUserSecretName").GetString().Should()
             .StartWith("ghtok-user--",
                 "the pod must fetch ONLY the run owner's KV secret (base32-encoded user id)");
+
+        var configuredState = new AgentHostRuntimeState();
+        var configureRequest = JsonSerializer.Deserialize<ConfigureRequest>(
+            configureHandler.Body!,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        configureRequest.Should().NotBeNull();
+        configuredState.TryConfigure(configureRequest!.ToRunConfiguration()).Should().BeTrue();
+        configuredState.ToolApprovalApiAccess.Should().NotBeNull(
+            "the real warm-pool configure payload must enable lifecycle-aware policy reads");
+        configuredState.ToolApprovalApiAccess!.BearerToken.Should().Be(
+            body.GetProperty("turnBearerToken").GetString());
     }
 
     [Fact]

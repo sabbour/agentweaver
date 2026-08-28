@@ -8,9 +8,14 @@ internal static class AgentHostRuntimeServiceCollectionExtensions
 {
     public static IServiceCollection AddAgentHostRuntime(this IServiceCollection services)
     {
+        services.AddHttpClient("agentweaver-api");
         services.AddSingleton<AgentHostRuntimeState>();
         services.AddSingleton<IToolApprovalOwnerResolver, AgentHostToolApprovalOwnerResolver>();
         services.AddAgentRuntime();
+        services.AddSingleton<IAgentHostToolApprovalPolicyClient, AgentHostToolApprovalPolicyClient>();
+        services.AddSingleton<AgentHostDurableToolApprovalGate>();
+        services.AddSingleton<IToolApprovalGate>(sp =>
+            sp.GetRequiredService<AgentHostDurableToolApprovalGate>());
         return services;
     }
 }
