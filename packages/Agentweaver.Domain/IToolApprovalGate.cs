@@ -26,6 +26,9 @@ public enum ToolApprovalRequestState
     Expired,
 }
 
+/// <summary>Server-side context captured when a tool-approval request is armed.</summary>
+public sealed record ToolApprovalRequestContext(string ToolName, string? Url);
+
 /// <summary>Canonical policy semantics shared by durable and in-memory approval gates.</summary>
 public static class ToolApprovalPolicySemantics
 {
@@ -93,6 +96,12 @@ public interface IToolApprovalGate
     /// <summary>Returns the server-visible lifecycle state for a tool-approval request.</summary>
     ToolApprovalRequestState GetRequestState(string runId, string requestId) =>
         IsKnownRequest(runId, requestId) ? ToolApprovalRequestState.Pending : ToolApprovalRequestState.Unknown;
+
+    /// <summary>
+    /// Returns the server-captured context for a known approval request. Callers must not use
+    /// client-supplied tool metadata when creating a broader approval policy.
+    /// </summary>
+    ToolApprovalRequestContext? GetRequestContext(string runId, string requestId) => null;
 
     /// <summary>
     /// Returns <see langword="true"/> if a tool-approval request with <paramref name="requestId"/>

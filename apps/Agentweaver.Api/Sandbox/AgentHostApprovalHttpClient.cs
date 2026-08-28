@@ -7,7 +7,10 @@ public sealed record AgentHostApprovalOutcome(
     bool Resolved,
     string State,
     bool Unreachable,
-    int? StatusCode);
+    int? StatusCode,
+    bool Applied = false,
+    string? ToolName = null,
+    string? Url = null);
 
 public interface IAgentHostApprovalHttpClient
 {
@@ -109,13 +112,19 @@ public sealed class AgentHostApprovalHttpClient(
                 body?.Resolved ?? false,
                 state,
                 Unreachable: (int)response.StatusCode >= 500,
-                StatusCode: (int)response.StatusCode);
+                StatusCode: (int)response.StatusCode,
+                Applied: body?.Applied ?? false,
+                ToolName: body?.ToolName,
+                Url: body?.Url);
         }
     }
 
     private sealed record ApprovalResponse
     {
         [JsonPropertyName("resolved")] public bool Resolved { get; init; }
+        [JsonPropertyName("applied")] public bool Applied { get; init; }
         [JsonPropertyName("state")] public string? State { get; init; }
+        [JsonPropertyName("toolName")] public string? ToolName { get; init; }
+        [JsonPropertyName("url")] public string? Url { get; init; }
     }
 }

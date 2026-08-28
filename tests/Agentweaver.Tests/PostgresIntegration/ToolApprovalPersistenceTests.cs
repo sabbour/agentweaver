@@ -74,6 +74,44 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
             .Should().BeFalse();
     }
 
+    [PostgresFact]
+    public async Task ConcurrentOnceAndAlwaysDecisions_OnlyPersistTheWinningScopeAcrossReplicas()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var project = ProjectId.New();
+        var source = NewRun($"alice-{suffix}", project);
+        var future = NewRun($"alice-{suffix}", project);
+        var runStore = new EfRunStore(pg.Factory);
+        await runStore.InsertAsync(source);
+        await runStore.InsertAsync(future);
+
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(options =>
+            options.UseNpgsql(
+                pg.ConnectionString,
+                npgsql => npgsql.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
+        using var provider = services.BuildServiceProvider();
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var gateA = new DurableToolApprovalGate(
+            new DurableRunControlState(provider.GetRequiredService<IServiceScopeFactory>(), eventStream),
+            runStore: runStore);
+        var gateB = new DurableToolApprovalGate(
+            new DurableRunControlState(provider.GetRequiredService<IServiceScopeFactory>(), eventStream),
+            runStore: runStore);
+        var wait = gateA.WaitForApprovalAsync(
+            source.Id.ToString(), "once-vs-always", "web_fetch", "https://source.test",
+            TimeSpan.FromSeconds(10), default);
+
+        var once = gateA.GrantAsync(source.Id.ToString(), "once-vs-always", ApprovalScope.Once);
+        var always = gateB.GrantAsync(source.Id.ToString(), "once-vs-always", ApprovalScope.Always);
+        await Task.WhenAll(once, always);
+
+        (await once).Should().NotBe(await always);
+        (await wait).Should().BeTrue();
+        gateA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test")
+            .Should().Be(await always);
+    }
+
     private static Run NewRun(string owner, ProjectId projectId) => new()
     {
         Id = RunId.New(),

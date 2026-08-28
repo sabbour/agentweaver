@@ -258,6 +258,29 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task ConcurrentOnceAndAlwaysDecisions_OnlyTheWinningDecisionCanCreateAPolicy()
+    {
+        var project = ProjectId.New();
+        var source = await InsertOwnedRunAsync("alice", project);
+        var future = await InsertOwnedRunAsync("alice", project);
+        var replicaA = NewApprovalGate();
+        var replicaB = NewApprovalGate();
+        var wait = replicaA.WaitForApprovalAsync(
+            source.Id.ToString(), "once-vs-always", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+
+        var once = replicaA.GrantAsync(source.Id.ToString(), "once-vs-always", ApprovalScope.Once);
+        var always = replicaB.GrantAsync(source.Id.ToString(), "once-vs-always", ApprovalScope.Always);
+        await Task.WhenAll(once, always);
+
+        (await once).Should().NotBe(await always, "the durable request claim has exactly one winner");
+        (await wait).Should().BeTrue();
+        replicaA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test")
+            .Should().Be(await always,
+                "only an Always decision that won the atomic request claim may create a future policy");
+    }
+
+    [Fact]
     public async Task AlwaysApproval_DoesNotCrossProjectBoundary()
     {
         var sourceProject = ProjectId.New();

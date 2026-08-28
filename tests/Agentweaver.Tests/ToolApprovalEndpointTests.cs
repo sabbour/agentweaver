@@ -2,11 +2,19 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Agentweaver.AgentRuntime;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Sandbox.Preview;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Tests.Api;
 
@@ -265,6 +273,257 @@ public sealed class ToolApprovalEndpointTests
             .Should().BeTrue();
         approvalGate.IsAutoApproved(otherFuture.ToString(), "web_fetch", "https://other.test")
             .Should().BeFalse();
+        var policy = await ownerClient.GetFromJsonAsync<System.Text.Json.JsonElement>(
+            $"/api/runs/{ownerFuture}/tool-approval-policies/web_fetch");
+        policy.GetProperty("auto_approved").GetBoolean().Should().BeTrue(
+            "a new AgentHost pod reads this durable policy before it decides whether to prompt");
+    }
+
+    [Fact]
+    public async Task ProjectContributor_CanApproveOnceButCannotCreateScopesForAnotherContributorsRun()
+    {
+        const string ownerUser = "tool-approval-owner-oid";
+        const string otherUser = "tool-approval-contributor-oid";
+        using var factory = new EntraWebApplicationFactory();
+        using var ownerClient = factory.CreateAuthenticatedClientForObjectId(
+            ownerUser,
+            PlatformRoles.ProjectCreator);
+        using var otherClient = factory.CreateAuthenticatedClientForObjectId(
+            otherUser,
+            PlatformRoles.Contributor);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var roles = factory.Services.GetRequiredService<IProjectRoleAssignmentStore>();
+        var project = ProjectId.New();
+        await factory.Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
+        {
+            Id = project,
+            Name = $"Approval scope {Guid.NewGuid():N}",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = factory.NewWorkingDirectory(),
+            DefaultBranch = "main",
+            Owner = ownerUser,
+            ProviderSettings = new ProjectProviderSettings { DefaultProvider = ModelSource.GitHubCopilot },
+            State = ProjectState.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await roles.UpsertAsync(new ProjectRoleAssignment
+        {
+            ProjectId = project,
+            PrincipalId = ownerUser,
+            Role = ProjectRole.Owner,
+            GrantedBy = ownerUser,
+            GrantedAt = DateTimeOffset.UtcNow,
+        });
+        await roles.UpsertAsync(new ProjectRoleAssignment
+        {
+            ProjectId = project,
+            PrincipalId = otherUser,
+            Role = ProjectRole.Contributor,
+            GrantedBy = ownerUser,
+            GrantedAt = DateTimeOffset.UtcNow,
+        });
+
+        var ownerRun = RunId.New();
+        await InsertRunAsync(
+            runStore,
+            ownerRun,
+            RunStatus.InProgress,
+            submittingUser: ownerUser,
+            projectId: project);
+        var ownerPending = approvalGate.WaitForApprovalAsync(
+            ownerRun.ToString(), "other-contributor-owner-run", "web_fetch", "https://example.test",
+            TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        var forbidden = await otherClient.PostAsJsonAsync(
+            $"/api/runs/{ownerRun}/tool-approvals",
+            new { request_id = "other-contributor-owner-run", scope = "always" });
+        forbidden.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        approvalGate.GetRequestState(ownerRun.ToString(), "other-contributor-owner-run")
+            .Should().Be(ToolApprovalRequestState.Pending);
+
+        var oneTime = await otherClient.PostAsJsonAsync(
+            $"/api/runs/{ownerRun}/tool-approvals",
+            new { request_id = "other-contributor-owner-run", scope = "once" });
+        oneTime.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await ownerPending.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue(
+            "a project contributor may still perform the one-time review action");
+
+        var otherRun = RunId.New();
+        var otherFuture = RunId.New();
+        var ownerFuture = RunId.New();
+        await InsertRunAsync(
+            runStore,
+            otherRun,
+            RunStatus.InProgress,
+            submittingUser: otherUser,
+            projectId: project);
+        await InsertRunAsync(
+            runStore,
+            otherFuture,
+            RunStatus.InProgress,
+            submittingUser: otherUser,
+            projectId: project);
+        await InsertRunAsync(
+            runStore,
+            ownerFuture,
+            RunStatus.InProgress,
+            submittingUser: ownerUser,
+            projectId: project);
+        var otherPending = approvalGate.WaitForApprovalAsync(
+            otherRun.ToString(), "other-contributor-own-run", "web_fetch", "https://example.test",
+            TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        var ownPolicy = await otherClient.PostAsJsonAsync(
+            $"/api/runs/{otherRun}/tool-approvals",
+            new { request_id = "other-contributor-own-run", scope = "always" });
+        ownPolicy.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await otherPending.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+        approvalGate.IsAutoApproved(otherFuture.ToString(), "web_fetch", "https://other.test")
+            .Should().BeTrue();
+        approvalGate.IsAutoApproved(ownerFuture.ToString(), "web_fetch", "https://owner.test")
+            .Should().BeFalse("a contributor's policy cannot authorize another contributor's run");
+    }
+
+    [Fact]
+    public async Task AgentHostPolicyRead_RequiresTheRunsBoundCapability()
+    {
+        const string ownerUser = "tool-approval-agenthost-owner";
+        const string capabilityToken = "valid-run-capability";
+        using var factory = new EntraWebApplicationFactory();
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var capabilities = factory.Services.GetRequiredService<IRunAuthorshipCapabilityStore>();
+        var project = ProjectId.New();
+        await factory.Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
+        {
+            Id = project,
+            Name = $"Approval scope {Guid.NewGuid():N}",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = factory.NewWorkingDirectory(),
+            DefaultBranch = "main",
+            Owner = ownerUser,
+            ProviderSettings = new ProjectProviderSettings { DefaultProvider = ModelSource.GitHubCopilot },
+            State = ProjectState.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        var source = RunId.New();
+        var future = RunId.New();
+        await InsertRunAsync(runStore, source, RunStatus.InProgress, submittingUser: ownerUser, projectId: project);
+        await InsertRunAsync(runStore, future, RunStatus.InProgress, submittingUser: ownerUser, projectId: project);
+        var pending = approvalGate.WaitForApprovalAsync(
+            source.ToString(), "agenthost-policy-source", "web_fetch", "https://source.test",
+            TimeSpan.FromMinutes(1), CancellationToken.None);
+        (await approvalGate.GrantAsync(source.ToString(), "agenthost-policy-source", ApprovalScope.Always))
+            .Should().BeTrue();
+        (await pending.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
+
+        await capabilities.RegisterAsync(
+            future.ToString(),
+            capabilityToken,
+            DateTimeOffset.UtcNow.AddMinutes(5),
+            CancellationToken.None);
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", "internal-test-api-key");
+
+        var missingCapability = await client.GetAsync(
+            $"/api/runs/{future}/tool-approval-policies/web_fetch");
+        missingCapability.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        client.DefaultRequestHeaders.Add(RunAuthorshipHeaders.RunId, future.ToString());
+        client.DefaultRequestHeaders.Add(RunAuthorshipHeaders.RunToken, capabilityToken);
+        var response = await client.GetFromJsonAsync<System.Text.Json.JsonElement>(
+            $"/api/runs/{future}/tool-approval-policies/web_fetch");
+        response.GetProperty("auto_approved").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PodPerRun_AgentHostAcceptedScopes_AuthorizeSiblingAndFuturePodRun()
+    {
+        var agentHost = new RecordingAgentHostClient(
+            new AgentHostApprovalOutcome(
+                Resolved: true,
+                State: "approved",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                Applied: true,
+                ToolName: "web_fetch"));
+        using var baseFactory = new CoordinatorWebApplicationFactory();
+        using var factory = baseFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:AgentExecutionMode"] = "pod-per-run",
+                    ["Agentweaver:RemoteApiBaseUrl"] = "http://agentweaver-api:8080",
+                }));
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAgentHostApprovalHttpClient>();
+                services.AddSingleton<IAgentHostApprovalHttpClient>(agentHost);
+            });
+        });
+        using var ownerClient = CreateOwnerClient(factory, CoordinatorWebApplicationFactory.OwnerApiKey);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
+        var secretStore = factory.Services.GetRequiredService<ISecretStore>();
+        var project = await CreateProjectAsync(baseFactory, ownerClient);
+        var parent = RunId.New();
+        var child = RunId.New();
+        var sibling = RunId.New();
+        foreach (var id in new[] { parent, child, sibling })
+        {
+            await InsertRunAsync(
+                runStore,
+                id,
+                RunStatus.InProgress,
+                parentRunId: id == parent ? null : parent.ToString(),
+                submittingUser: CoordinatorWebApplicationFactory.OwnerUser,
+                projectId: project);
+        }
+        approvalGate.RegisterParentRun(child.ToString(), parent.ToString());
+        approvalGate.RegisterParentRun(sibling.ToString(), parent.ToString());
+        await secretStore.SetSecretAsync(
+            PreviewRunnerCredential.SecretKey(child.ToString()),
+            "pod-approval-credential");
+
+        var response = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{child}/tool-approvals",
+            new { request_id = "pod-session-scope", scope = "run" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        agentHost.LastScope.Should().Be("run");
+        approvalGate.IsAutoApproved(sibling.ToString(), "web_fetch", "https://sibling.test")
+            .Should().BeTrue(
+                "the API persists the scope only after the AgentHost reports it accepted the approval");
+
+        var alwaysSource = RunId.New();
+        var futurePodRun = RunId.New();
+        foreach (var id in new[] { alwaysSource, futurePodRun })
+        {
+            await InsertRunAsync(
+                runStore,
+                id,
+                RunStatus.InProgress,
+                submittingUser: CoordinatorWebApplicationFactory.OwnerUser,
+                projectId: project);
+        }
+        await secretStore.SetSecretAsync(
+            PreviewRunnerCredential.SecretKey(alwaysSource.ToString()),
+            "pod-always-credential");
+
+        var always = await ownerClient.PostAsJsonAsync(
+            $"/api/runs/{alwaysSource}/tool-approvals",
+            new { request_id = "pod-always-scope", scope = "always" });
+
+        always.StatusCode.Should().Be(HttpStatusCode.OK);
+        var futurePolicy = await ownerClient.GetFromJsonAsync<System.Text.Json.JsonElement>(
+            $"/api/runs/{futurePodRun}/tool-approval-policies/web_fetch");
+        futurePolicy.GetProperty("auto_approved").GetBoolean().Should().BeTrue(
+            "a freshly configured AgentHost pod reads the same project-and-owner-bound policy");
     }
 
     [Fact]
@@ -311,6 +570,31 @@ public sealed class ToolApprovalEndpointTests
         return client;
     }
 
+    private static HttpClient CreateOwnerClient(
+        Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> factory,
+        string apiKey)
+    {
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        return client;
+    }
+
+    private static async Task<ProjectId> CreateProjectAsync(
+        CoordinatorWebApplicationFactory workspaceFactory,
+        HttpClient client)
+    {
+        var response = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Approval scope {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = workspaceFactory.NewWorkingDirectory(),
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        return ProjectId.Parse(
+            (await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>())
+            .GetProperty("project_id").GetString()!);
+    }
+
     private static Task InsertRunAsync(
         IRunStore runStore,
         RunId id,
@@ -333,4 +617,32 @@ public sealed class ToolApprovalEndpointTests
             SubtaskId = parentRunId is null ? null : "1",
             ProjectId = projectId,
         });
+
+    private sealed class RecordingAgentHostClient(AgentHostApprovalOutcome outcome) : IAgentHostApprovalHttpClient
+    {
+        public string? LastScope { get; private set; }
+
+        public Task<AgentHostApprovalOutcome> GrantAsync(
+            string childRunId,
+            string requestId,
+            string scope,
+            string? bearer,
+            CancellationToken ct)
+        {
+            LastScope = scope;
+            return Task.FromResult(outcome);
+        }
+
+        public Task<AgentHostApprovalOutcome> DenyAsync(
+            string childRunId,
+            string requestId,
+            string? bearer,
+            CancellationToken ct) =>
+            Task.FromResult(new AgentHostApprovalOutcome(
+                Resolved: true,
+                State: "denied",
+                Unreachable: false,
+                StatusCode: StatusCodes.Status200OK,
+                Applied: true));
+    }
 }

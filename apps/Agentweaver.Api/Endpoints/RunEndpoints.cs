@@ -1643,6 +1643,7 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     ToolApprovalRequest body,
     IRunStore runStore,
     IToolApprovalGate approvalGate,
+    DurableToolApprovalGate durableApprovalGate,
     IAgentHostApprovalHttpClient agentHostApprovalClient,
     IOptions<SandboxRuntimeOptions> sandboxRuntime,
     RunStreamStore streamStore,
@@ -1690,6 +1691,11 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
         && targetRun.ProjectId is null
         && !ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(targetRun.SubmittingUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (approvalScope != ApprovalScope.Once
+        && !ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(targetRun.SubmittingUser))
+    {
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+    }
 
     // #349: only apply the run-active guard when there is a genuinely backend-tracked PENDING
     // request to protect. The frontend optimistically renders one HITL card per approval-gated
@@ -1737,7 +1743,25 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
                 streamStore,
                 ct).ConfigureAwait(false);
             if (podOutcome is not null)
+            {
+                if (podOutcome.Applied && approvalScope != ApprovalScope.Once)
+                {
+                    if (string.IsNullOrWhiteSpace(podOutcome.ToolName)
+                        || !await durableApprovalGate.PersistAgentHostApprovalAsync(
+                            targetRunId,
+                            body.RequestId,
+                            podOutcome.ToolName,
+                            podOutcome.Url,
+                            approvalScope).ConfigureAwait(false))
+                    {
+                        return Results.Problem(
+                            "The AgentHost approved this request, but the selected scope could not be persisted. No future policy was applied.",
+                            statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
+                }
+
                 return MapAgentHostApprovalOutcome(podOutcome, targetRunId, body.RequestId, approve: true);
+            }
 
             return Results.NotFound(new
             {
@@ -1851,6 +1875,46 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     }
 
     return Results.Ok(new { run_id = targetRunId, request_id = body.RequestId, denied = true });
+});
+
+app.MapGet("/api/runs/{id}/tool-approval-policies/{toolName}", async (
+    HttpContext httpContext,
+    string id,
+    string toolName,
+    IRunStore runStore,
+    IToolApprovalGate approvalGate,
+    IRunAuthorshipCapabilityStore capabilityStore,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId) || string.IsNullOrWhiteSpace(toolName))
+        return Results.BadRequest(new { error = "Invalid run id or tool name." });
+
+    var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+    if (run is null)
+        return Results.NotFound();
+
+    if (httpContext.User.HasClaim("agentweaver_internal", "true"))
+    {
+        var capabilityRunId = httpContext.Request.Headers[RunAuthorshipHeaders.RunId].ToString();
+        var capabilityToken = httpContext.Request.Headers[RunAuthorshipHeaders.RunToken].ToString();
+        if (!string.Equals(capabilityRunId, id, StringComparison.Ordinal)
+            || !await capabilityStore.ValidateAsync(id, capabilityToken, ct).ConfigureAwait(false))
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+    }
+    else if (await EndpointHelpers.RequireRunAccessAsync(
+            httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+    {
+        return denied;
+    }
+
+    return Results.Ok(new
+    {
+        run_id = id,
+        tool_name = toolName,
+        auto_approved = approvalGate.IsAutoApproved(id, toolName, url: null),
+    });
 });
 
 app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (

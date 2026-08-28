@@ -742,9 +742,13 @@ internal static class ToolApprovalEndpointHandlers
             _ => ApprovalScope.Once,
         };
 
-        // A pod serves one run, so "always" is effectively run-scoped and does not survive pod restart.
-        await gate.GrantAsync(runtimeState.RunId, request.RequestId, scope).ConfigureAwait(false);
-        return ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId));
+        var context = gate.GetRequestContext(runtimeState.RunId, request.RequestId);
+        var applied = await gate.GrantAsync(runtimeState.RunId, request.RequestId, scope).ConfigureAwait(false);
+        return ResultFor(
+            gate.GetRequestState(runtimeState.RunId, request.RequestId),
+            applied,
+            context?.ToolName,
+            context?.Url);
     }
 
     public static Task<IResult> DenyAsync(
@@ -760,8 +764,8 @@ internal static class ToolApprovalEndpointHandlers
         if (IsRunMismatch(request.RunId, runtimeState.RunId))
             return Task.FromResult<IResult>(Results.Conflict(new { error = "run mismatch", state = "run_mismatch" }));
 
-        gate.Deny(runtimeState.RunId, request.RequestId);
-        return Task.FromResult(ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId)));
+        var applied = gate.Deny(runtimeState.RunId, request.RequestId);
+        return Task.FromResult(ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId), applied));
     }
 
     private static bool IsRunMismatch(string? requestedRunId, string runtimeRunId) =>
@@ -769,16 +773,20 @@ internal static class ToolApprovalEndpointHandlers
         && !string.IsNullOrWhiteSpace(runtimeRunId)
         && !string.Equals(requestedRunId, runtimeRunId, StringComparison.Ordinal);
 
-    private static IResult ResultFor(ToolApprovalRequestState state) =>
+    private static IResult ResultFor(
+        ToolApprovalRequestState state,
+        bool applied = false,
+        string? toolName = null,
+        string? url = null) =>
         state switch
         {
             ToolApprovalRequestState.Approved or
             ToolApprovalRequestState.Denied or
             ToolApprovalRequestState.Expired =>
-                Results.Ok(new { resolved = true, state = FormatState(state) }),
+                Results.Ok(new { resolved = true, applied, state = FormatState(state), toolName, url }),
             ToolApprovalRequestState.Pending =>
-                Results.Conflict(new { resolved = false, state = "pending" }),
-            _ => Results.NotFound(new { resolved = false, state = "unknown" }),
+                Results.Conflict(new { resolved = false, applied = false, state = "pending" }),
+            _ => Results.NotFound(new { resolved = false, applied = false, state = "unknown" }),
         };
 
     private static string FormatState(ToolApprovalRequestState state) =>

@@ -3,7 +3,9 @@ using System.Text;
 using System.Text.Json;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Runs;
@@ -61,57 +63,42 @@ public sealed class DurableToolApprovalGate(
 
     public async Task<bool> GrantAsync(string runId, string requestId, ApprovalScope scope)
     {
-        var context = LatestContext(runId, requestId);
-        if (context is null || LatestResolution(runId, requestId) is not null)
+        var resolved = await ResolveAndPersistAsync(runId, requestId, scope, context: null)
+            .ConfigureAwait(false);
+        if (!resolved)
         {
-            var reason = context is null ? "no_context" : "already_resolved";
+            var reason = LatestContext(runId, requestId) is null ? "no_context" : "already_resolved";
             logger?.LogWarning(
                 "GrantAsync rejected: runId={RunId} requestId={DisplayId} reason={Reason}",
                 runId, requestId.Length >= 8 ? requestId[..8] : requestId, reason);
             return false;
         }
 
-        if (scope != ApprovalScope.Once && !string.IsNullOrWhiteSpace(context.ToolName))
-        {
-            var subject = await SubjectOfAsync(runId).ConfigureAwait(false);
-            if (subject is not null)
-            {
-                var policy = new PolicyGrant(
-                    subject.ProjectId?.ToString(),
-                    subject.Owner,
-                    context.ToolName,
-                    ToolApprovalPolicySemantics.RiskFor(context.ToolName));
-
-                if (scope == ApprovalScope.Always)
-                {
-                    // A durable "always" grant must have a real project boundary. Legacy runs
-                    // without one still resolve the current request, but cannot create a policy
-                    // that could accidentally apply outside their intended project.
-                    if (subject.ProjectId is not null &&
-                        ToolApprovalPolicySemantics.IsAlwaysEligible(context.ToolName))
-                    {
-                        _state.Append(ProjectPolicyBucket(subject.ProjectId.Value, subject.Owner), PolicyGranted, policy);
-                    }
-                }
-                else
-                {
-                    _state.Append(runId, PolicyGranted, policy);
-
-                    if (ParentOf(runId) is { } parentId)
-                    {
-                        var parentSubject = await SubjectOfAsync(parentId).ConfigureAwait(false);
-                        if (parentSubject == subject)
-                        {
-                            _state.Append(parentId, PolicyGranted, policy);
-                        }
-                    }
-                }
-            }
-        }
-
-        _state.Append(runId, RequestResolved, new ApprovalResolution(requestId, true, false));
         EmitResolved(runId, requestId, approved: true, expired: false);
         return true;
+    }
+
+    /// <summary>
+    /// Persists a scope selected for an AgentHost-owned request after the pod has atomically
+    /// accepted that exact approval. The AgentHost supplies its server-captured tool context; the
+    /// API never trusts UI metadata when creating a durable policy.
+    /// </summary>
+    public async Task<bool> PersistAgentHostApprovalAsync(
+        string runId,
+        string requestId,
+        string toolName,
+        string? url,
+        ApprovalScope scope)
+    {
+        if (scope == ApprovalScope.Once || string.IsNullOrWhiteSpace(toolName))
+            return false;
+
+        return await ResolveAndPersistAsync(
+                runId,
+                requestId,
+                scope,
+                new ApprovalContext(requestId, toolName, url))
+            .ConfigureAwait(false);
     }
 
     public bool Deny(string runId, string requestId)
@@ -159,6 +146,11 @@ public sealed class DurableToolApprovalGate(
     public bool IsKnownRequest(string runId, string requestId) =>
         LatestContext(runId, requestId) is not null;
 
+    public ToolApprovalRequestContext? GetRequestContext(string runId, string requestId) =>
+        LatestContext(runId, requestId) is { } context
+            ? new ToolApprovalRequestContext(context.ToolName, context.Url)
+            : null;
+
     public bool HasArmedApproval(string runId)
     {
         // A request is ARMED when its context was registered (after the last clear) but no resolution
@@ -191,6 +183,151 @@ public sealed class DurableToolApprovalGate(
     public void RegisterParentRun(string childRunId, string parentRunId) =>
         _state.Append(childRunId, ParentRegistered, new ParentRegistration(parentRunId));
 
+    private async Task<bool> ResolveAndPersistAsync(
+        string runId,
+        string requestId,
+        ApprovalScope scope,
+        ApprovalContext? context)
+    {
+        var subject = scope == ApprovalScope.Once
+            ? null
+            : await SubjectOfAsync(runId).ConfigureAwait(false);
+        var parentId = scope == ApprovalScope.Once ? null : ParentOf(runId);
+        var parentSubject = parentId is null
+            ? null
+            : await SubjectOfAsync(parentId).ConfigureAwait(false);
+        var lockIds = PolicyLockStreamIds(runId, parentId, subject, parentSubject, scope);
+
+        return await _state.ExecuteExclusivelyAsync(
+            lockIds,
+            async (db, ct) =>
+            {
+                var records = await db.RunEvents
+                    .AsNoTracking()
+                    .Where(e => e.RunId == runId
+                        && (e.EventType == RequestContext
+                            || e.EventType == RequestResolved
+                            || e.EventType == RunCleared))
+                    .OrderBy(e => e.Sequence)
+                    .ToListAsync(ct)
+                    .ConfigureAwait(false);
+                var persistedContext = LatestContext(records, requestId);
+                var resolvedContext = persistedContext ?? context;
+                if (resolvedContext is null || LatestResolutionRecord(records, requestId) is not null)
+                    return false;
+                var policyDestinations = BuildPolicyDestinations(
+                    runId, parentId, subject, parentSubject, resolvedContext.ToolName, scope);
+
+                // Claiming the pending request and writing every selected policy occur in this
+                // transaction under the same sorted advisory locks. A losing once/always race
+                // observes this resolution and cannot create a broader policy.
+                var events = new List<PendingEvent>();
+                if (persistedContext is null)
+                    events.Add(new PendingEvent(runId, RequestContext, resolvedContext));
+                events.Add(new PendingEvent(
+                    runId,
+                    RequestResolved,
+                    new ApprovalResolution(requestId, true, false)));
+                events.AddRange(policyDestinations.Select(destination =>
+                    new PendingEvent(destination.StreamId, PolicyGranted, destination.Policy)));
+
+                var nextSequences = await NextSequencesAsync(
+                        db,
+                        events.Select(e => e.StreamId).Distinct(StringComparer.Ordinal),
+                        ct)
+                    .ConfigureAwait(false);
+                var now = DateTime.UtcNow;
+                foreach (var entry in events)
+                {
+                    db.RunEvents.Add(new RunEventRecord
+                    {
+                        RunId = entry.StreamId,
+                        Sequence = nextSequences[entry.StreamId]++,
+                        EventType = entry.EventType,
+                        PayloadJson = JsonSerializer.Serialize(entry.Payload, JsonDefaults.Options),
+                        CreatedAt = now,
+                    });
+                }
+
+                return true;
+            },
+            CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private static IEnumerable<string> PolicyLockStreamIds(
+        string runId,
+        string? parentId,
+        ApprovalSubject? subject,
+        ApprovalSubject? parentSubject,
+        ApprovalScope scope)
+    {
+        yield return runId;
+        if (subject is null || scope == ApprovalScope.Once)
+            yield break;
+
+        if (scope == ApprovalScope.Always)
+        {
+            if (subject.ProjectId is not null)
+                yield return ProjectPolicyBucket(subject.ProjectId.Value, subject.Owner);
+            yield break;
+        }
+
+        if (parentId is not null && parentSubject == subject)
+            yield return parentId;
+    }
+
+    private static IReadOnlyList<PolicyDestination> BuildPolicyDestinations(
+        string runId,
+        string? parentId,
+        ApprovalSubject? subject,
+        ApprovalSubject? parentSubject,
+        string? toolName,
+        ApprovalScope scope)
+    {
+        if (subject is null || string.IsNullOrWhiteSpace(toolName) || scope == ApprovalScope.Once)
+            return [];
+
+        var policy = new PolicyGrant(
+            subject.ProjectId?.ToString(),
+            subject.Owner,
+            toolName,
+            ToolApprovalPolicySemantics.RiskFor(toolName));
+
+        if (scope == ApprovalScope.Always)
+        {
+            // A durable "always" grant must have a real project boundary. Legacy runs still
+            // resolve their current request, but cannot create a policy outside that project.
+            return subject.ProjectId is not null
+                && ToolApprovalPolicySemantics.IsAlwaysEligible(toolName)
+                ? [new PolicyDestination(ProjectPolicyBucket(subject.ProjectId.Value, subject.Owner), policy)]
+                : [];
+        }
+
+        var destinations = new List<PolicyDestination> { new(runId, policy) };
+        if (parentId is not null && parentSubject == subject)
+            destinations.Add(new PolicyDestination(parentId, policy));
+        return destinations;
+    }
+
+    private static async Task<Dictionary<string, int>> NextSequencesAsync(
+        MemoryDbContext db,
+        IEnumerable<string> streamIds,
+        CancellationToken ct)
+    {
+        var next = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var streamId in streamIds)
+        {
+            var max = await db.RunEvents
+                .Where(e => e.RunId == streamId)
+                .Select(e => (int?)e.Sequence)
+                .MaxAsync(ct)
+                .ConfigureAwait(false);
+            next[streamId] = (max ?? 0) + 1;
+        }
+
+        return next;
+    }
+
     private void EmitResolved(string runId, string requestId, bool approved, bool expired) =>
         streams?.Get(runId)?.RecordNext(EventTypes.ToolApprovalResolved, new
         {
@@ -201,8 +338,12 @@ public sealed class DurableToolApprovalGate(
         });
 
     private ApprovalContext? LatestContext(string runId, string requestId) =>
-        _state.Load(runId, RequestContext, RunCleared)
-            .TakeLastAfterClear()
+        LatestContext(_state.Load(runId, RequestContext, RunCleared), requestId);
+
+    private static ApprovalContext? LatestContext(
+        IReadOnlyList<RunEventRecord> records,
+        string requestId) =>
+        records.TakeLastAfterClear()
             .Where(e => e.EventType == RequestContext)
             .Select(e => JsonSerializer.Deserialize<ApprovalContext>(e.PayloadJson, JsonDefaults.Options))
             .LastOrDefault(c => c?.RequestId == requestId);
@@ -211,8 +352,12 @@ public sealed class DurableToolApprovalGate(
         LatestResolutionRecord(runId, requestId)?.Approved;
 
     private ApprovalResolution? LatestResolutionRecord(string runId, string requestId) =>
-        _state.Load(runId, RequestResolved, RunCleared)
-            .TakeLastAfterClear()
+        LatestResolutionRecord(_state.Load(runId, RequestResolved, RunCleared), requestId);
+
+    private static ApprovalResolution? LatestResolutionRecord(
+        IReadOnlyList<RunEventRecord> records,
+        string requestId) =>
+        records.TakeLastAfterClear()
             .Where(e => e.EventType == RequestResolved)
             .Select(e => JsonSerializer.Deserialize<ApprovalResolution>(e.PayloadJson, JsonDefaults.Options))
             .LastOrDefault(r => r?.RequestId == requestId);
@@ -303,6 +448,8 @@ public sealed class DurableToolApprovalGate(
     private sealed record PolicyGrant(string? ProjectId, string? Owner, string? ToolId, string? RiskSemantics);
     private sealed record ParentRegistration(string ParentRunId);
     private sealed record ApprovalSubject(string Owner, ProjectId? ProjectId);
+    private sealed record PolicyDestination(string StreamId, PolicyGrant Policy);
+    private sealed record PendingEvent(string StreamId, string EventType, object Payload);
 }
 
 file static class DurableRunControlEventExtensions

@@ -160,6 +160,13 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate
         _requestContext.TryGetValue(runId, out var runCtx) && runCtx.ContainsKey(requestId);
 
     /// <inheritdoc />
+    public ToolApprovalRequestContext? GetRequestContext(string runId, string requestId) =>
+        _requestContext.TryGetValue(runId, out var runCtx) &&
+        runCtx.TryGetValue(requestId, out var context)
+            ? new ToolApprovalRequestContext(context.ToolName, context.Url)
+            : null;
+
+    /// <inheritdoc />
     public bool HasArmedApproval(string runId) =>
         // A pending entry exists only while a request is awaiting the operator's grant/deny decision;
         // it is removed in WaitForApprovalAsync's finally once resolved, denied, expired, or cancelled.
