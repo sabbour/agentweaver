@@ -159,7 +159,7 @@ function buildToolsDoc(groups, total) {
   lines.push('}');
   lines.push("```");
   lines.push("");
-  lines.push("Common mappings include auth-first guidance (`github_signin` → `session_start`), resource-specific list/read hints for `404`s, review-state guidance for `409`s, and `diagnostics_get` retry guidance for timeouts.");
+  lines.push("Common mappings include Agentweaver sign-in guidance for `401`s, resource-specific list/read hints for `404`s, review-state guidance for `409`s, and `diagnostics_get` retry guidance for timeouts.");
   lines.push("");
 
   for (const g of groups) {

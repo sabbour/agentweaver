@@ -81,9 +81,13 @@ at storage time.
 
 MCP browser handoff returns a distinct, non-enumerable transaction ID, browser URL, and expiry.
 The transaction ID is cryptographically random and is never derived from or equal to OAuth
-state. It is bound to its stored App kind and initiating Entra subject. OAuth state, PKCE
-material, and callback-cookie material are persistence-only values and are never externally
-serialized.
+state. It is bound to its stored App kind and initiating Entra subject. Opening the browser URL
+requires an authenticated Agentweaver Entra browser session for that same initiating subject;
+the handoff atomically pins that opaque browser session to the transaction before it issues the
+callback cookie. Callback completion revalidates both the pinned browser session and the
+callback-cookie hash. A transaction ID or browser URL alone is never authority to mint a
+callback binding. OAuth state, PKCE material, browser-session identifiers, and callback-cookie
+material are persistence-only values and are never externally serialized.
 Polling is authorized only for the initiating Entra subject and exposes only
 `pending`, `completed`, `failed`, or `expired`; it exposes no code, credential metadata,
 other user's GitHub identity, or raw provider error.

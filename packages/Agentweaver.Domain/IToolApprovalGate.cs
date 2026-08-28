@@ -6,10 +6,10 @@ public enum ApprovalScope
     /// <summary>Approve only this specific request.</summary>
     Once,
 
-    /// <summary>Approve all future requests from the same tool+URL combo for this run.</summary>
+    /// <summary>Approve all future requests from this tool for the current orchestration run.</summary>
     Run,
 
-    /// <summary>Persist an eligible-tool policy for future runs owned by the same persisted user.</summary>
+    /// <summary>Persist an eligible-tool policy for future runs in the same project, owned by the same persisted user.</summary>
     Always,
 
     /// <summary>Approve all future requests from this tool (any URL) for this run.</summary>
@@ -25,6 +25,9 @@ public enum ToolApprovalRequestState
     Denied,
     Expired,
 }
+
+/// <summary>Server-side context captured when a tool-approval request is armed.</summary>
+public sealed record ToolApprovalRequestContext(string ToolName, string? Url);
 
 /// <summary>Canonical policy semantics shared by durable and in-memory approval gates.</summary>
 public static class ToolApprovalPolicySemantics
@@ -85,14 +88,20 @@ public interface IToolApprovalGate
     bool Deny(string runId, string requestId);
 
     /// <summary>
-    /// Returns <see langword="true"/> if the tool is covered by an owner-bound run-scoped policy
-    /// or an eligible owner-bound always policy, meaning no HITL card should be shown.
+    /// Returns <see langword="true"/> if the tool is covered by a run-scoped policy or an eligible
+    /// project- and owner-bound always policy, meaning no HITL card should be shown.
     /// </summary>
     bool IsAutoApproved(string runId, string toolName, string? url);
 
     /// <summary>Returns the server-visible lifecycle state for a tool-approval request.</summary>
     ToolApprovalRequestState GetRequestState(string runId, string requestId) =>
         IsKnownRequest(runId, requestId) ? ToolApprovalRequestState.Pending : ToolApprovalRequestState.Unknown;
+
+    /// <summary>
+    /// Returns the server-captured context for a known approval request. Callers must not use
+    /// client-supplied tool metadata when creating a broader approval policy.
+    /// </summary>
+    ToolApprovalRequestContext? GetRequestContext(string runId, string requestId) => null;
 
     /// <summary>
     /// Returns <see langword="true"/> if a tool-approval request with <paramref name="requestId"/>
@@ -115,8 +124,53 @@ public interface IToolApprovalGate
 
     /// <summary>
     /// Registers a parent–child relationship so that run-scoped policies granted on a child run
-    /// are also visible to its sibling child runs (i.e. stored under the parent run ID too).
+    /// are also visible to its sibling child runs within the same orchestration (i.e. stored under
+    /// the real parent run ID too).
     /// Call this once when a coordinator child run is dispatched.
     /// </summary>
     void RegisterParentRun(string childRunId, string parentRunId);
+}
+
+/// <summary>
+/// Allows a pod-facing approval endpoint to withdraw a scoped policy that it provisionally
+/// applied before the API durably commits the matching policy. The opaque grant id prevents a
+/// delayed rollback from removing a separately granted equivalent policy.
+/// </summary>
+public interface IToolApprovalScopeRollback
+{
+    /// <summary>Returns the opaque id of a scoped policy applied by this exact approval.</summary>
+    string? GetScopeGrantId(string runId, string requestId);
+
+    /// <summary>
+    /// Removes only the policies created by <paramref name="scopeGrantId"/>.
+    /// Returns <see langword="false"/> when that provisional policy was already finalized,
+    /// rolled back, or does not belong to this request.
+    /// </summary>
+    bool RollbackScopeGrant(string runId, string requestId, string scopeGrantId);
+
+    /// <summary>
+    /// Marks a provisional policy as durably committed without altering its local coverage.
+    /// </summary>
+    bool FinalizeScopeGrant(string runId, string requestId, string scopeGrantId);
+}
+
+/// <summary>
+/// Extends scope rollback with a lease-bound grant operation for an AgentHost pod.
+/// Until the API finalizes it, the local policy must expire independently so a dropped
+/// response cannot leave a pod-local scope usable indefinitely.
+/// </summary>
+public interface IProvisionalToolApprovalGate : IToolApprovalScopeRollback
+{
+    Task<bool> GrantProvisionalScopeAsync(
+        string runId,
+        string requestId,
+        ApprovalScope scope,
+        string scopeGrantId,
+        DateTimeOffset expiresAt);
+}
+
+/// <summary>Shared lease protocol for locally applied AgentHost approval scopes.</summary>
+public static class ToolApprovalScopeProtocol
+{
+    public static readonly TimeSpan ProvisionalScopeLifetime = TimeSpan.FromSeconds(15);
 }

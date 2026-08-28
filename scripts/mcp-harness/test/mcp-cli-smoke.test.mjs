@@ -14,8 +14,7 @@ const tool = (name, required = []) => ({
 const contract = {
   contractVersion: 'test',
   capabilities: [
-    { capability: 'auth-status', tools: ['github_status'] },
-    { capability: 'auth-signin', tools: ['github_signin'] },
+    { capability: 'repo-app-connect', tools: ['github_repo_app_connect'] },
     { capability: 'list-projects', tools: ['project_list'] },
     { capability: 'create-project', tools: ['project_create'], in: { requires: { name: 'string', working_directory: 'string' } } },
     { capability: 'submit-run', tools: ['run_submit'], in: { requires: { project_id: 'string', task: 'string' } } },
@@ -32,7 +31,7 @@ function fakeClient(responses) {
     calls,
     async discoverTools() {
       return [
-        tool('github_status'), tool('github_signin'), tool('project_list'),
+        tool('github_repo_app_connect'), tool('project_list'),
         tool('project_create', ['name', 'working_directory']),
         tool('run_submit', ['project_id', 'task']), tool('run_status', ['run_id']),
         tool('coordinator_outcome_spec_confirm', ['run_id']),
@@ -48,10 +47,8 @@ function fakeClient(responses) {
   };
 }
 
-test('runs signin, project creation, submit, poll, artifacts, and cleanup end to end', async () => {
+test('runs project creation, submit, poll, artifacts, and cleanup end to end', async () => {
   const client = fakeClient({
-    github_status: { status: 'never_signed_in' },
-    github_signin: { status: 'signed_in' },
     project_list: [],
     project_create: { id: 'project-1' },
     run_submit: { run_id: 'run-1', status: 'queued' },
@@ -76,8 +73,6 @@ test('runs signin, project creation, submit, poll, artifacts, and cleanup end to
   assert.equal(result.project.source, 'created');
   assert.equal(result.artifactCount, 1);
   assert.deepEqual(client.calls.map((call) => call.name), [
-    'github_status',
-    'github_signin',
     'project_list',
     'project_create',
     'run_submit',
@@ -91,7 +86,6 @@ test('runs signin, project creation, submit, poll, artifacts, and cleanup end to
 
 test('reuses an existing project and reports the failing workflow step', async () => {
   const client = fakeClient({
-    github_status: { status: 'signed_in' },
     project_list: [{ id: 'project-1', name: 'smoke' }],
     run_submit: { run_id: 'run-1' },
     run_status: { status: 'failed' },

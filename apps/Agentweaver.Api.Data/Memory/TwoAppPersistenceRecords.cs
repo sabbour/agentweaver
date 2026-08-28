@@ -32,6 +32,12 @@ public sealed class GitHubAuthorizationRecord
     public string PkceVerifierProtected { get; set; } = "";
     [System.Text.Json.Serialization.JsonIgnore]
     public string CallbackCookieHash { get; set; } = "";
+    /// <summary>
+    /// The opaque Entra browser-session identifier that redeemed an MCP handoff.
+    /// Direct UI transactions leave this unset.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? BrowserSessionId { get; set; }
     public GitHubAuthorizationStatus Status { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }

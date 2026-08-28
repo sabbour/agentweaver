@@ -179,6 +179,8 @@ Agent loopback writes authenticate with the normal internal API key plus a run-s
 | `POST` | `/api/auth/github-accounts/link` | Start a second GitHub OAuth round-trip that links another GitHub account to the current Entra user |
 | `DELETE` | `/api/auth/github-accounts/{login}` | Unlink one linked GitHub account; if it was default, the store promotes the next remaining linked account |
 | `POST` | `/api/auth/github/repo-app/authorizations` | Begin an Entra-user-bound Repo App authorization; returns an authorization URL and opaque transaction ID |
+| `POST` | `/api/auth/github/repo-app/authorizations/handoff` | Begin an MCP-safe Repo App browser handoff; returns only an opaque transaction ID, browser URL, and expiry |
+| `GET` | `/auth/github/repo-app/handoff/{transactionId}` | Redeem an MCP browser URL only from the initiating user's authenticated Entra browser session; issues the callback cookie and redirects to GitHub |
 | `GET` | `/auth/github/repo-app/callback` | Complete the Repo App browser callback with its one-time callback cookie |
 | `GET` | `/api/auth/github/repo-app/authorizations/{transactionId}` | Return only the initiating subject's safe transaction status |
 | `POST` | `/api/auth/github/repo-app/authorization/refresh` | Refresh the caller's Repo App authorization without changing its grant identity |
@@ -188,6 +190,12 @@ Agent loopback writes authenticate with the normal internal API key plus a run-s
 | `GET` | `/api/github/accounts` | List the signed-in user's personal account followed by organizations |
 | `GET` | `/api/github/repos` | List repositories for the signed-in GitHub user or selected account |
 | `POST` | `/api/auth/github/sign-out` | Sign out and delete the stored token |
+
+Project Copilot App authorization has equivalent project-scoped endpoints at
+`/api/projects/{id}/github/copilot/authorizations/handoff` and
+`/auth/github/copilot-app/handoff/{transactionId}`. Handoff URLs require the same
+initiating Entra browser session through callback completion; the transaction ID alone
+cannot issue a callback cookie or authorize a GitHub account.
 
 The linked-account and per-project GitHub-identity endpoints are available only in Entra auth mode and require an authenticated caller with an Entra object id. `GET /api/projects/{id}/github-identity` requires project `Viewer` or higher; `PUT /api/projects/{id}/github-identity` requires project `Contributor` or higher. These endpoints surface the real GitHub permissions reported by each linked identity; Agentweaver project roles do not simulate or override GitHub repo rights.
 
@@ -825,11 +833,11 @@ Request:
 Scope values: `once` = this call only; `run` = all calls to the same tool+url this run; `always` = all calls this server session; `tool` = all calls to this tool regardless of url.
 For a decision forwarded to a pod-local gate, `always` is effectively run-scoped and does not survive a pod restart.
 
-Response `200 OK` `{ "run_id", "request_id", "approved": true }`. Terminal/replayed and pod-forwarded responses also include `resolved: true`, `expired`, and `state: "approved" | "denied" | "expired"`. The returned `run_id` is the run that actually **owned** the approval, which may differ from `{id}`.
+Response `200 OK` `{ "run_id", "request_id", "approved": true }`. Terminal/replayed and pod-forwarded responses also include `resolved: true`, `expired`, and `state: "approved" | "denied" | "expired"`; pod-forwarded approvals also include `applied`, which confirms that the owning AgentHost accepted this exact forwarding request. The returned `run_id` is the run that actually **owned** the approval, which may differ from `{id}`.
 
 **Owning-run resolution.** The approval context lives on the run that *raised* the tool call. When `{id}` is a coordinator run (`ParentRunId == null` and `AgentName == "Coordinator"`), the API checks its children and then scans persisted `coordinator.child_approval_required` events for the matching `requestId` and `childRunId`. Approving therefore works whether the client posts the coordinator id or the child id.
 
-**Pod-per-run fallback.** If the API's `DurableToolApprovalGate` returns `Unknown` for the resolved child, the API uses `IAgentHostOriginResolver` and `AgentHostApprovalHttpClient` to forward the decision to the pod's authenticated `/tool-approvals` route through the `a2a-sandbox-pod` client. The bearer is re-fetched with `PreviewRunnerCredential.SecretKey(runId)`. A successful terminal forward emits `tool.approval_resolved` on the child run.
+**Pod-per-run fallback.** If the API's `DurableToolApprovalGate` returns `Unknown` for the resolved child, the API uses `IAgentHostOriginResolver` and `AgentHostApprovalHttpClient` to forward the selected scope to the pod's authenticated `/tool-approvals` route through the `a2a-sandbox-pod` client. The bearer is re-fetched with `PreviewRunnerCredential.SecretKey(runId)`. The AgentHost publishes its current-pod scope bridge only when it wins and applies that pending approval; the API publishes the durable cross-pod policy only after it receives `resolved: true`, `state: "approved"`, and `applied: true` for that exact forward. A duplicate or late terminal response with `applied: false`, and every failed, denied, or expired forward, leaves no durable policy. A successful terminal forward emits `tool.approval_resolved` on the child run.
 
 | Status | Approval result |
 | --- | --- |

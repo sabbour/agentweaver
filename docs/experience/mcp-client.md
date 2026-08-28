@@ -281,15 +281,20 @@ Purpose: preserve decisions, inbox items, agent memory, session context, and fil
 | `memory_export` | Exports project memory to `.squad/` and `.agentweaver/context/` files. |
 | `memory_import` | Imports `.squad/decisions/inbox/*.md` files into the project memory database. |
 
-### GitHub authentication
+### GitHub App capabilities
 
-Purpose: manage the GitHub sign-in state used by Agentweaver features that need GitHub identity.
+Purpose: connect purpose-bound GitHub capabilities while Microsoft Entra remains the
+Agentweaver product identity. Browser handoff and status output are redacted.
 
 | Tool | What it does for the user |
 |---|---|
-| `github_status` | Checks the current GitHub authentication status. |
-| `github_signin` | Starts GitHub device-flow sign-in, returns a user code and verification URL, reports polling progress, and completes when the browser step succeeds. |
-| `github_signout` | Signs out of GitHub authentication. |
+| `github_repo_app_connect` | Starts the current human's Repo App browser handoff and returns only an opaque transaction ID, browser URL, and expiry. |
+| `github_repo_app_authorization_status` | Polls the initiating human's Repo App handoff, returning only lifecycle status. |
+| `github_repo_app_disconnect` | Disconnects the current human's Repo App authorization. |
+| `project_copilot_app_connect` | Starts an Owner-authorized, project-pinned Copilot App browser handoff. |
+| `project_copilot_app_authorization_status` | Polls the initiating human's project-pinned Copilot handoff. |
+| `project_copilot_app_disconnect` | De-privileges a project Copilot binding for an authorized human Owner or administrator. |
+| `project_github_capability_status` | Gets redacted, server-derived unattended readiness for a project. |
 
 ### Sandbox policy
 

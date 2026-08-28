@@ -111,7 +111,15 @@ builder.Services.AddSingleton<SqliteDb>();
     if (!_isPostgres)
     {
         builder.Services.AddSingleton<SqliteRunStore>();
-        builder.Services.AddSingleton<IRunStore>(sp => sp.GetRequiredService<SqliteRunStore>());
+        // SQLite keeps run records and RunEvents/policy data in separate database files, so the
+        // active-run check a durable tool-approval scope persistence performs cannot share one
+        // ACID transaction with the run store the way Postgres's FOR UPDATE does. Wrapping the
+        // store in RunActiveClaimGuardedRunStore gives DurableToolApprovalGate a real in-process
+        // mutual-exclusion claim to close that gap instead of relying on another racy pre-read.
+        builder.Services.AddSingleton<RunActiveClaimGuard>();
+        builder.Services.AddSingleton<IRunStore>(sp => new RunActiveClaimGuardedRunStore(
+            sp.GetRequiredService<SqliteRunStore>(),
+            sp.GetRequiredService<RunActiveClaimGuard>()));
         builder.Services.AddSingleton<SqliteRunRevisionStore>();
         builder.Services.AddSingleton<IRunRevisionStore>(sp => sp.GetRequiredService<SqliteRunRevisionStore>());
         builder.Services.AddSingleton<SqliteWorkflowRunStore>();
@@ -268,6 +276,7 @@ builder.Services.AddScoped<GitHubCapabilityBroker>();
 builder.Services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
 builder.Services.AddScoped<ProjectGitHubIdentityService>();
 builder.Services.AddScoped<LinkedGitHubAccountService>();
+builder.Services.AddScoped<BrowserEntraSessionService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,
     Agentweaver.Api.Blueprints.HttpContextAuthenticatedOwnerContext>();
@@ -470,6 +479,7 @@ builder.Services.AddSingleton<DurableShellApprovalStore>();
 builder.Services.AddSingleton<IShellApprovalStore>(sp => sp.GetRequiredService<DurableShellApprovalStore>());
 builder.Services.AddSingleton<DurableToolApprovalGate>();
 builder.Services.AddSingleton<IToolApprovalGate>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
+builder.Services.AddSingleton<IAgentHostToolApprovalPersistence>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
 builder.Services.AddSingleton<DurableQuestionGate>();
 builder.Services.AddSingleton<IQuestionGate>(sp => sp.GetRequiredService<DurableQuestionGate>());
 builder.Services.AddSingleton<DurableRunOptionsStore>();

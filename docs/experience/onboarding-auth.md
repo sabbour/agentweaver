@@ -200,19 +200,23 @@ Once a bearer token is accepted, the MCP server stores both the resolved identit
 
 Downstream resource authorization remains ownership-based. A valid bearer token and allowed org membership let the caller reach protected APIs, but project, team, run, backlog, workflow, workspace, and memory operations still require the caller to own the target resource. Agentweaver does not assign superuser privileges from GitHub usernames, including `admin`.
 
-## GitHub auth tools in MCP
+## GitHub capability tools in MCP
 
-The MCP server exposes three GitHub auth tools for agents that need to check or repair GitHub connectivity during an assistant-driven session:
+The MCP server exposes two explicit GitHub App capabilities for assistant-driven sessions. The Repo App is caller-scoped; the Copilot App is project-scoped and can only be connected by a Project Owner:
 
 | Tool | User-facing purpose | What the user sees |
 |---|---|---|
-| `github_status` | Check whether the current caller has a stored GitHub sign-in. | A JSON status such as signed in, signed out, or never signed in, plus login and avatar when available. |
-| `github_signin` | Start GitHub device-flow sign-in for environments where the assistant cannot drive the web UI sign-in button. | A progress message: **Open {verification URL} and enter code: {user code}**, followed by waiting updates until success or timeout. |
-| `github_signout` | Clear the stored GitHub sign-in for the current caller. | The message **Signed out of GitHub successfully.** |
+| `github_repo_app_connect` | Start a Repo App browser handoff for the current caller. | An opaque transaction ID, browser URL, and expiry. Open the URL in a browser to continue GitHub authorization. |
+| `github_repo_app_authorization_status` | Poll the caller's Repo App authorization. | A redacted lifecycle state and expiry; no token, installation, repository, or permission data. |
+| `github_repo_app_disconnect` | Remove the caller's Repo App connection. | A de-privileging confirmation. |
+| `project_copilot_app_connect` | Start a project-pinned Copilot App browser handoff. | An opaque transaction ID, browser URL, and expiry for an authorized Project Owner. |
+| `project_copilot_app_authorization_status` | Poll the project's Copilot App authorization. | A redacted lifecycle state and expiry, scoped to the initiating caller and project. |
+| `project_copilot_app_disconnect` | Remove a project's Copilot App connection. | A de-privileging confirmation for an authorized Project Owner. |
+| `project_github_capability_status` | Inspect unattended GitHub readiness for a project. | Server-derived, redacted capability readiness only. |
 
-An agent uses `github_status` before trying GitHub-backed actions such as listing repositories. If the status is not signed in and the task needs GitHub repository access, the agent can call `github_signin`. The device flow keeps the device code server-side; the user receives only the verification URL and user code. Agentweaver polls GitHub until the user approves, denies, the code expires, or the operation times out. On success, the token is stored under the caller's token scope and future GitHub-backed tools can proceed.
+Before GitHub-backed work, an agent calls `github_repo_app_connect`, asks the user to open the returned browser URL, then polls `github_repo_app_authorization_status`. The API transfers the callback cookie directly to the browser through a one-time opaque handoff; OAuth state, callback cookies, tokens, installation details, repository data, and permissions never enter MCP output.
 
-`github_signout` is useful when the wrong GitHub account is connected, when a user wants to reset access, or when troubleshooting stale credentials. After sign-out, `github_status` reports a non-signed-in state and GitHub-backed actions require sign-in again.
+For unattended project work, a Project Owner repeats that browser flow with `project_copilot_app_connect`, polls its authorization status, and checks `project_github_capability_status`. Disconnect tools intentionally remove authority rather than exposing or transferring it.
 
 ## Troubleshooting and edge cases
 
@@ -254,9 +258,9 @@ Agentweaver can require membership in a configured GitHub organization, and some
 
 Agentweaver JWT access tokens are intentionally short-lived. OAuth-capable clients should use the refresh token grant to rotate the refresh token and receive a new access token. If refresh fails because the refresh token expired, was reused, was revoked, or no longer matches the client, reconnect the MCP client and repeat the OAuth consent flow.
 
-### GitHub auth tools time out
+### GitHub capability handoffs expire
 
-`github_signin` follows GitHub's device-flow timing. If the user does not enter the code before expiry, the tool reports a timeout or expired status. Run `github_signin` again to get a fresh user code and verification URL.
+If the browser handoff expires before the user completes GitHub authorization, start a fresh Repo App or project Copilot App connection. The old opaque transaction cannot be reused.
 
 ## Experience guardrails
 

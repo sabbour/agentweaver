@@ -465,6 +465,7 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
             _runtimeState?.PodBaseSystemPromptContext,
             setup.SystemPromptContext);
 
+        _runtimeState?.SetToolApprovalApiAccess(setup.ApiBaseUrl, setup.ApiKey);
         var applied = _runner.ApplyPerTurnContext(
             merged, setup.ProjectId, setup.AgentName, setup.ApiBaseUrl, setup.ApiKey);
         if (applied)

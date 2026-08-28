@@ -27,6 +27,7 @@ public sealed class DataMigratorTests : IDisposable
     private readonly string _agentweaverDbPath;
     private readonly string _memoryDbPath;
     private readonly string _seededProjectId;
+    private readonly string _seededRecoveredRunId;
     private readonly string _seededPackageId;
     private readonly string _seededPackageVersion;
 
@@ -38,7 +39,8 @@ public sealed class DataMigratorTests : IDisposable
         _agentweaverDbPath = Path.Combine(_tempDir, "agentweaver.db");
         _memoryDbPath = Path.Combine(_tempDir, "memory.db");
 
-        (_seededProjectId, _seededPackageId, _seededPackageVersion) = SeedSqliteDb(_agentweaverDbPath);
+        (_seededProjectId, _seededRecoveredRunId, _seededPackageId, _seededPackageVersion) =
+            SeedSqliteDb(_agentweaverDbPath);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -58,6 +60,7 @@ public sealed class DataMigratorTests : IDisposable
         var workflowRuns = await db.WorkflowRuns.CountAsync();
         var backlogTasks = await db.BacklogTasks.CountAsync();
         var seededProject = await db.Projects.SingleAsync(project => project.ProjectId == _seededProjectId);
+        var recoveredRun = await db.Runs.SingleAsync(run => run.RunId == _seededRecoveredRunId);
         var packageVersions = await db.BlueprintPackageVersions
             .Where(version => version.PackageId == _seededPackageId)
             .ToListAsync();
@@ -75,6 +78,8 @@ public sealed class DataMigratorTests : IDisposable
         seededProject.TeamRevision.Should().Be(7, "team mutation concurrency state must survive provider migration");
         seededProject.WebhookSecret.Should().Be("github-webhook:seed",
             "the per-project webhook secret-store reference must survive provider migration");
+        recoveredRun.ApprovalGeneration.Should().Be(2,
+            "a recovered run must retain its lifecycle generation so pre-recovery approval policies cannot match");
         packageVersions.Should().ContainSingle();
         packageVersions.Single().CanonicalVersionKey.Should().Be(
             BlueprintPackageLibraryLimits.CanonicalVersionKey(packageVersions.Single().CanonicalVersion));
@@ -229,7 +234,8 @@ public sealed class DataMigratorTests : IDisposable
     /// statements below also use explicit column-name lists rather than positional VALUES, so
     /// future nullable/defaulted columns added via migration don't require touching this file.
     /// </summary>
-    private static (string ProjectId, string PackageId, string PackageVersion) SeedSqliteDb(string dbPath)
+    private static (string ProjectId, string RecoveredRunId, string PackageId, string PackageVersion) SeedSqliteDb(
+        string dbPath)
     {
         var schemaConfig = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["Database:Path"] = dbPath })
@@ -261,8 +267,8 @@ public sealed class DataMigratorTests : IDisposable
 
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result, project_id)
                 VALUES ('{rid1}','/repo','main','github_copilot','task1','alice','completed','{now}','{now}','ok','{pid1}');
-            INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, project_id)
-                VALUES ('{rid2}','/repo','main','github_copilot','task2','bob','in_progress','{now}','{pid1}');
+            INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, project_id, approval_generation)
+                VALUES ('{rid2}','/repo','main','github_copilot','task2','bob','in_progress','{now}','{pid1}',2);
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result, project_id)
                 VALUES ('{rid3}','/repo','main','github_copilot','task3','alice','failed','{now}','{now}','err','{pid2}');
 
@@ -299,7 +305,7 @@ public sealed class DataMigratorTests : IDisposable
                     '1111111111111111111111111111111111111111','{now}','feature/migrate');
             """;
         data.ExecuteNonQuery();
-        return (pid1, packageId, packageVersion);
+        return (pid1, rid2, packageId, packageVersion);
     }
 
     public void Dispose()
