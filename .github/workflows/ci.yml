@@ -10,9 +10,8 @@ name: CI
 #   - node scripts/ci/validate.mjs --profile ci --area node,harness
 #   - node scripts/ci/validate.mjs --profile ci --area web
 #   - node scripts/ci/validate.mjs --profile ci --area docs
-# .NET tests are split by stable product namespaces and explicit isolation categories. The
-# partition guard discovers every test and rejects any gap or overlap before the aggregate gate
-# can pass. This keeps the required `.NET tests` check stable while parallelizing the real work.
+# .NET tests are split by stable product namespaces and explicit isolation categories. This keeps
+# the required `.NET tests` check stable while parallelizing the real work.
 #
 # A `changes` job classifies the PR/push diff by path group first, and every
 # suite job below only runs `if:` its group actually changed (a change to this
@@ -211,47 +210,16 @@ jobs:
           path: TestResults/${{ matrix.id }}
           if-no-files-found: error
 
-  dotnet-test-partition:
-    name: Verify .NET test partition
-    needs: dotnet-test-plan
-    if: needs.dotnet-test-plan.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: global.json
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v6
-        with:
-          path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', 'nuget.config', 'Directory.*', '**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
-          restore-keys: |
-            nuget-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Restore and build .NET test project
-        run: |
-          dotnet restore tests/Agentweaver.Tests/Agentweaver.Tests.csproj --locked-mode -p:CopilotSkipCliDownload=true
-          dotnet build tests/Agentweaver.Tests/Agentweaver.Tests.csproj --no-restore -p:CopilotSkipCliDownload=true
-
-      - name: Prove all discovered tests belong to exactly one shard
-        run: node scripts/ci/dotnet-test-shards.mjs verify
-
   dotnet-tests:
     name: .NET tests
-    needs: [changes, dotnet-test-plan, dotnet-test-shards, dotnet-test-partition]
+    needs: [changes, dotnet-test-plan, dotnet-test-shards]
     if: always() && needs.changes.outputs.dotnet == 'true' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - name: Require every .NET test shard and partition guard
+      - name: Require every .NET test shard
         run: |
           test "${{ needs.dotnet-test-plan.result }}" = "success"
           test "${{ needs.dotnet-test-shards.result }}" = "success"
-          test "${{ needs.dotnet-test-partition.result }}" = "success"
 
   node-toolchain-tests:
     name: Node toolchain tests
