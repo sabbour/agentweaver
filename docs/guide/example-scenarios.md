@@ -30,7 +30,7 @@ This is the canonical end-to-end flow for software delivery.
 From the **Project Gallery** (`/projects`), choose a creation path:
 
 - **Create blank project** — enter a name and a repository folder. Agentweaver initializes an empty git repository (`POST /api/projects` with `origin: blank`).
-- **Create from GitHub** — enter a name, pick `owner/repo`, and a folder. Agentweaver clones the repository (`POST /api/projects` with `origin: github` and a `source_repository`).
+- **Create from GitHub** — enter a name, select a Repo App-authorized repository, and a folder. Agentweaver clones it after consuming an opaque `repository_selection_code` (`POST /api/projects` with `origin: github`).
 
 You land on the project **Dashboard** (`/projects/{id}`).
 

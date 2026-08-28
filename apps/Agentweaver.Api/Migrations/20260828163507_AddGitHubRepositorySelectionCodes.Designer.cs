@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,31 +11,14 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Agentweaver.Api.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260828163507_AddGitHubRepositorySelectionCodes")]
+    partial class AddGitHubRepositorySelectionCodes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.7");
-
-            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.BrowserEntraSession", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("EntraObjectId")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ExpiresAt");
-
-                    b.ToTable("BrowserEntraSessions");
-                });
 
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.EntraOAuthState", b =>
                 {
@@ -896,10 +880,6 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("app_kind");
 
-                    b.Property<string>("BrowserSessionId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("browser_session_id");
-
                     b.Property<string>("CallbackCookieHash")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -1078,10 +1058,6 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("created_at");
 
-                    b.Property<int>("CredentialKind")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("credential_kind");
-
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -1090,11 +1066,6 @@ namespace Agentweaver.Api.Migrations
                     b.Property<long>("ExpiresAtUnixMilliseconds")
                         .HasColumnType("INTEGER")
                         .HasColumnName("expires_at_unix_ms");
-
-                    b.Property<string>("RepoAppAuthorizationId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("repo_app_authorization_id");
 
                     b.Property<long>("RepositoryId")
                         .HasColumnType("INTEGER")

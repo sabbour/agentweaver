@@ -38,6 +38,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<GitHubAppAuthorizationRecord> GitHubAppAuthorizations => Set<GitHubAppAuthorizationRecord>();
     public DbSet<GitHubInstallationRecord> GitHubInstallations => Set<GitHubInstallationRecord>();
     public DbSet<GitHubRepositoryGrantRecord> GitHubRepositoryGrants => Set<GitHubRepositoryGrantRecord>();
+    public DbSet<GitHubRepositorySelectionCodeRecord> GitHubRepositorySelectionCodes => Set<GitHubRepositorySelectionCodeRecord>();
     public DbSet<ProjectCopilotBindingRecord> ProjectCopilotBindings => Set<ProjectCopilotBindingRecord>();
     public DbSet<AutomationActivationRecord> AutomationActivations => Set<AutomationActivationRecord>();
     public DbSet<AutomationInvocationRecord> AutomationInvocations => Set<AutomationInvocationRecord>();
@@ -645,6 +646,21 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasOne<GitHubInstallationRecord>().WithMany().HasForeignKey(x => x.InstallationId)
                 .OnDelete(DeleteBehavior.Cascade).HasConstraintName("FK_github_repository_grants_installations_installation_id");
             ConfigureProjectForeignKey(e, "FK_github_repository_grants_projects_project_id");
+        });
+
+        model.Entity<GitHubRepositorySelectionCodeRecord>(e =>
+        {
+            e.ToTable("github_repository_selection_codes").HasKey(x => x.CodeHash);
+            e.Property(x => x.CodeHash).HasColumnName("code_hash");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.RepoAppAuthorizationId).HasColumnName("repo_app_authorization_id");
+            e.Property(x => x.CredentialKind).HasColumnName("credential_kind");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.ExpiresAtUnixMilliseconds).HasColumnName("expires_at_unix_ms");
+            e.Property(x => x.ConsumedAtUnixMilliseconds).HasColumnName("consumed_at_unix_ms");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => new { x.EntraObjectId, x.ExpiresAtUnixMilliseconds });
+            e.HasIndex(x => x.ExpiresAtUnixMilliseconds);
         });
 
         model.Entity<ProjectCopilotBindingRecord>(e =>

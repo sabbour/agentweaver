@@ -251,7 +251,7 @@ export interface SuggestBlueprintResponse {
 export interface CreateProjectRequest {
   name: string;
   origin: ProjectOrigin;
-  source_repository?: string;
+  repository_selection_code?: string;
   working_directory: string;
   default_provider?: ModelSource;
   default_model_github_copilot?: string;
@@ -515,6 +515,23 @@ export interface AccessibleGitHubRepo extends GitHubRepo {
   source_login: string;
   source_avatar_url?: string | null;
   source_is_default?: boolean;
+}
+
+export interface GitHubRepositorySelectionCandidate {
+  full_name: string;
+  owner_login: string;
+  private: boolean;
+  default_branch: string;
+  pushed_at: string | null;
+}
+
+export interface GitHubRepositorySelectionListResponse {
+  repositories: GitHubRepositorySelectionCandidate[];
+}
+
+export interface GitHubRepositorySelectionCodeResponse {
+  selection_code: string;
+  expires_at: string;
 }
 
 /** One candidate owner for creating a new repository for a project (GET

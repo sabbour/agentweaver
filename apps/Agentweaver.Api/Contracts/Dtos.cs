@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 
 namespace Agentweaver.Api.Contracts;
 
@@ -565,8 +566,16 @@ public sealed record CreateProjectRequest
     [JsonPropertyName("name")] public string? Name { get; init; }
     /// <summary>Project bootstrap mode: <c>blank</c> creates an empty workspace and <c>github</c> clones a repository.</summary>
     [JsonPropertyName("origin")] public string? Origin { get; init; }                   // "blank" | "github"
-    /// <summary>Repository to clone when <see cref="Origin"/> is <c>github</c>.</summary>
-    [JsonPropertyName("source_repository")] public string? SourceRepository { get; init; }
+    /// <summary>
+    /// Short-lived, caller-bound authority minted by <c>POST /api/github/repository-selections</c>.
+    /// Required when <see cref="Origin"/> is <c>github</c>; repository URLs and identifiers are not accepted.
+    /// </summary>
+    [JsonPropertyName("repository_selection_code")] public string? RepositorySelectionCode { get; init; }
+    /// <summary>
+    /// Captures unknown request fields so GitHub-origin creation can reject legacy or authority-bearing
+    /// repository inputs rather than silently ignoring them.
+    /// </summary>
+    [JsonExtensionData] public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
     /// <summary>Absolute workspace path where the project should live on the server.</summary>
     [JsonPropertyName("working_directory")] public string? WorkingDirectory { get; init; }
     /// <summary>Default provider used for future model-driven operations in the project.</summary>
@@ -586,6 +595,44 @@ public sealed record CreateProjectRequest
     /// value returned in <c>generated_workflow_yaml</c> from <c>POST /api/blueprints/generate</c>.
     /// </summary>
     [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
+}
+
+/// <summary>
+/// Metadata-only repository candidate returned by the pre-project Repo App browse endpoint.
+/// Visibility is display data, not evidence of clone or installation authority.
+/// </summary>
+public sealed record GitHubRepositorySelectionCandidateDto
+{
+    [JsonPropertyName("full_name")] public required string FullName { get; init; }
+    [JsonPropertyName("owner_login")] public required string OwnerLogin { get; init; }
+    [JsonPropertyName("private")] public required bool IsPrivate { get; init; }
+    [JsonPropertyName("default_branch")] public required string DefaultBranch { get; init; }
+    [JsonPropertyName("pushed_at")] public DateTimeOffset? PushedAt { get; init; }
+}
+
+/// <summary>Response for GET /api/github/repository-selections.</summary>
+public sealed record GitHubRepositorySelectionListResponse
+{
+    [JsonPropertyName("repositories")] public required IReadOnlyList<GitHubRepositorySelectionCandidateDto> Repositories { get; init; }
+}
+
+/// <summary>
+/// A requested repository choice. Its numeric ID is only a selection instruction; the server
+/// independently verifies it through the caller's active Repo App authorization before minting.
+/// </summary>
+public sealed record IssueGitHubRepositorySelectionRequest
+{
+    [JsonPropertyName("full_name")] public string? FullName { get; init; }
+}
+
+/// <summary>
+/// Short-lived opaque authority for the next GitHub project-create layer. No repository metadata,
+/// installation identity, credential reference, permission, or token is returned.
+/// </summary>
+public sealed record GitHubRepositorySelectionCodeResponse
+{
+    [JsonPropertyName("selection_code")] public required string SelectionCode { get; init; }
+    [JsonPropertyName("expires_at")] public required DateTimeOffset ExpiresAt { get; init; }
 }
 
 /// <summary>Request body for renaming a project.</summary>

@@ -53,14 +53,6 @@ import type {
 } from '../api/types';
 import type { BlueprintSelection } from '../components/BlueprintPicker.helpers';
 import type { ReactElement, ReactNode } from 'react';
-/** Normalizes an owner/repo string or existing https URL to a full GitHub HTTPS URL. */
-function toGitHubUrl(val: string): string {
-  const v = val.trim();
-  if (v.startsWith('https://')) return v;
-  if (/^[\w.-]+\/[\w.-]/.test(v)) return `https://github.com/${v}`;
-  return v;
-}
-
 const useStyles = makeStyles({
   // One-time entrance for a freshly-created project card: a brand ring that
   // fades out with a slight rise. Purely a "this is the new one" cue.
@@ -279,7 +271,16 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
         origin,
         working_directory: workingDirectory.trim(),
       };
-      if (origin === 'github') req.source_repository = toGitHubUrl(sourceRepository.trim());
+      if (origin === 'github') {
+        const selections = await apiClient.listGitHubRepositorySelections();
+        const selected = selections.repositories.find((repository) =>
+          repository.full_name.localeCompare(sourceRepository.trim(), undefined, { sensitivity: 'accent' }) === 0);
+        if (!selected) {
+          throw new Error('Select a repository available through your Repo App authorization.');
+        }
+        const issued = await apiClient.issueGitHubRepositorySelection(selected.full_name);
+        req.repository_selection_code = issued.selection_code;
+      }
       applyBlueprintToRequest(req, blueprint);
       const project = await apiClient.createProject(req);
       onCreated(project);
@@ -690,10 +691,9 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   const [showMoreSources, setShowMoreSources] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
-  const hasLinkedGitHubIdentity = accounts.length > 0 || selectedAccount !== null;
 
   const hasChosenRepository = /^(https:\/\/github\.com\/)?[\w.-]+\/[\w.-]+/.test(d.sourceRepository.trim());
-  const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && hasChosenRepository && hasLinkedGitHubIdentity && !d.saving);
+  const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && hasChosenRepository && !d.saving);
   const setWorkspaceSlug = (slug: string) => {
     setFolderName(slug);
     d.setWorkingDirectory(workspaceAutoAssigned ? slug : workspacePath(dataDir, slug));
@@ -768,7 +768,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
             ? selectedAccount
               ? `Showing repositories reachable via @${selectedAccount.login}. Start typing to narrow the list.`
               : 'Showing repositories reachable across all linked GitHub accounts. Start typing to narrow the list.'
-            : 'Start typing to search any owner/repository on GitHub. Import succeeds only if one of your linked GitHub identities can actually access it.'}
+            : 'Start typing to narrow your repositories. Import succeeds only after the Repo App authorization verifies the selection.'}
         </Text>
       </div>
 
@@ -791,7 +791,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       {!authRequired && !accountsLoading && accounts.length === 0 && !accountsError && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            Link at least one GitHub account before importing a repository or running background GitHub work.
+            Authorize the Repo App before importing a repository or running background GitHub work.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -848,7 +848,7 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         </div>
       )}
 
-      <Field label="Or paste any repository" hint="owner/repo e.g. kubernetes/client-go">
+      <Field label="Paste a repository from your Repo App authorization" hint="owner/repo e.g. kubernetes/client-go">
         <div className={styles.pasteRow}>
           <Input className={styles.growInput} value={pasteRepo} onChange={(_, v) => setPasteRepo(v.value)} placeholder="owner/repo" />
           <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Go →</Button>

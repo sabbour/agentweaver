@@ -122,6 +122,36 @@ the project Copilot App binding. Each purpose validates its matching App,
 project/repository scope, permission/grant digest, and snapshot reference before issuing a
 bounded capability.
 
+## Pre-project repository selection contract
+
+Before a project exists, a signed-in human Entra subject may browse a bounded,
+metadata-only list using its own active Repo App authorization and ask the server to mint a
+selection code for one `full_name` returned by that list. The server resolves that selection to
+the canonical numeric repository ID before minting. It stores only a digest of the
+cryptographically random code, the caller subject, credential kind, exact Repo App
+authorization (for Entra mode), repository ID, expiry, and consumed marker. It verifies the
+selected full name against the caller's live browse result before minting.
+
+The documented `GitHubLegacy` mode preserves the same protocol for a non-internal,
+authenticated GitHub caller with an active caller-scoped legacy credential. Its code is bound to
+that caller and credential kind; it cannot be consumed in Entra mode or by another legacy caller.
+At consumption, the server re-resolves the caller's current legacy credential, so sign-out or
+credential invalidation fails closed. This compatibility path does not accept a repository URL,
+numeric ID, or any other client-provided repository authority.
+
+The code is caller-bound, expires after five minutes, and is atomically single-use. It is the
+only repository authority accepted by the later GitHub project-create operation. Repository
+ID, URL, owner/name, installation ID, token, permission map, clone URL, and display metadata
+are never client authority. On consumption, the server obtains the canonical ID from the
+stored scope and resolves clone metadata server-side; malformed, expired, consumed, revoked,
+or cross-subject codes are indistinguishable unavailable authority.
+
+The browse response contains only full name, owner login, private visibility, default branch,
+and pushed-at timestamp. The canonical numeric ID is persistence-only and never appears in this
+response. It contains no provider permission object, derived access label, repository contents,
+clone URL, credential data, or raw provider response.
+Public/metadata visibility is not proof of operational access.
+
 ## Sandbox and private-key boundary
 
 All GitHub repository reads and writes for a run occur through backend capability adapters.

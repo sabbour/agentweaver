@@ -80,6 +80,8 @@ public static class OperatorToolApprovalPolicy
         "github_repo_app_disconnect",
         "project_copilot_app_connect",
         "project_copilot_app_disconnect",
+        // Mints a caller-bound capability to select a GitHub repository for project creation.
+        "github_repository_selection_issue",
     };
 
     /// <summary>
@@ -137,6 +139,7 @@ public static class OperatorToolApprovalPolicy
         "github_repo_app_authorization_status",
         "project_copilot_app_authorization_status",
         "project_github_capability_status",
+        "github_repository_selections_list",
 
         // Memory: reads + record/export (import is gated).
         "memory_export",

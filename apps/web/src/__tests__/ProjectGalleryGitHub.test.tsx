@@ -25,6 +25,8 @@ vi.mock('../api/apiClient', () => ({
     suggestBlueprint: vi.fn(),
     listLinkedGitHubAccounts: vi.fn(),
     listAccessibleGitHubRepos: vi.fn(),
+    listGitHubRepositorySelections: vi.fn(),
+    issueGitHubRepositorySelection: vi.fn(),
     listGitHubAccounts: vi.fn(),
     listGitHubRepos: vi.fn(),
   },
@@ -106,6 +108,17 @@ beforeEach(() => {
   vi.mocked(apiClient.createProject).mockImplementation(async () => makeProject('new', 'New'));
   vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([LINKED_ACCOUNT, ALT_LINKED_ACCOUNT] as never);
   vi.mocked(apiClient.listAccessibleGitHubRepos).mockResolvedValue([]);
+  vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+    repositories: [
+      { full_name: 'me/manual-repo', owner_login: 'me', private: true, default_branch: 'main', pushed_at: null },
+      { full_name: 'me/my-repo', owner_login: 'me', private: true, default_branch: 'main', pushed_at: null },
+      { full_name: 'octocat/hello-world', owner_login: 'octocat', private: false, default_branch: 'main', pushed_at: null },
+    ],
+  } as never);
+  vi.mocked(apiClient.issueGitHubRepositorySelection).mockResolvedValue({
+    selection_code: 'opaque-selection-code',
+    expires_at: '2026-08-28T00:05:00+00:00',
+  } as never);
   // Default: legacy fallback endpoints also succeed if cross-account APIs are absent.
   vi.mocked(apiClient.listGitHubAccounts).mockResolvedValue([USER_ACCOUNT] as never);
   vi.mocked(apiClient.listGitHubRepos).mockResolvedValue([]);
@@ -274,37 +287,37 @@ describe('ProjectGalleryPage — GitHub repo listing auth', () => {
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
     expect(req.origin).toBe('github');
-    expect(req.source_repository).toBe('https://github.com/me/manual-repo');
+    expect(req.repository_selection_code).toBe('opaque-selection-code');
   });
 
-  it('requires at least one linked GitHub account before creating from GitHub in Entra mode', async () => {
+  it('does not require a linked GitHub account before creating from GitHub in Entra mode', async () => {
     vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([] as never);
     vi.mocked(apiClient.listAccessibleGitHubRepos).mockResolvedValue([] as never);
 
     await openGitHubDialog();
 
-    expect(await screen.findByText(/Link at least one GitHub account before importing a repository/)).toBeDefined();
+    expect(await screen.findByText(/Authorize the Repo App before importing a repository/)).toBeDefined();
     fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'My Project' } });
     fireEvent.input(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'me/manual-repo' } });
     fireEvent.change(screen.getByPlaceholderText('my-repo'), { target: { value: 'my-repo' } });
 
-    expect((screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('normalizes a manually typed owner/repo to an HTTPS URL on submit', async () => {
+  it('mints an opaque selection code for a manually typed authorized repository', async () => {
     await openGitHubDialog();
 
     fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'My Repo' } });
     const repoCombobox = screen.getByRole('combobox', { name: 'Repository' });
-    // Already-full URL must pass through unchanged
-    fireEvent.input(repoCombobox, { target: { value: 'https://github.com/me/my-repo' } });
+    fireEvent.input(repoCombobox, { target: { value: 'me/my-repo' } });
     fireEvent.change(screen.getByPlaceholderText('my-repo'), { target: { value: 'my-repo' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
-    expect(req.source_repository).toBe('https://github.com/me/my-repo');
+    expect(apiClient.issueGitHubRepositorySelection).toHaveBeenCalledWith('me/my-repo');
+    expect(req.repository_selection_code).toBe('opaque-selection-code');
   });
 });
 
@@ -379,6 +392,6 @@ describe('ProjectGalleryPage — GitHub dialog, workspace_auto_assigned', () => 
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
     const req = vi.mocked(apiClient.createProject).mock.calls[0][0];
     expect(req.working_directory).toBe('hello-world');
-    expect(req.source_repository).toBe('https://github.com/octocat/hello-world');
+    expect(req.repository_selection_code).toBe('opaque-selection-code');
   });
 });

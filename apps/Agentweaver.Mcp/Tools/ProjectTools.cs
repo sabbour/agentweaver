@@ -9,7 +9,33 @@ namespace Agentweaver.Mcp.Tools;
 public sealed class ProjectTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
-    private const string GitHubHttpsPrefix = "https://github.com/";
+
+    [McpServerTool(Name = "github_repository_selections_list"), Description("List the signed-in caller's authorized GitHub repositories as bounded, redacted metadata. Choose one full_name from this result, then call github_repository_selection_issue before project_create with origin 'github'.")]
+    public async Task<string> GitHubRepositorySelectionsListAsync(CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.GetAsync<JsonElement>("/api/github/repository-selections", ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    [McpServerTool(Name = "github_repository_selection_issue"), Description("Mint a short-lived, single-use repository selection code for one full_name returned by github_repository_selections_list. Pass only the returned code to project_create; never pass a repository URL or identifier.")]
+    public async Task<string> GitHubRepositorySelectionIssueAsync(
+        [Description("Repository full name selected from github_repository_selections_list.")] string full_name,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await api.PostAsync<JsonElement>(
+                "/api/github/repository-selections", new { full_name }, ct);
+            return JsonSerializer.Serialize(result, JsonOpts);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
 
     [McpServerTool(Name = "project_list"), Description("List all Agentweaver projects.")]
     public async Task<string> ProjectListAsync(CancellationToken ct)
@@ -37,13 +63,13 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "project_create"), Description("Create a new Agentweaver project. When origin is 'github', source_repository is required. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive.")]
+    [McpServerTool(Name = "project_create"), Description("Create a new Agentweaver project. When origin is 'github', repository_selection_code is required; first use github_repository_selections_list and github_repository_selection_issue with the same caller. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive.")]
     public async Task<string> ProjectCreateAsync(
         [Description("Project name")] string name,
         [Description("Local working directory path")] string working_directory,
         [Description("Inline blueprint object to apply at creation, as a JSON-encoded string (optional; exclusive with blueprint_id)")] string? blueprint = null,
         [Description("Project origin: 'blank' (default) or 'github'")] string? origin = null,
-        [Description("GitHub repository in 'owner/repo' shorthand or full 'https://github.com/owner/repo' HTTPS URL format (optional trailing '.git' accepted); required when origin is 'github'. Shorthand is normalized to the full HTTPS URL before calling the API.")] string? source_repository = null,
+        [Description("Short-lived opaque code returned by POST /api/github/repository-selections; required when origin is 'github'. Do not supply a repository URL or identifier.")] string? repository_selection_code = null,
         [Description("Predefined blueprint ID to apply (optional; exclusive with blueprint)")] string? blueprint_id = null,
         [Description("Generated workflow YAML returned by blueprint_generate (optional; forwarded as generated_workflow_yaml)")] string? generated_workflow_yaml = null,
         CancellationToken ct = default)
@@ -56,8 +82,7 @@ public sealed class ProjectTools(AgentweaverApiClient api)
                 ["working_directory"] = working_directory,
             };
             if (origin is not null) bodyNode["origin"] = origin;
-            var normalizedSourceRepository = NormalizeGitHubSourceRepository(source_repository);
-            if (normalizedSourceRepository is not null) bodyNode["source_repository"] = normalizedSourceRepository;
+            if (repository_selection_code is not null) bodyNode["repository_selection_code"] = repository_selection_code;
             if (blueprint_id is not null) bodyNode["blueprint_id"] = blueprint_id;
             if (!string.IsNullOrWhiteSpace(blueprint))
             {
@@ -139,25 +164,6 @@ public sealed class ProjectTools(AgentweaverApiClient api)
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
-    }
-
-    private static string? NormalizeGitHubSourceRepository(string? sourceRepository)
-    {
-        if (sourceRepository is null) return null;
-
-        var trimmed = sourceRepository.Trim();
-        if (trimmed.Length == 0) return trimmed;
-        if (trimmed.StartsWith(GitHubHttpsPrefix, StringComparison.OrdinalIgnoreCase)) return trimmed;
-        if (trimmed.Contains("://", StringComparison.Ordinal) || trimmed.Contains('@') || trimmed.Contains(':'))
-            return trimmed;
-
-        var segments = trimmed.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (segments.Length == 2)
-        {
-            return $"{GitHubHttpsPrefix}{segments[0]}/{segments[1]}";
-        }
-
-        return trimmed;
     }
 
 }
