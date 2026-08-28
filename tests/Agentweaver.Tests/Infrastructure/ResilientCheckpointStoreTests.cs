@@ -13,6 +13,7 @@ namespace Agentweaver.Tests.Infrastructure;
 /// throws in the store constructor and bricks the entire API at startup. <see cref="ResilientCheckpointStore"/>
 /// must sanitize the index (or quarantine it) so construction always succeeds.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class ResilientCheckpointStoreTests : IDisposable
 {
     private readonly string _dir;

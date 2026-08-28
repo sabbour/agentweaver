@@ -24,6 +24,7 @@ namespace Agentweaver.Tests.AgentHost;
 /// the pod booted a fresh store defaulting <c>AutoApproveTools=false</c>, so every request stalled
 /// the 5-minute gate and auto-denied.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class AgentHostStartupServiceConfigureTests : IDisposable
 {
     private static readonly string[] RuntimeEnvironmentVariables =

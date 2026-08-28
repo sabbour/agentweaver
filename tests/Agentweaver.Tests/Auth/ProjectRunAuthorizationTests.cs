@@ -314,6 +314,7 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId)))!;
 }
 
+[Trait("Category", "ProcessEnvironment")]
 public sealed class LegacyRunAuthorizationTests : IClassFixture<ReviewWebApplicationFactory>
 {
     private readonly ReviewWebApplicationFactory _factory;

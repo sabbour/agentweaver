@@ -20,6 +20,7 @@ using PodLocalWorkspaceSpec = agenthost::Agentweaver.AgentHost.PodLocalWorkspace
 
 namespace Agentweaver.Tests.AgentHost;
 
+[Trait("Category", "ProcessEnvironment")]
 public sealed class PodLocalWorkspaceManagerTests : IDisposable
 {
     private readonly string _root = Path.Combine(

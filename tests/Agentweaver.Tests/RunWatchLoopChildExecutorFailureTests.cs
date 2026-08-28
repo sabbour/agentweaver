@@ -28,6 +28,7 @@ namespace Agentweaver.Tests.Api;
 /// Failed with an informative `child_executor_failed:*` reason — never
 /// `watch_stream_completed_without_terminal_event`.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class RunWatchLoopChildExecutorFailureTests
 {
     [Fact]

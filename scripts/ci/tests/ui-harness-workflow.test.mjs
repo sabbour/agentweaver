@@ -57,3 +57,15 @@ test("no echo-only stub jobs remain in the pipeline", () => {
   assert.doesNotMatch(WORKFLOW, /^\s+web-lint:$/m);
   assert.doesNotMatch(WORKFLOW, /name: Web lint/);
 });
+
+test(".NET tests run as stable shards with an exact-partition guard", () => {
+  const jobs = workflowSection("  dotnet-test-plan:\n", "\n  node-toolchain-tests:\n");
+
+  assert.match(jobs, /node scripts\/ci\/dotnet-test-shards\.mjs matrix/);
+  assert.match(jobs, /dotnet-test-shards:/);
+  assert.match(jobs, /strategy:\n\s+fail-fast: false\n\s+matrix: \$\{\{ fromJSON\(needs\.dotnet-test-plan\.outputs\.matrix\) \}\}/);
+  assert.match(jobs, /node scripts\/ci\/dotnet-test-shards\.mjs verify/);
+  assert.match(jobs, /name: \.NET tests/);
+  assert.match(jobs, /--logger "trx;LogFileName=\$\{\{ matrix\.id \}\}\.trx"/);
+  assert.doesNotMatch(jobs, /Run full \.NET test suite/);
+});

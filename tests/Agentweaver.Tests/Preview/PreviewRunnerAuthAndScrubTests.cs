@@ -20,6 +20,7 @@ namespace Agentweaver.Tests.Preview;
 ///   preview-runner credential, and known secret env names.</item>
 /// </list>
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class PreviewRunnerAuthAndScrubTests
 {
     private const string TurnToken = "turn-token-abc";

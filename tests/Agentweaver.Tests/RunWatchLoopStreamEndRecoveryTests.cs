@@ -26,6 +26,7 @@ namespace Agentweaver.Tests.Api;
 /// after the agent turn) are deliberately NOT covered — a successful agent turn there is not
 /// sufficient evidence the run is actually done, so they still fall through to the generic fallback.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class RunWatchLoopStreamEndRecoveryTests : IClassFixture<ReviewWebApplicationFactory>
 {
     private readonly ReviewWebApplicationFactory _factory;

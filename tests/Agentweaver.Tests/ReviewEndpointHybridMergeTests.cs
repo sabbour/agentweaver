@@ -26,6 +26,7 @@ namespace Agentweaver.Tests.Api;
 /// No mocks — every test uses a real in-process server, a real SQLite database,
 /// and real git repositories constructed with LibGit2Sharp.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebApplicationFactory>, IDisposable
 {
     private readonly ReviewWebApplicationFactory _factory;

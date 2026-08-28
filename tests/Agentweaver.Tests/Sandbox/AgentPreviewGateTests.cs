@@ -14,6 +14,7 @@ namespace Agentweaver.Tests.Sandbox;
 /// per-run option, scoped policy) grant unattended, that an operator grant resolves the gate, and
 /// that deny / timeout produce distinct final outcomes.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class AgentPreviewGateTests
 {
     private const string RunId = "run-preview-1";

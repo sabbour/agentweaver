@@ -72,6 +72,23 @@ worktree-local build, then `dotnet test --no-build --no-restore`. `bin/` and `ob
 are never shared. If an assets file points at another checkout, only that project's
 current-worktree outputs are deleted before restore.
 
+## .NET CI shards
+
+CI runs the .NET suite in stable product-namespace shards. PostgreSQL/Testcontainers,
+process-global environment, and Kata/bubblewrap tests use dedicated category shards so
+container and process state cannot leak across runners. The Kata gate remains required
+and requires a usable bubblewrap user namespace.
+
+After restore and build, CI runs `node scripts/ci/dotnet-test-shards.mjs verify`. It
+discovers the unfiltered suite and every shard filter, failing on an empty shard, a
+missing test, or a test selected by more than one shard. Each shard uploads a TRX
+artifact, whose test outcomes and per-test durations are machine-readable. Run the
+same guard locally after a .NET build when changing test categories or shard rules:
+
+```bash
+node scripts/ci/dotnet-test-shards.mjs verify
+```
+
 Each stacked PR gets its path-targeted preflight. Run the full profile against the
 exact integrated tree at the stack top:
 

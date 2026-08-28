@@ -24,6 +24,7 @@ namespace Agentweaver.Tests.Api;
 /// Uses ReviewWebApplicationFactory which registers two API keys (owner and
 /// other) so authorization tests can exercise the non-owner 404 path.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicationFactory>
 {
     private readonly ReviewWebApplicationFactory _factory;
