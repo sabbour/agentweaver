@@ -221,6 +221,62 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         dispatch.StartDispatchCalls.Should().BeEmpty("an already-active coordinator is never re-armed");
     }
 
+    [Fact]
+    public async Task Sweep_TerminalCoordinator_PersistsTerminalPlanState_AndSkipsRepeatedScans()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.Completed);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.Completed, (string?)null) });
+        var dispatch = new RecordingDispatch();
+        var reconciler = BuildReconciler(dispatch);
+
+        (await reconciler.SweepAsync(default)).Should().Be(0);
+        (await reconciler.SweepAsync(default)).Should().Be(0);
+
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.Complete,
+            "the terminal result is persisted instead of re-armed on every heartbeat");
+        dispatch.StartDispatchCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Sweep_TerminalCoordinator_DurablePlanStateSurvivesPodRestart()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.Failed);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.Completed, (string?)null) });
+        var firstPodDispatch = new RecordingDispatch();
+
+        (await BuildReconciler(firstPodDispatch).SweepAsync(default)).Should().Be(0);
+
+        var restartedPodDispatch = new RecordingDispatch();
+        (await BuildReconciler(restartedPodDispatch).SweepAsync(default)).Should().Be(0);
+
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AssemblyFailed);
+        firstPodDispatch.StartDispatchCalls.Should().BeEmpty();
+        restartedPodDispatch.StartDispatchCalls.Should().BeEmpty(
+            "a new pod reads the persisted terminal work-plan state, not a per-pod memory set");
+    }
+
+    [Fact]
+    public async Task Sweep_CoordinatorBecomesTerminal_SettlesPreviouslyOrphanedDispatch()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.Running, (string?)RunId.New().ToString()) });
+        var dispatch = new RecordingDispatch();
+        var reconciler = BuildReconciler(dispatch);
+
+        (await reconciler.SweepAsync(default)).Should().Be(1,
+            "a genuinely interrupted non-terminal coordinator still recovers");
+        await _runStore.UpdateStatusAsync(RunId.Parse(coord), RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        (await reconciler.SweepAsync(default)).Should().Be(0);
+
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AssemblyFailed);
+        dispatch.StartDispatchCalls.Should().ContainSingle(
+            "the terminal transition stops future recovery without preventing the earlier non-terminal recovery");
+    }
+
     // -----------------------------------------------------------------------
     // in_review handling: legitimate-vs-orphaned + auto-abandon escape hatch.
     // -----------------------------------------------------------------------
