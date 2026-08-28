@@ -170,7 +170,7 @@ public sealed class AssistantRunEndpointsTests
         // await the turn.
         var turnTask = client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "start coordinator" });
 
-        var requestId = await WaitForApprovalRequestIdAsync(client, runId);
+        var requestId = await WaitForApprovalRequestIdAsync(factory.Agent);
         requestId.Should().NotBeNullOrWhiteSpace("the gated tool must raise a tool.approval_required event");
 
         var approve = await client.PostAsJsonAsync(
@@ -207,7 +207,7 @@ public sealed class AssistantRunEndpointsTests
 
         var turnTask = client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "submit a run" });
 
-        var requestId = await WaitForApprovalRequestIdAsync(client, runId);
+        var requestId = await WaitForApprovalRequestIdAsync(factory.Agent);
         requestId.Should().NotBeNullOrWhiteSpace();
 
         var deny = await client.PostAsJsonAsync(
@@ -840,23 +840,8 @@ public sealed class AssistantRunEndpointsTests
             e.GetProperty("payload"))).ToList();
     }
 
-    /// <summary>Polls the run's event stream until a tool.approval_required event appears and returns
-    /// its requestId, or null if none arrives within the timeout.</summary>
-    private static async Task<string?> WaitForApprovalRequestIdAsync(HttpClient client, string runId)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (DateTime.UtcNow < deadline)
-        {
-            var events = await GetEventsAsync(client, runId);
-            var required = events.FirstOrDefault(e => e.Type == EventTypes.ToolApprovalRequired);
-            if (required is not null &&
-                required.Payload.TryGetProperty("requestId", out var id) &&
-                id.GetString() is { Length: > 0 } requestId)
-                return requestId;
-            await Task.Delay(100);
-        }
-        return null;
-    }
+    private static Task<string> WaitForApprovalRequestIdAsync(FakeOperatorAssistantAgent agent) =>
+        agent.ApprovalRequestId.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
     private sealed record EventRow(int Sequence, string Type, JsonElement Payload);
 }
@@ -959,6 +944,8 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
 
     /// <summary>Captures the approval decision the sink returned, for test assertions.</summary>
     public bool? LastApprovalGranted { get; private set; }
+    public TaskCompletionSource<string> ApprovalRequestId { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Captures the most recent request the fake was invoked with, so tests can assert on
     /// the conversation <see cref="OperatorAssistantRequest.History"/> the caller supplied (e.g. to
@@ -978,7 +965,9 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
         {
             var requestId = Guid.NewGuid().ToString("N");
             await sink.OnToolCallAsync(ApprovalToolName, "{}", ct);
-            var approved = await sink.OnApprovalRequiredAsync(requestId, ApprovalToolName, "{}", ct);
+            var approvalTask = sink.OnApprovalRequiredAsync(requestId, ApprovalToolName, "{}", ct).AsTask();
+            ApprovalRequestId.TrySetResult(requestId);
+            var approved = await approvalTask;
             LastApprovalGranted = approved;
             await sink.OnToolResultAsync(ApprovalToolName, success: approved, ct);
         }

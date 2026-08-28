@@ -68,32 +68,46 @@ public sealed class McpToolSchemaGenerationStartupTests
         using var process = new Process { StartInfo = psi };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+        var outputLock = new object();
+        var listening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void CaptureOutput(StringBuilder destination, string? line)
+        {
+            if (line is null)
+                return;
+
+            lock (outputLock)
+            {
+                destination.AppendLine(line);
+            }
+
+            if (line.Contains("Now listening", StringComparison.OrdinalIgnoreCase))
+                listening.TrySetResult();
+        }
+
+        process.OutputDataReceived += (_, e) => CaptureOutput(stdout, e.Data);
+        process.ErrorDataReceived += (_, e) => CaptureOutput(stderr, e.Data);
 
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        // Give the process time to run through startup (MapMcp/AIFunctionFactory.Create for every
-        // tool) and settle into listening for HTTP requests. A clean startup keeps running
-        // (RunAsync blocks); a startup crash exits well before this timeout elapses.
-        var exitedEarly = await Task.Run(() => process.WaitForExit(6_000));
-
-        var combinedOutput = stdout.ToString() + stderr.ToString();
-
         try
         {
+            // The schema exporter completes before Kestrel reports readiness. Waiting for that
+            // concrete signal verifies real startup without charging every successful run six seconds.
+            var exited = process.WaitForExitAsync();
+            var completed = await Task.WhenAny(listening.Task, exited, Task.Delay(TimeSpan.FromSeconds(6)));
+            string combinedOutput;
+            lock (outputLock)
+            {
+                combinedOutput = stdout.ToString() + stderr.ToString();
+            }
+
             combinedOutput.Should().NotContain("Unhandled exception",
                 because: $"the MCP server must not crash at startup (regression of 7605b692 / #419). Output:\n{combinedOutput}");
 
-            if (exitedEarly)
-            {
-                // If it exited early for some other reason, that's still a startup failure worth
-                // failing loudly on instead of silently passing.
-                process.ExitCode.Should().Be(0,
-                    because: $"the MCP server exited early during startup (exit code {process.ExitCode}). Output:\n{combinedOutput}");
-            }
+            completed.Should().BeSameAs(listening.Task,
+                because: $"the MCP server must report readiness within six seconds. Output:\n{combinedOutput}");
         }
         finally
         {
