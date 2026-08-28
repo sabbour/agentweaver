@@ -217,6 +217,77 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunTick_AfterClaimBeforeInsertion_RetryUsesTheReservedTaskIdentity()
+    {
+        var project = await SeedProjectAsync(WeeklyMondayNineAmYaml);
+        using var cancellation = new CancellationTokenSource();
+        var invocations = new RecoverableAutomationInvocationService { CancelOnNextReservation = cancellation };
+        await using var provider = CreateRecoveryProvider(invocations);
+        var service = CreateRecoveryService(provider);
+
+        await FluentActions.Invoking(() => service.RunTickAsync(
+                new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero), cancellation.Token))
+            .Should().ThrowAsync<OperationCanceledException>();
+        (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty();
+
+        await service.RunTickAsync(new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero), CancellationToken.None);
+
+        var task = (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle().Subject;
+        task.Id.Should().Be(invocations.ReservedTaskId);
+        task.State.Should().Be(BacklogTaskState.Ready);
+    }
+
+    [Fact]
+    public async Task RunTick_AfterInsertionBeforeBinding_ExceptionThenRetryPublishesOnce()
+    {
+        var project = await SeedProjectAsync(WeeklyMondayNineAmYaml);
+        var invocations = new RecoverableAutomationInvocationService { ThrowOnNextBind = true };
+        await using var provider = CreateRecoveryProvider(invocations);
+        var service = CreateRecoveryService(provider);
+        var now = new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero);
+
+        await service.RunTickAsync(now, CancellationToken.None);
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.Should().Match<BacklogTask>(task =>
+                task.State == BacklogTaskState.Backlog && task.IsAutomationInvocationPending);
+
+        await service.RunTickAsync(now, CancellationToken.None);
+
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.State.Should().Be(BacklogTaskState.Ready);
+        invocations.BindAttempts.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task RunTick_AfterBindingBeforePublish_RetryPublishesWithoutRebinding()
+    {
+        var project = await SeedProjectAsync(WeeklyMondayNineAmYaml);
+        var invocations = new RecoverableAutomationInvocationService { IsBound = true };
+        await _backlog.InsertAsync(new BacklogTask
+        {
+            Id = invocations.ReservedTaskId,
+            ProjectId = project.Id,
+            Title = "Scheduled run: Scheduled Triage",
+            Description = "interrupted after binding",
+            State = BacklogTaskState.Backlog,
+            OrderKey = "n",
+            CapturedBy = WorkflowScheduleTriggerService.CapturedBy,
+            CreatedAt = DateTimeOffset.UtcNow,
+            SourceFilePath = WorkflowScheduleTriggerService.BuildIdempotencyKey("scheduled-triage", "2026-07-13"),
+            WorkflowOverrideId = "scheduled-triage",
+            IsAutomationInvocationPending = true,
+        });
+        await using var provider = CreateRecoveryProvider(invocations);
+        var service = CreateRecoveryService(provider);
+
+        await service.RunTickAsync(new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero), CancellationToken.None);
+
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.State.Should().Be(BacklogTaskState.Ready);
+        invocations.BindAttempts.Should().Be(0);
+    }
+
+    [Fact]
     public async Task RunTick_NextOccurrence_FiresAgain()
     {
         var project = await SeedProjectAsync(WeeklyMondayNineAmYaml);
@@ -273,4 +344,18 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
 
         (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty();
     }
+
+    private ServiceProvider CreateRecoveryProvider(IAutomationInvocationService invocations) =>
+        new ServiceCollection()
+            .AddSingleton<IProjectStore>(_projects)
+            .AddSingleton<IBacklogTaskStore>(_backlog)
+            .AddSingleton(_registry)
+            .AddScoped<IAutomationInvocationService>(_ => invocations)
+            .BuildServiceProvider();
+
+    private static WorkflowScheduleTriggerService CreateRecoveryService(ServiceProvider provider) =>
+        new(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            new ConfigurationBuilder().Build(),
+            NullLogger<WorkflowScheduleTriggerService>.Instance);
 }

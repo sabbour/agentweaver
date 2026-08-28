@@ -1,4 +1,7 @@
 using Agentweaver.Domain;
+using Agentweaver.Api.Auth;
+using System.Data.Common;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -57,10 +60,11 @@ internal static class WorkflowTriggerBacklogFactory
         string capturedBy,
         string idempotencyKey,
         DateTimeOffset now,
-        CancellationToken ct) =>
+        CancellationToken ct,
+        BacklogTaskId? taskId = null) =>
         CreateBacklogTaskAsync(
             backlogStore, project, definition, title, description, capturedBy, idempotencyKey, now, ct,
-            isAutomationInvocationPending: true);
+            isAutomationInvocationPending: true, taskId: taskId);
 
     private static async Task<BacklogTask> CreateBacklogTaskAsync(
         IBacklogTaskStore backlogStore,
@@ -72,10 +76,18 @@ internal static class WorkflowTriggerBacklogFactory
         string idempotencyKey,
         DateTimeOffset now,
         CancellationToken ct,
-        bool isAutomationInvocationPending = false)
+        bool isAutomationInvocationPending = false,
+        BacklogTaskId? taskId = null)
     {
-        var existing = await backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false);
-        var backlogKeys = existing
+        if (taskId.HasValue)
+        {
+            var existingTask = await backlogStore.GetAsync(project.Id, taskId.Value, ct).ConfigureAwait(false);
+            if (existingTask is not null)
+                return existingTask;
+        }
+
+        var projectTasks = await backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false);
+        var backlogKeys = projectTasks
             .Where(t => t.State == BacklogTaskState.Backlog)
             .OrderBy(t => t.OrderKey, StringComparer.Ordinal)
             .Select(t => t.OrderKey)
@@ -84,7 +96,7 @@ internal static class WorkflowTriggerBacklogFactory
 
         var task = new BacklogTask
         {
-            Id = BacklogTaskId.New(),
+            Id = taskId ?? BacklogTaskId.New(),
             ProjectId = project.Id,
             Title = title,
             Description = description,
@@ -98,8 +110,96 @@ internal static class WorkflowTriggerBacklogFactory
             IsAutomationInvocationPending = isAutomationInvocationPending,
         };
 
-        await backlogStore.InsertAsync(task, ct).ConfigureAwait(false);
+        try
+        {
+            await backlogStore.InsertAsync(task, ct).ConfigureAwait(false);
+        }
+        catch (DbUpdateException) when (taskId.HasValue && !ct.IsCancellationRequested)
+        {
+            var existingTask = await backlogStore.GetAsync(project.Id, taskId.Value, CancellationToken.None).ConfigureAwait(false);
+            if (existingTask is not null)
+                return existingTask;
+            throw;
+        }
+        catch (DbException) when (taskId.HasValue && !ct.IsCancellationRequested)
+        {
+            var existingTask = await backlogStore.GetAsync(project.Id, taskId.Value, CancellationToken.None).ConfigureAwait(false);
+            if (existingTask is not null)
+                return existingTask;
+            throw;
+        }
         return task;
+    }
+
+    /// <summary>
+    /// Reconciles a durable invocation with its one reserved provisional task. The reservation is
+    /// written before task insertion and the task id is reused after a crash, making the cross-store
+    /// SQLite path replay-safe without treating an existing provisional task as a completed firing.
+    /// </summary>
+    public static async Task<BacklogTask> RecoverAndPublishAutomationTaskAsync(
+        IBacklogTaskStore backlogStore,
+        IAutomationInvocationService invocations,
+        AutomationInvocationClaim invocation,
+        Project project,
+        WorkflowDefinition definition,
+        string title,
+        string description,
+        string capturedBy,
+        string idempotencyKey,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var reservation = await invocations.TryReserveBacklogTaskAsync(invocation.InvocationId, project.Id, ct)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Unable to reserve a trusted automation invocation backlog task.");
+        var task = await backlogStore.GetAsync(project.Id, reservation.BacklogTaskId, ct).ConfigureAwait(false);
+
+        if (task is null)
+        {
+            try
+            {
+                task = await CreateProvisionalAutomationTaskAsync(
+                    backlogStore, project, definition, title, description, capturedBy, idempotencyKey, now, ct,
+                    reservation.BacklogTaskId).ConfigureAwait(false);
+            }
+            catch
+            {
+                var staged = await backlogStore.GetAsync(
+                    project.Id, reservation.BacklogTaskId, CancellationToken.None).ConfigureAwait(false);
+                if (staged is null)
+                {
+                    await invocations.TryReleaseBacklogTaskReservationAsync(
+                        invocation.InvocationId, project.Id, reservation.BacklogTaskId, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                throw;
+            }
+        }
+
+        if (!IsTrustedAutomationTask(task) ||
+            !string.Equals(task.SourceFilePath, idempotencyKey, StringComparison.Ordinal))
+            throw new InvalidOperationException("Reserved automation invocation task does not match its occurrence.");
+
+        if (task.State == BacklogTaskState.Ready && !task.IsAutomationInvocationPending)
+            return task;
+
+        if (task.State != BacklogTaskState.Backlog || !task.IsAutomationInvocationPending)
+            throw new InvalidOperationException("Reserved automation invocation task is not publishable.");
+
+        if (!reservation.IsBound &&
+            !await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
+                .ConfigureAwait(false))
+            throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
+
+        if (!await TryPublishAsync(backlogStore, project, task, now, ct).ConfigureAwait(false))
+        {
+            var published = await backlogStore.GetAsync(project.Id, task.Id, ct).ConfigureAwait(false);
+            if (published?.State != BacklogTaskState.Ready || published.IsAutomationInvocationPending)
+                throw new InvalidOperationException("Unable to publish trusted automation invocation backlog task.");
+            return published;
+        }
+
+        return task with { State = BacklogTaskState.Ready, CommittedAt = now, IsAutomationInvocationPending = false };
     }
 
     public static async Task<bool> TryPublishAsync(

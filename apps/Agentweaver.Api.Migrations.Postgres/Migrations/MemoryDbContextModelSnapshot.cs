@@ -592,6 +592,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("outcome");
 
+                    b.Property<string>("PendingBacklogTaskId")
+                        .HasColumnType("text")
+                        .HasColumnName("pending_backlog_task_id");
+
                     b.Property<string>("ProjectId")
                         .IsRequired()
                         .HasColumnType("text")

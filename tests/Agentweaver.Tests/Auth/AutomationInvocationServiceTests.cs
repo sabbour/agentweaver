@@ -37,7 +37,7 @@ public sealed class AutomationInvocationServiceTests
         var invocationId = (await db.AutomationInvocations.SingleAsync()).Id;
         var projectId = ProjectId.Parse(activation.ProjectId);
 
-        var taskId = BacklogTaskId.New();
+        var taskId = (await service.TryReserveBacklogTaskAsync(invocationId, projectId))!.BacklogTaskId;
         (await service.TryBindBacklogTaskAsync(invocationId, projectId, taskId)).Should().BeTrue();
         (await service.TryPrepareRunAsync(projectId, taskId, "run-1")).Should().BeTrue();
         var snapshots = await db.RunGitHubCapabilitySnapshots.Where(x => x.RunId == "run-1").ToListAsync();
@@ -67,7 +67,7 @@ public sealed class AutomationInvocationServiceTests
         var claim = await service.TryClaimForProjectAsync(project, "schedule:valid", null, "schedule");
         claim.Should().NotBeNull();
 
-        var taskId = BacklogTaskId.New();
+        var taskId = (await service.TryReserveBacklogTaskAsync(claim!.InvocationId, project))!.BacklogTaskId;
         (await service.TryBindBacklogTaskAsync(claim!.InvocationId, project, taskId)).Should().BeTrue();
         (await service.TryPrepareRunAsync(ProjectId.New(), taskId, "cross-project-run")).Should().BeFalse(
             "a task id cannot select an invocation owned by another project");
@@ -93,12 +93,58 @@ public sealed class AutomationInvocationServiceTests
         (await service.TryClaimForProjectAsync(project, "event:retry", "delivery-retry", "issues")).Should().NotBeNull(
             "a trigger whose task binding failed must be able to safely retry the same occurrence");
         var rebound = await db.AutomationInvocations.SingleAsync();
-        var boundTaskId = BacklogTaskId.New();
+        var boundTaskId = (await service.TryReserveBacklogTaskAsync(rebound.Id, project))!.BacklogTaskId;
         (await service.TryBindBacklogTaskAsync(rebound.Id, project, boundTaskId)).Should().BeTrue();
         (await service.TryDiscardInvocationForTaskAsync(rebound.Id, project, BacklogTaskId.New())).Should().BeFalse(
             "a bound invocation is never discarded for a different task");
         (await service.TryDiscardInvocationForTaskAsync(rebound.Id, project, boundTaskId)).Should().BeTrue(
             "publication recovery may release a binding only after that exact provisional task was deleted");
+    }
+
+    [Fact]
+    public async Task Reservation_ReusesClaimedOccurrenceAndOnlyBindsItsReservedTask()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var activation = await ActivateAsync(db);
+        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        var project = ProjectId.Parse(activation.ProjectId);
+
+        var initial = await service.TryClaimForProjectAsync(project, "schedule:recovery", null, "schedule");
+        var retry = await service.TryClaimForProjectAsync(project, "schedule:recovery", null, "schedule");
+        retry.Should().Be(initial, "a retry must resume the durable claim rather than abandon it");
+
+        var reservation = await service.TryReserveBacklogTaskAsync(initial!.InvocationId, project);
+        var concurrentRetry = await service.TryReserveBacklogTaskAsync(retry!.InvocationId, project);
+        concurrentRetry.Should().Be(reservation, "concurrent recovery must stage exactly one task identity");
+
+        (await service.TryBindBacklogTaskAsync(initial.InvocationId, project, BacklogTaskId.New())).Should().BeFalse(
+            "a binding cannot substitute an arbitrary task for the server-reserved identity");
+        (await service.TryBindBacklogTaskAsync(initial.InvocationId, project, reservation!.BacklogTaskId)).Should().BeTrue();
+        (await service.TryReserveBacklogTaskAsync(initial.InvocationId, project)).Should()
+            .Be(new AutomationInvocationTaskReservation(reservation.BacklogTaskId, IsBound: true));
+    }
+
+    [Fact]
+    public async Task Reservation_ReleaseAfterStagingFailureAllowsTheSameClaimToRetry()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var activation = await ActivateAsync(db);
+        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        var project = ProjectId.Parse(activation.ProjectId);
+
+        var claim = await service.TryClaimForProjectAsync(project, "event:staging-failure", "delivery-staging", "issues");
+        var reservation = await service.TryReserveBacklogTaskAsync(claim!.InvocationId, project);
+        (await service.TryReleaseBacklogTaskReservationAsync(
+            claim.InvocationId, project, reservation!.BacklogTaskId)).Should().BeTrue(
+                "a failed insertion leaves no task and releases its reservation for recovery");
+
+        var retry = await service.TryClaimForProjectAsync(project, "event:staging-failure", "delivery-staging", "issues");
+        retry.Should().Be(claim);
+        var recovered = await service.TryReserveBacklogTaskAsync(retry!.InvocationId, project);
+        recovered.Should().NotBeNull();
+        recovered!.IsBound.Should().BeFalse();
+        (await db.AutomationInvocations.ToListAsync()).Should().ContainSingle(
+            "a failed stage must not make the occurrence permanently unrecoverable");
     }
 
     private static async Task<FencedAutomationActivation> ActivateAsync(MemoryDbContext db, ProjectId? projectId = null)

@@ -135,10 +135,11 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
 
                 var idempotencyKey = BuildIdempotencyKey(def.Id, periodKey, scheduleOrdinal);
                 scheduleOrdinal++;
-                var alreadyFired = await backlogStore
-                    .GetExistingTitlesFromSourceAsync(project.Id, idempotencyKey, ct)
-                    .ConfigureAwait(false);
-                if (alreadyFired.Count > 0)
+                var alreadyPublished = (await backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false))
+                    .Any(task => string.Equals(task.SourceFilePath, idempotencyKey, StringComparison.Ordinal) &&
+                                 task.State == BacklogTaskState.Ready &&
+                                 !task.IsAutomationInvocationPending);
+                if (alreadyPublished)
                     continue;
 
                 var invocation = await invocations.TryClaimForProjectAsync(
@@ -151,31 +152,11 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
                     continue;
                 }
 
-                var task = await WorkflowTriggerBacklogFactory.CreateProvisionalAutomationTaskAsync(
-                    backlogStore,
-                    project,
-                    def,
+                var task = await WorkflowTriggerBacklogFactory.RecoverAndPublishAutomationTaskAsync(
+                    backlogStore, invocations, invocation, project, def,
                     title: $"Scheduled run: {def.Name}",
                     description: $"Automatically triggered by the '{def.Id}' workflow's schedule trigger (occurrence {periodKey}).",
-                    capturedBy: CapturedBy,
-                    idempotencyKey: idempotencyKey,
-                    now: now,
-                    ct: ct).ConfigureAwait(false);
-                try
-                {
-                    if (!await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
-                            .ConfigureAwait(false))
-                        throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
-                    if (!await WorkflowTriggerBacklogFactory.TryPublishAsync(backlogStore, project, task, now, ct)
-                            .ConfigureAwait(false))
-                        throw new InvalidOperationException("Unable to publish trusted automation invocation backlog task.");
-                }
-                catch
-                {
-                    await DiscardUnpublishedTaskAsync(invocations, backlogStore, invocation, project, task)
-                        .ConfigureAwait(false);
-                    throw;
-                }
+                    capturedBy: CapturedBy, idempotencyKey: idempotencyKey, now: now, ct: ct).ConfigureAwait(false);
 
                 _logger.LogInformation(
                     "Workflow schedule trigger: fired workflow {WorkflowId} for project {ProjectId} (task {TaskId}, occurrence {PeriodKey})",
@@ -189,21 +170,4 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
             ? $"workflow-schedule-trigger:{workflowId}:{periodKey}"
             : $"workflow-schedule-trigger:{workflowId}:{scheduleOrdinal}:{periodKey}";
 
-    private static async Task DiscardUnpublishedTaskAsync(
-        IAutomationInvocationService invocations,
-        IBacklogTaskStore backlogStore,
-        AutomationInvocationClaim invocation,
-        Project project,
-        BacklogTask task)
-    {
-        var deleted = await backlogStore.TryDeleteProvisionalAutomationTaskAsync(project.Id, task.Id, CancellationToken.None)
-            .ConfigureAwait(false);
-        if (!deleted)
-            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
-        var released = await invocations.TryDiscardInvocationForTaskAsync(
-                invocation.InvocationId, project.Id, task.Id, CancellationToken.None)
-            .ConfigureAwait(false);
-        if (!released)
-            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
-    }
 }

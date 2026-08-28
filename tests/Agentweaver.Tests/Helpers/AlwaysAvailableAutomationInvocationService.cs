@@ -14,6 +14,14 @@ public sealed class AlwaysAvailableAutomationInvocationService : IAutomationInvo
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
         Task.FromResult(true);
 
+    public Task<AutomationInvocationTaskReservation?> TryReserveBacklogTaskAsync(
+        string invocationId, ProjectId projectId, CancellationToken ct = default) =>
+        Task.FromResult<AutomationInvocationTaskReservation?>(new(BacklogTaskId.New(), IsBound: false));
+
+    public Task<bool> TryReleaseBacklogTaskReservationAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
+
     public Task<bool> TryDiscardInvocationForTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
         Task.FromResult(true);
@@ -57,6 +65,65 @@ public sealed class CoordinatorInterleavingAutomationInvocationService(IBacklogT
             ct);
         return true;
     }
+
+    public Task<AutomationInvocationTaskReservation?> TryReserveBacklogTaskAsync(
+        string invocationId, ProjectId projectId, CancellationToken ct = default) =>
+        Task.FromResult<AutomationInvocationTaskReservation?>(new(BacklogTaskId.New(), IsBound: false));
+
+    public Task<bool> TryReleaseBacklogTaskReservationAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
+
+    public Task<bool> TryDiscardInvocationForTaskAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
+
+    public Task<bool> TryPrepareRunAsync(
+        ProjectId expectedProjectId, BacklogTaskId backlogTaskId, string runId, CancellationToken ct = default) =>
+        Task.FromResult(true);
+}
+
+/// <summary>Deterministic durable-state seam for trigger recovery boundary tests.</summary>
+public sealed class RecoverableAutomationInvocationService : IAutomationInvocationService
+{
+    private readonly AutomationInvocationClaim _claim = new("recoverable-test-invocation");
+    private readonly BacklogTaskId _taskId = BacklogTaskId.New();
+
+    public bool IsBound { get; set; }
+    public bool ThrowOnNextBind { get; set; }
+    public CancellationTokenSource? CancelOnNextReservation { get; set; }
+    public int BindAttempts { get; private set; }
+    public BacklogTaskId ReservedTaskId => _taskId;
+
+    public Task<AutomationInvocationClaim?> TryClaimForProjectAsync(
+        ProjectId projectId, string occurrenceKey, string? deliveryId, string? eventName, CancellationToken ct = default) =>
+        Task.FromResult<AutomationInvocationClaim?>(_claim);
+
+    public Task<AutomationInvocationTaskReservation?> TryReserveBacklogTaskAsync(
+        string invocationId, ProjectId projectId, CancellationToken ct = default)
+    {
+        CancelOnNextReservation?.Cancel();
+        CancelOnNextReservation = null;
+        return Task.FromResult<AutomationInvocationTaskReservation?>(new(_taskId, IsBound));
+    }
+
+    public Task<bool> TryBindBacklogTaskAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default)
+    {
+        BindAttempts++;
+        if (ThrowOnNextBind)
+        {
+            ThrowOnNextBind = false;
+            throw new InvalidOperationException("injected bind interruption");
+        }
+
+        IsBound = true;
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> TryReleaseBacklogTaskReservationAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
 
     public Task<bool> TryDiscardInvocationForTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>

@@ -573,6 +573,10 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("outcome");
 
+                    b.Property<string>("PendingBacklogTaskId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("pending_backlog_task_id");
+
                     b.Property<string>("ProjectId")
                         .IsRequired()
                         .HasColumnType("TEXT")

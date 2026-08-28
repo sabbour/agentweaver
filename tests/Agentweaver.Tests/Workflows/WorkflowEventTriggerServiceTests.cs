@@ -275,7 +275,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task FireEvent_WhenBindingFails_RemovesUnpublishedTaskSoDeliveryCanRetry()
+    public async Task FireEvent_WhenBindingFails_KeepsProvisionalTaskSoDeliveryCanResume()
     {
         var project = await SeedProjectAsync(IssueOpenedEventYaml);
         var invocations = new FailFirstBindingInvocationService();
@@ -289,9 +289,11 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
         await FluentActions.Invoking(() => service.FireEventAsync(
                 project, "issue.opened", "retry-delivery", null, CancellationToken.None))
             .Should().ThrowAsync<InvalidOperationException>();
-        (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty(
-            "a failed binding must not leave a task that a coordinator can claim or that suppresses the retry");
-        invocations.ReleasedUnboundClaims.Should().Be(1);
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.Should().Match<BacklogTask>(task =>
+                task.State == BacklogTaskState.Backlog && task.IsAutomationInvocationPending,
+                "a failed binding remains server-owned and unavailable to coordinator pickup until retry resumes it");
+        invocations.ReleasedUnboundClaims.Should().Be(0);
 
         var retried = await service.FireEventAsync(
             project, "issue.opened", "retry-delivery", null, CancellationToken.None);
@@ -322,6 +324,102 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
 
         (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle(
             because: "a retried webhook delivery with the same dedupe key must not double-fire");
+    }
+
+    [Fact]
+    public async Task FireEvent_AfterClaimBeforeInsertion_RetryUsesTheReservedTaskIdentity()
+    {
+        var project = await SeedProjectAsync(IssueOpenedEventYaml);
+        using var cancellation = new CancellationTokenSource();
+        var invocations = new RecoverableAutomationInvocationService { CancelOnNextReservation = cancellation };
+        await using var provider = CreateRecoveryProvider(invocations);
+        var service = new WorkflowEventTriggerService(
+            _backlog, _registry, new LoggerAdapter<WorkflowEventTriggerService>(_logger),
+            provider.GetRequiredService<IServiceScopeFactory>());
+
+        await FluentActions.Invoking(() => service.FireEventAsync(
+                project, "issue.opened", "recover-insert", null, cancellation.Token))
+            .Should().ThrowAsync<OperationCanceledException>();
+        (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty();
+
+        await service.FireEventAsync(project, "issue.opened", "recover-insert", null, CancellationToken.None);
+
+        var task = (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle().Subject;
+        task.Id.Should().Be(invocations.ReservedTaskId);
+        task.State.Should().Be(BacklogTaskState.Ready);
+    }
+
+    [Fact]
+    public async Task FireEvent_AfterInsertionBeforeBinding_ExceptionThenRetryPublishesOnce()
+    {
+        var project = await SeedProjectAsync(IssueOpenedEventYaml);
+        var invocations = new RecoverableAutomationInvocationService { ThrowOnNextBind = true };
+        await using var provider = CreateRecoveryProvider(invocations);
+        var service = new WorkflowEventTriggerService(
+            _backlog, _registry, new LoggerAdapter<WorkflowEventTriggerService>(_logger),
+            provider.GetRequiredService<IServiceScopeFactory>());
+
+        await FluentActions.Invoking(() => service.FireEventAsync(
+                project, "issue.opened", "recover-bind", null, CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>();
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.Should().Match<BacklogTask>(task =>
+                task.State == BacklogTaskState.Backlog && task.IsAutomationInvocationPending);
+
+        await service.FireEventAsync(project, "issue.opened", "recover-bind", null, CancellationToken.None);
+
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.State.Should().Be(BacklogTaskState.Ready);
+        invocations.BindAttempts.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task FireEvent_AfterBindingBeforePublish_RetryPublishesWithoutRebinding()
+    {
+        var project = await SeedProjectAsync(IssueOpenedEventYaml);
+        var invocations = new RecoverableAutomationInvocationService { IsBound = true };
+        await _backlog.InsertAsync(new BacklogTask
+        {
+            Id = invocations.ReservedTaskId,
+            ProjectId = project.Id,
+            Title = "Event run: On Issue Opened",
+            Description = "interrupted after binding",
+            State = BacklogTaskState.Backlog,
+            OrderKey = "n",
+            CapturedBy = WorkflowEventTriggerService.CapturedBy,
+            CreatedAt = DateTimeOffset.UtcNow,
+            SourceFilePath = "workflow-event-trigger:on-issue-opened:issue.opened:recover-publish",
+            WorkflowOverrideId = "on-issue-opened",
+            IsAutomationInvocationPending = true,
+        });
+        await using var provider = CreateRecoveryProvider(invocations);
+        var service = new WorkflowEventTriggerService(
+            _backlog, _registry, new LoggerAdapter<WorkflowEventTriggerService>(_logger),
+            provider.GetRequiredService<IServiceScopeFactory>());
+
+        await service.FireEventAsync(project, "issue.opened", "recover-publish", null, CancellationToken.None);
+
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.State.Should().Be(BacklogTaskState.Ready);
+        invocations.BindAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task FireEvent_ConcurrentRetries_PublishOnlyTheOneReservedTask()
+    {
+        var project = await SeedProjectAsync(IssueOpenedEventYaml);
+        var invocations = new RecoverableAutomationInvocationService();
+        await using var provider = CreateRecoveryProvider(invocations);
+        var service = new WorkflowEventTriggerService(
+            _backlog, _registry, new LoggerAdapter<WorkflowEventTriggerService>(_logger),
+            provider.GetRequiredService<IServiceScopeFactory>());
+
+        await Task.WhenAll(
+            service.FireEventAsync(project, "issue.opened", "concurrent-recovery", null, CancellationToken.None),
+            service.FireEventAsync(project, "issue.opened", "concurrent-recovery", null, CancellationToken.None));
+
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle()
+            .Which.State.Should().Be(BacklogTaskState.Ready);
     }
 
     [Fact]
@@ -447,6 +545,11 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
         _logger.HasEntryContaining("/agentweaver:triage capture-this-secret").Should().BeFalse(
             because: "commentMatches must reduce the raw comment body to a fire/no-fire boolean only");
     }
+
+    private ServiceProvider CreateRecoveryProvider(Agentweaver.Api.Auth.IAutomationInvocationService invocations) =>
+        new ServiceCollection()
+            .AddScoped<Agentweaver.Api.Auth.IAutomationInvocationService>(_ => invocations)
+            .BuildServiceProvider();
 }
 
 file sealed class LoggerAdapter<TCategory>(CapturingLogger inner) : Microsoft.Extensions.Logging.ILogger<TCategory>
@@ -465,6 +568,7 @@ file sealed class LoggerAdapter<TCategory>(CapturingLogger inner) : Microsoft.Ex
 file sealed class FailFirstBindingInvocationService : Agentweaver.Api.Auth.IAutomationInvocationService
 {
     private int _bindings;
+    private BacklogTaskId? _reservation;
 
     public int ReleasedUnboundClaims { get; private set; }
 
@@ -475,6 +579,15 @@ file sealed class FailFirstBindingInvocationService : Agentweaver.Api.Auth.IAuto
     public Task<bool> TryBindBacklogTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
         Task.FromResult(Interlocked.Increment(ref _bindings) != 1);
+
+    public Task<Agentweaver.Api.Auth.AutomationInvocationTaskReservation?> TryReserveBacklogTaskAsync(
+        string invocationId, ProjectId projectId, CancellationToken ct = default) =>
+        Task.FromResult<Agentweaver.Api.Auth.AutomationInvocationTaskReservation?>(
+            new(_reservation ??= BacklogTaskId.New(), IsBound: false));
+
+    public Task<bool> TryReleaseBacklogTaskReservationAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
 
     public Task<bool> TryDiscardInvocationForTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default)

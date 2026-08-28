@@ -713,6 +713,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ProjectId).HasColumnName("project_id");
             e.Property(x => x.ActivationId).HasColumnName("activation_id");
             e.Property(x => x.BacklogTaskId).HasColumnName("backlog_task_id");
+            e.Property(x => x.PendingBacklogTaskId).HasColumnName("pending_backlog_task_id");
             e.Property(x => x.OccurrenceKey).HasColumnName("occurrence_key");
             e.Property(x => x.DeliveryId).HasColumnName("delivery_id");
             e.Property(x => x.EventName).HasColumnName("event_name");
