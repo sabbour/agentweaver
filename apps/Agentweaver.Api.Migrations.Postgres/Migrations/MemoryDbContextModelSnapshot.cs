@@ -567,6 +567,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("backlog_task_id");
 
+                    b.Property<string>("PendingBacklogTaskId")
+                        .HasColumnType("text")
+                        .HasColumnName("pending_backlog_task_id");
+
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
@@ -616,6 +620,11 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsUnique()
                         .HasDatabaseName("UX_automation_invocations_delivery_id")
                         .HasFilter("delivery_id IS NOT NULL");
+
+                    b.HasIndex("PendingBacklogTaskId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_automation_invocations_pending_backlog_task_id")
+                        .HasFilter("pending_backlog_task_id IS NOT NULL");
 
                     b.HasIndex("ProjectId");
 

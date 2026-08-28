@@ -5,6 +5,8 @@ using Microsoft.EntityFrameworkCore;
 namespace Agentweaver.Api.Auth;
 
 public sealed record AutomationInvocationClaim(string InvocationId);
+public sealed record AutomationInvocationTaskReservation(BacklogTaskId BacklogTaskId, bool IsBound);
+public sealed record OutstandingScheduleInvocation(string InvocationId, string OccurrenceKey);
 
 public interface IAutomationInvocationService
 {
@@ -16,6 +18,34 @@ public interface IAutomationInvocationService
         CancellationToken ct = default);
 
     Task<bool> TryBindBacklogTaskAsync(
+        string invocationId,
+        ProjectId projectId,
+        BacklogTaskId backlogTaskId,
+        CancellationToken ct = default);
+
+    Task<AutomationInvocationTaskReservation?> TryReserveBacklogTaskAsync(
+        string invocationId,
+        ProjectId projectId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically associates a legacy staged provisional task with an otherwise unbound invocation.
+    /// The caller must first prove the task is the sole exact server-owned occurrence match.
+    /// </summary>
+    Task<bool> TryAdoptLegacyProvisionalTaskAsync(
+        string invocationId,
+        ProjectId projectId,
+        BacklogTaskId backlogTaskId,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<OutstandingScheduleInvocation>> ListOutstandingScheduleInvocationsAsync(
+        ProjectId projectId,
+        string occurrenceKeyPrefix,
+        IReadOnlyCollection<string> legacyProvisionalOccurrenceKeys,
+        int maximumCount,
+        CancellationToken ct = default);
+
+    Task<bool> TryCompleteBacklogTaskReservationAsync(
         string invocationId,
         ProjectId projectId,
         BacklogTaskId backlogTaskId,
@@ -97,7 +127,8 @@ public sealed class AutomationInvocationService(
             .Where(x => x.Id == invocationId &&
                         x.ProjectId == projectId.ToString() &&
                         x.Outcome == AutomationInvocationOutcome.Claimed &&
-                        x.BacklogTaskId == null)
+                        x.BacklogTaskId == null &&
+                        (x.PendingBacklogTaskId == null || x.PendingBacklogTaskId == backlogTaskId.ToString()))
             .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.BacklogTaskId, backlogTaskId.ToString()), ct)
             .ConfigureAwait(false);
         if (changed == 1)
@@ -110,6 +141,133 @@ public sealed class AutomationInvocationService(
             x.BacklogTaskId == backlogTaskId.ToString(), ct).ConfigureAwait(false);
     }
 
+    public async Task<AutomationInvocationTaskReservation?> TryReserveBacklogTaskAsync(
+        string invocationId,
+        ProjectId projectId,
+        CancellationToken ct = default)
+    {
+        var invocation = await db.AutomationInvocations.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == invocationId &&
+                                      x.ProjectId == projectId.ToString() &&
+                                      x.Outcome == AutomationInvocationOutcome.Claimed, ct)
+            .ConfigureAwait(false);
+        if (invocation is null)
+            return null;
+        if (!string.IsNullOrWhiteSpace(invocation.BacklogTaskId))
+            return new(BacklogTaskId.Parse(invocation.BacklogTaskId), IsBound: true);
+        if (!string.IsNullOrWhiteSpace(invocation.PendingBacklogTaskId))
+            return new(BacklogTaskId.Parse(invocation.PendingBacklogTaskId), IsBound: false);
+
+        var taskId = BacklogTaskId.New();
+        var changed = await db.AutomationInvocations
+            .Where(x => x.Id == invocationId &&
+                        x.ProjectId == projectId.ToString() &&
+                        x.Outcome == AutomationInvocationOutcome.Claimed &&
+                        x.BacklogTaskId == null &&
+                        x.PendingBacklogTaskId == null)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                x => x.PendingBacklogTaskId, taskId.ToString()), ct)
+            .ConfigureAwait(false);
+        if (changed == 1)
+            return new(taskId, IsBound: false);
+
+        invocation = await db.AutomationInvocations.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == invocationId &&
+                                      x.ProjectId == projectId.ToString() &&
+                                      x.Outcome == AutomationInvocationOutcome.Claimed, ct)
+            .ConfigureAwait(false);
+        if (invocation is null)
+            return null;
+        if (!string.IsNullOrWhiteSpace(invocation.BacklogTaskId))
+            return new(BacklogTaskId.Parse(invocation.BacklogTaskId), IsBound: true);
+        return string.IsNullOrWhiteSpace(invocation.PendingBacklogTaskId)
+            ? null
+            : new(BacklogTaskId.Parse(invocation.PendingBacklogTaskId), IsBound: false);
+    }
+
+    public async Task<bool> TryAdoptLegacyProvisionalTaskAsync(
+        string invocationId,
+        ProjectId projectId,
+        BacklogTaskId backlogTaskId,
+        CancellationToken ct = default)
+    {
+        var changed = await db.AutomationInvocations
+            .Where(x => x.Id == invocationId &&
+                        x.ProjectId == projectId.ToString() &&
+                        x.Outcome == AutomationInvocationOutcome.Claimed &&
+                        x.BacklogTaskId == null &&
+                        x.PendingBacklogTaskId == null)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                x => x.PendingBacklogTaskId, backlogTaskId.ToString()), ct)
+            .ConfigureAwait(false);
+        if (changed == 1)
+            return true;
+
+        return await db.AutomationInvocations.AsNoTracking().AnyAsync(x =>
+            x.Id == invocationId &&
+            x.ProjectId == projectId.ToString() &&
+            x.Outcome == AutomationInvocationOutcome.Claimed &&
+            (x.BacklogTaskId == backlogTaskId.ToString() ||
+             x.PendingBacklogTaskId == backlogTaskId.ToString()), ct).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<OutstandingScheduleInvocation>> ListOutstandingScheduleInvocationsAsync(
+        ProjectId projectId,
+        string occurrenceKeyPrefix,
+        IReadOnlyCollection<string> legacyProvisionalOccurrenceKeys,
+        int maximumCount,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(occurrenceKeyPrefix))
+            throw new ArgumentException("A schedule occurrence key prefix is required.", nameof(occurrenceKeyPrefix));
+        if (maximumCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maximumCount));
+
+        var legacyKeys = legacyProvisionalOccurrenceKeys.Distinct(StringComparer.Ordinal).ToArray();
+        var invocations = await db.AutomationInvocations.AsNoTracking()
+            .Where(x => x.ProjectId == projectId.ToString() &&
+                        x.EventName == "schedule" &&
+                        x.Outcome == AutomationInvocationOutcome.Claimed &&
+                        x.OccurrenceKey.StartsWith(occurrenceKeyPrefix) &&
+                        (x.BacklogTaskId == null ||
+                         x.PendingBacklogTaskId != null ||
+                         legacyKeys.Contains(x.OccurrenceKey)))
+            .OrderBy(x => x.OccurrenceKey)
+            .ThenBy(x => x.Id)
+            .Select(x => new OutstandingScheduleInvocation(x.Id, x.OccurrenceKey))
+            .Take(maximumCount + 1)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        if (invocations.Count > maximumCount)
+            throw new InvalidOperationException(
+                $"Outstanding schedule invocation recovery exceeds the safe limit of {maximumCount}.");
+        return invocations;
+    }
+
+    public async Task<bool> TryCompleteBacklogTaskReservationAsync(
+        string invocationId,
+        ProjectId projectId,
+        BacklogTaskId backlogTaskId,
+        CancellationToken ct = default)
+    {
+        var changed = await db.AutomationInvocations
+            .Where(x => x.Id == invocationId &&
+                        x.ProjectId == projectId.ToString() &&
+                        x.Outcome == AutomationInvocationOutcome.Claimed &&
+                        x.BacklogTaskId == backlogTaskId.ToString() &&
+                        (x.PendingBacklogTaskId == backlogTaskId.ToString() ||
+                         x.PendingBacklogTaskId == null))
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.PendingBacklogTaskId, (string?)null), ct)
+            .ConfigureAwait(false);
+        return changed == 1 ||
+            await db.AutomationInvocations.AsNoTracking().AnyAsync(x =>
+                x.Id == invocationId &&
+                x.ProjectId == projectId.ToString() &&
+                x.Outcome == AutomationInvocationOutcome.Claimed &&
+                x.BacklogTaskId == backlogTaskId.ToString() &&
+                x.PendingBacklogTaskId == null, ct).ConfigureAwait(false);
+    }
+
     public async Task<bool> TryDiscardInvocationForTaskAsync(
         string invocationId,
         ProjectId projectId,
@@ -120,7 +278,9 @@ public sealed class AutomationInvocationService(
             .Where(x => x.Id == invocationId &&
                         x.ProjectId == projectId.ToString() &&
                         x.Outcome == AutomationInvocationOutcome.Claimed &&
-                        (x.BacklogTaskId == null || x.BacklogTaskId == backlogTaskId.ToString()))
+                        ((x.BacklogTaskId == null && x.PendingBacklogTaskId == null) ||
+                         x.BacklogTaskId == backlogTaskId.ToString() ||
+                         x.PendingBacklogTaskId == backlogTaskId.ToString()))
             .ExecuteDeleteAsync(ct)
             .ConfigureAwait(false);
         return changed == 1;

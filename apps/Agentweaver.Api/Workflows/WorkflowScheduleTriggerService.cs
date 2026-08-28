@@ -17,14 +17,15 @@ namespace Agentweaver.Api.Workflows;
 /// there is no bespoke run-start path here, so the same pickup-capacity bounds, exactly-once claim,
 /// and board visibility apply as for every other backlog task.
 ///
-/// <para>Idempotency (fire-at-most-once per occurrence) piggybacks on the SAME "does a task with this
-/// synthetic source path already exist" check the backlog-capture endpoint uses for external-id
-/// idempotency (<see cref="IBacklogTaskStore.GetExistingTitlesFromSourceAsync"/>): the source path
-/// encodes the workflow id + the due occurrence's period key, so a fresh occurrence always gets a
-/// fresh key and a repeated tick within the same occurrence is a no-op. As with that existing
-/// idempotency check, this is a check-then-insert (not a DB-enforced unique constraint), so an
-/// extremely narrow multi-replica race remains theoretically possible — the same known limitation the
-/// existing capture-by-external-id path already has.</para>
+/// <para>Idempotency (fire-at-most-once per occurrence) is held by the server-owned automation
+/// invocation claim and its task reservation. The source path encodes the workflow id + due period,
+/// so a completed Ready task is a fast repeat-tick no-op while an incomplete handoff is resumed
+/// through that same claimed invocation.</para>
+///
+/// <para>Before evaluating the current period, each configured schedule trigger resumes its bounded
+/// set of incomplete, durably reserved task handoffs. This prevents an interruption in a previous
+/// daily, weekly, or monthly period from becoming permanently stranded when its occurrence key rolls
+/// over. A recovery set over the safety limit fails the project tick rather than dropping an occurrence.</para>
 ///
 /// <para>A workflow with no triggers is entirely unaffected, so on-demand/manual start behavior is
 /// unchanged.</para>
@@ -32,6 +33,7 @@ namespace Agentweaver.Api.Workflows;
 public sealed class WorkflowScheduleTriggerService : BackgroundService
 {
     public const string CapturedBy = "automation:schedule-trigger";
+    private const int MaximumOutstandingInvocationsPerTrigger = 100;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<WorkflowScheduleTriggerService> _logger;
@@ -124,21 +126,54 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
             if (def is null)
                 continue;
 
-            var scheduleOrdinal = 0;
-            foreach (var trigger in def.Triggers.Where(t => t.Type == WorkflowTriggerType.Schedule))
+            var schedules = def.Triggers
+                .Where(t => t.Type == WorkflowTriggerType.Schedule)
+                .Select((trigger, ordinal) => (Trigger: trigger, Ordinal: ordinal))
+                .ToList();
+            foreach (var schedule in schedules)
             {
-                if (!WorkflowScheduleEvaluator.TryGetDueOccurrence(trigger, now, out var periodKey, out _))
-                {
-                    scheduleOrdinal++;
-                    continue;
-                }
+                ct.ThrowIfCancellationRequested();
+                var occurrenceKeyPrefix = BuildIdempotencyKey(def.Id, string.Empty, schedule.Ordinal);
+                var legacyProvisionalOccurrences = (await backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false))
+                    .Where(task => task.State == BacklogTaskState.Backlog &&
+                                   task.RunId is null &&
+                                   task.IsAutomationInvocationPending &&
+                                   string.Equals(task.WorkflowOverrideId, def.Id, StringComparison.Ordinal) &&
+                                   string.Equals(task.CapturedBy, CapturedBy, StringComparison.Ordinal) &&
+                                   task.SourceFilePath?.StartsWith(occurrenceKeyPrefix, StringComparison.Ordinal) == true)
+                    .Select(task => task.SourceFilePath!)
+                    .Distinct(StringComparer.Ordinal)
+                    .Take(MaximumOutstandingInvocationsPerTrigger + 1)
+                    .ToList();
+                if (legacyProvisionalOccurrences.Count > MaximumOutstandingInvocationsPerTrigger)
+                    throw new InvalidOperationException(
+                        $"Outstanding schedule invocation recovery exceeds the safe limit of {MaximumOutstandingInvocationsPerTrigger}.");
 
-                var idempotencyKey = BuildIdempotencyKey(def.Id, periodKey, scheduleOrdinal);
-                scheduleOrdinal++;
-                var alreadyFired = await backlogStore
-                    .GetExistingTitlesFromSourceAsync(project.Id, idempotencyKey, ct)
+                var outstanding = await invocations.ListOutstandingScheduleInvocationsAsync(
+                    project.Id, occurrenceKeyPrefix, legacyProvisionalOccurrences,
+                    MaximumOutstandingInvocationsPerTrigger, ct)
                     .ConfigureAwait(false);
-                if (alreadyFired.Count > 0)
+                foreach (var pending in outstanding)
+                {
+                    var periodKey = pending.OccurrenceKey[occurrenceKeyPrefix.Length..];
+                    await RecoverAndPublishAsync(
+                        invocations, backlogStore, new(pending.InvocationId), project, def, periodKey,
+                        pending.OccurrenceKey, now, ct).ConfigureAwait(false);
+                }
+            }
+
+            foreach (var schedule in schedules)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!WorkflowScheduleEvaluator.TryGetDueOccurrence(schedule.Trigger, now, out var periodKey, out _))
+                    continue;
+
+                var idempotencyKey = BuildIdempotencyKey(def.Id, periodKey, schedule.Ordinal);
+                var alreadyPublished = (await backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false))
+                    .Any(task => string.Equals(task.SourceFilePath, idempotencyKey, StringComparison.Ordinal) &&
+                                 task.State == BacklogTaskState.Ready &&
+                                 !task.IsAutomationInvocationPending);
+                if (alreadyPublished)
                     continue;
 
                 var invocation = await invocations.TryClaimForProjectAsync(
@@ -151,31 +186,9 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
                     continue;
                 }
 
-                var task = await WorkflowTriggerBacklogFactory.CreateProvisionalAutomationTaskAsync(
-                    backlogStore,
-                    project,
-                    def,
-                    title: $"Scheduled run: {def.Name}",
-                    description: $"Automatically triggered by the '{def.Id}' workflow's schedule trigger (occurrence {periodKey}).",
-                    capturedBy: CapturedBy,
-                    idempotencyKey: idempotencyKey,
-                    now: now,
-                    ct: ct).ConfigureAwait(false);
-                try
-                {
-                    if (!await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
-                            .ConfigureAwait(false))
-                        throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
-                    if (!await WorkflowTriggerBacklogFactory.TryPublishAsync(backlogStore, project, task, now, ct)
-                            .ConfigureAwait(false))
-                        throw new InvalidOperationException("Unable to publish trusted automation invocation backlog task.");
-                }
-                catch
-                {
-                    await DiscardUnpublishedTaskAsync(invocations, backlogStore, invocation, project, task)
-                        .ConfigureAwait(false);
-                    throw;
-                }
+                var task = await RecoverAndPublishAsync(
+                    invocations, backlogStore, invocation, project, def, periodKey, idempotencyKey, now, ct)
+                    .ConfigureAwait(false);
 
                 _logger.LogInformation(
                     "Workflow schedule trigger: fired workflow {WorkflowId} for project {ProjectId} (task {TaskId}, occurrence {PeriodKey})",
@@ -189,21 +202,19 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
             ? $"workflow-schedule-trigger:{workflowId}:{periodKey}"
             : $"workflow-schedule-trigger:{workflowId}:{scheduleOrdinal}:{periodKey}";
 
-    private static async Task DiscardUnpublishedTaskAsync(
+    private static Task<BacklogTask> RecoverAndPublishAsync(
         IAutomationInvocationService invocations,
         IBacklogTaskStore backlogStore,
         AutomationInvocationClaim invocation,
         Project project,
-        BacklogTask task)
-    {
-        var deleted = await backlogStore.TryDeleteProvisionalAutomationTaskAsync(project.Id, task.Id, CancellationToken.None)
-            .ConfigureAwait(false);
-        if (!deleted)
-            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
-        var released = await invocations.TryDiscardInvocationForTaskAsync(
-                invocation.InvocationId, project.Id, task.Id, CancellationToken.None)
-            .ConfigureAwait(false);
-        if (!released)
-            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
-    }
+        WorkflowDefinition definition,
+        string periodKey,
+        string idempotencyKey,
+        DateTimeOffset now,
+        CancellationToken ct) =>
+        WorkflowTriggerBacklogFactory.RecoverAndPublishAutomationTaskAsync(
+            backlogStore, invocations, invocation, project, definition,
+            title: $"Scheduled run: {definition.Name}",
+            description: $"Automatically triggered by the '{definition.Id}' workflow's schedule trigger (occurrence {periodKey}).",
+            capturedBy: CapturedBy, idempotencyKey: idempotencyKey, now: now, ct: ct);
 }

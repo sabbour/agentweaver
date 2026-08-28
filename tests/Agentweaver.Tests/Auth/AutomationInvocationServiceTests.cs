@@ -101,6 +101,36 @@ public sealed class AutomationInvocationServiceTests
             "publication recovery may release a binding only after that exact provisional task was deleted");
     }
 
+    [Fact]
+    public async Task AdoptLegacyProvisionalTask_IsIdempotentUnderConcurrentRetry()
+    {
+        var databaseName = $"automation-invocation-{Guid.NewGuid():N}";
+        var connectionString = $"Data Source=file:{databaseName}?mode=memory&cache=shared;Default Timeout=5";
+        var options = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite(connectionString, options => options.MigrationsAssembly("Agentweaver.Api")).Options;
+        await using var firstDb = new MemoryDbContext(options);
+        await firstDb.Database.MigrateAsync();
+        var activation = await ActivateAsync(firstDb);
+        var project = ProjectId.Parse(activation.ProjectId);
+        var first = new AutomationInvocationService(firstDb, new TwoAppPersistenceStore(firstDb));
+        (await first.TryClaimForProjectAsync(project, "schedule:concurrent-legacy", null, "schedule")).Should().NotBeNull();
+        var invocationId = await firstDb.AutomationInvocations.Select(x => x.Id).SingleAsync();
+
+        await using var secondDb = new MemoryDbContext(options);
+        var second = new AutomationInvocationService(secondDb, new TwoAppPersistenceStore(secondDb));
+        var taskId = BacklogTaskId.New();
+        var results = await Task.WhenAll(
+            first.TryAdoptLegacyProvisionalTaskAsync(invocationId, project, taskId),
+            second.TryAdoptLegacyProvisionalTaskAsync(invocationId, project, taskId));
+
+        results.Should().OnlyContain(result => result,
+            "concurrent retries may converge only on the exact same server-owned legacy task");
+        firstDb.ChangeTracker.Clear();
+        var invocation = await firstDb.AutomationInvocations.SingleAsync();
+        invocation.PendingBacklogTaskId.Should().Be(taskId.ToString());
+        invocation.BacklogTaskId.Should().BeNull();
+    }
+
     private static async Task<FencedAutomationActivation> ActivateAsync(MemoryDbContext db, ProjectId? projectId = null)
     {
         var project = projectId ?? ProjectId.New();
