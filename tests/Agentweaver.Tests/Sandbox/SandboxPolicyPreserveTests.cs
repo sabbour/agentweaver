@@ -235,6 +235,7 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplic
             .GetPolicyAsync(_repoPath);
 
         policy.DestructiveCommandPatterns.Should().Equal("user-defined-command");
+        policy.DestructiveCommandPatterns.Should().NotContain("gh workflow run");
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
@@ -324,6 +325,7 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplic
                      "gh pr close 1",
                      "gh repo delete example/repo",
                      "gh repo archive example/repo",
+                     "gh workflow run ci.yml --repo sabbour/agentweaver",
                  })
         {
             var result = await tool.InvokeAsync(new AIFunctionArguments(

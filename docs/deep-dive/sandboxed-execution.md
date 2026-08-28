@@ -106,9 +106,9 @@ browser/editor forms are rejected even after operator approval, so they never re
 start an external program. Likewise, `gh gist edit` and every other editor-facing gist form remain
 outside the allowlist.
 
-The approval policy gates `git push`, remote changes, `gh pr` changes, `gh repo` changes, `gh api`,
-`gh secret set`, and `gh auth` commands (including `gh auth token`). The API does not inspect or
-proxy these commands.
+The approval policy gates `git push`, remote changes, `gh pr` changes, `gh repo` changes,
+`gh workflow run`, `gh api`, `gh secret set`, and `gh auth` commands (including `gh auth token`).
+The API does not inspect or proxy these commands.
 
 The system keeps this credential out of pod specs, files, logs, events, annotations, shared environments, and credential-helper files. Normal release and orphan cleanup log failed revocations. The
 registry retains failed revocations independently of their SandboxClaim, and each reaper sweep retries

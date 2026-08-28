@@ -335,6 +335,55 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         executor.ExecuteCalls.Should().Be(0);
     }
 
+    [Fact]
+    public async Task Controlled_run_command_requires_approval_before_direct_credentialed_workflow_run()
+    {
+        const string command = "gh workflow run ci.yml --repo sabbour/agentweaver";
+        const string sentinel = "repository-access-token";
+        var approved = false;
+        var approvalChecks = 0;
+        SandboxCommand? observed = null;
+        var executor = new CapturingExecutor(candidate => observed = candidate);
+        using var tracker = new ShellExecutionTracker();
+        var context = BuildContext(
+            executor,
+            tracker,
+            repositoryAccessToken: sentinel,
+            destructivePatterns: [.. SandboxPolicy.Default(_root).DestructiveCommandPatterns],
+            rejectDestructiveCommands: false,
+            isCommandApproved: _ =>
+            {
+                approvalChecks++;
+                return approved;
+            });
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var awaitingApproval = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        awaitingApproval?.ToString().Should().Contain("requires operator approval");
+        approvalChecks.Should().Be(1);
+        observed.Should().BeNull("the workflow must not start before its command is approved");
+
+        approved = true;
+        var executed = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        executed?.ToString().Should().Contain("exit_code: 0");
+        approvalChecks.Should().Be(2);
+        observed.Should().NotBeNull();
+        observed!.CommandLine.Should().NotContain(sentinel);
+        observed.Environment.Should().NotContain(pair => pair.Value == sentinel);
+        observed.DirectExecution.Should().NotBeNull();
+        observed.DirectExecution!.Executable.Should().Be("gh");
+        observed.DirectExecution.Arguments.Should().Equal(
+            "workflow", "run", "ci.yml", "--repo", "sabbour/agentweaver");
+        observed.DirectExecution.Environment.Should().Contain(
+            new KeyValuePair<string, string>("GH_TOKEN", sentinel));
+    }
+
     [Theory]
     [InlineData("gh 'secret' set DEPLOY_KEY --body value")]
     [InlineData("gh \"secret\" set DEPLOY_KEY --body value")]
