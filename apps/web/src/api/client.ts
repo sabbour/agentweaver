@@ -431,22 +431,6 @@ export class AgentweaverApiClient {
     return this.request('POST', `/projects/${encodeURIComponent(projectId)}/github/copilot/authorizations`, {});
   }
 
-  rotateProjectWebhookSecret(projectId: string): Promise<import('./types').WebhookSecretRotationResponse> {
-    return this.request<import('./types').WebhookSecretRotationResponse>(
-      'POST',
-      `/projects/${encodeURIComponent(projectId)}/webhook-secret/rotate`,
-      {},
-    );
-  }
-
-  autoCreateProjectWebhook(projectId: string): Promise<import('./types').GitHubWebhookProvisioningResponse> {
-    return this.request<import('./types').GitHubWebhookProvisioningResponse>(
-      'POST',
-      `/projects/${encodeURIComponent(projectId)}/webhooks/github/provision`,
-      {},
-    );
-  }
-
   deleteProject(projectId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}?confirm=true`);
   }

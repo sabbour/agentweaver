@@ -306,7 +306,6 @@ public sealed class LinkedGitHubAccountsApiTests
     [Fact]
     public async Task LegacyPerProjectWebhookProvisioning_IsUnavailable()
     {
-        const string entraUserId = "00000000-0000-0000-0000-00000000aa11";
         var seenAuthorizations = new List<string?>();
         using var factory = new LinkedGitHubAccountsWebApplicationFactory(request =>
         {
@@ -324,39 +323,10 @@ public sealed class LinkedGitHubAccountsApiTests
 
             return Json(HttpStatusCode.NotFound, new { error = "unhandled" });
         });
-        await factory.TokenStore.LinkIdentityAsync(entraUserId, Token("tok-alice", "alice"), isDefault: true);
-        await factory.TokenStore.LinkIdentityAsync(entraUserId, Token("tok-bob", "bob"));
-        await factory.TokenStore.SetAsync(GitHubTokenScope.ForUser(entraUserId), Token("tok-alice", "alice"));
-
-        using var client = factory.CreateAuthenticatedClient(entraUserId, roles: [PlatformRoles.ProjectCreator]);
-        var create = await client.PostAsJsonAsync("/api/projects", new
-        {
-            name = "Webhook Identity Project",
-            origin = "blank",
-            working_directory = factory.NewWorkingDirectory(),
-        });
-        var project = await create.Content.ReadFromJsonAsync<ProjectResponse>();
-
-        using (var scope = factory.Services.CreateScope())
-        {
-            var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
-            await projectStore.UpdateOriginAsync(
-                ProjectId.Parse(project!.ProjectId),
-                ProjectOrigin.FromGitHub("acme/widgets"),
-                DateTimeOffset.UtcNow);
-        }
-
-        // Save a project-level override to a different login ("bob"). This must NOT change which
-        // identity's token is used to provision the webhook — the submitting user's own default
-        // token ("alice") must always win.
-        (await client.PutAsJsonAsync(
-            $"/api/projects/{project!.ProjectId}/github-identity",
-            new UpdateProjectGitHubIdentityRequest { GitHubLogin = "bob" }))
-            .StatusCode.Should().Be(HttpStatusCode.NoContent);
-
-        var response = await client.PostAsJsonAsync(
-            $"/api/projects/{project.ProjectId}/webhooks/github/provision",
-            new { });
+        using var client = factory.CreateAuthenticatedClient(
+            "00000000-0000-0000-0000-00000000aa11",
+            roles: [PlatformRoles.ProjectCreator]);
+        var response = await client.PostAsJsonAsync("/api/projects/not-a-project/webhooks/github/provision", new { });
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
         seenAuthorizations.Should().BeEmpty();

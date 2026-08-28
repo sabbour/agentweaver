@@ -20,7 +20,7 @@ revealing or selecting credentials.
 
 - live Copilot App registration validation at startup and readiness checks
 - a project-scoped, redacted REST readiness status and web settings view
-- legacy interactive GitHub identity and webhook controls that disappear after a Repo App connection
+- removal of legacy per-project GitHub identity and webhook settings controls
 
 ### Out
 
@@ -35,8 +35,8 @@ revealing or selecting credentials.
 - [ ] The readiness response includes no identifiers, names, permission maps, credentials, or
       arbitrary provider failures.
 - [ ] The Web UI has no unattended activation control or activation-record write.
-- [ ] Legacy per-project GitHub identity and webhook controls are hidden after a Repo App
-      installation exists for the project and otherwise state their interactive-only removal path.
+- [ ] Project Settings exposes no legacy per-project GitHub identity, webhook provisioning, or
+      webhook-secret controls.
 
 ## Notable edge cases
 

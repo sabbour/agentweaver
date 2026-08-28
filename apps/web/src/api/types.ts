@@ -200,17 +200,6 @@ export interface Project {
   allowed_workflow_ids?: string[] | null;
 }
 
-export interface WebhookSecretRotationResponse {
-  secret: string;
-}
-
-export interface GitHubWebhookProvisioningResponse {
-  hook_id: number;
-  created: boolean;
-  repository: string;
-  payload_url: string;
-}
-
 export interface Blueprint {
   id: string;
   name: string;

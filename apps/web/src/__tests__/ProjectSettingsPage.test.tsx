@@ -1,5 +1,4 @@
 import { apiClient } from '../api/apiClient';
-import { API_URL, resolvePublicApiOrigin } from '../config';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectSettingsPage } from '../pages/ProjectSettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -19,12 +18,8 @@ vi.mock('../api/apiClient', () => ({
     getServerInfo: vi.fn(),
     getSandboxPolicy: vi.fn(),
     getProjectAccessOverview: vi.fn(),
-    listLinkedGitHubAccounts: vi.fn(),
     createProjectRoleAssignment: vi.fn(),
     deleteProjectRoleAssignment: vi.fn(),
-    setProjectGitHubIdentityOverride: vi.fn(),
-    autoCreateProjectWebhook: vi.fn(),
-    rotateProjectWebhookSecret: vi.fn(),
     updateProjectProviderSettings: vi.fn(),
     updateProjectPreviewSettings: vi.fn(),
     updateSandboxPolicy: vi.fn(),
@@ -90,7 +85,6 @@ beforeEach(() => {
     platform_roles_source: 'entra',
     current_user_project_role: 'Owner',
     can_manage_role_assignments: true,
-    can_manage_project_github_identity: true,
     project_role_assignments: [
       {
         assignment_id: 'assign-1',
@@ -101,35 +95,9 @@ beforeEach(() => {
         scope: 'Project:proj-1',
       },
     ],
-    github_identity_override_login: null,
-    effective_github_login: 'octocat',
-    effective_github_permission: 'Write',
-    github_identity_permissions: [
-      { login: 'octocat', permission: 'Write', is_default: true },
-      { login: 'altcat', permission: 'Read', is_default: false },
-    ],
   } as never);
-  vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([
-    {
-      login: 'octocat',
-      name: 'Octocat',
-      avatar_url: 'https://example.com/octocat.png',
-      type: 'user',
-      is_default: true,
-      copilot_entitled: true,
-    },
-    {
-      login: 'altcat',
-      name: 'Alt Cat',
-      avatar_url: 'https://example.com/altcat.png',
-      type: 'user',
-      is_default: false,
-      copilot_entitled: false,
-    },
-  ] as never);
   vi.mocked(apiClient.createProjectRoleAssignment).mockResolvedValue(undefined as never);
   vi.mocked(apiClient.deleteProjectRoleAssignment).mockResolvedValue(undefined as never);
-  vi.mocked(apiClient.setProjectGitHubIdentityOverride).mockResolvedValue(undefined as never);
   vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
     status: 'not_ready',
     reason_code: 'copilot_binding_required',
@@ -178,83 +146,15 @@ describe('ProjectSettingsPage', () => {
     expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
   });
 
-  it('hides legacy identity and webhook controls after a Repo App installation is connected', async () => {
-    vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
-      status: 'not_ready',
-      reason_code: 'copilot_binding_required',
-      message: 'Connect a project Copilot App identity before unattended work can run.',
-      repo_app_installation_connected: true,
-    } as never);
+  it('removes legacy identity and webhook controls', async () => {
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
-    await waitFor(() => expect(screen.queryByRole('button', { name: /Webhooks/i })).toBeNull());
+    expect(screen.queryByRole('button', { name: /Webhooks/i })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Access/i }));
 
     expect(screen.queryByText('GitHub identity for this project')).toBeNull();
-  });
-
-  it('reveals a rotated GitHub webhook secret once', async () => {
-    vi.mocked(apiClient.rotateProjectWebhookSecret).mockResolvedValue({ secret: 'new-secret' } as never);
-    renderPage('proj-1');
-
-    await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Webhooks/i }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Generate secret' }));
-
-    await waitFor(() => expect(apiClient.rotateProjectWebhookSecret).toHaveBeenCalledWith('proj-1'));
-    expect(await screen.findByText('Copy this secret now. You won’t be able to see it again.')).toBeDefined();
-    expect(screen.getByDisplayValue('new-secret')).toBeDefined();
-  });
-
-  it('uses the configured API origin for the GitHub webhook URL', async () => {
-    renderPage('proj-1');
-
-    await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Webhooks/i }));
-
-    expect(screen.getByDisplayValue(
-      `${resolvePublicApiOrigin(API_URL)}/api/projects/proj-1/webhooks/github`,
-    )).toBeDefined();
-  });
-
-  it('creates the GitHub webhook automatically', async () => {
-    vi.mocked(apiClient.autoCreateProjectWebhook).mockResolvedValue({
-      hook_id: 42,
-      created: true,
-      repository: 'octocat/demo',
-      payload_url: 'https://api.example.test/api/projects/proj-1/webhooks/github',
-    });
-    renderPage('proj-1');
-
-    await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Webhooks/i }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Create webhook automatically' }));
-
-    await waitFor(() => expect(apiClient.autoCreateProjectWebhook).toHaveBeenCalledWith('proj-1'));
-    expect(await screen.findByText('GitHub webhook created for octocat/demo.')).toBeDefined();
-  });
-
-  it('reports when an existing GitHub webhook was refreshed', async () => {
-    vi.mocked(apiClient.autoCreateProjectWebhook).mockResolvedValue({
-      hook_id: 42,
-      created: false,
-      repository: 'octocat/demo',
-      payload_url: 'https://api.example.test/api/projects/proj-1/webhooks/github',
-    });
-    renderPage('proj-1');
-
-    await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Webhooks/i }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Create webhook automatically' }));
-
-    expect(await screen.findByText(
-      'GitHub webhook for octocat/demo was already configured and has been updated.',
-    )).toBeDefined();
-  });
-
-  it('uses the browser origin for public URLs when API_URL is the same-origin sentinel', () => {
-    expect(resolvePublicApiOrigin('')).toBe(window.location.origin);
+    expect(screen.queryByRole('button', { name: /Save GitHub identity/i })).toBeNull();
   });
 
   it('renders generation model overrides with blank fields inheriting gpt-5.4', async () => {
@@ -272,7 +172,7 @@ describe('ProjectSettingsPage', () => {
     expect(outcome.value).toBe('');
   });
 
-  it('shows project members and linked GitHub identity controls on the Access section', async () => {
+  it('shows project members on the Access section', async () => {
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
@@ -280,8 +180,6 @@ describe('ProjectSettingsPage', () => {
 
     expect(await screen.findByText('Platform access')).toBeDefined();
     expect(screen.getByText('Ada Lovelace')).toBeDefined();
-    expect(screen.getByText('Currently effective: @octocat')).toBeDefined();
-    expect(screen.getByText(/octocat — Write/)).toBeDefined();
   });
 
   it('adds a project member through Tank role-assignment contract', async () => {
@@ -301,18 +199,6 @@ describe('ProjectSettingsPage', () => {
       email: 'grace@contoso.com',
       role: 'Contributor',
     }));
-  });
-
-  it('saves a per-project GitHub identity override', async () => {
-    renderPage('proj-1');
-
-    await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
-
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Use GitHub identity' }), { target: { value: 'altcat' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save GitHub identity' }));
-
-    await waitFor(() => expect(apiClient.setProjectGitHubIdentityOverride).toHaveBeenCalledWith('proj-1', 'altcat'));
   });
 
   it('saves generation model overrides using Tank backend payload shape', async () => {

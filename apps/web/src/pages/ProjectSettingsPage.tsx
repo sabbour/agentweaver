@@ -1,5 +1,4 @@
-﻿import { apiClient } from '../api/apiClient';
-import { resolvePublicApiOrigin } from '../config';
+import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import {
@@ -21,7 +20,6 @@ import { Branch24Regular, Delete24Regular, People24Regular, Settings24Regular, S
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
-  LinkedGitHubAccount,
   Project,
   ProjectAccessOverview,
   SandboxPolicy,
@@ -42,7 +40,7 @@ import {
 // right content pane. Only sections with a real Agentweaver backend are shipped
 // (Principle VII): General, Sandbox policy, Danger Zone. The rail is
 // data-driven so more sections can be appended as their backends land.
-type SectionId = 'general' | 'access' | 'repository' | 'webhooks' | 'unattended' | 'sandbox' | 'danger';
+type SectionId = 'general' | 'access' | 'repository' | 'unattended' | 'sandbox' | 'danger';
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
 
@@ -63,8 +61,6 @@ const AUTH_MODE_LABELS = {
   'github-legacy': 'GitHub',
 } as const;
 
-const DEFAULT_GITHUB_IDENTITY = '__default__';
-
 interface SectionDef {
   id: SectionId;
   label: string;
@@ -83,7 +79,7 @@ const SECTIONS: SectionDef[] = [
   {
     id: 'access',
     label: 'Access',
-    description: 'Manage project membership and GitHub identity selection.',
+    description: 'Manage project membership.',
     icon: <People24Regular />,
   },
   {
@@ -91,12 +87,6 @@ const SECTIONS: SectionDef[] = [
     label: 'Repository',
     description: 'Connect or create the GitHub repository for this project.',
     icon: <Branch24Regular />,
-  },
-  {
-    id: 'webhooks',
-    label: 'Webhooks',
-    description: 'Configure GitHub event delivery for this project.',
-    icon: <Settings24Regular />,
   },
   {
     id: 'unattended',
@@ -123,7 +113,6 @@ function isSectionId(value: string | null): value is SectionId {
   return value === 'general'
     || value === 'access'
     || value === 'repository'
-    || value === 'webhooks'
     || value === 'unattended'
     || value === 'sandbox'
     || value === 'danger';
@@ -348,15 +337,7 @@ export function ProjectSettingsPage() {
   const [previewApprovalError, setPreviewApprovalError] = useState<string | null>(null);
   const [previewApprovalSuccess, setPreviewApprovalSuccess] = useState(false);
 
-  // A webhook secret is deliberately only retained in this component after its rotation response.
-  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
-  const [rotatingWebhookSecret, setRotatingWebhookSecret] = useState(false);
-  const [webhookError, setWebhookError] = useState<string | null>(null);
-  const [copiedWebhookValue, setCopiedWebhookValue] = useState<'url' | 'secret' | null>(null);
-  const [creatingWebhook, setCreatingWebhook] = useState(false);
-  const [webhookInfo, setWebhookInfo] = useState<{ intent: 'success' | 'warning'; body: string } | null>(null);
-
-  // Entra access management / per-project GitHub identity.
+  // Entra access management.
   const [accessOverview, setAccessOverview] = useState<ProjectAccessOverview | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
   const [accessError, setAccessError] = useState<string | null>(null);
@@ -367,13 +348,6 @@ export function ProjectSettingsPage() {
   const [roleAssignmentError, setRoleAssignmentError] = useState<string | null>(null);
   const [roleAssignmentSuccess, setRoleAssignmentSuccess] = useState<string | null>(null);
   const [roleActionKey, setRoleActionKey] = useState<string | null>(null);
-  const [linkedAccounts, setLinkedAccounts] = useState<LinkedGitHubAccount[]>([]);
-  const [linkedAccountsLoading, setLinkedAccountsLoading] = useState(false);
-  const [linkedAccountsError, setLinkedAccountsError] = useState<string | null>(null);
-  const [overrideLogin, setOverrideLogin] = useState(DEFAULT_GITHUB_IDENTITY);
-  const [savingOverride, setSavingOverride] = useState(false);
-  const [overrideError, setOverrideError] = useState<string | null>(null);
-  const [overrideSuccess, setOverrideSuccess] = useState(false);
   const [unattendedReadiness, setUnattendedReadiness] = useState<UnattendedReadiness | null>(null);
   const [unattendedLoading, setUnattendedLoading] = useState(true);
   const [unattendedError, setUnattendedError] = useState<string | null>(null);
@@ -416,11 +390,9 @@ export function ProjectSettingsPage() {
     setAccessError(null);
     try {
       // Assumption for Tank's authz rollout: a single access snapshot endpoint returns
-      // the current auth mode, platform-role view, project role assignments, and the
-      // effective/per-project GitHub identity selection for this project.
+      // the current auth mode, platform-role view, and project role assignments.
       const overview = await apiClient.getProjectAccessOverview(projectId);
       setAccessOverview(overview);
-      setOverrideLogin(overview.github_identity_override_login ?? DEFAULT_GITHUB_IDENTITY);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setAccessError('Access management is not available on this deployment yet.');
@@ -456,32 +428,6 @@ export function ProjectSettingsPage() {
     if (!projectId) return;
     queueMicrotask(() => { void refreshUnattendedReadiness(); });
   }, [projectId, refreshUnattendedReadiness]);
-
-  useEffect(() => {
-    if (accessOverview?.auth_mode !== 'entra') return;
-    let cancelled = false;
-    queueMicrotask(() => {
-      setLinkedAccountsLoading(true);
-      setLinkedAccountsError(null);
-      void apiClient.listLinkedGitHubAccounts()
-        .then((accounts) => {
-          if (!cancelled) setLinkedAccounts(accounts);
-        })
-        .catch((err) => {
-          if (cancelled) return;
-          if (err instanceof ApiError && err.status === 404) {
-            setLinkedAccountsError('Linked GitHub accounts are not available on this deployment yet.');
-          } else {
-            setLinkedAccountsError(formatError(err));
-          }
-          setLinkedAccounts([]);
-        })
-        .finally(() => {
-          if (!cancelled) setLinkedAccountsLoading(false);
-        });
-    });
-    return () => { cancelled = true; };
-  }, [accessOverview?.auth_mode]);
 
   const handleSaveModel = async () => {
     if (!projectId) return;
@@ -647,33 +593,6 @@ export function ProjectSettingsPage() {
     }
   };
 
-  const webhookUrl = `${resolvePublicApiOrigin()}/api/projects/${encodeURIComponent(projectId ?? '')}/webhooks/github`;
-
-  const copyWebhookValue = async (value: string, kind: 'url' | 'secret') => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedWebhookValue(kind);
-    } catch {
-      setWebhookError('Could not copy to the clipboard. Copy the value manually.');
-    }
-  };
-
-  const handleRotateWebhookSecret = async () => {
-    if (!projectId) return;
-    setRotatingWebhookSecret(true);
-    setWebhookError(null);
-    setWebhookInfo(null);
-    setCopiedWebhookValue(null);
-    try {
-      const result = await apiClient.rotateProjectWebhookSecret(projectId);
-      setWebhookSecret(result.secret);
-    } catch (err) {
-      setWebhookError(formatError(err));
-    } finally {
-      setRotatingWebhookSecret(false);
-    }
-  };
-
   const handleAddRoleAssignment = async () => {
     if (!projectId || !principalId.trim()) return;
     setSavingRoleAssignment(true);
@@ -714,45 +633,6 @@ export function ProjectSettingsPage() {
     }
   };
 
-  const handleSaveGitHubIdentityOverride = async () => {
-    if (!projectId) return;
-    setSavingOverride(true);
-    setOverrideError(null);
-    setOverrideSuccess(false);
-    try {
-      await apiClient.setProjectGitHubIdentityOverride(
-        projectId,
-        overrideLogin === DEFAULT_GITHUB_IDENTITY ? null : overrideLogin,
-      );
-      setOverrideSuccess(true);
-      await refreshAccessOverview();
-    } catch (err) {
-      setOverrideError(formatError(err));
-    } finally {
-      setSavingOverride(false);
-    }
-  };
-
-  const handleAutoCreateWebhook = async () => {
-    if (!projectId) return;
-    setCreatingWebhook(true);
-    setWebhookError(null);
-    setWebhookInfo(null);
-    try {
-      const result = await apiClient.autoCreateProjectWebhook(projectId);
-      setWebhookInfo({
-        intent: 'success',
-        body: result.created
-          ? `GitHub webhook created for ${result.repository}.`
-          : `GitHub webhook for ${result.repository} was already configured and has been updated.`,
-      });
-    } catch (err) {
-      setWebhookError(formatError(err));
-    } finally {
-      setCreatingWebhook(false);
-    }
-  };
-
   const handleConnectCopilot = async () => {
     if (!projectId) return;
     setConnectingCopilot(true);
@@ -768,10 +648,7 @@ export function ProjectSettingsPage() {
 
   if (!projectId) return null;
 
-  const hasRepoAppInstallation = unattendedReadiness?.repo_app_installation_connected === true;
-  const visibleSections = SECTIONS.filter((s) =>
-    (s.id !== 'repository' || project?.origin === 'blank') &&
-    (s.id !== 'webhooks' || !hasRepoAppInstallation));
+  const visibleSections = SECTIONS.filter((s) => s.id !== 'repository' || project?.origin === 'blank');
   const displayedSection = visibleSections.some((section) => section.id === activeSection)
     ? activeSection
     : 'unattended';
@@ -1096,86 +973,6 @@ export function ProjectSettingsPage() {
                       )}
                     </div>
 
-                    {!hasRepoAppInstallation && (
-                    <div className={styles.subBlock}>
-                      <TitleText>GitHub identity for this project</TitleText>
-                      <MessageBar intent="warning">
-                        <MessageBarBody>
-                          This legacy identity selection is limited to interactive use and is pending removal.
-                          It is unavailable after the Repo App is connected to this project.
-                        </MessageBarBody>
-                      </MessageBar>
-                      {accessOverview.auth_mode === 'entra' ? (
-                        <>
-                          <Body as="p" tone="muted">
-                            Pick a linked GitHub account for this project, or leave it on your default account.
-                            The selected identity controls repository reachability and Copilot entitlement for
-                            project-scoped GitHub actions. Agentweaver does not grant GitHub permissions itself.
-                          </Body>
-                          {project.source_repository && (
-                            <Body as="p" tone="muted">
-                              {accessOverview.effective_github_login
-                                ? `Resolved GitHub access for ${project.source_repository}: @${accessOverview.effective_github_login}${accessOverview.effective_github_permission ? ` (${accessOverview.effective_github_permission} access)` : ''}.`
-                                : `No linked GitHub account is currently resolved for ${project.source_repository}. Link or select one to enable repository operations.`}
-                            </Body>
-                          )}
-                          {accessOverview.github_identity_permissions && accessOverview.github_identity_permissions.length > 0 && (
-                            <div className={styles.badgeRow}>
-                              {accessOverview.github_identity_permissions.map((entry) => (
-                                <Badge key={entry.login} appearance={entry.login === accessOverview.effective_github_login ? 'filled' : 'outline'}>
-                                  @{entry.login}{entry.permission ? ` — ${entry.permission}` : ' — permission unknown'}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
-                          {linkedAccountsLoading && <Spinner size="extra-tiny" label="Loading linked GitHub accounts" />}
-                          {linkedAccountsError && (
-                            <MessageBar intent="warning">
-                              <MessageBarBody>{linkedAccountsError}</MessageBarBody>
-                            </MessageBar>
-                          )}
-                          {!linkedAccountsLoading && !linkedAccountsError && (
-                            <Field
-                              label="Use GitHub identity"
-                              hint={accessOverview.effective_github_login
-                                ? `Currently effective: @${accessOverview.effective_github_login}`
-                                : 'No linked GitHub identity has been selected yet.'}
-                            >
-                              <Select value={overrideLogin} onChange={(_, data) => setOverrideLogin(data.value)}>
-                                <option value={DEFAULT_GITHUB_IDENTITY}>Default linked account</option>
-                                {linkedAccounts.map((account) => (
-                                  <option key={account.login} value={account.login}>
-                                    @{account.login}{account.is_default ? ' (default)' : ''}
-                                  </option>
-                                ))}
-                              </Select>
-                            </Field>
-                          )}
-                          <div className={styles.formActions}>
-                            <Button
-                              appearance="primary"
-                              disabled={!accessOverview.can_manage_project_github_identity || savingOverride}
-                              onClick={() => void handleSaveGitHubIdentityOverride()}
-                            >
-                              {savingOverride ? 'Saving' : 'Save GitHub identity'}
-                            </Button>
-                            {savingOverride && <Spinner size="extra-tiny" aria-hidden="true" />}
-                          </div>
-                          {overrideError && (
-                            <MessageBar intent="error"><MessageBarBody>{overrideError}</MessageBarBody></MessageBar>
-                          )}
-                          {overrideSuccess && (
-                            <MessageBar intent="success"><MessageBarBody>GitHub identity saved.</MessageBarBody></MessageBar>
-                          )}
-                        </>
-                      ) : (
-                        <Body as="p" tone="muted">
-                          In GitHub mode, this project uses the current signed-in GitHub account directly.
-                          Per-project linked-account overrides are only available in Entra ID mode.
-                        </Body>
-                      )}
-                    </div>
-                    )}
                   </>
                 )}
               </div>
@@ -1248,72 +1045,6 @@ export function ProjectSettingsPage() {
                     selectSection('general');
                   }}
                 />
-              </div>
-            )}
-
-            {displayedSection === 'webhooks' && (
-              <div className={styles.section}>
-                <div className={styles.subBlock}>
-                  <TitleText>GitHub webhook</TitleText>
-                  <MessageBar intent="warning">
-                    <MessageBarBody>
-                      This legacy webhook control is limited to interactive use and is pending removal.
-                      It is unavailable after the Repo App is connected to this project.
-                    </MessageBarBody>
-                  </MessageBar>
-                  <Body as="p" tone="muted">
-                    In GitHub, open your repository’s Settings, then Webhooks, and add this payload URL.
-                    Set the content type to <strong>application/json</strong>.
-                  </Body>
-                  {webhookInfo && (
-                    <MessageBar intent={webhookInfo.intent}>
-                      <MessageBarBody>{webhookInfo.body}</MessageBarBody>
-                    </MessageBar>
-                  )}
-                  <Field label="Payload URL">
-                    <Input value={webhookUrl} readOnly />
-                  </Field>
-                  <div className={styles.formActions}>
-                    <Button appearance="primary" disabled={creatingWebhook} onClick={() => void handleAutoCreateWebhook()}>
-                      {creatingWebhook ? 'Creating webhook' : 'Create webhook automatically'}
-                    </Button>
-                    <Button appearance="secondary" onClick={() => void copyWebhookValue(webhookUrl, 'url')}>
-                      {copiedWebhookValue === 'url' ? 'Copied URL' : 'Copy URL'}
-                    </Button>
-                  </div>
-                </div>
-
-                <div className={styles.subBlock}>
-                  <TitleText>Webhook secret</TitleText>
-                  <Body as="p" tone="muted">
-                    Generate a unique secret for GitHub to sign deliveries. Rotating it immediately
-                    invalidates the previous secret.
-                  </Body>
-                  <div className={styles.formActions}>
-                    <Button appearance="primary" disabled={rotatingWebhookSecret} onClick={() => void handleRotateWebhookSecret()}>
-                      {rotatingWebhookSecret ? 'Generating' : webhookSecret ? 'Rotate secret' : 'Generate secret'}
-                    </Button>
-                    {rotatingWebhookSecret && <Spinner size="extra-tiny" aria-hidden="true" />}
-                  </div>
-                  {webhookSecret && (
-                    <>
-                      <MessageBar intent="warning">
-                        <MessageBarBody>Copy this secret now. You won’t be able to see it again.</MessageBarBody>
-                      </MessageBar>
-                      <Field label="Secret">
-                        <Input value={webhookSecret} readOnly type="text" />
-                      </Field>
-                      <div className={styles.formActions}>
-                        <Button appearance="secondary" onClick={() => void copyWebhookValue(webhookSecret, 'secret')}>
-                          {copiedWebhookValue === 'secret' ? 'Copied secret' : 'Copy secret'}
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                  {webhookError && (
-                    <MessageBar intent="error"><MessageBarBody>{webhookError}</MessageBarBody></MessageBar>
-                  )}
-                </div>
               </div>
             )}
 

@@ -133,25 +133,11 @@ The visual event-trigger editor is intentionally constrained:
 
 ## Triggering workflows from GitHub
 
-Each GitHub-connected project can receive repository events through its own webhook. Open the
-project's **Settings → Webhooks** page. Agentweaver keeps the manual setup visible at all times and
-also shows a **Create webhook automatically** button. The button uses the project's effective
-linked GitHub identity to create or refresh the repository webhook, including a project-specific
-signing secret and the supported event set. The linked identity must be able to administer
-repository webhooks (`repo` or `write:repo_hook` for classic OAuth tokens).
-
-Select **Generate secret** and copy the generated value immediately: it is shown once only. In your
-GitHub repository, go to **Settings → Webhooks → Add webhook** and configure:
-
-- **Payload URL:** the project-specific URL displayed in Agentweaver:
-  `https://your-agentweaver-host/api/projects/<project-id>/webhooks/github`
-- **Content type:** `application/json`
-- **Secret:** the generated project secret
-- **Events:** choose the GitHub events your workflow needs.
-
-GitHub signs each delivery with the project's secret. Agentweaver rejects unsigned or invalid
-deliveries, and rotating a secret invalidates the old value immediately. The old global
-`/api/webhooks/github` URL is no longer supported.
+Repository events are delivered through the Repo App's App-level webhook. Project Settings does
+not expose a payload URL, webhook provisioning action, or webhook secret. Install and grant the
+Repo App for the required repository, then use **Settings → Unattended** to see the project's
+read-only readiness status. Agentweaver verifies deliveries against the App-level configuration
+without disclosing webhook credentials or provider internals.
 
 An event delivery named by GitHub's `X-GitHub-Event` header fires `github.<event>` (for example,
 `github.push` or `github.issues`). When the payload has an `action`, it also fires the more specific
@@ -201,11 +187,6 @@ trigger:
 
 `comment_matches` is boolean-only: it decides fire / no-fire, but Agentweaver does not forward the
 raw comment body into backlog task text or downstream prompts.
-
-The Webhooks settings page always keeps the manual setup path visible. If GitHub rejects automatic
-provisioning because the selected identity lacks repository-hook permission, reconnect that account
-with `repo` or `write:repo_hook` access, or use the displayed payload URL and one-time secret to
-configure the webhook manually.
 
 For example, this project workflow starts whenever an issue is opened:
 

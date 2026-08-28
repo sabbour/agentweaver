@@ -78,8 +78,7 @@ Settings are organized in a left rail:
 
 ### Access
 
-Manage Agentweaver project members. Before a Repo App installation is connected, this section
-also contains a clearly marked legacy GitHub identity selector for interactive use only.
+Manage Agentweaver project members.
 
 ### Sandbox policy
 
@@ -100,9 +99,9 @@ permission maps, or credentials. A Project Owner can start the separate Copilot 
 that is the missing prerequisite, but this page has no automation enablement or activation
 control; activation consent is a separate step.
 
-After a Repo App installation is connected, Project Settings hides the older per-project GitHub
-identity and webhook controls. Before then, those legacy controls are limited to interactive use
-and marked as pending removal.
+Project Settings does not include per-project GitHub identity selection, webhook provisioning, or
+webhook-secret controls. Repository event delivery is configured through the Repo App's
+App-level webhook.
 
 ### Danger Zone
 
