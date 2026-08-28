@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Domain;
@@ -161,6 +162,35 @@ public sealed class GitHubTokenAuthMiddleware
 
         var token = header[SchemePrefixStr.Length..].Trim();
 
+        // AgentHost warm-pool pods receive only their per-run turn capability through /configure.
+        // It may authenticate a durable approval-policy read for that same run, but no other API
+        // route; the endpoint revalidates the matching header-bound capability before serving it.
+        if (TryGetToolApprovalPolicyRunId(context, out var policyRunId)
+            && string.Equals(
+                context.Request.Headers[RunAuthorshipHeaders.RunId].ToString(),
+                policyRunId,
+                StringComparison.Ordinal)
+            && await context.RequestServices
+                .GetRequiredService<IRunAuthorshipCapabilityStore>()
+                .ValidateAsync(policyRunId, token, context.RequestAborted)
+                .ConfigureAwait(false))
+        {
+            var capabilityCaller = new CallerContext
+            {
+                User = "agentweaver-internal",
+                GitHubLogin = "agentweaver-internal",
+                IsOAuthJwt = _authMode == AuthMode.GitHubLegacy,
+                Org = _authMode == AuthMode.GitHubLegacy
+                    ? GitHubOrgList.ParseEntities(_configuration["Auth:GitHub:AllowedOrg"]).FirstOrDefault()?.RuleString
+                    : null,
+                PlatformRoles = _authMode == AuthMode.Entra ? [PlatformRoles.PlatformAdmin] : [],
+                PrimaryPlatformRole = _authMode == AuthMode.Entra ? PlatformRoles.PlatformAdmin : null,
+            };
+            SetCaller(context, capabilityCaller, BuildClaimsPrincipal(capabilityCaller, isInternal: true));
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
         var internalKey = _configuration["Auth:ApiKey"];
         if (!string.IsNullOrEmpty(internalKey) && token == internalKey)
         {
@@ -243,6 +273,30 @@ public sealed class GitHubTokenAuthMiddleware
         var gitHubCaller = new CallerContext { User = login, GitHubLogin = login };
         SetCaller(context, gitHubCaller, BuildClaimsPrincipal(gitHubCaller));
         await _next(context).ConfigureAwait(false);
+    }
+
+    private static bool TryGetToolApprovalPolicyRunId(HttpContext context, out string runId)
+    {
+        const string prefix = "/api/runs/";
+        const string separator = "/tool-approval-policies/";
+        runId = string.Empty;
+        if (!HttpMethods.IsGet(context.Request.Method))
+            return false;
+
+        var path = context.Request.Path.Value;
+        if (path is null || !path.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        var separatorIndex = path.IndexOf(separator, prefix.Length, StringComparison.Ordinal);
+        if (separatorIndex <= prefix.Length || separatorIndex + separator.Length >= path.Length)
+            return false;
+
+        var candidate = path[prefix.Length..separatorIndex];
+        if (!RunId.TryParse(candidate, out _))
+            return false;
+
+        runId = candidate;
+        return true;
     }
 
     public static CallerContext GetCaller(HttpContext context) =>

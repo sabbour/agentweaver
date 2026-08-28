@@ -158,7 +158,15 @@ child run is `pod-per-run` and the API-side durable gate returns `Unknown`:
 3. `AgentHostApprovalHttpClient` sends the decision through the `a2a-sandbox-pod` HTTP client to
    the pod-root `/tool-approvals` or `/tool-denials` route.
 4. AgentHost authenticates the bearer and resolves its in-memory `IToolApprovalGate`.
-5. A terminal result causes the API to emit `tool.approval_resolved` on the owning child run.
+5. For `run`, `tool`, and `always`, the exact selected scope becomes a current-pod bridge only if
+   it wins and applies that pending approval. The bridge is in place before the waiting tool call
+   resumes, so the next call in that pod does not re-prompt while the API persists the durable
+   cross-pod policy.
+6. The API persists that durable policy only for an `approved` response with `applied: true`.
+   A late or duplicate forward may return the prior terminal `approved` state with
+   `applied: false`; it cannot create a policy. Failed, denied, expired, or unapplied forwards
+   are fail-closed.
+7. A terminal result causes the API to emit `tool.approval_resolved` on the owning child run.
 
 Forwarded outcome states:
 

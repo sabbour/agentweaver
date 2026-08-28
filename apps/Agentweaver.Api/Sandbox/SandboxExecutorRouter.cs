@@ -122,6 +122,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 // Option C warm-pool token fetch: same KV the API persists user tokens to.
                 KvUri = _config["Sandbox:AgentHost:KeyVaultUri"]
                     ?? _config["Auth:TokenStore:KeyVaultUri"],
+                ToolApprovalApiBaseUrl = _config["Agentweaver:ApiBaseUrl"],
             };
             var k8sLogger = _loggerFactory.CreateLogger<KubernetesSandboxExecutor>();
             WarnIfServiceCidrNotExcluded(sandboxOptions, logger);

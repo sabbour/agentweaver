@@ -422,6 +422,9 @@ app.MapGet("/healthz", (AgentHostStartupService startup) =>
 
 // ── Tool approval endpoints ───────────────────────────────────────────────────
 app.MapPost("/tool-approvals", ToolApprovalEndpointHandlers.GrantAsync);
+app.MapGet("/tool-approvals/{requestId}", ToolApprovalEndpointHandlers.GetPendingContextAsync);
+app.MapPost("/tool-approvals/{requestId}/rollback", ToolApprovalEndpointHandlers.RollbackScopeAsync);
+app.MapPost("/tool-approvals/{requestId}/finalize", ToolApprovalEndpointHandlers.FinalizeScopeAsync);
 app.MapPost("/tool-denials", ToolApprovalEndpointHandlers.DenyAsync);
 
 // ── PreviewRunner endpoints ───────────────────────────────────────────────────
@@ -604,6 +607,12 @@ internal sealed record ConfigureRequest
     public string? CallerBearerToken { get; init; }
 
     /// <summary>
+    /// Internal API endpoint used only for this run's durable tool-approval-policy lookups.
+    /// Authentication uses the per-run turn capability, never a static API credential.
+    /// </summary>
+    public string? ToolApprovalApiBaseUrl { get; init; }
+
+    /// <summary>
     /// The run's shared orchestration worktree path (e.g. <c>/workspace/{worktree}</c>). When present,
     /// the pod runs <c>SetupAsync</c> with this as its working directory — and therefore its file-tool
     /// root — instead of the static <c>AgentHost__WorkingDirectory</c> env default. This keeps every
@@ -688,7 +697,8 @@ internal sealed record ConfigureRequest
         ProjectId,
         AgentName,
         CallerBearerToken,
-        RepositoryAccessToken);
+        RepositoryAccessToken,
+        ToolApprovalApiBaseUrl);
 }
 
 internal sealed record PreviewProcessStartRequest
@@ -717,10 +727,48 @@ internal sealed record AgentHostToolApprovalRequest
     public string? RunId { get; init; }
     public string? RequestId { get; init; }
     public string Scope { get; init; } = "once";
+    public string? ScopeGrantId { get; init; }
+    public DateTimeOffset? ScopeExpiresAt { get; init; }
+}
+
+internal sealed record AgentHostToolApprovalScopeRequest
+{
+    public string? RunId { get; init; }
+    public string? ScopeGrantId { get; init; }
 }
 
 internal static class ToolApprovalEndpointHandlers
 {
+    public static Task<IResult> GetPendingContextAsync(
+        HttpContext ctx,
+        string requestId,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState)
+    {
+        if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+            return Task.FromResult<IResult>(Results.Unauthorized());
+        if (string.IsNullOrWhiteSpace(requestId))
+            return Task.FromResult<IResult>(Results.BadRequest(new { error = "requestId is required" }));
+
+        var context = gate.GetRequestContext(runtimeState.RunId, requestId);
+        var state = gate.GetRequestState(runtimeState.RunId, requestId);
+        return Task.FromResult<IResult>(
+            state == ToolApprovalRequestState.Pending && context is not null
+                ? Results.Ok(new
+                {
+                    resolved = false,
+                    applied = false,
+                    state = "pending",
+                    toolName = context.ToolName,
+                    url = context.Url,
+                })
+                : ResultFor(
+                    state,
+                    scopeGrantId: (gate as IToolApprovalScopeRollback)?.GetScopeGrantId(
+                        runtimeState.RunId,
+                        requestId)));
+    }
+
     public static async Task<IResult> GrantAsync(
         HttpContext ctx,
         AgentHostToolApprovalRequest request,
@@ -742,10 +790,53 @@ internal static class ToolApprovalEndpointHandlers
             _ => ApprovalScope.Once,
         };
 
-        // A pod serves one run, so "always" is effectively run-scoped and does not survive pod restart.
-        await gate.GrantAsync(runtimeState.RunId, request.RequestId, scope).ConfigureAwait(false);
-        return ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId));
+        var context = gate.GetRequestContext(runtimeState.RunId, request.RequestId);
+        if (scope != ApprovalScope.Once
+            && request.ScopeExpiresAt is { } expiresAt
+            && expiresAt <= DateTimeOffset.UtcNow)
+        {
+            gate.Deny(runtimeState.RunId, request.RequestId);
+            return ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId));
+        }
+
+        var provisionalGate = gate as IProvisionalToolApprovalGate;
+        var scopeGrantId = scope != ApprovalScope.Once && provisionalGate is not null
+            ? request.ScopeGrantId ?? Guid.NewGuid().ToString("N")
+            : null;
+        var applied = provisionalGate is not null && scopeGrantId is not null
+            ? await provisionalGate.GrantProvisionalScopeAsync(
+                runtimeState.RunId,
+                request.RequestId,
+                scope,
+                scopeGrantId,
+                request.ScopeExpiresAt ?? DateTimeOffset.UtcNow + ToolApprovalScopeProtocol.ProvisionalScopeLifetime)
+                .ConfigureAwait(false)
+            : await gate.GrantAsync(runtimeState.RunId, request.RequestId, scope).ConfigureAwait(false);
+        return ResultFor(
+            gate.GetRequestState(runtimeState.RunId, request.RequestId),
+            applied,
+            context?.ToolName,
+            context?.Url,
+            applied && scopeGrantId is not null
+                ? (gate as IToolApprovalScopeRollback)?.GetScopeGrantId(runtimeState.RunId, request.RequestId)
+                : null);
     }
+
+    public static Task<IResult> RollbackScopeAsync(
+        HttpContext ctx,
+        string requestId,
+        AgentHostToolApprovalScopeRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState) =>
+        CompleteScopeAsync(ctx, requestId, request, gate, runtimeState, finalize: false);
+
+    public static Task<IResult> FinalizeScopeAsync(
+        HttpContext ctx,
+        string requestId,
+        AgentHostToolApprovalScopeRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState) =>
+        CompleteScopeAsync(ctx, requestId, request, gate, runtimeState, finalize: true);
 
     public static Task<IResult> DenyAsync(
         HttpContext ctx,
@@ -760,8 +851,8 @@ internal static class ToolApprovalEndpointHandlers
         if (IsRunMismatch(request.RunId, runtimeState.RunId))
             return Task.FromResult<IResult>(Results.Conflict(new { error = "run mismatch", state = "run_mismatch" }));
 
-        gate.Deny(runtimeState.RunId, request.RequestId);
-        return Task.FromResult(ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId)));
+        var applied = gate.Deny(runtimeState.RunId, request.RequestId);
+        return Task.FromResult(ResultFor(gate.GetRequestState(runtimeState.RunId, request.RequestId), applied));
     }
 
     private static bool IsRunMismatch(string? requestedRunId, string runtimeRunId) =>
@@ -769,16 +860,59 @@ internal static class ToolApprovalEndpointHandlers
         && !string.IsNullOrWhiteSpace(runtimeRunId)
         && !string.Equals(requestedRunId, runtimeRunId, StringComparison.Ordinal);
 
-    private static IResult ResultFor(ToolApprovalRequestState state) =>
+    private static Task<IResult> CompleteScopeAsync(
+        HttpContext ctx,
+        string requestId,
+        AgentHostToolApprovalScopeRequest request,
+        IToolApprovalGate gate,
+        AgentHostRuntimeState runtimeState,
+        bool finalize)
+    {
+        if (!PreviewRunnerEndpointAuth.Authorize(ctx, runtimeState))
+            return Task.FromResult<IResult>(Results.Unauthorized());
+        if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(request.ScopeGrantId))
+            return Task.FromResult<IResult>(Results.BadRequest(new { error = "requestId and scopeGrantId are required" }));
+        if (IsRunMismatch(request.RunId, runtimeState.RunId))
+            return Task.FromResult<IResult>(Results.Conflict(new { error = "run mismatch", state = "run_mismatch" }));
+
+        var scopeGate = gate as IToolApprovalScopeRollback;
+        var completed = scopeGate is not null && (finalize
+            ? scopeGate.FinalizeScopeGrant(runtimeState.RunId, requestId, request.ScopeGrantId)
+            : scopeGate.RollbackScopeGrant(runtimeState.RunId, requestId, request.ScopeGrantId));
+        return Task.FromResult<IResult>(completed
+            ? Results.Ok(new
+            {
+                resolved = false,
+                applied = false,
+                state = finalize ? "finalized" : "rolled_back",
+                finalized = finalize,
+                rolledBack = !finalize,
+            })
+            : Results.Conflict(new
+            {
+                resolved = false,
+                applied = false,
+                state = "scope_not_found",
+                finalized = false,
+                rolledBack = false,
+            }));
+    }
+
+    private static IResult ResultFor(
+        ToolApprovalRequestState state,
+        bool applied = false,
+        string? toolName = null,
+        string? url = null,
+        string? scopeGrantId = null) =>
         state switch
         {
             ToolApprovalRequestState.Approved or
             ToolApprovalRequestState.Denied or
             ToolApprovalRequestState.Expired =>
-                Results.Ok(new { resolved = true, state = FormatState(state) }),
+                Results.Ok(new { resolved = true, applied, state = FormatState(state), toolName, url, scopeGrantId }),
             ToolApprovalRequestState.Pending =>
-                Results.Conflict(new { resolved = false, state = "pending" }),
-            _ => Results.NotFound(new { resolved = false, state = "unknown" }),
+                Results.Conflict(new { resolved = false, applied = false, state = "pending" }),
+            _ => Results.NotFound(new { resolved = false, applied = false, state = "unknown" }),
         };
 
     private static string FormatState(ToolApprovalRequestState state) =>

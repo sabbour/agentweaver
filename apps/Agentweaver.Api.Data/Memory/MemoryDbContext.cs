@@ -265,6 +265,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.Task).HasColumnName("task");
             e.Property(r => r.SubmittingUser).HasColumnName("submitting_user");
             e.Property(r => r.Status).HasColumnName("status");
+            e.Property(r => r.ApprovalGeneration).HasColumnName("approval_generation").HasDefaultValue(1);
             e.Property(r => r.StartedAt).HasColumnName("started_at");
             e.Property(r => r.EndedAt).HasColumnName("ended_at");
             e.Property(r => r.Result).HasColumnName("result");

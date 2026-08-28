@@ -81,6 +81,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN subtask_id TEXT;", ct);
 
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN review_ready_at TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_generation INTEGER NOT NULL DEFAULT 1;", ct);
 
         // Durable run-origin marker for backlog-pickup coordinator runs (Feature 009). Existing rows
         // default to 'interactive'; only the claim+reserve transaction writes 'backlog_pickup'.
@@ -559,7 +560,8 @@ public sealed class SqliteDb
             task               TEXT NOT NULL,
             submitting_user    TEXT NOT NULL,
             status             TEXT NOT NULL,
-            started_at         TEXT NOT NULL,
+            approval_generation INTEGER NOT NULL DEFAULT 1,
+            started_at      TEXT NOT NULL,
             ended_at           TEXT,
             result             TEXT,
             worktree_path      TEXT,

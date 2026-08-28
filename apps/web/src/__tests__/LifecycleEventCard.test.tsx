@@ -41,7 +41,7 @@ describe('LifecycleEventCard — coordinator.work_plan', () => {
 });
 
 describe('LifecycleEventCard — tool.approval_required', () => {
-  it('renders the card with tool name and Allow once/Allow this run/Always allow (session)/Deny buttons', () => {
+  it('renders the card with tool name and approval scope buttons', () => {
     render(
       <Wrapper>
         <LifecycleEventCard
@@ -62,8 +62,8 @@ describe('LifecycleEventCard — tool.approval_required', () => {
     expect(screen.getByText('https://example.com/some/path')).toBeDefined();
     expect(screen.getByText('Fetch documentation for reference')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Allow once' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Allow this run' })).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Always allow (session)' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Allow for session' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Always allow' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Deny' })).toBeDefined();
   });
 
@@ -174,7 +174,7 @@ describe('LifecycleEventCard — tool.approval_required', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('/runs/plain-run/tool-approvals');
   });
 
-  it('shows resolved state "✓ Allowed (this run)" after Allow this run click', async () => {
+  it('shows resolved state "✓ Allowed (this session)" after Allow for session click', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -190,12 +190,12 @@ describe('LifecycleEventCard — tool.approval_required', () => {
       </Wrapper>,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: 'Allow this run' }));
-    expect(screen.getByText('✓ Allowed (this run) · web_fetch')).toBeDefined();
-    expect(screen.queryByRole('button', { name: 'Allow this run' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Allow for session' }));
+    expect(screen.getByText('✓ Allowed (this session) · web_fetch')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Allow for session' })).toBeNull();
   });
 
-  it('sends scope="run" in the request body when Allow this run is clicked', async () => {
+  it('sends scope="run" in the request body when Allow for session is clicked', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -211,13 +211,13 @@ describe('LifecycleEventCard — tool.approval_required', () => {
       </Wrapper>,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: 'Allow this run' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Allow for session' }));
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { request_id: string; scope: string };
     expect(body.scope).toBe('run');
     expect(body.request_id).toBe('req-scope-run');
   });
 
-  it('shows resolved state "✓ Allowed (always, this session)" after Always allow (session) click', async () => {
+  it('shows resolved state "✓ Allowed (always, this project)" after Always allow click', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -233,12 +233,12 @@ describe('LifecycleEventCard — tool.approval_required', () => {
       </Wrapper>,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: 'Always allow (session)' }));
-    expect(screen.getByText('✓ Allowed (always, this session) · web_fetch')).toBeDefined();
-    expect(screen.queryByRole('button', { name: 'Always allow (session)' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Always allow' }));
+    expect(screen.getByText('✓ Allowed (always, this project) · web_fetch')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Always allow' })).toBeNull();
   });
 
-  it('sends scope="always" in the request body when Always allow (session) is clicked', async () => {
+  it('sends scope="always" in the request body when Always allow is clicked', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -254,7 +254,7 @@ describe('LifecycleEventCard — tool.approval_required', () => {
       </Wrapper>,
     );
 
-    await userEvent.click(screen.getByRole('button', { name: 'Always allow (session)' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Always allow' }));
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { request_id: string; scope: string };
     expect(body.scope).toBe('always');
     expect(body.request_id).toBe('req-scope-always');
