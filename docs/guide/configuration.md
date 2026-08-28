@@ -29,23 +29,14 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Auth:GitHub:ClientId` | none | GitHub OAuth App client ID — required for sign-in |
-| `Auth:GitHub:ClientSecret` | none | GitHub OAuth App client secret — required for sign-in |
-| `Auth:GitHub:CallbackUrl` | none | OAuth callback URL registered in the GitHub App (must match exactly) |
-| `Auth:GitHub:FrontendUrl` | none | URL the API redirects to after a successful sign-in |
-| `Auth:GitHub:AllowedOrg` | none | Comma/semicolon-delimited list of allow-rules. Each rule is one of: `*` (all organizations), `org` (bare org — any member), `org/*` (explicit organization wildcard), or `org/team-slug` (only that specific team). A caller is allowed if they satisfy ANY rule. Team display names with spaces or uppercase are defensively slugified (e.g. `Azure/AKS PM` is treated as `Azure/aks-pm`). Example: `Azure/aks,Azure/AKS PM,azure-management-and-platforms/*`. |
-
-Set the OAuth client secret locally with user-secrets:
-
-```powershell
-cd apps/Agentweaver.Api
-dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
-```
+| `Auth:Mode` | `Entra` | Microsoft Entra browser sign-in mode |
+| `Auth:Entra:ClientId` | none | Entra application (client) ID |
+| `Auth:Entra:TenantId` | none | Entra tenant (directory) ID |
+| `Auth:Entra:RedirectUri` | none | Exact Entra application callback URL |
 
 #### Repo App user authorization
 
-Interactive repository access is authorized separately from product sign-in and from the
-legacy GitHub OAuth configuration. An Entra-authenticated human starts
+Interactive repository access is authorized separately from product sign-in. An Entra-authenticated human starts
 `POST /api/auth/github/repo-app/authorizations`; the browser completes the App callback at
 `GET /auth/github/repo-app/callback`. The API persists only opaque transaction and credential
 references. It uses PKCE S256 and a one-time `__Host-` callback cookie; do not register the
@@ -173,13 +164,12 @@ allow public client flows.
 ::: tip AKS deploy pipeline wiring
 On the AKS deploy pipeline, `Auth:Mode`/`Auth:Entra:ClientId`/`Auth:Entra:TenantId`/
 `Auth:Entra:RedirectUri` are set from the deploy-time `AUTH_MODE`/`ENTRA_CLIENT_ID`/
-`ENTRA_TENANT_ID` environment variables (mirroring how `GITHUB_ALLOWED_ORG` etc. flow into
-`Auth:GitHub:*` for GitHub mode) — see `scripts/azure/variables.mjs` and
+`ENTRA_TENANT_ID` environment variables — see `scripts/azure/variables.mjs` and
 `k8s/base/api-deployment.yaml`. `Auth:Entra:ClientSecret` (`Auth__Entra__ClientSecret`) is
 deliberately **not** wired through the deploy pipeline: this environment is PKCE-only per the
 tenant policy noted above, so there is no deploy-time env var / ConfigMap key for it. If a
 future tenant allows a confidential-client secret, set `Auth__Entra__ClientSecret` manually via
-the Key Vault CSI `SecretProviderClass`, mirroring the existing `github-client-secret` wiring.
+the Key Vault CSI `SecretProviderClass`.
 :::
 
 ### CORS settings
@@ -229,7 +219,8 @@ Grounded in `apps/Agentweaver.Api/appsettings.json` (`Logging:LogLevel`). Overri
 
 ## Web environment variables
 
-The web UI authenticates users through GitHub OAuth and sends the resulting session token automatically — it does not require a static API key.
+The web UI authenticates users through Microsoft Entra ID and sends the resulting session
+cookie automatically — it does not require a static API key.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |

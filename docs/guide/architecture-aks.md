@@ -161,50 +161,43 @@ One static `SecretProviderClass` object syncs app secrets from Key Vault into th
 
 | Key Vault secret | File in `/mnt/secrets-store/` | Used for |
 |-----------------|------------------------------|----------|
-| `github-client-id` | `github-client-id` | GitHub OAuth App client ID → `GitHub__ClientId` env var |
-| `github-client-secret` | `github-client-secret` | GitHub OAuth App client secret → `GitHub__ClientSecret` env var |
 | `mcp-oauth-signing-key` | `mcp-oauth-signing-key` | ECDSA P-256 key for signing Agentweaver OAuth tokens → `Auth__OAuth__SigningKey` |
 
 The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough).
 
 Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
 
-Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`). At run launch, `KubernetesSandboxExecutor` claims a pod from the shared `agentweaver-agent-host` pool, calls `POST /configure` with the run owner's secret name, and the pod's `KeyVaultUserTokenProvider` fetches only that secret through `SecretClient` + `DefaultAzureCredential`, caching it for the pod lifetime.
+Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. GitHub capability credentials are brokered per run after platform authorization; AgentHost pods do not receive an OAuth client secret mount.
 
 ---
 
 ## Authentication
 
-Agentweaver uses **GitHub OAuth** for user authentication. There are no API keys issued to end users.
+Agentweaver uses **Microsoft Entra ID** for browser authentication. There are no API keys issued to end users.
 
 ### Login flow
 
-1. User visits the frontend and clicks **Sign in with GitHub**
-2. Frontend redirects to `https://<host>/auth/github/login` (API endpoint)
-3. API redirects to GitHub OAuth authorization URL with the app's client ID
-4. User authorizes on GitHub; GitHub redirects back to `https://<host>/auth/github/callback`
-5. API exchanges the authorization code for an access token using `github-client-id` and `github-client-secret` (from Key Vault)
-6. API validates the token by calling `GET https://api.github.com/user` — the token is the user's GitHub OAuth token
-7. API stores the token only in the authenticated user's Key Vault-backed scope (`GitHubTokenScope.ForUser(login)`, `ghtok-user--{base32(userId)}`)
-8. API checks the user's org membership (`Auth__GitHub__AllowedOrg: microsoft`) — users not in the org are rejected
-9. API issues a session and returns a cookie or Bearer token to the frontend
+1. User visits the frontend and clicks **Sign in with Microsoft Entra ID**.
+2. The API redirects the browser to the configured Entra application.
+3. Entra returns to `https://<host>/auth/entra/callback`; the API establishes the platform session from the Entra identity and app roles.
+4. Repository discovery and project creation use a distinct Repo App browser handoff with an opaque, short-lived selection code.
+5. Copilot-backed work uses a distinct project-scoped Copilot App browser handoff.
 
 ### MCP authentication
 
-The MCP server (`agentweaver-mcp`) accepts inbound connections with a Bearer token. It forwards the caller's Bearer token as-is to the API (`AGENTWEAVER_API_URL: http://agentweaver-api:8080`). The API validates the token as an Agentweaver-minted JWT or a GitHub OAuth token via the `GET /user` + org membership flow. There is no static MCP bearer key — auth relies only on the OAuth paths.
+The MCP server (`agentweaver-mcp`) forwards the authenticated caller context to the API (`AGENTWEAVER_API_URL: http://agentweaver-api:8080`). Platform authorization is based on Entra identity; repository and Copilot capabilities continue through the Repo App and Copilot App handoffs. There is no static MCP bearer key.
 
 ### External dependencies
 
 | Service | Purpose | Allowed by |
 |---------|---------|-----------|
-| `api.github.com` | OAuth token validation (`GET /user`), org membership | `CiliumNetworkPolicy` FQDN allowlist |
-| `github.com` | GitHub OAuth redirect and OAuth exchange | `CiliumNetworkPolicy` FQDN allowlist |
+| `api.github.com` | GitHub App capability operations | `CiliumNetworkPolicy` FQDN allowlist |
+| `github.com` | Repo App and Copilot App browser handoffs | `CiliumNetworkPolicy` FQDN allowlist |
 | Azure Key Vault (`*.vault.azure.net`) | Secret fetch via CSI driver | HTTPS egress + workload identity |
 | Azure Container Registry (`agentweaverregistry.azurecr.io`) | Image pull (kubelet, not pod) | ACR attachment on cluster |
 | OpenTelemetry collector (`otel-collector.observability.svc.cluster.local:4317`) | Telemetry export (gRPC) | `CiliumNetworkPolicy` FQDN allowlist |
 
 ---
-
 ## Storage model
 
 ### PostgreSQL (primary data store)

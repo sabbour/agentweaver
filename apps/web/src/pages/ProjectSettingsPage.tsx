@@ -58,7 +58,6 @@ const emptyGenerationModels: GenerationModelState = {
 
 const AUTH_MODE_LABELS = {
   entra: 'Entra ID',
-  'github-legacy': 'GitHub',
 } as const;
 
 interface SectionDef {
@@ -887,7 +886,7 @@ export function ProjectSettingsPage() {
                       {accessOverview.auth_mode === 'entra' ? (
                         <>
                           <Body as="p" tone="muted">
-                            Owners, contributors, and viewers are stored in Agentweaver for this project. These roles control Agentweaver actions only; GitHub repository access still depends on the real permission of the linked GitHub account resolved for this project.
+                            Owners, contributors, and viewers are stored in Agentweaver for this project. These roles control Agentweaver actions only; GitHub repository access still depends on the authorization granted through the Repo App.
                           </Body>
                           <div className={styles.roleList}>
                             {accessOverview.project_role_assignments.length === 0 ? (
@@ -1026,7 +1025,7 @@ export function ProjectSettingsPage() {
                   <Body as="p" tone="muted">
                     This project was started without a connected GitHub repository, so runs can't
                     open pull requests. Create a new repository (or connect one you own) to enable
-                    publishing. GitHub actions run as your linked GitHub identity, so make sure
+                    publishing. GitHub actions use the project capability authorization, so make sure
                     you've linked an account first.
                   </Body>
                   <div className={styles.formActions}>

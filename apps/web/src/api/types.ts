@@ -1,5 +1,5 @@
 export type ModelSource = 'github-copilot' | 'microsoft-foundry';
-export type AuthMode = 'entra' | 'github-legacy';
+export type AuthMode = 'entra';
 
 export interface ServerInfo {
   data_directory: string;
@@ -447,28 +447,6 @@ export interface GraphDescriptor {
   edges: GraphEdge[];
 }
 
-// GitHub auth
-export type GitHubAuthStatus = 'signed_in' | 'signed_out' | 'never_signed_in';
-
-export interface GitHubDeviceFlow {
-  user_code: string;
-  verification_uri: string;
-  expires_in: number;
-  interval: number;
-}
-
-export interface GitHubPollResult {
-  status: 'pending' | 'success' | 'expired' | 'denied';
-  login: string | null;
-}
-
-export interface GitHubAuthStatusResponse {
-  status: GitHubAuthStatus;
-  login: string | null;
-  avatar_url?: string;
-  token_action_required?: boolean;
-}
-
 export interface AuthSessionResponse {
   authenticated: boolean;
   auth_mode: AuthMode;
@@ -478,43 +456,6 @@ export interface AuthSessionResponse {
   avatar_url?: string | null;
   entra_object_id?: string | null;
   platform_roles: string[];
-}
-
-export interface GitHubRepo {
-  fullName: string | null;
-  htmlUrl?: string | null;
-  description?: string | null;
-  private: boolean;
-  defaultBranch: string;
-}
-
-export interface GitHubAccount {
-  login: string;
-  name: string | null;
-  avatar_url: string;
-  type: 'user' | 'org';
-}
-
-export interface LinkedGitHubAccount {
-  login: string;
-  name: string | null;
-  avatar_url: string;
-  type: 'user' | 'org';
-  is_default: boolean;
-  copilot_entitled: boolean | null;
-  linked_at?: string | null;
-  default_for_project_count?: number | null;
-  override_project_count?: number | null;
-  dependent_project_names?: string[] | null;
-  unlink_warnings?: string[] | null;
-  can_unlink?: boolean;
-  token_valid?: boolean | null;
-}
-
-export interface AccessibleGitHubRepo extends GitHubRepo {
-  source_login: string;
-  source_avatar_url?: string | null;
-  source_is_default?: boolean;
 }
 
 export interface GitHubRepositorySelectionCandidate {
@@ -586,17 +527,6 @@ export interface ProjectAccessOverview {
   effective_github_login?: string | null;
   effective_github_permission?: string | null;
   github_identity_permissions?: ProjectGitHubIdentityPermission[] | null;
-}
-
-export interface ProjectGitHubIdentity {
-  project_id: string;
-  project_override_login: string | null;
-  effective_login: string | null;
-  effective_avatar_url: string | null;
-  copilot_entitled: boolean | null;
-  is_default: boolean | null;
-  linked_at: string | null;
-  resolution_source: string;
 }
 
 export interface UnattendedReadiness {

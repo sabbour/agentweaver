@@ -8,7 +8,6 @@ import {
 } from '@fluentui/react-icons';
 import { GLOBAL_NAV_ITEMS, NAV_SECTIONS, navItemPath } from './navConfig';
 import { useAppVersion } from '../../hooks/useAppVersion';
-import { GitHubSignIn } from '../GitHubSignIn';
 import { NotificationBell } from './NotificationBell';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
@@ -307,9 +306,8 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
         ))}
       </div>
 
-      {/* Footer: signed-in persona + status dot + version badge */}
+      {/* Footer: status dot + version badge */}
       <div className="aw-rail-footer">
-        <GitHubSignIn projectId={projectId} collapsed={collapsed} />
         <div className="aw-rail-footer__meta">
           <StatusDot />
           <Badge
