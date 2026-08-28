@@ -727,8 +727,8 @@ interface ToolApprovalCardProps {
 function scopeLabel(scope: string): string {
   switch (scope) {
     case 'once': return 'Allowed (once)';
-    case 'run': return 'Allowed (this run)';
-    case 'always': return 'Allowed (always, this session)';
+    case 'run': return 'Allowed (this session)';
+    case 'always': return 'Allowed (always, this project)';
     case 'tool': return 'Allowed (all calls to tool)';
     case 'approved': return 'Allowed';
     default: return `Allowed (${scope})`;
@@ -921,7 +921,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
             Allow once
           </Button>
           <Tooltip
-            content="Allows all calls to this tool (any URL) for the rest of this run."
+            content="Allows all calls to this tool for the rest of this orchestration session."
             relationship="description"
           >
             <Button
@@ -930,7 +930,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
               disabled={busy || !runId}
               onClick={() => void handleAllow('run')}
             >
-              Allow this run
+              Allow for session
             </Button>
           </Tooltip>
           <Tooltip
@@ -947,7 +947,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
             </Button>
           </Tooltip>
           <Tooltip
-            content="Allows all calls to this tool (any URL) for this session. Resets when the server restarts."
+            content="Allows this eligible tool in future runs of this project. Other projects and tools still ask."
             relationship="description"
           >
             <Button
@@ -956,7 +956,7 @@ function ToolApprovalCard({ styles, requestId, displayId, toolName, url, intenti
               disabled={busy || !runId}
               onClick={() => void handleAllow('always')}
             >
-              Always allow (session)
+              Always allow
             </Button>
           </Tooltip>
           <Button

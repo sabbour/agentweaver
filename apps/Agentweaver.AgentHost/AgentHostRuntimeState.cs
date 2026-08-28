@@ -101,6 +101,14 @@ internal sealed class AgentHostRuntimeState
     public string? CallerBearerToken { get; private set; }
 
     /// <summary>
+    /// API address and credential used only by the internal approval-policy reader. The run
+    /// capability remains required by the API, so this configuration cannot read another run's
+    /// policy.
+    /// </summary>
+    public ToolApprovalApiAccess? ToolApprovalApiAccess => Volatile.Read(ref _toolApprovalApiAccess);
+    private ToolApprovalApiAccess? _toolApprovalApiAccess;
+
+    /// <summary>
     /// Seeds the runtime state from env-injected options (non-warm pod launched with a RunId).
     /// Marks the state configured so a later /configure is rejected (409 "Already configured via env").
     /// </summary>
@@ -115,6 +123,7 @@ internal sealed class AgentHostRuntimeState
         GitHubAccessToken = null; // not available on env-var launch path
         RepositoryAccessToken = null;
         CallerBearerToken = null; // operator-assistant-only warm-pod input
+        SetToolApprovalApiAccess(options.ApiBaseUrl, options.ApiKey);
         Purpose = AgentHostPurpose.Default;
         WorkspaceMode = ExecutionWorkspaceMode.Shared;
         SharedWorkingDirectory = options.WorkingDirectory;
@@ -180,7 +189,20 @@ internal sealed class AgentHostRuntimeState
         ProjectId = configuration.ProjectId;
         AgentName = configuration.AgentName;
         EffectiveWorkingDirectory = configuration.SharedWorkingDirectory;
+        SetToolApprovalApiAccess(configuration.ToolApprovalApiBaseUrl, TurnBearerToken);
         return true;
+    }
+
+    public void SetToolApprovalApiAccess(string? apiBaseUrl, string? apiKey)
+    {
+        var bearerToken = string.IsNullOrWhiteSpace(apiKey)
+            ? CallerBearerToken
+            : apiKey;
+        Volatile.Write(
+            ref _toolApprovalApiAccess,
+            string.IsNullOrWhiteSpace(apiBaseUrl) || string.IsNullOrWhiteSpace(bearerToken)
+                ? null
+                : new ToolApprovalApiAccess(apiBaseUrl, bearerToken));
     }
 
     public void SetEffectiveWorkingDirectory(string workingDirectory) =>
@@ -198,6 +220,8 @@ internal sealed class AgentHostRuntimeState
     public void SetPodBaseSystemPromptContext(string? context) =>
         PodBaseSystemPromptContext = context;
 }
+
+internal sealed record ToolApprovalApiAccess(string BaseUrl, string BearerToken);
 
 /// <summary>Complete one-time configuration delivered to a warm AgentHost pod.</summary>
 internal sealed record AgentHostRunConfiguration(
@@ -220,4 +244,5 @@ internal sealed record AgentHostRunConfiguration(
     string? ProjectId = null,
     string? AgentName = null,
     string? CallerBearerToken = null,
-    string? RepositoryAccessToken = null);
+    string? RepositoryAccessToken = null,
+    string? ToolApprovalApiBaseUrl = null);
