@@ -21,6 +21,16 @@ public interface IAutomationInvocationService
         BacklogTaskId backlogTaskId,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Discards a claimed invocation only after its provisional task has been durably removed.
+    /// The task id fences the cleanup so a caller cannot release an unrelated invocation.
+    /// </summary>
+    Task<bool> TryDiscardInvocationForTaskAsync(
+        string invocationId,
+        ProjectId projectId,
+        BacklogTaskId backlogTaskId,
+        CancellationToken ct = default);
+
     Task<bool> TryPrepareRunAsync(
         ProjectId expectedProjectId,
         BacklogTaskId backlogTaskId,
@@ -98,6 +108,22 @@ public sealed class AutomationInvocationService(
             x.ProjectId == projectId.ToString() &&
             x.Outcome == AutomationInvocationOutcome.Claimed &&
             x.BacklogTaskId == backlogTaskId.ToString(), ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryDiscardInvocationForTaskAsync(
+        string invocationId,
+        ProjectId projectId,
+        BacklogTaskId backlogTaskId,
+        CancellationToken ct = default)
+    {
+        var changed = await db.AutomationInvocations
+            .Where(x => x.Id == invocationId &&
+                        x.ProjectId == projectId.ToString() &&
+                        x.Outcome == AutomationInvocationOutcome.Claimed &&
+                        (x.BacklogTaskId == null || x.BacklogTaskId == backlogTaskId.ToString()))
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+        return changed == 1;
     }
 
     public async Task<bool> TryClaimAsync(

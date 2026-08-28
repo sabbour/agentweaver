@@ -16,8 +16,8 @@ namespace Agentweaver.Tests.Workflows;
 /// <see cref="SqliteProjectStore"/> / <see cref="SqliteBacklogTaskStore"/> / <see cref="WorkflowRegistry"/>
 /// (Principle VII: no mocks of the store or its transaction logic). Every tick is driven by an
 /// explicit <c>now</c> passed to <see cref="WorkflowScheduleTriggerService.RunTickAsync"/> — never the
-/// wall clock — so the whole "due occurrence -> Ready backlog task -> idempotent re-tick" pipeline is
-/// deterministic and fast.
+/// wall clock — so the whole "due occurrence -> bound Ready backlog task -> idempotent re-tick"
+/// pipeline is deterministic and fast.
 /// </summary>
 public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
 {
@@ -147,6 +147,30 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
         task.WorkflowOverrideId.Should().Be("scheduled-triage");
         task.CapturedBy.Should().Be(WorkflowScheduleTriggerService.CapturedBy);
         task.RunId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RunTick_CoordinatorCannotClaimTaskBetweenCreationAndInvocationBinding()
+    {
+        var project = await SeedProjectAsync(WeeklyMondayNineAmYaml);
+        var invocations = new CoordinatorInterleavingAutomationInvocationService(_backlog);
+        await using var provider = new ServiceCollection()
+            .AddSingleton<IProjectStore>(_projects)
+            .AddSingleton<IBacklogTaskStore>(_backlog)
+            .AddSingleton(_registry)
+            .AddScoped<IAutomationInvocationService>(_ => invocations)
+            .BuildServiceProvider();
+        var service = new WorkflowScheduleTriggerService(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            new ConfigurationBuilder().Build(),
+            NullLogger<WorkflowScheduleTriggerService>.Instance);
+
+        await service.RunTickAsync(new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero), CancellationToken.None);
+
+        invocations.ClaimResultDuringBinding.Should().Be(ClaimReserveResult.Lost,
+            "the schedule task is not Ready until the invocation-to-task binding is durable");
+        var task = (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle().Subject;
+        task.State.Should().Be(BacklogTaskState.Ready);
     }
 
     [Fact]

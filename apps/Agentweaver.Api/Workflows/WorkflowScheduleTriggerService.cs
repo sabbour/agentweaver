@@ -151,7 +151,7 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
                     continue;
                 }
 
-                var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
+                var task = await WorkflowTriggerBacklogFactory.CreateUnpublishedTaskAsync(
                     backlogStore,
                     project,
                     def,
@@ -161,9 +161,21 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
                     idempotencyKey: idempotencyKey,
                     now: now,
                     ct: ct).ConfigureAwait(false);
-                if (!await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
-                        .ConfigureAwait(false))
-                    throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
+                try
+                {
+                    if (!await invocations.TryBindBacklogTaskAsync(invocation.InvocationId, project.Id, task.Id, ct)
+                            .ConfigureAwait(false))
+                        throw new InvalidOperationException("Unable to bind trusted automation invocation to its backlog task.");
+                    if (!await WorkflowTriggerBacklogFactory.TryPublishAsync(backlogStore, project, task, now, ct)
+                            .ConfigureAwait(false))
+                        throw new InvalidOperationException("Unable to publish trusted automation invocation backlog task.");
+                }
+                catch
+                {
+                    await DiscardUnpublishedTaskAsync(invocations, backlogStore, invocation, project, task)
+                        .ConfigureAwait(false);
+                    throw;
+                }
 
                 _logger.LogInformation(
                     "Workflow schedule trigger: fired workflow {WorkflowId} for project {ProjectId} (task {TaskId}, occurrence {PeriodKey})",
@@ -176,4 +188,22 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
         scheduleOrdinal == 0
             ? $"workflow-schedule-trigger:{workflowId}:{periodKey}"
             : $"workflow-schedule-trigger:{workflowId}:{scheduleOrdinal}:{periodKey}";
+
+    private static async Task DiscardUnpublishedTaskAsync(
+        IAutomationInvocationService invocations,
+        IBacklogTaskStore backlogStore,
+        AutomationInvocationClaim invocation,
+        Project project,
+        BacklogTask task)
+    {
+        var deleted = await backlogStore.TryDeleteAsync(project.Id, task.Id, CancellationToken.None)
+            .ConfigureAwait(false);
+        if (!deleted)
+            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
+        var released = await invocations.TryDiscardInvocationForTaskAsync(
+                invocation.InvocationId, project.Id, task.Id, CancellationToken.None)
+            .ConfigureAwait(false);
+        if (!released)
+            throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");
+    }
 }

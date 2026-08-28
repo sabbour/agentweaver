@@ -76,6 +76,31 @@ public sealed class AutomationInvocationServiceTests
         (await service.TryPrepareRunAsync(project, taskId, "valid-run")).Should().BeTrue();
     }
 
+    [Fact]
+    public async Task DiscardInvocationForDeletedTask_AllowsTriggerOccurrenceToBeClaimedAgain()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var activation = await ActivateAsync(db);
+        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        var project = ProjectId.Parse(activation.ProjectId);
+
+        (await service.TryClaimForProjectAsync(project, "event:retry", "delivery-retry", "issues")).Should().NotBeNull();
+        var invocation = await db.AutomationInvocations.SingleAsync();
+        var provisionalTaskId = BacklogTaskId.New();
+        (await service.TryDiscardInvocationForTaskAsync(invocation.Id, project, provisionalTaskId)).Should().BeTrue();
+        (await db.AutomationInvocations.ToListAsync()).Should().BeEmpty();
+
+        (await service.TryClaimForProjectAsync(project, "event:retry", "delivery-retry", "issues")).Should().NotBeNull(
+            "a trigger whose task binding failed must be able to safely retry the same occurrence");
+        var rebound = await db.AutomationInvocations.SingleAsync();
+        var boundTaskId = BacklogTaskId.New();
+        (await service.TryBindBacklogTaskAsync(rebound.Id, project, boundTaskId)).Should().BeTrue();
+        (await service.TryDiscardInvocationForTaskAsync(rebound.Id, project, BacklogTaskId.New())).Should().BeFalse(
+            "a bound invocation is never discarded for a different task");
+        (await service.TryDiscardInvocationForTaskAsync(rebound.Id, project, boundTaskId)).Should().BeTrue(
+            "publication recovery may release a binding only after that exact provisional task was deleted");
+    }
+
     private static async Task<FencedAutomationActivation> ActivateAsync(MemoryDbContext db, ProjectId? projectId = null)
     {
         var project = projectId ?? ProjectId.New();
