@@ -19,11 +19,27 @@ internal sealed class RunCommandTool : ISandboxTool
                 if (ctx.Options.RejectBackgroundCommands && ContainsBackgrounding(command))
                     return "Command rejected: background/detached shell execution is not allowed.";
 
-                var destructive = IsDestructivePattern(command, ctx.Options.DestructiveCommandPatterns);
+                IReadOnlyList<string>? credentialArguments = null;
+                var approvalCommand = command;
+                var commandHash = ComputeCommandHash(command);
+                if (!string.IsNullOrWhiteSpace(ctx.Options.RepositoryAccessToken))
+                {
+                    if (!TryParseCommand(command, out credentialArguments, out var credentialParseError))
+                        return credentialParseError!;
+
+                    if (credentialArguments.Count > 0 &&
+                        (credentialArguments[0] == "git" || credentialArguments[0] == "gh"))
+                    {
+                        // Approval must describe and identify the exact argv that receives the
+                        // credential, rather than the shell spelling the model originally sent.
+                        approvalCommand = FormatParsedCommand(credentialArguments);
+                        commandHash = ComputeCommandHash(credentialArguments);
+                    }
+                }
+
+                var destructive = IsDestructivePattern(approvalCommand, ctx.Options.DestructiveCommandPatterns);
                 if (ctx.Options.RejectDestructiveCommands && destructive)
                     return "Command rejected: destructive shell commands are not allowed in the Build/Test gate.";
-
-                var commandHash = ComputeCommandHash(command);
 
                 // HITL gate: destructive commands require operator approval before execution.
                 if (ctx.Options.RequireApprovalForAllShell || destructive)
@@ -100,7 +116,7 @@ internal sealed class RunCommandTool : ISandboxTool
                 if (ctx.Options.MaximumTimeoutMs > 0)
                     timeout = Math.Min(timeout, ctx.Options.MaximumTimeoutMs);
                 if (!TryCreateRepositoryCredentialCommand(
-                        command,
+                        credentialArguments,
                         ctx.Options.RepositoryAccessToken,
                         out var directExecution,
                         out var credentialError))
@@ -156,6 +172,11 @@ internal sealed class RunCommandTool : ISandboxTool
             System.Security.Cryptography.SHA256.HashData(
                 System.Text.Encoding.UTF8.GetBytes(command)))[..16].ToLowerInvariant();
 
+    private static string ComputeCommandHash(IReadOnlyList<string> arguments) =>
+        // TryParseCommand rejects NUL, so this separator gives every parsed argv sequence
+        // a distinct stable identity without returning to the shell's original text.
+        ComputeCommandHash(string.Join('\0', arguments));
+
     private static string? ResolveScratchDirectory(SandboxToolContext ctx)
     {
         if (!string.IsNullOrWhiteSpace(ctx.ScratchDirectory))
@@ -206,7 +227,7 @@ internal sealed class RunCommandTool : ISandboxTool
     };
 
     private static bool TryCreateRepositoryCredentialCommand(
-        string command,
+        IReadOnlyList<string>? arguments,
         string? accessToken,
         out SandboxDirectExecution? directExecution,
         out string? error)
@@ -216,8 +237,8 @@ internal sealed class RunCommandTool : ISandboxTool
         if (string.IsNullOrWhiteSpace(accessToken))
             return true;
 
-        if (!TryParseCommand(command, out var arguments, out error))
-            return false;
+        if (arguments is null)
+            throw new InvalidOperationException("Credential-bearing command arguments must be parsed before execution.");
         if (arguments.Count == 0 ||
             (arguments[0] != "git" && arguments[0] != "gh"))
             return true;
@@ -301,15 +322,7 @@ internal sealed class RunCommandTool : ISandboxTool
             return false;
         }
 
-        var hasNestedCommand = (string topLevel, string nested) =>
-            arguments[1] == topLevel &&
-            arguments.Skip(2).Any(argument => argument == nested);
-        if (arguments[1] == "codespace" ||
-            arguments.Skip(2).Any(argument =>
-                argument is "--web" or "--browser" or "--editor") ||
-            hasNestedCommand("auth", "setup-git") ||
-            hasNestedCommand("repo", "clone") ||
-            hasNestedCommand("pr", "checkout"))
+        if (GhArgumentsCanStartAnotherExecutable(arguments))
         {
             error = "Command rejected: gh commands that start another executable are not allowed with repository credentials.";
             return false;
@@ -317,6 +330,58 @@ internal sealed class RunCommandTool : ISandboxTool
 
         return true;
     }
+
+    private static bool GhArgumentsCanStartAnotherExecutable(IReadOnlyList<string> arguments)
+    {
+        if (arguments[1] == "codespace" || HasGhProcessLaunchingOption(arguments))
+            return true;
+
+        return HasNestedGhCommand(arguments, "auth", "login") ||
+            HasNestedGhCommand(arguments, "auth", "setup-git") ||
+            HasNestedGhCommand(arguments, "gist", "clone") ||
+            HasNestedGhCommand(arguments, "repo", "clone") ||
+            HasNestedGhCommand(arguments, "pr", "checkout") ||
+            (HasNestedGhCommand(arguments, "issue", "develop") &&
+                HasGhOption(arguments, "--checkout", 'c')) ||
+            (HasNestedGhCommand(arguments, "repo", "create") &&
+                HasGhOption(arguments, "--clone", 'c')) ||
+            (HasNestedGhCommand(arguments, "repo", "fork") &&
+                HasGhOption(arguments, "--clone", 'c'));
+    }
+
+    private static bool HasNestedGhCommand(
+        IReadOnlyList<string> arguments,
+        string topLevel,
+        string nested) =>
+        arguments[1] == topLevel &&
+        arguments.Skip(2).TakeWhile(argument => argument != "--")
+            .Any(argument => argument == nested);
+
+    private static bool HasGhProcessLaunchingOption(IReadOnlyList<string> arguments) =>
+        arguments.Skip(2).TakeWhile(argument => argument != "--")
+            .Any(argument =>
+                argument is "--web" or "--browser" or "--editor" ||
+                argument.StartsWith("--web=", StringComparison.Ordinal) ||
+                argument.StartsWith("--browser=", StringComparison.Ordinal) ||
+                argument.StartsWith("--editor=", StringComparison.Ordinal) ||
+                HasShortGhOption(argument, 'w') ||
+                HasShortGhOption(argument, 'e'));
+
+    private static bool HasGhOption(
+        IReadOnlyList<string> arguments,
+        string longOption,
+        char shortOption) =>
+        arguments.Skip(2).TakeWhile(argument => argument != "--")
+            .Any(argument =>
+                argument == longOption ||
+                argument.StartsWith(longOption + "=", StringComparison.Ordinal) ||
+                HasShortGhOption(argument, shortOption));
+
+    private static bool HasShortGhOption(string argument, char option) =>
+        argument.Length > 1 &&
+        argument[0] == '-' &&
+        argument[1] != '-' &&
+        argument.AsSpan(1).IndexOf(option) >= 0;
 
     private static bool TryParseCommand(
         string command,
@@ -329,6 +394,7 @@ internal sealed class RunCommandTool : ISandboxTool
         var current = new System.Text.StringBuilder();
         var quote = '\0';
         var escaping = false;
+        var argumentStarted = false;
 
         foreach (var character in command)
         {
@@ -342,18 +408,21 @@ internal sealed class RunCommandTool : ISandboxTool
             if (escaping)
             {
                 current.Append(character);
+                argumentStarted = true;
                 escaping = false;
                 continue;
             }
 
             if (character == '\\' && quote != '\'')
             {
+                argumentStarted = true;
                 escaping = true;
                 continue;
             }
 
             if (character is '\'' or '"')
             {
+                argumentStarted = true;
                 if (quote == '\0')
                     quote = character;
                 else if (quote == character)
@@ -365,15 +434,17 @@ internal sealed class RunCommandTool : ISandboxTool
 
             if (char.IsWhiteSpace(character) && quote == '\0')
             {
-                if (current.Length > 0)
+                if (argumentStarted)
                 {
                     parsed.Add(current.ToString());
                     current.Clear();
+                    argumentStarted = false;
                 }
                 continue;
             }
 
             current.Append(character);
+            argumentStarted = true;
         }
 
         if (escaping || quote != '\0')
@@ -381,11 +452,24 @@ internal sealed class RunCommandTool : ISandboxTool
             error = "Command rejected: GitHub credentials require balanced, literal arguments.";
             return false;
         }
-        if (current.Length > 0)
+        if (argumentStarted)
             parsed.Add(current.ToString());
 
         arguments = parsed;
         return true;
+    }
+
+    private static string FormatParsedCommand(IReadOnlyList<string> arguments) =>
+        string.Join(' ', arguments.Select(FormatParsedArgument));
+
+    private static string FormatParsedArgument(string argument)
+    {
+        if (argument.Length > 0 && argument.All(character =>
+                char.IsLetterOrDigit(character) ||
+                character is '-' or '_' or '.' or '/' or ':' or '=' or '+' or ',' or '@' or '%' or '#'))
+            return argument;
+
+        return "'" + argument.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
     }
 
     private static bool IsDestructivePattern(string command, string[] patterns)

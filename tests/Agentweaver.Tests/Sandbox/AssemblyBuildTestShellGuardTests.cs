@@ -291,6 +291,132 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         executor.ExecuteCalls.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData("gh 'secret' set DEPLOY_KEY --body value")]
+    [InlineData("gh \"secret\" set DEPLOY_KEY --body value")]
+    [InlineData("gh 'auth' token")]
+    [InlineData("gh \"auth\" token")]
+    public async Task Controlled_run_command_requires_operator_approval_for_quoted_sensitive_gh_commands(
+        string command)
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var context = BuildContext(
+            executor,
+            tracker,
+            repositoryAccessToken: "repository-access-token",
+            destructivePatterns: [.. SandboxPolicy.Default(_root).DestructiveCommandPatterns],
+            rejectDestructiveCommands: false);
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        result?.ToString().Should().Contain("requires operator approval");
+        executor.ExecuteCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_uses_one_approval_identity_for_equivalent_quoted_gh_arguments()
+    {
+        var observedHashes = new List<string>();
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var context = BuildContext(
+            executor,
+            tracker,
+            repositoryAccessToken: "repository-access-token",
+            destructivePatterns: [.. SandboxPolicy.Default(_root).DestructiveCommandPatterns],
+            rejectDestructiveCommands: false,
+            isCommandApproved: hash =>
+            {
+                observedHashes.Add(hash);
+                return false;
+            });
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "gh secret set DEPLOY_KEY --body value" }));
+        await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "gh \"secret\" set DEPLOY_KEY --body value" }));
+
+        observedHashes.Should().HaveCount(2);
+        observedHashes.Distinct().Should().ContainSingle(
+            "equivalent quoted spellings must resolve to the same direct-execution argv identity");
+        executor.ExecuteCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_preserves_safe_quoted_gh_arguments_for_direct_execution()
+    {
+        SandboxCommand? observed = null;
+        var executor = new CapturingExecutor(command => observed = command);
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker, repositoryAccessToken: "repository-access-token"),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?>
+            {
+                ["command"] = "gh \"repo\" view \"sabbour/agentweaver\"",
+            }));
+
+        result?.ToString().Should().Contain("exit_code: 0");
+        observed!.DirectExecution!.Arguments.Should().Equal("repo", "view", "sabbour/agentweaver");
+    }
+
+    [Theory]
+    [InlineData("gh pr create --editor")]
+    [InlineData("gh pr create -e")]
+    [InlineData("gh pr create -ew")]
+    [InlineData("gh pr create -we")]
+    [InlineData("gh pr view 1 --web")]
+    [InlineData("gh pr view 1 --web=true")]
+    [InlineData("gh pr view 1 -w")]
+    [InlineData("gh pr view 1 -we")]
+    [InlineData("gh pr view 1 -ew")]
+    [InlineData("gh repo view --browser")]
+    [InlineData("gh gist clone deadbeef")]
+    [InlineData("gh issue develop 1 --checkout")]
+    [InlineData("gh issue develop 1 -c")]
+    [InlineData("gh repo create example --clone")]
+    [InlineData("gh repo create example -c")]
+    [InlineData("gh repo fork example --clone")]
+    [InlineData("gh repo fork example -c")]
+    [InlineData("gh auth login")]
+    [InlineData("gh auth setup-git")]
+    [InlineData("gh codespace list")]
+    public async Task Controlled_run_command_does_not_execute_approved_gh_child_process_paths(
+        string command)
+    {
+        const string sentinel = "sentinel-repository-token";
+        SandboxCommand? observed = null;
+        var executor = new CapturingExecutor(candidate => observed = candidate);
+        using var tracker = new ShellExecutionTracker();
+        var context = BuildContext(
+            executor,
+            tracker,
+            repositoryAccessToken: sentinel,
+            requireApprovalForAllShell: true,
+            isCommandApproved: _ => true);
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        result?.ToString().Should().Contain("start another executable");
+        result?.ToString().Should().NotContain(sentinel);
+        observed.Should().BeNull(
+            "an editor, browser, clone, checkout, or nested gh child must never receive the repository token");
+    }
+
     [Fact]
     public async Task Controlled_run_command_does_not_leak_the_sentinel_to_a_repository_configured_external_diff()
     {
@@ -600,7 +726,9 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         string? scratchDirectory = null,
         string? repositoryAccessToken = null,
         string[]? destructivePatterns = null,
-        bool rejectDestructiveCommands = true) =>
+        bool rejectDestructiveCommands = true,
+        bool requireApprovalForAllShell = false,
+        Func<string, bool>? isCommandApproved = null) =>
         new(
             AgentId: "agent",
             WorkingDirectory: workspace ?? _root,
@@ -614,11 +742,13 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
                 DestructiveCommandPatterns = destructivePatterns ?? ["rm -rf"],
                 RejectBackgroundCommands = true,
                 RejectDestructiveCommands = rejectDestructiveCommands,
+                RequireApprovalForAllShell = requireApprovalForAllShell,
                 MaximumTimeoutMs = 600_000,
                 RepositoryAccessToken = repositoryAccessToken,
             },
             Logger: NullLogger.Instance,
             ShellExecutionTracker: tracker,
+            IsCommandApproved: isCommandApproved,
             ScratchDirectory: scratchDirectory);
 
     private static async Task RunGitAsync(string workingDirectory, params string[] arguments)
