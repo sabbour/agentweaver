@@ -121,7 +121,10 @@ Turn a PRD, design doc, or feature spec already in the repository into queued wo
 
 Everything above is available programmatically through the [MCP server](/reference/mcp). Any MCP-compatible client can run the complete lifecycle. The tool names below are exact.
 
-1. **Authenticate** — `github_signin` (device flow), check with `github_status`.
+1. **Sign in and connect capabilities** — sign in to Agentweaver with Microsoft Entra. When
+   GitHub access is needed, use `github_repo_app_connect`, open its `browser_url`, and poll
+   `github_repo_app_authorization_status`. A project Owner connects Copilot with
+   `project_copilot_app_connect` and verifies `project_github_capability_status`.
 2. **Create a project** — `project_create`; list with `project_list`.
 3. **Cast a team** — `catalog_list_roles` / `catalog_list_scenarios`, then `team_cast`; inspect with `team_get`.
 4. **Capture and queue work** — `backlog_capture_task`, then `backlog_move_to_ready` (or `send_all_backlog_to_ready`); view the board with `backlog_get_board`.

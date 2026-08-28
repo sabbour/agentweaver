@@ -110,9 +110,9 @@ traces) rather than HTTP request/response or DOM snapshots.
 - **Not** re-driving the raw REST API — that is the API harness's job. If a bug is in
   the backend and reproduces identically via REST, it belongs to the API harness; the
   MCP harness owns bugs that live in or are shaped by the **MCP layer**.
-- **Not** a Playwright/browser surface — that is Trinity's UI harness. The MCP harness
-  never opens a browser (the one exception: `github_signin` device-flow requires a
-  human to visit a verification URL once; see Auth).
+- **Not** a Playwright/browser surface — that is Trinity's UI harness. When an MCP
+  scenario requires GitHub capability, it records the opaque browser handoff and has a
+  human complete it outside the harness; it does not automate the browser.
 - **Not** building the backend conversational operator-agent (#201) itself. The
   harness is a client of the MCP surface; #201 is a server feature. Once #201 ships a
   natural-language operator run type, the same brief/pushback architecture extends to
@@ -149,7 +149,7 @@ index (`docs/reference/mcp-tools.md`), and epic **#295** + children.
     Copilot CLI actually hits.)
 - Tools return a **JSON string** as their content (`JsonSerializer.Serialize(...)`);
   errors are raised as `McpApiException(statusCode, message)`, surfaced to the client
-  as MCP tool errors. Long-running tools (`run_watch`, `github_signin`) stream
+  as MCP tool errors. Long-running tools such as `run_watch` stream
   `ProgressNotificationValue` progress notifications.
 - **90 tools across 14 categories** are published today (authoritative *point-in-time*
   list: `docs/reference/mcp-tools.md`, generated from source). The categories the harness
@@ -175,7 +175,7 @@ index (`docs/reference/mcp-tools.md`), and epic **#295** + children.
 
 | Category | Tools the harness drives | API-harness analog |
 |---|---|---|
-| Auth | `github_status`, `github_signin`, `github_signout` | (bearer supplied out-of-band) |
+| GitHub capability | `github_repo_app_connect`, `github_repo_app_authorization_status`, `github_repo_app_disconnect`, `project_copilot_app_connect`, `project_copilot_app_authorization_status`, `project_copilot_app_disconnect`, `project_github_capability_status` | (bearer supplied out-of-band) |
 | Session | `session_start`, `session_current`, `session_update` | (implicit) |
 | Discovery | `project_list`, `list_blueprints`, `catalog_list_scenarios`, `catalog_list_roles`, `workflows_list` | `list-blueprints`, `get-team` |
 | Project | `project_create`, `project_get`, `project_configure` | `create-project` |
@@ -217,13 +217,12 @@ Investigated in `McpBearerTokenMiddleware.cs` + `AgentweaverApiClient.cs` +
   the MCP server forward it. For staging validation the harness will use the
   **GitHub-token passthrough** path (a `gh auth token`), which is the simplest bearer
   the hosted `/mcp` currently accepts.
-- **In-band auth tools:** `github_signin` runs the GitHub **device flow** and streams
-  a `user_code` + `verification_uri` as progress; a human enters the code once, then
-  the tool polls to completion. `github_status` reports signed-in state;
-  `session_start`/`session_current` establish the operator session. The
-  `agentweaver.agent.md` "auth-first" rule (call `github_status`, and on 401 run
-  `github_signin` + `session_start` before retrying) is itself part of what #128 wants
-  hardened — the harness will drive and **assert** that recovery path.
+- **In-band GitHub capability tools:** `github_repo_app_connect` and
+  `project_copilot_app_connect` return only an opaque transaction ID, browser URL, and
+  expiry. A human completes the browser handoff, then the matching status tool polls
+  the redacted lifecycle state. `session_start`/`session_current` establish the
+  operator session. The `agentweaver.agent.md` capability-first rule is part of what
+  #128 wants hardened — the harness will drive and **assert** that recovery path.
 
 ### What exists today vs. what's missing (per #295 and children)
 
@@ -392,7 +391,7 @@ to actually **fail** when one disappears.
 ```jsonc
 // scripts/mcp-harness/required-capabilities.json  (versioned; illustrative)
 {
-  "contractVersion": "1.0.0",
+  "contractVersion": "2.0.0",
   "policy": "additive-ok; removal|rename|required-arg-add|depended-field-type-change = BREAKING",
   "capabilities": [
     { "capability": "submit-run",     "tools": ["run_submit"],
@@ -400,8 +399,11 @@ to actually **fail** when one disappears.
     { "capability": "poll-run",        "tools": ["run_status"],        "out": { "requires": ["status"] } },
     { "capability": "list-artifacts",  "tools": ["run_show_artifacts"],"out": { "requires": ["artifacts"] } },
     { "capability": "cleanup-run",     "tools": ["run_archive"] },
-    { "capability": "auth-status",     "tools": ["github_status"] },
-    { "capability": "auth-signin",     "tools": ["github_signin"] },
+    { "capability": "repo-app-connect", "tools": ["github_repo_app_connect"] },
+    { "capability": "repo-app-poll", "tools": ["github_repo_app_authorization_status"] },
+    { "capability": "project-copilot-connect", "tools": ["project_copilot_app_connect"] },
+    { "capability": "project-copilot-poll", "tools": ["project_copilot_app_authorization_status"] },
+    { "capability": "project-github-capability-status", "tools": ["project_github_capability_status"] },
     { "capability": "diagnostics",     "tools": ["diagnostics_get"] },
     { "capability": "one-call-run",    "tools": ["run_task"], "optional": true,
       "note": "#130 — not yet shipped; when present, must return run_id+status+artifacts" }
@@ -480,10 +482,9 @@ sessions can run concurrently:
   session affinity to collide on. The only shared-state caveats are *backend* resources
   the personas create (projects/runs) — so each concurrent session must create its
   **own** project (unique name) rather than reusing a shared one, keeping run/project
-  IDs disjoint. This is the recommended path for large concurrent fan-out. One auth
-  caveat: interactive `github_signin` device flow is per-identity and human-gated, so
-  concurrent unattended runs should share a **pre-provisioned bearer** (one `gh auth
-  token`) rather than each triggering a device flow.
+  IDs disjoint. This is the recommended path for large concurrent fan-out. GitHub
+  capability handoffs are human-gated and one-time, so unattended runs must use
+  already-completed server-side capabilities rather than each initiating a handoff.
 - **`--target stdio`** (local/CI): each session spawns its **own** `--stdio` server
   process, so parallelism is process-level (N processes) and naturally collision-free,
   but heavier per-session (one server process each). Best for a bounded CI matrix and
@@ -547,10 +548,10 @@ system improve in response to each pushback, was an error message actually actio
   the MCP `initialize` handshake, (c) resolves the RFC 9728 protected-resource
   metadata, (d) attaches `Authorization: Bearer <token>` to every `tools/call`. If the
   server returns a 401/`invalid_token` challenge, the harness records it verbatim (it
-  is itself evidence for #128's auth-first requirement) and, for the driven persona,
-  the LLM may call `github_status` → `github_signin`. Device-flow `github_signin`
-  needs a one-time human code entry; for unattended CI we use `--target stdio` (no
-  OAuth) or a pre-provisioned token.
+  is itself evidence for #128's capability-first requirement) and, for the driven
+  persona, the LLM may guide the user through `github_repo_app_connect` and poll
+  `github_repo_app_authorization_status`. Browser handoffs need a one-time human
+  action; unattended CI uses pre-established capabilities.
 - `--target stdio`: the local bearer/`AGENTWEAVER_API_KEY` is forwarded; no device
   flow. This is the deterministic CI path (#131).
 - Session tools (`session_start`/`session_current`) are driven as first-class turns so
@@ -781,7 +782,7 @@ forked here.
 | **#131** (CLI→MCP smoke test) | **Directly implemented** by `smoke/mcp-cli-smoke.mjs`: **first runs the §1a required-capabilities contract check** (live `tools/list` vs `required-capabilities.json`) so a renamed/removed/schema-incompatible required tool fails loudly up front, then signin/token → create/reuse project → `run_submit` (smallest task, fast blueprint) → `run_status` poll to terminal (≤5 min) → `run_show_artifacts` asserts ≥1 artifact → `run_archive` cleanup. Runs on `--target stdio` in CI, `--target http` against staging. Failure output names the failing step + tool + raw error (or the missing/incompatible capability) — satisfying #131's "actionable failure output" AC. |
 | **#129** (actionable errors) | A dedicated **error-probe scenario** deliberately triggers each error class from #129's table — signed-out call, `project_get` on a bad id (404), `run_review` on a not-reviewable run (409), submit a workflow not in `allowed_workflow_ids` (400), induce `-32001` timeout, hit a sandbox-not-bound 409 — and captures each raw error result verbatim. The judge scores each against the #129 target ("does it say what went wrong, why, and the next tool to call; is there a `hint`?"). Because the driver embeds no heuristics, this becomes a living acceptance test for #129 as it's implemented. |
 | **#130** (`run_task` one-call path) | Until shipped: the harness documents/measures the multi-call baseline (turn count from goal→results) as the regression `run_task` must beat, and `run_task` is an **`optional` capability** in the §1a contract (absent = skip, not fail). After shipped: it is promoted to a **required capability** (removal/schema-break then trips CONTRACT FAIL), and a scenario drives `run_task` directly and the driver asserts it (a) returns `run_id`+`status`+`artifacts` in one call, (b) **surfaces** review gates / steering questions (`awaiting_review`) rather than silently skipping, (c) respects the timeout returning partial state — all structural/deterministic driver checks; the judge assesses whether the one-call result is actually usable. |
-| **#128** (hardened `agentweaver.agent.md` driver instructions) | The harness drives the exact sequences #128 documents and asserts they're navigable **from the tools + agent.md alone** — with the §1a contract guaranteeing the tools those sequences depend on (`github_status`, `github_signin`, `diagnostics_get`, `run_watch`, …) actually exist and keep a compatible shape, so a rename/removal fails loudly instead of manifesting as an unexplained "the persona got stuck": auth-first recovery (force a 401 → `github_status` → `github_signin` → retry), `run_watch` long-poll behavior (assert it streams progress and doesn't look like a hang without explanation), timeout retry (`-32001` → `diagnostics_get` → idempotent retry), the full submit→poll→review→artifacts sequence, and the backlog→ready→run flow. Gaps the driving LLM hits (it got stuck, guessed an id, couldn't recover) are captured as evidence that the driver instructions need hardening. |
+| **#128** (hardened `agentweaver.agent.md` driver instructions) | The harness drives the exact sequences #128 documents and asserts they're navigable **from the tools + agent.md alone** — with the §1a contract guaranteeing the tools those sequences depend on (`github_repo_app_connect`, `github_repo_app_authorization_status`, `diagnostics_get`, `run_watch`, …) actually exist and keep a compatible shape, so a rename/removal fails loudly instead of manifesting as an unexplained "the persona got stuck": capability-first recovery (force a GitHub capability prerequisite → browser handoff → status poll → retry), `run_watch` long-poll behavior (assert it streams progress and doesn't look like a hang without explanation), timeout retry (`-32001` → `diagnostics_get` → idempotent retry), the full submit→poll→review→artifacts sequence, and the backlog→ready→run flow. Gaps the driving LLM hits (it got stuck, guessed an id, couldn't recover) are captured as evidence that the driver instructions need hardening. |
 | **#201** (conversational operator-agent run type) | Forward-looking. When #201 ships a natural-language operator run, the same brief/pushback loop drives real conversational turns through that run type (text-in/text-out) instead of typed tool calls — the judge taxonomy carries over unchanged. Explicitly out of current scope (Trinity's investigation recommended deferring #201). |
 
 ---
@@ -1122,9 +1123,9 @@ doubles as their acceptance suite.
 2. **MCP client dependency:** adopt `@modelcontextprotocol/sdk` (recommended) vs a
    hand-rolled JSON-RPC client (zero-dep). Recommendation: the real SDK, to exercise
    real protocol framing.
-3. **CI auth for `--target http`:** device-flow `github_signin` needs a human once; CI
-   uses `--target stdio` (no OAuth) or a pre-provisioned token. Confirm which staging
-   bearer CI may hold.
+3. **CI GitHub capability for `--target http`:** browser handoffs require a human
+   once; CI uses pre-established capabilities. Confirm which staging MCP bearer CI
+   may hold.
 4. **`run_task` (#130) dependency:** the one-call scenario is stubbed until #130 ships;
    the harness measures the multi-call baseline meanwhile.
 

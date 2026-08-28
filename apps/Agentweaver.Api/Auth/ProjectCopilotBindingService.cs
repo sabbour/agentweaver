@@ -31,6 +31,12 @@ public sealed record CopilotBindingBeginResult(
 
 public sealed record CopilotBindingPollResult(CopilotBindingOutcome Outcome, string? Status);
 
+public sealed record McpCopilotBrowserHandoffResult(
+    CopilotBindingOutcome Outcome,
+    string? TransactionId,
+    string? BrowserUrl,
+    DateTimeOffset? ExpiresAt);
+
 /// <summary>
 /// Owns the project-pinned Copilot App authorization transaction and its durable binding.
 /// This service deliberately has no repository, installation, PEM, or generic token-store dependency.
@@ -54,6 +60,82 @@ public sealed class ProjectCopilotBindingService(
     private readonly string? _clientSecret = configuration["Auth:CopilotApp:ClientSecret"];
     private readonly string? _callbackUrl = configuration["Auth:CopilotApp:CallbackUrl"];
     private readonly string _scopes = configuration["Auth:CopilotApp:Scopes"] ?? "read:user";
+
+    public async Task<McpCopilotBrowserHandoffResult> BeginMcpHandoffAsync(
+        CallerContext caller,
+        ClaimsPrincipal principal,
+        ProjectId projectId,
+        CancellationToken ct = default)
+    {
+        var begin = await BeginAsync(caller, principal, projectId, ct).ConfigureAwait(false);
+        if (begin.Outcome != CopilotBindingOutcome.Success)
+            return new(begin.Outcome, null, null, null);
+
+        try
+        {
+            await secretStore.SetSecretAsync(
+                McpHandoffCookieKey(begin.TransactionId!),
+                begin.CallbackCookie!,
+                ct: ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            return new(CopilotBindingOutcome.GitHubBindingUnavailable, null, null, null);
+        }
+
+        return new(
+            CopilotBindingOutcome.Success,
+            begin.TransactionId,
+            BuildMcpHandoffUrl(begin.TransactionId!),
+            begin.ExpiresAt);
+    }
+
+    internal async Task<(string AuthorizationUrl, string CallbackCookie)?> TakeMcpBrowserHandoffAsync(
+        string transactionId,
+        string browserSessionId,
+        string browserEntraObjectId,
+        CancellationToken ct = default)
+    {
+        if (!await persistence.BindMcpBrowserSessionAsync(
+                transactionId,
+                GitHubAppKind.Copilot,
+                GitHubAuthorizationPurpose.InteractiveCopilot,
+                browserEntraObjectId,
+                browserSessionId,
+                ct).ConfigureAwait(false))
+            return null;
+
+        var transaction = await persistence.GetMcpBrowserHandoffTransactionAsync(
+            transactionId,
+            GitHubAppKind.Copilot,
+            GitHubAuthorizationPurpose.InteractiveCopilot,
+            browserEntraObjectId,
+            browserSessionId,
+            ct).ConfigureAwait(false);
+        if (transaction is null)
+            return null;
+
+        if (secretStore is not IAtomicSecretLeaseStore leaseStore)
+            return null;
+
+        var cookieKey = McpHandoffCookieKey(transactionId);
+        await using var lease = await leaseStore.TryAcquireLeaseAsync(
+            cookieKey,
+            Guid.NewGuid().ToString("N"),
+            TimeSpan.FromMinutes(1),
+            ct).ConfigureAwait(false);
+        if (lease is null)
+            return null;
+
+        var cookie = await secretStore.GetSecretAsync(cookieKey, ct).ConfigureAwait(false);
+        var verifier = await secretStore.GetSecretAsync(transaction.PkceVerifierReference, ct).ConfigureAwait(false);
+        if (!cookie.Found || string.IsNullOrWhiteSpace(cookie.Value) ||
+            !verifier.Found || string.IsNullOrWhiteSpace(verifier.Value))
+            return null;
+
+        await secretStore.DeleteSecretAsync(cookieKey, ct).ConfigureAwait(false);
+        return (BuildAuthorizationUrl(transaction.State, verifier.Value), cookie.Value);
+    }
 
     public async Task<CopilotBindingBeginResult> BeginAsync(
         CallerContext caller,
@@ -101,13 +183,7 @@ public sealed class ProjectCopilotBindingService(
             return new(CopilotBindingOutcome.GitHubBindingUnavailable, null, null, null);
         }
 
-        var url = $"{_baseUrl.TrimEnd('/')}/login/oauth/authorize" +
-            $"?client_id={Uri.EscapeDataString(_clientId!)}" +
-            $"&redirect_uri={Uri.EscapeDataString(_callbackUrl!)}" +
-            $"&scope={Uri.EscapeDataString(_scopes)}" +
-            $"&state={Uri.EscapeDataString(state)}" +
-            $"&code_challenge={Uri.EscapeDataString(CreateS256Challenge(verifier))}" +
-            "&code_challenge_method=S256";
+        var url = BuildAuthorizationUrl(state, verifier);
         return new(CopilotBindingOutcome.Success, url, transactionId, expiresAt) { CallbackCookie = cookie };
     }
 
@@ -131,6 +207,8 @@ public sealed class ProjectCopilotBindingService(
     }
 
     public async Task<CopilotBindingOutcome> CompleteBrowserCallbackAsync(
+        string? browserSessionId,
+        string? browserEntraObjectId,
         string? state,
         string? code,
         string? callbackCookie,
@@ -140,6 +218,9 @@ public sealed class ProjectCopilotBindingService(
             return CopilotBindingOutcome.AuthorizationTransactionInvalid;
         var transaction = await persistence.GetCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
         if (transaction is null || !ProjectId.TryParse(transaction.ProjectId, out var projectId) ||
+            (transaction.BrowserSessionId is not null &&
+             (!string.Equals(transaction.BrowserSessionId, browserSessionId, StringComparison.Ordinal) ||
+              !string.Equals(transaction.EntraObjectId, browserEntraObjectId, StringComparison.Ordinal))) ||
             string.IsNullOrWhiteSpace(callbackCookie) ||
             !FixedTimeCookieHashEquals(transaction.CallbackCookieHash, callbackCookie))
             return CopilotBindingOutcome.AuthorizationTransactionInvalid;
@@ -217,6 +298,26 @@ public sealed class ProjectCopilotBindingService(
         var frontend = (configuration["Auth:CopilotApp:FrontendUrl"] ?? "http://localhost:5173").TrimEnd('/');
         return $"{frontend}{ReturnRoutes["projects"]}?copilot_app_auth={ToStateCode(outcome)}";
     }
+
+    private string BuildMcpHandoffUrl(string transactionId) =>
+        CallbackBaseUrl() + "/auth/github/copilot-app/handoff/" + Uri.EscapeDataString(transactionId);
+
+    private string BuildAuthorizationUrl(string state, string verifier) =>
+        $"{_baseUrl.TrimEnd('/')}/login/oauth/authorize" +
+        $"?client_id={Uri.EscapeDataString(_clientId!)}" +
+        $"&redirect_uri={Uri.EscapeDataString(_callbackUrl!)}" +
+        $"&scope={Uri.EscapeDataString(_scopes)}" +
+        $"&state={Uri.EscapeDataString(state)}" +
+        $"&code_challenge={Uri.EscapeDataString(CreateS256Challenge(verifier))}" +
+        "&code_challenge_method=S256";
+
+    private string CallbackBaseUrl() =>
+        _callbackUrl!.EndsWith("/auth/github/copilot-app/callback", StringComparison.Ordinal)
+            ? _callbackUrl[..^"/auth/github/copilot-app/callback".Length].TrimEnd('/')
+            : throw new InvalidOperationException("Copilot App callback URL is invalid.");
+
+    private static string McpHandoffCookieKey(string transactionId) =>
+        $"copilot-app-mcp-handoff-{transactionId}";
 
     public static void SetCallbackCookie(HttpContext context, string value) =>
         context.Response.Cookies.Append(CookieName, value, CookieOptions());

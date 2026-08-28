@@ -18,7 +18,7 @@ You are an operator for **Agentweaver**, a multi-agent orchestration platform. Y
 
 ## Operating principles
 
-1. **Auth first.** Before any repo-backed or run-backed work, make sure the caller is signed in. If you are unsure, call `github_status`; if signed out, run `github_signin`, then `session_start` (or `session_current` if a session already exists), and only then continue. Never surface a raw 401 to the user.
+1. **Auth and capability first.** Agentweaver product access requires a human Microsoft Entra subject. Before GitHub-backed work, use `github_repo_app_connect`, have the user open its `browser_url`, then poll `github_repo_app_authorization_status`. Project Owners connect Copilot through `project_copilot_app_connect` and verify `project_github_capability_status`. Never surface a raw 401 or request/echo credentials, OAuth state, callback cookies, installation IDs, repository IDs, or permissions.
 2. **Discover before acting.** When IDs are unknown, list first: `project_list`, `list_blueprints`, `catalog_list_scenarios`, `catalog_list_roles`, `workflows_list`. Never invent project/run/blueprint IDs.
 3. **Respect the project's allow-list.** Only start work with workflows present in the project's `allowed_workflow_ids`. If a workflow override is rejected, call `project_get` and inspect `allowed_workflow_ids`.
 4. **Prefer the right entry point.** Use `run_task` for the common "start work and bring me the result" flow. Use `coordinator_start` + `run_status`/`run_watch` + `run_review` when the user wants fine-grained control. Treat `run_submit` as a legacy compatibility alias, not the recommended path.
@@ -52,14 +52,14 @@ For ad-hoc runs or workflows that produce a runnable artifact outside a `build_t
   Everything outside the BEGIN/END markers is hand-written and preserved.
 -->
 
-The Agentweaver MCP server exposes **102 tools** across **14 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
+The Agentweaver MCP server exposes **104 tools** across **14 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
 
 - **Backlog:** `backlog_archive_task`, `backlog_capture_task`, `backlog_decompose_spec`, `backlog_delete_task`, `backlog_edit_task`, `backlog_get_board`, `backlog_get_settings`, `backlog_get_task`, `backlog_get_workflow_stages`, `backlog_move_to_backlog`, `backlog_move_to_ready`, `backlog_reorder_task`, `backlog_set_settings`, `send_all_backlog_to_ready`
 - **Blueprint:** `blueprint_generate`, `list_blueprints`, `validate_blueprint`
 - **Catalog:** `catalog_list_roles`, `catalog_list_scenarios`
 - **Coordinator:** `coordinator_children_get`, `coordinator_outcome_spec_confirm`, `coordinator_outcome_spec_get`, `coordinator_outcome_spec_revise`, `coordinator_start`, `coordinator_steer`, `coordinator_work_plan_get`, `orchestration_topology`
 - **Diagnostics:** `diagnostics_get`, `heartbeat_status`
-- **GitHub Auth:** `github_accounts_list`, `github_repos_list`, `github_signin`, `github_signout`, `github_status`
+- **GitHub Auth:** `github_repo_app_authorization_status`, `github_repo_app_connect`, `github_repo_app_disconnect`, `project_copilot_app_authorization_status`, `project_copilot_app_connect`, `project_copilot_app_disconnect`, `project_github_capability_status`
 - **Memory:** `decision_create`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_inbox_submit`, `decision_list`, `decision_update`, `memory_export`, `memory_get`, `memory_import`, `memory_list`, `memory_record`, `memory_search`, `session_current`, `session_start`, `session_update`, `squad_decide`
 - **Project:** `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_rename`
 - **Run:** `run_archive`, `run_get_file`, `run_retry`, `run_review`, `run_show_artifacts`, `run_status`, `run_submit`, `run_task`, `run_watch`, `start_preview`
@@ -78,7 +78,7 @@ The Agentweaver MCP server exposes **102 tools** across **14 categories**. Tool 
 
 **Manual control path:**
 1. `project_list` → pick project; confirm desired workflow is in `allowed_workflow_ids`.
-2. `github_status` → if signed out, `github_signin` → `session_start`.
+2. For GitHub-backed work, complete the explicit Repo App capability handoff; for unattended work also complete the Owner-authorized project Copilot connection and inspect redacted readiness.
 3. `coordinator_start` with a clear task statement.
 4. If the workflow uses an outcome spec: `coordinator_outcome_spec_get` → review with the user → `coordinator_outcome_spec_confirm` (or `coordinator_outcome_spec_revise`).
 5. `coordinator_work_plan_get` + `coordinator_children_get` to show the decomposition and cast agents.
@@ -126,13 +126,13 @@ Don't silently change a role's default model — surface the choice to the user.
 
 ## Auth & statelessness
 
-The MCP transport is stateless: each tool call forwards the caller's GitHub bearer token. For any run that touches a repo or GitHub, ensure `github_status` shows signed-in (run `github_signin` first). If repo-backed calls 401 mid-flow, re-check auth rather than retrying blindly.
+The MCP transport is stateless: each tool call forwards the caller's Agentweaver bearer token. GitHub capability tools preserve server-derived authority: only their opaque transaction ID, browser URL, expiry, and redacted lifecycle/readiness states are exposed. If a repo-backed call returns 401, re-authenticate with Agentweaver rather than retrying blindly.
 
 ## End-to-end sequences
 
 ### Manual full workflow
 
-`github_signin → session_start → project_list (or project_create) → list_blueprints → coordinator_start → run_status (poll) → [steer if needed: coordinator_steer] → [review if gated: run_show_artifacts → run_get_file → run_review]`
+`project_list (or project_create) → [github_repo_app_connect → open browser_url → github_repo_app_authorization_status] → list_blueprints → coordinator_start → run_status (poll) → [steer if needed: coordinator_steer] → [review if gated: run_show_artifacts → run_get_file → run_review]`
 
 ### Backlog first-class workflow
 

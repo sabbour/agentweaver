@@ -41,6 +41,12 @@ public sealed record RepoAppAuthorizationPollResult(
     RepoAppAuthorizationOutcome Outcome,
     string? Status);
 
+public sealed record McpBrowserHandoffResult(
+    RepoAppAuthorizationOutcome Outcome,
+    string? TransactionId,
+    string? BrowserUrl,
+    DateTimeOffset? ExpiresAt);
+
 /// <summary>
 /// Repo App's explicit Entra-user authorization lane. It has no dependency on legacy
 /// GitHub token stores, so its Key Vault credential tombstones cannot resurrect disk state.
@@ -69,6 +75,84 @@ public sealed class RepoAppUserAuthorizationService(
     private readonly string? _clientSecret = configuration["Auth:RepoApp:ClientSecret"];
     private readonly string? _callbackUrl = configuration["Auth:RepoApp:CallbackUrl"];
     private readonly string _scopes = configuration["Auth:RepoApp:Scopes"] ?? "repo read:user";
+
+    public async Task<McpBrowserHandoffResult> BeginMcpHandoffAsync(
+        CallerContext caller,
+        ClaimsPrincipal principal,
+        string? requestedReturnRouteKey,
+        CancellationToken ct = default)
+    {
+        var begin = await BeginAsync(caller, principal, requestedReturnRouteKey, ct).ConfigureAwait(false);
+        if (begin.Outcome != RepoAppAuthorizationOutcome.Success)
+            return new(begin.Outcome, null, null, null);
+
+        try
+        {
+            await secretStore.SetSecretAsync(
+                McpHandoffCookieKey(begin.TransactionId!),
+                begin.CallbackCookie!,
+                ct: ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            // A transaction without a browser-held callback cookie is unusable. Do not return
+            // an authorization URL that could later be redeemed without that binding.
+            return new(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, null, null, null);
+        }
+
+        return new(
+            RepoAppAuthorizationOutcome.Success,
+            begin.TransactionId,
+            BuildMcpHandoffUrl(begin.TransactionId!),
+            begin.ExpiresAt);
+    }
+
+    internal async Task<(string AuthorizationUrl, string CallbackCookie)?> TakeMcpBrowserHandoffAsync(
+        string transactionId,
+        string browserSessionId,
+        string browserEntraObjectId,
+        CancellationToken ct = default)
+    {
+        if (!await persistence.BindMcpBrowserSessionAsync(
+                transactionId,
+                GitHubAppKind.Repo,
+                GitHubAuthorizationPurpose.InteractiveRepository,
+                browserEntraObjectId,
+                browserSessionId,
+                ct).ConfigureAwait(false))
+            return null;
+
+        var transaction = await persistence.GetMcpBrowserHandoffTransactionAsync(
+            transactionId,
+            GitHubAppKind.Repo,
+            GitHubAuthorizationPurpose.InteractiveRepository,
+            browserEntraObjectId,
+            browserSessionId,
+            ct).ConfigureAwait(false);
+        if (transaction is null)
+            return null;
+
+        if (secretStore is not IAtomicSecretLeaseStore leaseStore)
+            return null;
+
+        var cookieKey = McpHandoffCookieKey(transactionId);
+        await using var lease = await leaseStore.TryAcquireLeaseAsync(
+            cookieKey,
+            Guid.NewGuid().ToString("N"),
+            TimeSpan.FromMinutes(1),
+            ct).ConfigureAwait(false);
+        if (lease is null)
+            return null;
+
+        var cookie = await secretStore.GetSecretAsync(cookieKey, ct).ConfigureAwait(false);
+        var verifier = await secretStore.GetSecretAsync(transaction.PkceVerifierReference, ct).ConfigureAwait(false);
+        if (!cookie.Found || string.IsNullOrWhiteSpace(cookie.Value) ||
+            !verifier.Found || string.IsNullOrWhiteSpace(verifier.Value))
+            return null;
+
+        await secretStore.DeleteSecretAsync(cookieKey, ct).ConfigureAwait(false);
+        return (BuildAuthorizationUrl(transaction.State, verifier.Value), cookie.Value);
+    }
 
     public static string CallbackCookieName => CookieName;
 
@@ -120,13 +204,7 @@ public sealed class RepoAppUserAuthorizationService(
             return new(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, null, null, null);
         }
 
-        var authorizeUrl = $"{_baseUrl.TrimEnd('/')}/login/oauth/authorize" +
-            $"?client_id={Uri.EscapeDataString(_clientId!)}" +
-            $"&redirect_uri={Uri.EscapeDataString(_callbackUrl!)}" +
-            $"&scope={Uri.EscapeDataString(_scopes)}" +
-            $"&state={Uri.EscapeDataString(state)}" +
-            $"&code_challenge={Uri.EscapeDataString(CreateS256Challenge(verifier))}" +
-            "&code_challenge_method=S256";
+        var authorizeUrl = BuildAuthorizationUrl(state, verifier);
         return new(RepoAppAuthorizationOutcome.Success, authorizeUrl, transactionId, expiresAt)
         {
             CallbackCookie = callbackCookie,
@@ -244,6 +322,8 @@ public sealed class RepoAppUserAuthorizationService(
     /// Entra-authenticated begin; the callback never accepts an identity from the browser.
     /// </summary>
     public async Task<RepoAppAuthorizationCallbackResult> CompleteBrowserCallbackAsync(
+        string? browserSessionId,
+        string? browserEntraObjectId,
         string? state,
         string? code,
         string? callbackCookie,
@@ -256,6 +336,9 @@ public sealed class RepoAppUserAuthorizationService(
         if (transaction is null ||
             transaction.AppKind != GitHubAppKind.Repo ||
             transaction.Purpose != GitHubAuthorizationPurpose.InteractiveRepository ||
+            (transaction.BrowserSessionId is not null &&
+             (!string.Equals(transaction.BrowserSessionId, browserSessionId, StringComparison.Ordinal) ||
+              !string.Equals(transaction.EntraObjectId, browserEntraObjectId, StringComparison.Ordinal))) ||
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > transaction.ExpiresAtUnixMilliseconds ||
             string.IsNullOrWhiteSpace(callbackCookie) ||
             !FixedTimeCookieHashEquals(transaction.CallbackCookieHash, callbackCookie))
@@ -383,6 +466,26 @@ public sealed class RepoAppUserAuthorizationService(
         var route = ReturnRoutes.TryGetValue(returnRouteKey, out var candidate) ? candidate : ReturnRoutes["settings"];
         return $"{frontend}{route}?repo_app_auth={ToStateCode(outcome)}";
     }
+
+    private string BuildMcpHandoffUrl(string transactionId) =>
+        CallbackBaseUrl() + "/auth/github/repo-app/handoff/" + Uri.EscapeDataString(transactionId);
+
+    private string BuildAuthorizationUrl(string state, string verifier) =>
+        $"{_baseUrl.TrimEnd('/')}/login/oauth/authorize" +
+        $"?client_id={Uri.EscapeDataString(_clientId!)}" +
+        $"&redirect_uri={Uri.EscapeDataString(_callbackUrl!)}" +
+        $"&scope={Uri.EscapeDataString(_scopes)}" +
+        $"&state={Uri.EscapeDataString(state)}" +
+        $"&code_challenge={Uri.EscapeDataString(CreateS256Challenge(verifier))}" +
+        "&code_challenge_method=S256";
+
+    private string CallbackBaseUrl() =>
+        _callbackUrl!.EndsWith("/auth/github/repo-app/callback", StringComparison.Ordinal)
+            ? _callbackUrl[..^"/auth/github/repo-app/callback".Length].TrimEnd('/')
+            : throw new InvalidOperationException("Repo App callback URL is invalid.");
+
+    private static string McpHandoffCookieKey(string transactionId) =>
+        $"repo-app-mcp-handoff-{transactionId}";
 
     public static void SetCallbackCookie(HttpContext context, string callbackCookie) =>
         context.Response.Cookies.Append(CookieName, callbackCookie, new CookieOptions

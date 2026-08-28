@@ -31,6 +31,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<AuthModeEpochRecord> AuthModeEpochs => Set<AuthModeEpochRecord>();
     public DbSet<GitHubAccountLinkStateRecord> GitHubAccountLinkStates => Set<GitHubAccountLinkStateRecord>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
+    public DbSet<BrowserEntraSession> BrowserEntraSessions => Set<BrowserEntraSession>();
     public DbSet<IntegrationBuildLockRecord> IntegrationBuildLocks => Set<IntegrationBuildLockRecord>();
     public DbSet<DismissedNotification> DismissedNotifications => Set<DismissedNotification>();
     public DbSet<GitHubAuthorizationRecord> GitHubAuthorizations => Set<GitHubAuthorizationRecord>();
@@ -181,6 +182,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<WebSessionExchangeCode>().HasKey(c => c.Code);
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
+        model.Entity<BrowserEntraSession>().HasKey(s => s.Id);
+        model.Entity<BrowserEntraSession>().HasIndex(s => s.ExpiresAt);
 
         model.Entity<ProjectGitHubIdentityOverrideRecord>(e =>
         {
@@ -592,6 +595,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ReturnRouteKey).HasColumnName("return_route_key");
             e.Property(x => x.PkceVerifierProtected).HasColumnName("pkce_verifier_protected");
             e.Property(x => x.CallbackCookieHash).HasColumnName("callback_cookie_hash");
+            e.Property(x => x.BrowserSessionId).HasColumnName("browser_session_id");
             e.Property(x => x.Status).HasColumnName("status");
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.CompletedAt).HasColumnName("completed_at");

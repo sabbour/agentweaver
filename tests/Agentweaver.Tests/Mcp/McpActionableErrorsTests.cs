@@ -54,17 +54,17 @@ public sealed class McpActionableErrorsTests
     }
 
     [Fact]
-    public async Task GitHubStatus_Unauthorized_ThrowsAuthFirstHint()
+    public async Task GitHubCapabilityConnect_Unauthorized_ThrowsAgentweaverSignInHint()
     {
         var tools = CreateGitHubTools((_, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized)));
 
-        var act = () => tools.GitHubStatusAsync(CancellationToken.None);
+        var act = () => tools.GitHubRepoAppConnectAsync(CancellationToken.None);
 
         var ex = await act.Should().ThrowAsync<McpApiException>();
         ex.Which.StatusCode.Should().Be(401);
         ex.Which.Error.Should().Be("Not signed in.");
-        ex.Which.Hint.Should().Be("Call github_signin then session_start before retrying.");
+        ex.Which.Hint.Should().Be("Sign in to Agentweaver, then retry.");
     }
 
     [Fact]
