@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Agentweaver.Api.Auth;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -40,6 +41,7 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
         services.AddSingleton<IProjectStore>(_projects);
         services.AddSingleton<IBacklogTaskStore>(_backlog);
         services.AddSingleton(_registry);
+        services.AddScoped<IAutomationInvocationService, AlwaysAvailableAutomationInvocationService>();
         var provider = services.BuildServiceProvider();
         var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
 

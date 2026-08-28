@@ -166,6 +166,11 @@ public sealed class AutomationInvocationRecord
     public string Id { get; set; } = "";
     public string ProjectId { get; set; } = "";
     public string ActivationId { get; set; } = "";
+    /// <summary>
+    /// Server-owned binding to the Ready task produced by this trusted invocation. This is never
+    /// populated from a client backlog request or a user-controlled idempotency key.
+    /// </summary>
+    public string? BacklogTaskId { get; set; }
     public string OccurrenceKey { get; set; } = "";
     public string? DeliveryId { get; set; }
     public string? EventName { get; set; }

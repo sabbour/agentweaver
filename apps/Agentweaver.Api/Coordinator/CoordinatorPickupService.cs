@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 using Run = Agentweaver.Domain.Run;
@@ -137,17 +138,16 @@ public sealed class CoordinatorPickupService
             return;
         }
 
-        var invocationId = GetAutomationInvocationId(task.SourceFilePath);
-        if (invocationId is not null)
+        if (WorkflowTriggerBacklogFactory.IsTrustedAutomationTask(task))
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
-            var invocationService = scope.ServiceProvider.GetRequiredService<AutomationInvocationService>();
-            if (!await invocationService.TryPrepareRunAsync(invocationId, runId.ToString(), ct).ConfigureAwait(false))
+            var invocationService = scope.ServiceProvider.GetRequiredService<IAutomationInvocationService>();
+            if (!await invocationService.TryPrepareRunAsync(project.Id, task.Id, runId.ToString(), ct).ConfigureAwait(false))
             {
                 await _runStore.TrySetTerminalStatusAsync(
                     runId, RunStatus.Failed, DateTimeOffset.UtcNow, "automation_invocation_unavailable", ct)
                     .ConfigureAwait(false);
-                _logger.LogWarning("Pickup refused automation invocation {InvocationId} for run {RunId}", invocationId, runId);
+                _logger.LogWarning("Pickup refused unavailable automation invocation for task {TaskId} and run {RunId}", task.Id, runId);
                 return;
             }
         }
@@ -179,14 +179,5 @@ public sealed class CoordinatorPickupService
 
             // Task stays Claimed -> Failed coordinator run shown in the terminal column. No silent re-queue (FR-012).
         }
-    }
-
-    internal static string? GetAutomationInvocationId(string? sourceFilePath)
-    {
-        const string prefix = "automation-invocation:";
-        if (sourceFilePath is null || !sourceFilePath.StartsWith(prefix, StringComparison.Ordinal))
-            return null;
-        try { return new SnapshotRef(sourceFilePath[prefix.Length..]).Value; }
-        catch (ArgumentException) { return null; }
     }
 }

@@ -3,8 +3,12 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
@@ -196,6 +200,107 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         run.AgentName.Should().Be("Coordinator");
         run.Task.Should().Contain("Pickup must refuse teamless project");
         run.Task.Should().NotContain("Core Implementer");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TrustedTrigger_ActivationInvocationBacklogPickup_PreparesRunWithoutRootCapture(bool isEvent)
+    {
+        var projectId = await CreateProjectAsync();
+        var project = await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(ProjectId.Parse(projectId));
+        project.Should().NotBeNull();
+        var workflowPath = Path.Combine(project!.WorkingDirectory, ".agentweaver", "workflows");
+        Directory.CreateDirectory(workflowPath);
+        await File.WriteAllTextAsync(Path.Combine(workflowPath, "trigger.yaml"), isEvent ? """
+            id: event-trigger
+            name: Event Trigger
+            start: done
+            nodes:
+              - id: done
+                type: terminal
+                label: Done
+                role: plumbing
+            trigger:
+              type: event
+              event_name: issue.opened
+            """ : """
+            id: schedule-trigger
+            name: Schedule Trigger
+            start: done
+            nodes:
+              - id: done
+                type: terminal
+                label: Done
+                role: plumbing
+            trigger:
+              type: schedule
+              interval: daily
+              time_of_day: "09:00"
+            """);
+        await SeedActivationAsync(project.Id);
+
+        if (isEvent)
+        {
+            var fired = await _factory.Services.GetRequiredService<WorkflowEventTriggerService>()
+                .FireEventAsync(project, "issue.opened", "trusted-delivery", null, CancellationToken.None);
+            fired.Should().ContainSingle();
+        }
+        else
+        {
+            var scheduler = new WorkflowScheduleTriggerService(
+                _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+                _factory.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkflowScheduleTriggerService>.Instance);
+            await scheduler.RunTickAsync(new DateTimeOffset(2026, 8, 28, 9, 0, 0, TimeSpan.Zero), CancellationToken.None);
+        }
+
+        var backlog = _factory.Services.GetRequiredService<IBacklogTaskStore>();
+        var task = (await backlog.ListByProjectAsync(project.Id)).Should().ContainSingle().Subject;
+        await _factory.Services.GetRequiredService<CoordinatorPickupService>().TryPickupAsync(project, task, CancellationToken.None);
+        var claimed = await backlog.GetAsync(project.Id, task.Id);
+        claimed!.RunId.Should().NotBeNull();
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var snapshots = await db.RunGitHubCapabilitySnapshots.Where(x => x.RunId == claimed.RunId!.Value.ToString()).ToListAsync();
+        snapshots.Should().HaveCount(2, "the trusted invocation pre-populates the immutable activation pair before pickup starts");
+        snapshots.Should().OnlyContain(x => x.ProjectId == projectId);
+    }
+
+    private async Task SeedActivationAsync(ProjectId projectId)
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        if (!await db.Projects.AnyAsync(x => x.ProjectId == projectId.ToString()))
+            db.Projects.Add(new ProjectRecord { ProjectId = projectId.ToString() });
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = Random.Shared.NextInt64(1, long.MaxValue), AppKind = GitHubAppKind.Repo,
+            ProjectId = projectId.ToString(), CreatedAt = DateTimeOffset.UtcNow,
+        });
+        var installation = db.GitHubInstallations.Local.Last();
+        db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = installation.InstallationId, RepositoryId = installation.InstallationId,
+            ProjectId = projectId.ToString(), FullNameDisplay = "owner/repository", PermissionDigest = "repo-digest",
+            GrantedAt = DateTimeOffset.UtcNow,
+        });
+        db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+        {
+            Id = SnapshotRef.Create().Value, ProjectId = projectId.ToString(), EntraObjectId = "owner",
+            CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
+            Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        db.AutomationActivations.Add(new AutomationActivationRecord
+        {
+            Id = SnapshotRef.Create().Value, ProjectId = projectId.ToString(), InstallationId = installation.InstallationId,
+            RepositoryId = installation.InstallationId, RepositoryGrantDigest = "repo-digest",
+            CopilotBindingId = db.ProjectCopilotBindings.Local.Last().Id, CopilotBindingGrantDigest = "copilot-digest",
+            AutomationKey = "test", Status = AutomationActivationStatus.Active, ActivatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
     }
 
     private async Task<string> CreateProjectAsync(bool seedTeam = true)
