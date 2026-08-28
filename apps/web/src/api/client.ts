@@ -32,6 +32,8 @@ import type {
   DecomposeResponse,
   DetailedSystemDiagnosticsDto,
   GenerateBlueprintResponse,
+  GitHubRepositorySelectionCodeResponse,
+  GitHubRepositorySelectionListResponse,
   GitHubAccount,
   GitHubAuthStatusResponse,
   GitHubDeviceFlow,
@@ -379,6 +381,16 @@ export class AgentweaverApiClient {
 
   createProject(req: CreateProjectRequest): Promise<Project> {
     return this.request<Project>('POST', '/projects', req);
+  }
+
+  listGitHubRepositorySelections(): Promise<GitHubRepositorySelectionListResponse> {
+    return this.request<GitHubRepositorySelectionListResponse>('GET', '/github/repository-selections');
+  }
+
+  issueGitHubRepositorySelection(fullName: string): Promise<GitHubRepositorySelectionCodeResponse> {
+    return this.request<GitHubRepositorySelectionCodeResponse>('POST', '/github/repository-selections', {
+      full_name: fullName,
+    });
   }
 
   listBlueprints(): Promise<Blueprint[]> {

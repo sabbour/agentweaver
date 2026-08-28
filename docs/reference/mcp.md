@@ -171,18 +171,34 @@ Get a project by ID.
 
 ### `project_create`
 
-Create a new project, optionally linking a GitHub repository and applying a blueprint.
+Create a new project, optionally cloning a Repo App-authorized GitHub repository and applying a blueprint.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | yes | Project name |
 | `working_directory` | string | yes | Absolute path to the local working directory |
 | `origin` | string | no | Project origin: `blank` (default) or `github` |
-| `source_repository` | string | no | GitHub repository in `owner/repo` shorthand or full `https://github.com/owner/repo` HTTPS URL format (optional trailing `.git` accepted); required when `origin` is `github`. Shorthand is normalized to the full HTTPS URL before the MCP tool calls the API. |
+| `repository_selection_code` | string | no | Short-lived opaque code from `github_repository_selection_issue`; required when `origin` is `github`. Repository URLs and identifiers are not accepted. |
 | `blueprint_id` | string | no | Predefined blueprint ID to apply (exclusive with `blueprint`) |
 | `blueprint` | object | no | Inline blueprint JSON object to apply (exclusive with `blueprint_id`) |
 
 **Returns**: Created project object with assigned `id`.
+
+---
+
+### GitHub repository selection for `project_create`
+
+When creating a GitHub-origin project, keep the selection flow on the same authenticated MCP
+connection:
+
+1. Call `github_repository_selections_list`. Its redacted output supplies the selectable
+   `full_name` values only.
+2. Call `github_repository_selection_issue` with one returned `full_name`.
+3. Pass its `selection_code` as `repository_selection_code` to `project_create`.
+
+The code is bound to that caller, expires in five minutes, and is consumed once. The API resolves
+the clone metadata from its server-side authorization; do not send repository URLs, numeric IDs,
+installation IDs, permissions, tokens, or provider errors.
 
 ---
 

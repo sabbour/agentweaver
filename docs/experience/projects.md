@@ -177,7 +177,7 @@ The same model exists in MCP: predefined blueprints are applied by `blueprint_id
 
 Use MCP when an agent or script needs to manage projects without the web UI.
 
-For GitHub-backed MCP project creation, call `project_create` with `origin: "github"` and `source_repository` as either `owner/repo` or a full `https://github.com/owner/repo` URL. The MCP tool normalizes the shorthand to the full HTTPS URL before calling the API.
+For GitHub-backed MCP project creation, select a repository through the Repo App selection endpoints and call `project_create` with `origin: "github"` plus the resulting `repository_selection_code`. The code is short-lived, caller-bound, and single-use; repository URLs and identifiers are not accepted by project creation.
 
 ### Project tools
 
@@ -185,7 +185,7 @@ For GitHub-backed MCP project creation, call `project_create` with `origin: "git
 |---|---|
 | `project_list` | List all Agentweaver projects. |
 | `project_get` | Get one project by id, including name, origin, working directory, provider settings, state, and availability. |
-| `project_create` | Create a project with name, working directory, optional GitHub origin/source repository, and optional blueprint. |
+| `project_create` | Create a project with name, working directory, optional GitHub origin/selection code, and optional blueprint. |
 | `project_rename` | Rename the project display name. |
 | `project_delete` | Delete the project record. |
 | `project_configure` | Configure default model provider settings. |
@@ -207,13 +207,13 @@ For a predefined blueprint:
 
 1. Call `list_blueprints`.
 2. Pick a blueprint id.
-3. Call `project_create` with `name`, `working_directory`, `origin`, optional `source_repository`, and `blueprint_id`.
+3. For a GitHub origin, obtain `repository_selection_code`; then call `project_create` with `name`, `working_directory`, `origin`, that code, and `blueprint_id`.
 
 For a generated blueprint:
 
 1. Call `blueprint_generate` with a natural-language description.
 2. Inspect the returned blueprint and generated workflow YAML.
-3. Call `project_create` with `name`, `working_directory`, `origin`, optional `source_repository`, inline `blueprint`, and `generated_workflow_yaml`.
+3. For a GitHub origin, obtain `repository_selection_code`; then call `project_create` with `name`, `working_directory`, `origin`, that code, inline `blueprint`, and `generated_workflow_yaml`.
 
 For a custom inline blueprint:
 

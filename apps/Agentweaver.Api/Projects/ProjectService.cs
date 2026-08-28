@@ -132,7 +132,8 @@ public sealed class ProjectService
         string? defaultModelCopilot,
         string? defaultModelFoundry,
         string owner,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? accessTokenOverride = null)
     {
         ValidateName(name);
         if (string.IsNullOrWhiteSpace(sourceRepository))
@@ -144,17 +145,21 @@ public sealed class ProjectService
             .ConfigureAwait(false);
         EnsureEmptyOrCreatable(workingDir);
 
-        // Resolve a valid GitHub access token (refresh-aware; fail closed if signed out)
-        var scope = _scopeProvider.Resolve(owner);
-        string? accessToken;
-        if (_accessTokenProvider is not null)
+        // Project creation through a Repo App selection code supplies an ephemeral, server-only
+        // credential. Existing non-selection callers retain the legacy refresh-aware resolution.
+        var accessToken = accessTokenOverride;
+        if (string.IsNullOrWhiteSpace(accessToken))
         {
-            accessToken = await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
-        }
-        else
-        {
-            var tokenEntry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
-            accessToken = tokenEntry.Status == GitHubTokenStatus.SignedIn ? tokenEntry.AccessToken : null;
+            var scope = _scopeProvider.Resolve(owner);
+            if (_accessTokenProvider is not null)
+            {
+                accessToken = await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                var tokenEntry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
+                accessToken = tokenEntry.Status == GitHubTokenStatus.SignedIn ? tokenEntry.AccessToken : null;
+            }
         }
         if (string.IsNullOrWhiteSpace(accessToken))
             throw new InvalidOperationException(

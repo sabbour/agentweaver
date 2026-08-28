@@ -41,6 +41,10 @@ public sealed class OpenApiEndpointsTests : IDisposable
         {
             createProjectDescription.GetString().Should().NotBeNullOrWhiteSpace();
         }
+        var createProjectSchema = root.GetProperty("components").GetProperty("schemas")
+            .GetProperty("CreateProjectRequest").GetProperty("properties");
+        createProjectSchema.TryGetProperty("repository_selection_code", out _).Should().BeTrue();
+        createProjectSchema.TryGetProperty("source_repository", out _).Should().BeFalse();
 
         var startOrchestration = paths.GetProperty("/api/projects/{id}/orchestrations").GetProperty("post");
         startOrchestration.GetProperty("operationId").GetString().Should().Be("StartProjectOrchestration");

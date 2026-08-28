@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Api.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260828171057_BindRepositorySelectionCodesToAuthorization")]
+    partial class BindRepositorySelectionCodesToAuthorization
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -39,25 +42,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasIndex("ExpiresAt");
 
                     b.ToTable("EntraOAuthStates");
-                });
-
-            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.BrowserEntraSession", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("text");
-
-                    b.Property<string>("EntraObjectId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ExpiresAt");
-
-                    b.ToTable("BrowserEntraSessions");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.McpAuthorizationCode", b =>
@@ -1252,10 +1236,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("callback_cookie_hash");
 
-                    b.Property<string>("BrowserSessionId")
-                        .HasColumnType("text")
-                        .HasColumnName("browser_session_id");
-
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
@@ -1973,12 +1953,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("AgentName")
                         .HasColumnType("text")
                         .HasColumnName("agent_name");
-
-                    b.Property<int>("ApprovalGeneration")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(1)
-                        .HasColumnName("approval_generation");
 
                     b.Property<DateTimeOffset?>("ArchivedAt")
                         .HasColumnType("timestamp with time zone")

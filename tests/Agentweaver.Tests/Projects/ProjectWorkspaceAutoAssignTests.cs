@@ -1,9 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Projects;
 
@@ -14,12 +17,12 @@ namespace Agentweaver.Tests.Projects;
 /// PersistentVolumeWorkspaceProvider (AutoAssignsPath == true) instead of the default
 /// LocalFilesystemWorkspaceProvider used by <see cref="ProjectsWebApplicationFactory"/>.
 /// </summary>
-public sealed class ProjectWorkspaceAutoAssignTests : IClassFixture<PersistentVolumeProjectsWebApplicationFactory>
+public sealed class ProjectWorkspaceAutoAssignTests : IClassFixture<SelectionPersistentVolumeProjectsWebApplicationFactory>
 {
-    private readonly PersistentVolumeProjectsWebApplicationFactory _factory;
+    private readonly SelectionPersistentVolumeProjectsWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public ProjectWorkspaceAutoAssignTests(PersistentVolumeProjectsWebApplicationFactory factory)
+    public ProjectWorkspaceAutoAssignTests(SelectionPersistentVolumeProjectsWebApplicationFactory factory)
     {
         _factory = factory;
         _client  = factory.CreateAuthenticatedClient();
@@ -74,13 +77,50 @@ public sealed class ProjectWorkspaceAutoAssignTests : IClassFixture<PersistentVo
     [Fact]
     public async Task PostProject_FromGitHub_OmittingWorkingDirectory_Returns201_WhenProviderAutoAssigns()
     {
+        var selection = await _client.PostAsJsonAsync(
+            "/api/github/repository-selections", new { full_name = "example/repo" });
+        selection.StatusCode.Should().Be(HttpStatusCode.OK);
+        var selectionCode = (await selection.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("selection_code").GetString();
+
         var response = await _client.PostAsJsonAsync("/api/projects", new
         {
-            name              = $"Auto Assigned GitHub Project {Guid.NewGuid():N}",
-            origin            = "github",
-            source_repository = "https://github.com/example/repo.git",
+            name = $"Auto Assigned GitHub Project {Guid.NewGuid():N}",
+            origin = "github",
+            repository_selection_code = selectionCode,
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+}
+
+public sealed class SelectionPersistentVolumeProjectsWebApplicationFactory : PersistentVolumeProjectsWebApplicationFactory
+{
+    private readonly HttpMessageHandler _handler = new RepositorySelectionHandler();
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureServices(services =>
+        {
+            services.Configure<Microsoft.Extensions.Http.HttpClientFactoryOptions>(
+                "github",
+                options => options.HttpMessageHandlerBuilderActions.Add(
+                    build => build.PrimaryHandler = _handler));
+        });
+    }
+
+    private sealed class RepositorySelectionHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """[{"id":42,"full_name":"example/repo","owner":{"login":"example"},"private":true,"default_branch":"main"}]""",
+                    Encoding.UTF8,
+                    "application/json"),
+            });
     }
 }

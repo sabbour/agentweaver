@@ -148,7 +148,7 @@ public class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
 /// default local filesystem provider, so tests can verify that <c>POST /api/projects</c> does not
 /// require a client-supplied <c>working_directory</c> when the active provider auto-assigns one (#333).
 /// </summary>
-public sealed class PersistentVolumeProjectsWebApplicationFactory : ProjectsWebApplicationFactory
+public class PersistentVolumeProjectsWebApplicationFactory : ProjectsWebApplicationFactory
 {
     private readonly string _mountRoot =
         Path.Combine(Path.GetTempPath(), $"agentweaver-proj-pv-{Guid.NewGuid():N}");

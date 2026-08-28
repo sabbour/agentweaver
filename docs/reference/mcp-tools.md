@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **104 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **106 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -119,8 +119,10 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
+| `github_repository_selection_issue` | Mint a short-lived, single-use repository selection code for one full_name returned by github_repository_selections_list. Pass only the returned code to project_create; never pass a repository URL or identifier. |
+| `github_repository_selections_list` | List the signed-in caller's authorized GitHub repositories as bounded, redacted metadata. Choose one full_name from this result, then call github_repository_selection_issue before project_create with origin 'github'. |
 | `project_configure` | Configure the AI model provider settings for a project. |
-| `project_create` | Create a new Agentweaver project. When origin is 'github', source_repository is required. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
+| `project_create` | Create a new Agentweaver project. When origin is 'github', repository_selection_code is required; first use github_repository_selections_list and github_repository_selection_issue with the same caller. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
 | `project_delete` | Delete a project by ID. |
 | `project_get` | Get a project by ID. |
 | `project_list` | List all Agentweaver projects. |
@@ -200,4 +202,3 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `get_project_workspace_file` | Get the content of a file in a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace` | List the flat file tree for a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace_refs` | List the browsable git refs for a project workspace: the base branch and any active run worktrees. |
-

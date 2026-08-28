@@ -62,7 +62,11 @@ public sealed record FencedGitHubCapabilitySnapshot(
 /// Server-only repository scope recovered by atomically consuming a selection code.
 /// It deliberately excludes the code, credential reference, and display metadata.
 /// </summary>
-internal sealed record ConsumedGitHubRepositorySelection(string EntraObjectId, long RepositoryId);
+internal sealed record ConsumedGitHubRepositorySelection(
+    string EntraObjectId,
+    long RepositoryId,
+    string RepoAppAuthorizationId,
+    GitHubRepositorySelectionCredentialKind CredentialKind);
 
 public sealed record CapabilitySnapshotBackfillResult(int Migrated, int Unavailable);
 internal sealed record RepoAppAuthorizationTransaction(
@@ -177,6 +181,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     {
         if (string.IsNullOrWhiteSpace(selection.CodeHash) ||
             string.IsNullOrWhiteSpace(selection.EntraObjectId) ||
+            string.IsNullOrWhiteSpace(selection.RepoAppAuthorizationId) ||
             selection.RepositoryId <= 0 ||
             selection.ExpiresAtUnixMilliseconds <= selection.CreatedAt.ToUnixTimeMilliseconds())
             throw new ArgumentException("Repository selection codes must have valid, bounded scope.");
@@ -201,6 +206,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     internal async Task<ConsumedGitHubRepositorySelection?> TryConsumeRepositorySelectionCodeAsync(
         string codeHash,
         string entraObjectId,
+        GitHubRepositorySelectionCredentialKind credentialKind,
         DateTimeOffset now,
         CancellationToken ct = default)
     {
@@ -211,8 +217,16 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             var changed = await db.GitHubRepositorySelectionCodes
                 .Where(x => x.CodeHash == codeHash &&
                             x.EntraObjectId == entraObjectId &&
-                x.ConsumedAtUnixMilliseconds == null &&
-                x.ExpiresAtUnixMilliseconds > now.ToUnixTimeMilliseconds())
+                            x.CredentialKind == credentialKind &&
+                            x.ConsumedAtUnixMilliseconds == null &&
+                            x.ExpiresAtUnixMilliseconds > now.ToUnixTimeMilliseconds() &&
+                            (credentialKind == GitHubRepositorySelectionCredentialKind.GitHubLegacy ||
+                             db.GitHubAppAuthorizations.Any(authorization =>
+                                 authorization.Id == x.RepoAppAuthorizationId &&
+                                 authorization.EntraObjectId == entraObjectId &&
+                                 authorization.AppKind == GitHubAppKind.Repo &&
+                                 authorization.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                                 authorization.RevokedAt == null)))
                 .ExecuteUpdateAsync(s => s.SetProperty(
                     x => x.ConsumedAtUnixMilliseconds,
                     now.ToUnixTimeMilliseconds()), ct)
@@ -224,8 +238,14 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             }
 
             var selection = await db.GitHubRepositorySelectionCodes.AsNoTracking()
-                .Where(x => x.CodeHash == codeHash && x.EntraObjectId == entraObjectId)
-                .Select(x => new ConsumedGitHubRepositorySelection(x.EntraObjectId, x.RepositoryId))
+                .Where(x => x.CodeHash == codeHash &&
+                            x.EntraObjectId == entraObjectId &&
+                            x.CredentialKind == credentialKind)
+                .Select(x => new ConsumedGitHubRepositorySelection(
+                    x.EntraObjectId,
+                    x.RepositoryId,
+                    x.RepoAppAuthorizationId,
+                    x.CredentialKind))
                 .SingleAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return selection;
@@ -241,6 +261,20 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         string entraObjectId,
         CancellationToken ct = default) =>
         GetActiveRepoAppCredentialAsync(entraObjectId, ct);
+
+    internal Task<RepoAppCredentialReference?> GetLiveRepoAppCredentialAsync(
+        string entraObjectId,
+        string authorizationId,
+        CancellationToken ct = default) =>
+        db.GitHubAppAuthorizations.AsNoTracking()
+            .Where(x => x.Id == authorizationId &&
+                        x.EntraObjectId == entraObjectId &&
+                        x.AppKind == GitHubAppKind.Repo &&
+                        x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                        x.RevokedAt == null)
+            .Select(x => new RepoAppCredentialReference(
+                x.Id, x.CredentialReference, x.CredentialVersion, x.CreatedAt))
+            .SingleOrDefaultAsync(ct);
 
     internal Task<bool> IsLiveRepoAppCredentialAsync(
         RepoAppCredentialReference credential,

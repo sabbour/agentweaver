@@ -743,7 +743,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
     /// Persona-style drivers should prefer this route over manual file bootstrapping because it atomically creates the
     /// project, validates blueprint inputs, and rolls back on apply failures.
     /// </remarks>
-    public static async Task<IResult> CreateProjectAsync(
+    internal static async Task<IResult> CreateProjectAsync(
         HttpContext httpContext,
         CreateProjectRequest request,
         ProjectService projectService,
@@ -752,6 +752,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         RunWorkflowRegistry workflowRegistry,
         IProjectStore projectStore,
         ProjectRoleAssignmentService roleAssignments,
+        GitHubRepositorySelectionBroker repositorySelections,
         IConfiguration configuration,
         IProjectWorkspaceProvider workspaceProvider,
         ILogger<Program> logger,
@@ -766,8 +767,26 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             (request.Origin != "blank" && request.Origin != "github"))
             return Results.BadRequest(new { error = "origin must be 'blank' or 'github'." });
 
-        if (request.Origin == "github" && string.IsNullOrWhiteSpace(request.SourceRepository))
-            return Results.BadRequest(new { error = "source_repository is required when origin is 'github'." });
+        if (request.Origin == "github" &&
+            (string.IsNullOrWhiteSpace(request.RepositorySelectionCode) ||
+             request.AdditionalProperties is { Count: > 0 }))
+        {
+            return Results.BadRequest(new
+            {
+                error = "repository_selection_code is required and GitHub repository metadata is not accepted."
+            });
+        }
+
+        if (request.Origin == "github" &&
+            AuthModeResolver.Resolve(configuration) == AuthMode.Entra &&
+            HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) != HumanEntraSubjectState.Allowed)
+        {
+            return Results.Conflict(new { error = "human_entra_subject_required" });
+        }
+        if (request.Origin == "github" &&
+            AuthModeResolver.Resolve(configuration) == AuthMode.GitHubLegacy &&
+            httpContext.User.HasClaim("agentweaver_internal", "true"))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
 
         // working_directory is only mandatory when the active workspace provider cannot auto-assign
         // one (e.g. LocalFilesystemWorkspaceProvider). Providers that report AutoAssignsPath == true
@@ -824,6 +843,15 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             blueprintSourceType = "inline";
         }
 
+        ResolvedGitHubRepositorySelection? resolvedRepository = null;
+        if (request.Origin == "github")
+        {
+            resolvedRepository = await repositorySelections.TryConsumeAndResolveAsync(
+                request.RepositorySelectionCode!, caller, ct).ConfigureAwait(false);
+            if (resolvedRepository is null)
+                return Results.Conflict(new { error = "github_repository_selection_unavailable" });
+        }
+
         try
         {
             Agentweaver.Domain.Project project;
@@ -843,9 +871,10 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             else
             {
                 project = await projectService.CreateFromGitHubAsync(
-                    request.Name!, request.SourceRepository!, requestedWorkingDirectory,
+                    request.Name!, resolvedRepository!.SourceRepository, requestedWorkingDirectory,
                     request.DefaultProvider, request.DefaultModelGitHubCopilot,
-                    request.DefaultModelMicrosoftFoundry, caller.User, ct);
+                    request.DefaultModelMicrosoftFoundry, caller.User, ct,
+                    accessTokenOverride: resolvedRepository.AccessToken);
             }
 
             if (AuthModeResolver.Resolve(configuration) == AuthMode.Entra &&

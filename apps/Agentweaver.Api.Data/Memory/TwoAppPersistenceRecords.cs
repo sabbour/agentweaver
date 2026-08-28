@@ -12,6 +12,7 @@ public enum GitHubAuditActorKind { HumanEntraSubject, GitHubWebhook }
 public enum GitHubAuditAction { AuthorizationCompleted, BindingChanged, InstallationChanged, GrantChanged, AutomationActivated, AutomationInvoked, RunSnapshotValidated, CapabilitySnapshotMigrated }
 public enum GitHubAuditOutcome { Succeeded, Denied, Failed }
 public enum GitHubAuditReasonCode { None, BindingUnavailable, InstallationUnavailable, TransactionInvalid, TransactionConsumed, RotationMismatch, DuplicateDelivery, SnapshotMigrationUnavailable }
+public enum GitHubRepositorySelectionCredentialKind { EntraRepoApp, GitHubLegacy }
 
 public sealed class GitHubAuthorizationRecord
 {
@@ -96,6 +97,18 @@ public sealed class GitHubRepositorySelectionCodeRecord
     public string CodeHash { get; set; } = "";
     [System.Text.Json.Serialization.JsonIgnore]
     public string EntraObjectId { get; set; } = "";
+    /// <summary>
+    /// The exact live Repo App authorization that verified this selection. A code cannot be
+    /// consumed after this authorization is revoked or replaced.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string RepoAppAuthorizationId { get; set; } = "";
+    /// <summary>
+    /// The authenticated GitHub authority model that minted this code. This prevents a code from
+    /// being consumed after an auth-mode change as a different kind of caller.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public GitHubRepositorySelectionCredentialKind CredentialKind { get; set; }
     public long RepositoryId { get; set; }
     public long ExpiresAtUnixMilliseconds { get; set; }
     public long? ConsumedAtUnixMilliseconds { get; set; }
