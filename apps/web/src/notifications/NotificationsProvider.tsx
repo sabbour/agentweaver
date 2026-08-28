@@ -68,6 +68,7 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
   const notificationRequestVersionRef = useRef(0);
   const latestPollRequestVersionRef = useRef(0);
   const acceptedSourcesRef = useRef<Map<string, AcceptedNotificationSource>>(new Map());
+  const pendingApprovalValidationsRef = useRef<Map<number, NotificationDto>>(new Map());
 
   const reconcileApprovalToasts = useCallback((items: NotificationDto[], requestVersion: number) => {
     const currentById = new Map(items.map((notification) => [notification.id, notification]));
@@ -80,6 +81,13 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
       if (!current || !hasSameNotificationSource(current, announced)) {
         dismissToast(`notif-${id}`);
         activeApprovalToastsRef.current.delete(id);
+      }
+    }
+    for (const notification of pendingApprovalValidationsRef.current.values()) {
+      const current = currentById.get(notification.id);
+      const accepted = acceptedSourcesRef.current.get(notification.id);
+      if (!accepted || requestVersion > accepted.requestVersion) {
+        acceptedSourcesRef.current.set(notification.id, { requestVersion, source: current });
       }
     }
   }, [dismissToast]);
@@ -128,6 +136,7 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     }
 
     const requestVersion = ++notificationRequestVersionRef.current;
+    pendingApprovalValidationsRef.current.set(requestVersion, notification);
     try {
       // Confirm the source is still available immediately before navigating. Polling can otherwise
       // leave a short window where a permanent approval toast points at a deleted or inaccessible run.
@@ -150,6 +159,8 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     } catch {
       // Do not navigate without proof that this exact source is still present. Keep the CTA so
       // a transient request failure does not turn into a false "unavailable" result.
+    } finally {
+      pendingApprovalValidationsRef.current.delete(requestVersion);
     }
   }, [acceptValidationSource, dismissToast, navigate, showUnavailableTarget]);
 

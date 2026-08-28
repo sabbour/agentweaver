@@ -250,6 +250,53 @@ describe('NotificationBell + NotificationsProvider', () => {
     expect(await screen.findByText('This approval no longer has a run to review.')).toBeTruthy();
   });
 
+  it('blocks a pending CTA after its approval is dismissed from the bell and a later poll omits it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const approval = makeNotification({
+      type: 'tool_approval',
+      title: 'Approval needed to run "start_preview"',
+    });
+    let resolveValidation!: (response: NotificationsResponseDto) => void;
+    const validationResponse = new Promise<NotificationsResponseDto>((resolve) => {
+      resolveValidation = resolve;
+    });
+    vi.mocked(apiClient.getNotifications)
+      .mockResolvedValueOnce(respond([]))
+      .mockResolvedValueOnce(respond([approval]))
+      .mockImplementationOnce(() => validationResponse)
+      .mockResolvedValueOnce(respond([]));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    renderBell(1000);
+
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    await user.click(await screen.findByText('Review now'));
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(3));
+
+    await user.click(screen.getByTestId('notification-bell'));
+    await user.click(await screen.findByRole('button', {
+      name: `Dismiss notification: ${approval.title}`,
+    }));
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(4));
+
+    await act(async () => {
+      resolveValidation(respond([approval]));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('current-location').textContent).toBe('/');
+    expect(await screen.findByText('This approval no longer has a run to review.')).toBeTruthy();
+  });
+
   it('keeps two approval CTAs independent while both validations are pending', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const firstApproval = makeNotification({
