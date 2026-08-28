@@ -219,13 +219,6 @@ internal sealed class RunCommandTool : ISandboxTool
 
     private const string CredentialSafeGitCommand = "status";
 
-    private static readonly HashSet<string> BuiltInGhCommands = new(StringComparer.Ordinal)
-    {
-        "api", "attestation", "auth", "cache", "codespace", "completion", "config",
-        "gist", "gpg-key", "issue", "label", "org", "pr", "project", "release", "repo",
-        "ruleset", "search", "secret", "ssh-key", "status", "variable", "workflow",
-    };
-
     private static bool TryCreateRepositoryCredentialCommand(
         IReadOnlyList<string>? arguments,
         string? accessToken,
@@ -316,72 +309,118 @@ internal sealed class RunCommandTool : ISandboxTool
         out string? error)
     {
         error = null;
-        if (arguments.Count < 2 || !BuiltInGhCommands.Contains(arguments[1]))
+        if (!IsDirectGhCommand(arguments))
         {
-            error = "Command rejected: repository credentials require a built-in gh command.";
-            return false;
-        }
-
-        if (GhArgumentsCanStartAnotherExecutable(arguments))
-        {
-            error = "Command rejected: gh commands that start another executable are not allowed with repository credentials.";
+            error = "Command rejected: repository credentials only allow parsed direct gh command forms.";
             return false;
         }
 
         return true;
     }
 
-    private static bool GhArgumentsCanStartAnotherExecutable(IReadOnlyList<string> arguments)
-    {
-        if (arguments[1] == "codespace" || HasGhProcessLaunchingOption(arguments))
-            return true;
+    private static bool IsDirectGhCommand(IReadOnlyList<string> arguments) =>
+        // `gh api` cannot expand repository placeholders here because TryParseCommand rejects
+        // braces before this allowlist is evaluated.
+        IsGhCommand(arguments, "api") ||
+        IsGhCommand(arguments, "status") ||
+        HasExactSingleGhArgument(arguments, "repo", "list", IsGhIdentifier) ||
+        HasExactSingleGhArgument(arguments, "repo", "view", IsExplicitRepository) ||
+        HasExactSingleGhArgument(arguments, "repo", "fork", IsExplicitRepository) ||
+        HasGhRepositoryOption(arguments, ["issue", "list"], positionalArgumentCount: 0) ||
+        HasGhRepositoryOption(arguments, ["issue", "view"], positionalArgumentCount: 1) ||
+        HasGhRepositoryOption(
+            arguments,
+            ["issue", "develop"],
+            positionalArgumentCount: 1,
+            requiredOption: "--list") ||
+        HasGhRepositoryOption(arguments, ["pr", "list"], positionalArgumentCount: 0) ||
+        HasGhRepositoryOption(arguments, ["pr", "view"], positionalArgumentCount: 1) ||
+        HasGhRepositoryOption(arguments, ["pr", "close"], positionalArgumentCount: 1) ||
+        HasGhRepositoryOption(arguments, ["pr", "merge"], positionalArgumentCount: 1) ||
+        HasGhRepositoryOption(arguments, ["workflow", "list"], positionalArgumentCount: 0) ||
+        HasGhRepositoryOption(arguments, ["workflow", "view"], positionalArgumentCount: 1) ||
+        HasGhRepositoryOption(arguments, ["workflow", "run"], positionalArgumentCount: 1);
 
-        return HasNestedGhCommand(arguments, "auth", "login") ||
-            HasNestedGhCommand(arguments, "auth", "setup-git") ||
-            HasNestedGhCommand(arguments, "gist", "clone") ||
-            HasNestedGhCommand(arguments, "repo", "clone") ||
-            HasNestedGhCommand(arguments, "pr", "checkout") ||
-            (HasNestedGhCommand(arguments, "issue", "develop") &&
-                HasGhOption(arguments, "--checkout", 'c')) ||
-            (HasNestedGhCommand(arguments, "repo", "create") &&
-                HasGhOption(arguments, "--clone", 'c')) ||
-            (HasNestedGhCommand(arguments, "repo", "fork") &&
-                HasGhOption(arguments, "--clone", 'c'));
+    private static bool HasExactSingleGhArgument(
+        IReadOnlyList<string> arguments,
+        string topLevelCommand,
+        string subcommand,
+        Func<string, bool> isAllowedArgument) =>
+        IsGhCommand(arguments, topLevelCommand, subcommand) &&
+        arguments.Count == 4 &&
+        isAllowedArgument(arguments[3]);
+
+    private static bool HasGhRepositoryOption(
+        IReadOnlyList<string> arguments,
+        IReadOnlyList<string> command,
+        int positionalArgumentCount,
+        string? requiredOption = null)
+    {
+        if (!IsGhCommand(arguments, command))
+            return false;
+
+        var positionalArguments = new List<string>(positionalArgumentCount);
+        var hasRepository = false;
+        var hasRequiredOption = requiredOption is null;
+        for (var index = command.Count + 1; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (argument is "--repo" or "-R")
+            {
+                if (hasRepository || ++index >= arguments.Count || !IsExplicitRepository(arguments[index]))
+                    return false;
+
+                hasRepository = true;
+                continue;
+            }
+
+            if (argument.StartsWith("--repo=", StringComparison.Ordinal))
+            {
+                if (hasRepository || !IsExplicitRepository(argument["--repo=".Length..]))
+                    return false;
+
+                hasRepository = true;
+                continue;
+            }
+
+            if (argument == requiredOption)
+            {
+                if (hasRequiredOption)
+                    return false;
+
+                hasRequiredOption = true;
+                continue;
+            }
+
+            if (!IsGhIdentifier(argument))
+                return false;
+
+            positionalArguments.Add(argument);
+        }
+
+        return hasRepository &&
+            hasRequiredOption &&
+            positionalArguments.Count == positionalArgumentCount;
     }
 
-    private static bool HasNestedGhCommand(
+    private static bool IsGhCommand(
         IReadOnlyList<string> arguments,
-        string topLevel,
-        string nested) =>
-        arguments[1] == topLevel &&
-        arguments.Skip(2).TakeWhile(argument => argument != "--")
-            .Any(argument => argument == nested);
+        IReadOnlyList<string> command) =>
+        arguments.Count > command.Count &&
+        arguments[0] == "gh" &&
+        command.Select((word, index) => arguments[index + 1] == word).All(matches => matches);
 
-    private static bool HasGhProcessLaunchingOption(IReadOnlyList<string> arguments) =>
-        arguments.Skip(2).TakeWhile(argument => argument != "--")
-            .Any(argument =>
-                argument is "--web" or "--browser" or "--editor" ||
-                argument.StartsWith("--web=", StringComparison.Ordinal) ||
-                argument.StartsWith("--browser=", StringComparison.Ordinal) ||
-                argument.StartsWith("--editor=", StringComparison.Ordinal) ||
-                HasShortGhOption(argument, 'w') ||
-                HasShortGhOption(argument, 'e'));
-
-    private static bool HasGhOption(
+    private static bool IsGhCommand(
         IReadOnlyList<string> arguments,
-        string longOption,
-        char shortOption) =>
-        arguments.Skip(2).TakeWhile(argument => argument != "--")
-            .Any(argument =>
-                argument == longOption ||
-                argument.StartsWith(longOption + "=", StringComparison.Ordinal) ||
-                HasShortGhOption(argument, shortOption));
+        params string[] command) =>
+        IsGhCommand(arguments, (IReadOnlyList<string>)command);
 
-    private static bool HasShortGhOption(string argument, char option) =>
-        argument.Length > 1 &&
-        argument[0] == '-' &&
-        argument[1] != '-' &&
-        argument.AsSpan(1).IndexOf(option) >= 0;
+    private static bool IsExplicitRepository(string argument) =>
+        IsGhIdentifier(argument) && argument.Contains("/", StringComparison.Ordinal);
+
+    private static bool IsGhIdentifier(string argument) =>
+        !string.IsNullOrWhiteSpace(argument) &&
+        !argument.StartsWith("-", StringComparison.Ordinal);
 
     private static bool TryParseCommand(
         string command,

@@ -132,7 +132,21 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
 
     [Theory]
     [InlineData("git status")]
-    [InlineData("gh repo view")]
+    [InlineData("gh api user")]
+    [InlineData("gh status")]
+    [InlineData("gh repo list sabbour")]
+    [InlineData("gh repo view sabbour/agentweaver")]
+    [InlineData("gh repo fork sabbour/agentweaver")]
+    [InlineData("gh issue list --repo sabbour/agentweaver")]
+    [InlineData("gh issue view 947 --repo sabbour/agentweaver")]
+    [InlineData("gh issue develop 947 --list --repo sabbour/agentweaver")]
+    [InlineData("gh pr list --repo sabbour/agentweaver")]
+    [InlineData("gh pr view 968 --repo sabbour/agentweaver")]
+    [InlineData("gh pr close 968 --repo sabbour/agentweaver")]
+    [InlineData("gh pr merge 968 --repo sabbour/agentweaver")]
+    [InlineData("gh workflow list --repo sabbour/agentweaver")]
+    [InlineData("gh workflow view ci.yml --repo sabbour/agentweaver")]
+    [InlineData("gh workflow run ci.yml --repo sabbour/agentweaver")]
     public async Task Controlled_run_command_uses_direct_execution_for_repository_credential_commands(string command)
     {
         SandboxCommand? observed = null;
@@ -373,6 +387,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     [Theory]
     [InlineData("gh pr create --editor")]
     [InlineData("gh pr create -e")]
+    [InlineData("gh pr create --title test --body test")]
     [InlineData("gh pr create -ew")]
     [InlineData("gh pr create -we")]
     [InlineData("gh pr view 1 --web")]
@@ -381,13 +396,23 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     [InlineData("gh pr view 1 -we")]
     [InlineData("gh pr view 1 -ew")]
     [InlineData("gh repo view --browser")]
+    [InlineData("gh repo view sabbour/agentweaver --web")]
     [InlineData("gh gist clone deadbeef")]
+    [InlineData("gh issue develop 1")]
     [InlineData("gh issue develop 1 --checkout")]
     [InlineData("gh issue develop 1 -c")]
+    [InlineData("gh issue list --web")]
     [InlineData("gh repo create example --clone")]
     [InlineData("gh repo create example -c")]
+    [InlineData("gh repo fork example --remote")]
     [InlineData("gh repo fork example --clone")]
     [InlineData("gh repo fork example -c")]
+    [InlineData("gh pr checkout 1")]
+    [InlineData("gh pr close 1 --delete-branch")]
+    [InlineData("gh pr close 1 -d")]
+    [InlineData("gh pr merge 1 --delete-branch")]
+    [InlineData("gh pr merge 1 -d")]
+    [InlineData("gh workflow view build.yml --web")]
     [InlineData("gh auth login")]
     [InlineData("gh auth setup-git")]
     [InlineData("gh codespace list")]
@@ -396,6 +421,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     {
         const string sentinel = "sentinel-repository-token";
         SandboxCommand? observed = null;
+        var approvalChecks = 0;
         var executor = new CapturingExecutor(candidate => observed = candidate);
         using var tracker = new ShellExecutionTracker();
         var context = BuildContext(
@@ -403,7 +429,11 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             tracker,
             repositoryAccessToken: sentinel,
             requireApprovalForAllShell: true,
-            isCommandApproved: _ => true);
+            isCommandApproved: _ =>
+            {
+                approvalChecks++;
+                return true;
+            });
         var tool = CopilotAIAgent.BuildSessionConfigTools(
             context,
             includeControlledRunCommand: true).Single(t => t.Name == "run_command");
@@ -411,8 +441,10 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         var result = await tool.InvokeAsync(new AIFunctionArguments(
             new Dictionary<string, object?> { ["command"] = command }));
 
-        result?.ToString().Should().Contain("start another executable");
+        result?.ToString().Should().Contain("parsed direct gh command forms");
         result?.ToString().Should().NotContain(sentinel);
+        approvalChecks.Should().Be(1,
+            "an approval must not make a non-allowlisted command eligible for the repository token");
         observed.Should().BeNull(
             "an editor, browser, clone, checkout, or nested gh child must never receive the repository token");
     }
