@@ -433,6 +433,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.ParentPrdRunId).HasColumnName("parent_prd_run_id");
             e.Property(t => t.PromotionKey).HasColumnName("promotion_key");
             e.Property(t => t.PromotionReason).HasColumnName("promotion_reason");
+            e.Property(t => t.IsAutomationInvocationPending)
+                .HasColumnName("automation_invocation_pending")
+                .HasDefaultValue(false);
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })
                 .HasDatabaseName("IX_backlog_tasks_project_state_orderkey");
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })

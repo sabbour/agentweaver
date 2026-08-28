@@ -172,6 +172,8 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN promotion_key TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN promotion_reason TEXT;", ct);
         await TryAlterAsync(connection,
+            "ALTER TABLE backlog_tasks ADD COLUMN automation_invocation_pending INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection,
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_parent_promotion_key
                 ON backlog_tasks (parent_prd_run_id, promotion_key)
@@ -663,6 +665,7 @@ public sealed class SqliteDb
             parent_prd_run_id TEXT,
             promotion_key TEXT,
             promotion_reason TEXT,
+            automation_invocation_pending INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
         );
 

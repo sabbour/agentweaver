@@ -70,6 +70,10 @@ public sealed class SqliteBacklogTaskStoreTests
             verify.CommandText =
                 "SELECT COUNT(*) FROM pragma_index_list('backlog_tasks') WHERE name = 'idx_backlog_tasks_parent_promotion_key';";
             Convert.ToInt64(await verify.ExecuteScalarAsync()).Should().Be(1);
+            verify.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('backlog_tasks') WHERE name = 'automation_invocation_pending';";
+            Convert.ToInt64(await verify.ExecuteScalarAsync()).Should().Be(1,
+                "upgraded SQLite databases must retain the durable provisional-invocation marker");
         }
         finally
         {

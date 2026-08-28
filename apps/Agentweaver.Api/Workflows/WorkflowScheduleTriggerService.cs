@@ -151,7 +151,7 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
                     continue;
                 }
 
-                var task = await WorkflowTriggerBacklogFactory.CreateUnpublishedTaskAsync(
+                var task = await WorkflowTriggerBacklogFactory.CreateProvisionalAutomationTaskAsync(
                     backlogStore,
                     project,
                     def,
@@ -196,7 +196,7 @@ public sealed class WorkflowScheduleTriggerService : BackgroundService
         Project project,
         BacklogTask task)
     {
-        var deleted = await backlogStore.TryDeleteAsync(project.Id, task.Id, CancellationToken.None)
+        var deleted = await backlogStore.TryDeleteProvisionalAutomationTaskAsync(project.Id, task.Id, CancellationToken.None)
             .ConfigureAwait(false);
         if (!deleted)
             throw new InvalidOperationException("Unable to discard an unbound trusted automation invocation.");

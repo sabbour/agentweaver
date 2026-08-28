@@ -261,6 +261,7 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
                 ParentPrdRunId = parentRunId,
                 PromotionKey = task.PromotionKey,
                 PromotionReason = task.PromotionReason,
+                IsAutomationInvocationPending = task.IsAutomationInvocationPending,
             });
             created.Add(task);
             keyToTaskId.Add(task.PromotionKey!, task.Id);
@@ -584,5 +585,6 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
         ParentPrdRunId = reader.IsDBNull(15) ? null : RunId.Parse(reader.GetString(15)),
         PromotionKey = reader.IsDBNull(16) ? null : reader.GetString(16),
         PromotionReason = reader.IsDBNull(17) ? null : reader.GetString(17),
+        IsAutomationInvocationPending = false,
     };
 }

@@ -34,15 +34,21 @@ internal static class WorkflowTriggerBacklogFactory
         DateTimeOffset now,
         CancellationToken ct)
     {
-        var task = await CreateUnpublishedTaskAsync(
+        var task = await CreateBacklogTaskAsync(
             backlogStore, project, definition, title, description, capturedBy, idempotencyKey, now, ct)
             .ConfigureAwait(false);
-        if (!await TryPublishAsync(backlogStore, project, task, now, ct).ConfigureAwait(false))
+        var readyKeys = (await backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false))
+            .Where(t => t.State == BacklogTaskState.Ready)
+            .OrderBy(t => t.OrderKey, StringComparer.Ordinal)
+            .Select(t => t.OrderKey)
+            .ToList();
+        var orderKey = OrderKey.Between(readyKeys.Count == 0 ? null : readyKeys[^1], null);
+        if (!await backlogStore.TryMoveToReadyAsync(project.Id, task.Id, orderKey, now, ct).ConfigureAwait(false))
             throw new InvalidOperationException("Unable to publish workflow backlog task.");
         return task with { State = BacklogTaskState.Ready, CommittedAt = now };
     }
 
-    public static async Task<BacklogTask> CreateUnpublishedTaskAsync(
+    public static Task<BacklogTask> CreateProvisionalAutomationTaskAsync(
         IBacklogTaskStore backlogStore,
         Project project,
         WorkflowDefinition definition,
@@ -51,7 +57,22 @@ internal static class WorkflowTriggerBacklogFactory
         string capturedBy,
         string idempotencyKey,
         DateTimeOffset now,
-        CancellationToken ct)
+        CancellationToken ct) =>
+        CreateBacklogTaskAsync(
+            backlogStore, project, definition, title, description, capturedBy, idempotencyKey, now, ct,
+            isAutomationInvocationPending: true);
+
+    private static async Task<BacklogTask> CreateBacklogTaskAsync(
+        IBacklogTaskStore backlogStore,
+        Project project,
+        WorkflowDefinition definition,
+        string title,
+        string description,
+        string capturedBy,
+        string idempotencyKey,
+        DateTimeOffset now,
+        CancellationToken ct,
+        bool isAutomationInvocationPending = false)
     {
         var existing = await backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false);
         var backlogKeys = existing
@@ -74,6 +95,7 @@ internal static class WorkflowTriggerBacklogFactory
             CommittedAt = null,
             WorkflowOverrideId = definition.Id,
             SourceFilePath = idempotencyKey,
+            IsAutomationInvocationPending = isAutomationInvocationPending,
         };
 
         await backlogStore.InsertAsync(task, ct).ConfigureAwait(false);
@@ -93,7 +115,7 @@ internal static class WorkflowTriggerBacklogFactory
             .Select(t => t.OrderKey)
             .ToList();
         var orderKey = OrderKey.Between(readyKeys.Count == 0 ? null : readyKeys[^1], null);
-        return await backlogStore.TryMoveToReadyAsync(project.Id, task.Id, orderKey, now, ct)
+        return await backlogStore.TryPublishAutomationInvocationTaskAsync(project.Id, task.Id, orderKey, now, ct)
             .ConfigureAwait(false);
     }
 }
