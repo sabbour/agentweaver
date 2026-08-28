@@ -220,13 +220,17 @@ public sealed class DurableToolApprovalGate(
         // EVERY non-once scope from EVERY caller -- standard API GrantAsync (context: null) and
         // AgentHost-context PersistAgentHostApprovalAsync alike -- there is no context-based
         // carve-out for the active-run requirement.
-        IAsyncDisposable? activeClaim = null;
+        var activeClaims = new List<IAsyncDisposable>();
         if (scope != ApprovalScope.Once
-            && runActiveClaimGuard is not null
-            && RunId.TryParse(runId, out var claimRunId))
+            && runActiveClaimGuard is not null)
         {
-            activeClaim = await runActiveClaimGuard.AcquireAsync(claimRunId, CancellationToken.None)
-                .ConfigureAwait(false);
+            foreach (var claimRunId in ActiveClaimRunIds(runId, parentId, subject, parentSubject, scope)
+                         .Distinct()
+                         .OrderBy(id => id.ToString(), StringComparer.Ordinal))
+            {
+                activeClaims.Add(await runActiveClaimGuard.AcquireAsync(claimRunId, CancellationToken.None)
+                    .ConfigureAwait(false));
+            }
         }
 
         try
@@ -235,20 +239,6 @@ public sealed class DurableToolApprovalGate(
                 lockIds,
                 async (db, ct) =>
                 {
-                    // Persisting a scoped policy claims the same database row terminalization
-                    // updates. On Postgres, FOR UPDATE gives the grant and any terminal transition
-                    // a single winner; on SQLite the in-process claim acquired above serializes
-                    // this check against every guarded run-store status transition, since SQLite's
-                    // transaction retry only guards local write conflicts, not a separate run store.
-                    // The active-run requirement applies to every non-once scope regardless of
-                    // whether the caller supplied an AgentHost context.
-                    if (scope != ApprovalScope.Once
-                        && runStore is not null
-                        && !await LockAndRequireActiveRunAsync(db, runId, ct).ConfigureAwait(false))
-                    {
-                        return false;
-                    }
-
                     var records = await db.RunEvents
                         .AsNoTracking()
                         .Where(e => e.RunId == runId
@@ -264,6 +254,18 @@ public sealed class DurableToolApprovalGate(
                         return false;
                     var policyDestinations = BuildPolicyDestinations(
                         runId, parentId, subject, parentSubject, resolvedContext.ToolName, scope);
+
+                    // Persisting a scoped policy claims the same run rows status transitions
+                    // update. The requesting child and every parent run that would receive a
+                    // policy must still be active. Postgres locks and checks all of those rows
+                    // in this transaction; SQLite holds the corresponding in-process claims
+                    // across the separate run-store reads and this policy commit.
+                    if (scope != ApprovalScope.Once
+                        && !await LockAndRequireActiveRunsAsync(
+                            db, ActivePolicyRunIds(runId, policyDestinations), ct).ConfigureAwait(false))
+                    {
+                        return false;
+                    }
 
                     // Claiming the pending request and writing every selected policy occur in this
                     // transaction under the same sorted advisory locks. A losing once/always race
@@ -302,9 +304,23 @@ public sealed class DurableToolApprovalGate(
         }
         finally
         {
-            if (activeClaim is not null)
+            foreach (var activeClaim in activeClaims.AsEnumerable().Reverse())
                 await activeClaim.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    private async Task<bool> LockAndRequireActiveRunsAsync(
+        MemoryDbContext db,
+        IEnumerable<string> runIds,
+        CancellationToken ct)
+    {
+        foreach (var runId in runIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+        {
+            if (!await LockAndRequireActiveRunAsync(db, runId, ct).ConfigureAwait(false))
+                return false;
+        }
+
+        return true;
     }
 
     private async Task<bool> LockAndRequireActiveRunAsync(
@@ -327,6 +343,38 @@ public sealed class DurableToolApprovalGate(
 
         var run = await runStore.GetAsync(id, ct).ConfigureAwait(false);
         return run?.Status == RunStatus.InProgress;
+    }
+
+    private static IEnumerable<RunId> ActiveClaimRunIds(
+        string runId,
+        string? parentId,
+        ApprovalSubject? subject,
+        ApprovalSubject? parentSubject,
+        ApprovalScope scope)
+    {
+        if (RunId.TryParse(runId, out var sourceRunId))
+            yield return sourceRunId;
+
+        if (scope != ApprovalScope.Always
+            && parentId is not null
+            && subject is not null
+            && parentSubject == subject
+            && RunId.TryParse(parentId, out var parentRunId))
+        {
+            yield return parentRunId;
+        }
+    }
+
+    private static IEnumerable<string> ActivePolicyRunIds(
+        string runId,
+        IReadOnlyList<PolicyDestination> policyDestinations)
+    {
+        yield return runId;
+        foreach (var destination in policyDestinations)
+        {
+            if (RunId.TryParse(destination.StreamId, out _))
+                yield return destination.StreamId;
+        }
     }
 
     private Task<bool> ResolveDenialAsync(string runId, string requestId, bool expired) =>

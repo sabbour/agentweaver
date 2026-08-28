@@ -86,6 +86,31 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task RunScopedApproval_OnChild_FailsWhenParentIsNoLongerActive()
+    {
+        var parent = await InsertOwnedRunAsync("owner");
+        var child = await InsertOwnedRunAsync("owner");
+        var sibling = await InsertOwnedRunAsync("owner");
+        var gate = NewApprovalGate();
+        await _runStore.UpdateReviewReadyAsync(parent.Id, "tree", "diff", 1);
+        gate.RegisterParentRun(child.Id.ToString(), parent.Id.ToString());
+
+        var wait = gate.WaitForApprovalAsync(
+            child.Id.ToString(), "inactive-parent", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+
+        (await gate.GrantAsync(child.Id.ToString(), "inactive-parent", ApprovalScope.Run)).Should().BeFalse(
+            "a run-scoped child grant would write a policy to its parent, which is awaiting review");
+        gate.Deny(child.Id.ToString(), "inactive-parent").Should().BeTrue();
+        (await wait).Should().BeFalse();
+
+        (await _runStore.TryTransitionReviewToInProgressAsync(parent.Id)).Should().BeTrue();
+        gate.RegisterParentRun(sibling.Id.ToString(), parent.Id.ToString());
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://later-child.test").Should().BeFalse(
+            "a late grant must not leave a durable parent policy for children created after the parent resumes");
+    }
+
+    [Fact]
     public async Task ResolvedOrClearedRequests_DoNotApproveAgain()
     {
         var owner = NewApprovalGate();

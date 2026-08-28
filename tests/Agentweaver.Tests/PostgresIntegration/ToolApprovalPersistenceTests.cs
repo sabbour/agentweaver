@@ -214,7 +214,46 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
         gateA.GetRequestState(runId, requestId).Should().Be(ToolApprovalRequestState.Approved);
     }
 
-    private static Run NewRun(string owner, ProjectId projectId) => new()
+    [PostgresFact]
+    public async Task RunScopedChildGrant_FailsWhenParentIsAwaitingReview()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var project = ProjectId.New();
+        var parent = NewRun($"alice-{suffix}", project, RunStatus.AwaitingReview);
+        var child = NewRun($"alice-{suffix}", project);
+        var sibling = NewRun($"alice-{suffix}", project);
+        var runStore = new EfRunStore(pg.Factory);
+        foreach (var run in new[] { parent, child, sibling })
+            await runStore.InsertAsync(run);
+
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(options =>
+            options.UseNpgsql(
+                pg.ConnectionString,
+                npgsql => npgsql.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
+        using var provider = services.BuildServiceProvider();
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var gate = new DurableToolApprovalGate(
+            new DurableRunControlState(provider.GetRequiredService<IServiceScopeFactory>(), eventStream),
+            runStore: runStore);
+        gate.RegisterParentRun(child.Id.ToString(), parent.Id.ToString());
+
+        var wait = gate.WaitForApprovalAsync(
+            child.Id.ToString(), "inactive-parent", "web_fetch", "https://child.test",
+            TimeSpan.FromSeconds(5), default);
+
+        (await gate.GrantAsync(child.Id.ToString(), "inactive-parent", ApprovalScope.Run)).Should().BeFalse(
+            "Postgres must lock and require every policy destination run to remain active");
+        gate.Deny(child.Id.ToString(), "inactive-parent").Should().BeTrue();
+        (await wait).Should().BeFalse();
+
+        (await runStore.TryTransitionReviewToInProgressAsync(parent.Id)).Should().BeTrue();
+        gate.RegisterParentRun(sibling.Id.ToString(), parent.Id.ToString());
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://later-child.test").Should().BeFalse(
+            "a rejected late child grant must not authorize children after the parent resumes");
+    }
+
+    private static Run NewRun(string owner, ProjectId projectId, RunStatus status = RunStatus.InProgress) => new()
     {
         Id = RunId.New(),
         RepositoryPath = "postgres-tool-approval-test",
@@ -222,7 +261,7 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
         ModelSource = ModelSource.GitHubCopilot,
         Task = "Verify owner-scoped durable tool approval",
         SubmittingUser = owner,
-        Status = RunStatus.InProgress,
+        Status = status,
         StartedAt = DateTimeOffset.UtcNow,
         ProjectId = projectId,
     };

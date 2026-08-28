@@ -726,7 +726,7 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
     }
 
     [Fact]
-    public async Task PersistAgentHostApprovalAsync_HoldsActiveClaimAcrossReadAndCommit_BlockingConcurrentGuardedTerminalization()
+    public async Task PersistAgentHostApprovalAsync_HoldsActiveClaimAcrossReadAndCommit_BlockingConcurrentReviewReady()
     {
         var streams = new RunStreamStore();
         var runIdValue = RunId.New();
@@ -744,24 +744,24 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         await inner.EnteredRead.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // While the grant's active-run read is paused mid-flight -- still holding the claim
-        // acquired around the whole read-then-commit critical section -- a concurrent guarded
-        // status transition for the SAME run must be unable to proceed. This is the atomicity
-        // finding #3 requires on SQLite, where the run store and the RunEvents/policy store are
-        // separate database files that cannot share one ACID transaction.
-        var terminalizeTask = guardedStore.TrySetTerminalStatusAsync(
-            runIdValue, RunStatus.Failed, DateTimeOffset.UtcNow, "race", CancellationToken.None);
+        // acquired around the whole read-then-commit critical section -- marking the same run
+        // review-ready must be unable to proceed. This is the atomicity finding #3 requires on
+        // SQLite, where the run store and the RunEvents/policy store are separate database files
+        // that cannot share one ACID transaction.
+        var reviewReadyTask = guardedStore.UpdateReviewReadyAsync(
+            runIdValue, "tree", "diff", 1, CancellationToken.None);
 
         await Task.Delay(TimeSpan.FromMilliseconds(200));
-        terminalizeTask.IsCompleted.Should().BeFalse(
-            "terminalization must wait for the in-flight approval-scope claim, not interleave with it");
-        inner.TerminalizeCalls.Should().Be(0);
+        reviewReadyTask.IsCompleted.Should().BeFalse(
+            "marking review ready must wait for the in-flight durable approval-scope grant");
+        inner.ReviewReadyCalls.Should().Be(0);
 
         inner.ReleaseRead.SetResult();
 
         (await grantTask.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue(
             "the run was InProgress for the entire atomic claim, so the grant must succeed");
-        (await terminalizeTask.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
-        inner.TerminalizeCalls.Should().Be(1);
+        await reviewReadyTask.WaitAsync(TimeSpan.FromSeconds(5));
+        inner.ReviewReadyCalls.Should().Be(1);
 
         gate.IsAutoApproved(runId, "web_fetch", "https://other.test").Should().BeTrue(
             "the durable run-scope policy committed atomically before the later terminalization");
@@ -824,6 +824,7 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         public readonly TaskCompletionSource ReleaseRead =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int TerminalizeCalls;
+        public int ReviewReadyCalls;
 
         public async Task<Run?> GetAsync(RunId runId, CancellationToken ct = default)
         {
@@ -864,7 +865,12 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
         public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus s, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateStatusAsync(RunId runId, RunStatus s, DateTimeOffset? endedAt, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateResultAsync(RunId runId, RunStatus s, string result, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null)
+        {
+            Interlocked.Increment(ref ReviewReadyCalls);
+            _status = RunStatus.AwaitingReview;
+            return Task.CompletedTask;
+        }
         public Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
         public Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus s, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<bool> TryTransitionToCommittingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();

@@ -14,9 +14,9 @@ namespace Agentweaver.Api.Infrastructure;
 ///
 /// Guarded methods are exactly those that can transition a run away from InProgress:
 /// <see cref="UpdateStatusAsync"/>, <see cref="UpdateResultAsync"/>,
-/// <see cref="TrySetTerminalStatusAsync"/>, <see cref="SetAssembleReadyAsync"/>, and
-/// <see cref="TryTransitionToIdleAsync"/>. Every other member is a pure pass-through; this store
-/// introduces no other behavior change.
+/// <see cref="UpdateReviewReadyAsync"/>, <see cref="TrySetTerminalStatusAsync"/>,
+/// <see cref="SetAssembleReadyAsync"/>, and <see cref="TryTransitionToIdleAsync"/>.
+/// Every other member is a pure pass-through; this store introduces no other behavior change.
 /// </summary>
 public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClaimGuard guard) : IRunStore
 {
@@ -43,9 +43,12 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         await inner.UpdateResultAsync(runId, status, result, endedAt, ct).ConfigureAwait(false);
     }
 
-    public Task UpdateReviewReadyAsync(
-        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
-        inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now);
+    public async Task UpdateReviewReadyAsync(
+        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        await inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now).ConfigureAwait(false);
+    }
 
     public Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>

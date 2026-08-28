@@ -107,6 +107,29 @@ public sealed class RunActiveClaimGuardTests
     }
 
     [Fact]
+    public async Task GuardedRunStore_UpdateReviewReadyAsync_WaitsForExternallyHeldActiveClaim()
+    {
+        var guard = new RunActiveClaimGuard();
+        var runId = RunId.New();
+        var inner = new RecordingRunStore();
+        var store = new RunActiveClaimGuardedRunStore(inner, guard);
+
+        await using var claim = await guard.AcquireAsync(runId, CancellationToken.None);
+        var reviewReadyTask = store.UpdateReviewReadyAsync(
+            runId, "tree", "diff", 1, CancellationToken.None);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+        reviewReadyTask.IsCompleted.Should().BeFalse(
+            "marking review ready transitions an InProgress run and must not overlap a durable scope grant");
+        inner.ReviewReadyCalls.Should().Be(0, "the inner store must not observe the call until the claim is free");
+
+        await claim.DisposeAsync();
+
+        await reviewReadyTask.WaitAsync(TimeSpan.FromSeconds(5));
+        inner.ReviewReadyCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task GuardedRunStore_ReadOnlyMembers_ArePurelyPassThroughAndNeverGated()
     {
         var guard = new RunActiveClaimGuard();
@@ -114,7 +137,7 @@ public sealed class RunActiveClaimGuardTests
         var inner = new RecordingRunStore();
         var store = new RunActiveClaimGuardedRunStore(inner, guard);
 
-        // Hold the claim; a pass-through read (GetAsync is not one of the five guarded members)
+        // Hold the claim; a pass-through read (GetAsync is not one of the guarded members)
         // must still complete immediately -- guarding every read would be an unnecessary and
         // incorrect over-serialization, not required by finding #3.
         await using var claim = await guard.AcquireAsync(runId, CancellationToken.None);
@@ -126,6 +149,7 @@ public sealed class RunActiveClaimGuardTests
     private sealed class RecordingRunStore : IRunStore
     {
         public int TerminalizeCalls;
+        public int ReviewReadyCalls;
         public int GetAsyncCalls;
 
         public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default)
@@ -145,7 +169,11 @@ public sealed class RunActiveClaimGuardTests
         public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null)
+        {
+            Interlocked.Increment(ref ReviewReadyCalls);
+            return Task.CompletedTask;
+        }
         public Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
         public Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<bool> TryTransitionToCommittingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
