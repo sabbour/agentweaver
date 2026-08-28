@@ -398,7 +398,8 @@ public sealed class FoundryStreamingTests : IDisposable
     {
         var executor = new CancellationIgnoringExecutor();
         var client = new FakeStreamingChatClient(
-            new TurnSetup([FunctionCallUpdate("shell-call", "run_command", new() { ["command"] = "echo stuck" })]));
+            new TurnSetup([FunctionCallUpdate("shell-call", "run_command", new() { ["command"] = "echo stuck" })]),
+            new TurnSetup([EmptyUpdate()]));
         var runner = Runner(client, executor);
         runner.DefaultCommandTimeoutMs = 20;
         runner.ShellWatchdogGrace = TimeSpan.FromMilliseconds(50);
