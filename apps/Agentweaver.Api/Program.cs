@@ -243,6 +243,8 @@ builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddHttpClient("entra-oidc")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<CopilotAppRegistrationService>();
+builder.Services.AddHostedService<CopilotAppRegistrationStartupService>();
 builder.Services.AddSingleton<EntraAccessTokenValidator>();
 builder.Services.AddSingleton<AuthModeEpochService>();
 builder.Services.AddHostedService<AuthModeEpochStartupService>();
@@ -266,8 +268,6 @@ builder.Services.AddScoped<GitHubCapabilityBroker>();
 builder.Services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
 builder.Services.AddScoped<ProjectGitHubIdentityService>();
 builder.Services.AddScoped<LinkedGitHubAccountService>();
-builder.Services.AddSingleton<Agentweaver.Api.Webhooks.IGitHubWebhookProvisioningService,
-    Agentweaver.Api.Webhooks.GitHubWebhookProvisioningService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,
     Agentweaver.Api.Blueprints.HttpContextAuthenticatedOwnerContext>();

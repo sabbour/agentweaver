@@ -258,8 +258,16 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 | `PATCH` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Partially update one trigger by type |
 | `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear all triggers, or one type with `?type=` |
 | `POST` | `/api/projects/{projectId}/workflow-events` | Fire a named workflow event manually |
-| `POST` | `/api/projects/{projectId}/webhooks/github` | Receive an HMAC-signed GitHub webhook delivery |
-| `POST` | `/api/projects/{projectId}/webhooks/github/provision` | Create or update the connected repository's webhook using the project's effective GitHub identity |
+
+### GitHub App webhook receiver
+
+GitHub delivers repository events only to the Repo App's App-level receiver; do not
+configure per-project webhook URLs or provisioning routes. The API verifies the webhook
+signature before parsing and routing the delivery.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/github/webhooks/repo-app` | Receive an HMAC-signed Repo App webhook delivery |
 
 Workflow trigger objects use the existing top-level trigger fields (`type`, `interval`,
 `day_of_week`, `day_of_month`, `time_of_day`, `event_name`) plus an optional `if` predicate array

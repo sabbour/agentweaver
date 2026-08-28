@@ -15,7 +15,7 @@ namespace Agentweaver.Tests.Auth;
 public sealed class ProjectCopilotBindingServiceTests
 {
     [Fact]
-    public async Task Begin_PinsProjectAndRejectsAdminWithoutExplicitOwnership()
+    public async Task Begin_PinsProjectAndAllowsOnlyMandatoryMetadataReadPermission()
     {
         await using var db = await OpenDatabaseAsync();
         var roles = new MutableRoles();
@@ -102,12 +102,18 @@ public sealed class ProjectCopilotBindingServiceTests
             .Should().NotContain("ghu_").And.NotContain("refresh-secret").And.NotContain("code");
     }
 
-    private static ProjectCopilotBindingService CreateService(MemoryDbContext db, MutableRoles roles, ISecretStore secrets, string? provider = null) =>
-        new(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+    private static ProjectCopilotBindingService CreateService(MemoryDbContext db, MutableRoles roles, ISecretStore secrets, string? provider = null)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Auth:CopilotApp:ClientId"] = "copilot-client", ["Auth:CopilotApp:ClientSecret"] = "copilot-secret",
             ["Auth:CopilotApp:CallbackUrl"] = "https://agentweaver.test/auth/github/copilot-app/callback",
-        }).Build(), new TwoAppPersistenceStore(db), secrets, new StubHttpClientFactory(provider), roles);
+            ["Auth:CopilotApp:Slug"] = "agentweaver-copilot",
+        }).Build();
+        var httpClientFactory = new StubHttpClientFactory(provider);
+        return new(configuration, new TwoAppPersistenceStore(db), secrets, httpClientFactory, roles,
+            new CopilotAppRegistrationService(configuration, httpClientFactory));
+    }
     private static CallerContext Human(string id) => new() { User = id, EntraObjectId = id };
     private static ClaimsPrincipal HumanPrincipal() => new(new ClaimsIdentity([new Claim("oid", "owner")], "test"));
     private static ProjectCopilotBindingRecord Binding(ProjectId project, string reference, string version) => new()
@@ -146,7 +152,12 @@ public sealed class ProjectCopilotBindingServiceTests
         private sealed class Handler(string body) : HttpMessageHandler
         {
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
-                Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+                Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(request.RequestUri!.AbsolutePath.StartsWith("/apps/", StringComparison.Ordinal)
+                        ? """{"permissions":{"metadata":"read"}}"""
+                        : body),
+                });
         }
     }
 }

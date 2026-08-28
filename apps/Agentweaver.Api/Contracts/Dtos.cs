@@ -688,17 +688,6 @@ public sealed record ConnectedRepositoryResponse(
     [property: JsonPropertyName("source_repository")] string SourceRepository,
     [property: JsonPropertyName("html_url")] string HtmlUrl);
 
-/// <summary>Returned only by a webhook-secret rotation request; the value is not retrievable later.</summary>
-public sealed record WebhookSecretRotationResponse(
-    [property: JsonPropertyName("secret")] string Secret);
-
-/// <summary>Response for automatic GitHub webhook provisioning.</summary>
-public sealed record GitHubWebhookProvisioningResponse(
-    [property: JsonPropertyName("hook_id")] long HookId,
-    [property: JsonPropertyName("created")] bool Created,
-    [property: JsonPropertyName("repository")] string Repository,
-    [property: JsonPropertyName("payload_url")] string PayloadUrl);
-
 // -----------------------------------------------------------------------
 // GitHub auth
 // -----------------------------------------------------------------------
