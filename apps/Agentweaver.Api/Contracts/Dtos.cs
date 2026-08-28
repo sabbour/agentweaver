@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 
 namespace Agentweaver.Api.Contracts;
 
@@ -565,8 +566,16 @@ public sealed record CreateProjectRequest
     [JsonPropertyName("name")] public string? Name { get; init; }
     /// <summary>Project bootstrap mode: <c>blank</c> creates an empty workspace and <c>github</c> clones a repository.</summary>
     [JsonPropertyName("origin")] public string? Origin { get; init; }                   // "blank" | "github"
-    /// <summary>Repository to clone when <see cref="Origin"/> is <c>github</c>.</summary>
-    [JsonPropertyName("source_repository")] public string? SourceRepository { get; init; }
+    /// <summary>
+    /// Short-lived, caller-bound authority minted by <c>POST /api/github/repository-selections</c>.
+    /// Required when <see cref="Origin"/> is <c>github</c>; repository URLs and identifiers are not accepted.
+    /// </summary>
+    [JsonPropertyName("repository_selection_code")] public string? RepositorySelectionCode { get; init; }
+    /// <summary>
+    /// Captures unknown request fields so GitHub-origin creation can reject legacy or authority-bearing
+    /// repository inputs rather than silently ignoring them.
+    /// </summary>
+    [JsonExtensionData] public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
     /// <summary>Absolute workspace path where the project should live on the server.</summary>
     [JsonPropertyName("working_directory")] public string? WorkingDirectory { get; init; }
     /// <summary>Default provider used for future model-driven operations in the project.</summary>
@@ -594,7 +603,6 @@ public sealed record CreateProjectRequest
 /// </summary>
 public sealed record GitHubRepositorySelectionCandidateDto
 {
-    [JsonPropertyName("repository_id")] public required long RepositoryId { get; init; }
     [JsonPropertyName("full_name")] public required string FullName { get; init; }
     [JsonPropertyName("owner_login")] public required string OwnerLogin { get; init; }
     [JsonPropertyName("private")] public required bool IsPrivate { get; init; }
@@ -614,7 +622,7 @@ public sealed record GitHubRepositorySelectionListResponse
 /// </summary>
 public sealed record IssueGitHubRepositorySelectionRequest
 {
-    [JsonPropertyName("repository_id")] public long? RepositoryId { get; init; }
+    [JsonPropertyName("full_name")] public string? FullName { get; init; }
 }
 
 /// <summary>

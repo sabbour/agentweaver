@@ -20,7 +20,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
         await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
         var broker = CreateBroker(options, secrets, Repositories(42));
 
-        var issued = await broker.IssueAsync("entra-one", 42, CancellationToken.None);
+        var issued = await broker.IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
 
         issued.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
         issued.Code.Should().HaveLength(43);
@@ -31,6 +31,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
             persisted.CodeHash.Should().NotBe(issued.Code);
             JsonSerializer.Serialize(persisted).Should().NotContain(issued.Code!);
             persisted.EntraObjectId.Should().Be("entra-one");
+            persisted.RepoAppAuthorizationId.Should().NotBeNullOrWhiteSpace();
             persisted.RepositoryId.Should().Be(42);
         }
 
@@ -40,7 +41,11 @@ public sealed class GitHubRepositorySelectionBrokerTests
 
         var first = await CreateBroker(options, secrets, Repositories(42))
             .TryConsumeAsync(issued.Code!, "entra-one", CancellationToken.None);
-        first.Should().Be(new ConsumedGitHubRepositorySelection("entra-one", 42));
+        first.Should().BeEquivalentTo(new
+        {
+            EntraObjectId = "entra-one",
+            RepositoryId = 42L,
+        });
 
         var second = await CreateBroker(options, secrets, Repositories(42))
             .TryConsumeAsync(issued.Code!, "entra-one", CancellationToken.None);
@@ -56,7 +61,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
         await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
         var broker = CreateBroker(options, secrets, Repositories(42));
 
-        var result = await broker.IssueAsync("entra-one", 99, CancellationToken.None);
+        var result = await broker.IssueAsync("entra-one", "octo/not-authorized", CancellationToken.None);
 
         result.Outcome.Should().Be(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable);
         result.Code.Should().BeNull();
@@ -72,7 +77,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
         var secrets = new InMemorySecretStore();
         await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
         var broker = CreateBroker(options, secrets, Repositories(42));
-        var issued = await broker.IssueAsync("entra-one", 42, CancellationToken.None);
+        var issued = await broker.IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
 
         await using (var expire = new MemoryDbContext(options))
         {
@@ -83,6 +88,26 @@ public sealed class GitHubRepositorySelectionBrokerTests
 
         (await broker.TryConsumeAsync(issued.Code!, "entra-one", CancellationToken.None)).Should().BeNull();
         (await broker.TryConsumeAsync("not-a-code", "entra-one", CancellationToken.None)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Consume_RejectsAnUnconsumedCodeAfterItsIssuingAuthorizationIsRevoked()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var broker = CreateBroker(options, secrets, Repositories(42));
+        var issued = await broker.IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+
+        await using (var revoke = new MemoryDbContext(options))
+        {
+            var authorization = await revoke.GitHubAppAuthorizations.SingleAsync();
+            authorization.RevokedAt = DateTimeOffset.UtcNow;
+            await revoke.SaveChangesAsync();
+        }
+
+        (await broker.TryConsumeAsync(issued.Code!, "entra-one", CancellationToken.None)).Should().BeNull();
     }
 
     [Fact]

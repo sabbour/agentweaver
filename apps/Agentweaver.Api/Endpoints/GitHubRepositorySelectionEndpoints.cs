@@ -25,7 +25,6 @@ public static class GitHubRepositorySelectionEndpoints
                 {
                     Repositories = result.Candidates.Select(candidate => new GitHubRepositorySelectionCandidateDto
                     {
-                        RepositoryId = candidate.RepositoryId,
                         FullName = candidate.FullName,
                         OwnerLogin = candidate.OwnerLogin,
                         IsPrivate = candidate.IsPrivate,
@@ -55,10 +54,10 @@ public static class GitHubRepositorySelectionEndpoints
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
             if (HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) != HumanEntraSubjectState.Allowed)
                 return Results.Conflict(new { error = "human_entra_subject_required" });
-            if (request?.RepositoryId is not > 0)
-                return Results.BadRequest(new { error = "repository_id is required." });
+            if (string.IsNullOrWhiteSpace(request?.FullName))
+                return Results.BadRequest(new { error = "full_name is required." });
 
-            var result = await broker.IssueAsync(caller.EntraObjectId!, request.RepositoryId.Value, ct)
+            var result = await broker.IssueAsync(caller.EntraObjectId!, request.FullName, ct)
                 .ConfigureAwait(false);
             return result.Outcome switch
             {
@@ -76,7 +75,7 @@ public static class GitHubRepositorySelectionEndpoints
         .WithTags("GitHub", "Projects")
         .AddOpenApiOperationTransformer((operation, _, _) =>
         {
-            operation.Description = "Verifies one browse-result repository through the signed-in human's Repo App authorization and mints one short-lived, single-use opaque selection code. The next project-create layer must accept only this code as repository authority.";
+            operation.Description = "Verifies one browse-result repository through the signed-in human's Repo App authorization and mints one short-lived, single-use opaque selection code. Repository and authorization identifiers are never returned. POST /api/projects accepts only this code as repository authority.";
             return Task.CompletedTask;
         });
     }

@@ -114,11 +114,11 @@ The empty-directory rule is equally important. Creation is allowed to create a n
 
 A GitHub project is a project whose base workspace is cloned from GitHub. Conceptually, Agentweaver does three extra things beyond blank-project creation:
 
-1. It validates that the source is an HTTPS GitHub repository URL.
-2. It obtains a valid GitHub access token for the owner/session.
-3. It clones using that token as an ephemeral credential, then derives the default branch from the cloned repository.
+1. It atomically consumes a short-lived, caller-bound repository selection code.
+2. It verifies that the exact Repo App authorization that issued that code is still live, then resolves repository and clone metadata server-side.
+3. It clones using the server-recovered ephemeral credential, then derives the default branch from the cloned repository.
 
-The token is used to perform the clone; it is not meant to become project metadata. The project stores repository identity and defaults, not the user's secret. This keeps long-lived project state safer and lets token refresh/sign-in remain an authentication concern rather than a project-storage concern.
+The API does not accept a repository URL, numeric identifier, owner/name, installation ID, token, or permission map for GitHub-origin creation. The token is used to perform the clone; it is not meant to become project metadata. The project stores repository identity and defaults, not the user's secret. This keeps long-lived project state safer and lets token refresh/sign-in remain an authentication concern rather than a project-storage concern.
 
 The web picker now exposes the caller's personal GitHub account as a first-class repository source before organizations. `GET /api/github/accounts` fetches `https://api.github.com/user`, returns that account first with `type: "user"`, then appends orgs from `/user/orgs`. `GET /api/github/repos?account=<login>` treats the signed-in user's own login as personal scope and calls `/user/repos?affiliation=owner`; other account values call `/orgs/{org}/repos?type=all` (`apps/Agentweaver.Api/Endpoints/AuthEndpoints.cs:207`, `:249`, `:295`, `:333`). This changes repository discovery only; project creation still records the selected GitHub URL and goes through the same clone path.
 

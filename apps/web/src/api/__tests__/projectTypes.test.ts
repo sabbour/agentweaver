@@ -71,14 +71,14 @@ describe('Project type shapes', () => {
     expect(req.origin).toBe('blank');
   });
 
-  it('CreateProjectRequest supports github origin with source_repository', () => {
+  it('CreateProjectRequest supports github origin with repository_selection_code', () => {
     const req: CreateProjectRequest = {
       name: 'GH Project',
       origin: 'github',
-      source_repository: 'owner/repo',
+      repository_selection_code: 'opaque-selection-code',
       working_directory: '/tmp/gh-project',
     };
-    expect(req.source_repository).toBe('owner/repo');
+    expect(req.repository_selection_code).toBe('opaque-selection-code');
   });
 
   it('UpdateProjectProviderSettingsRequest is all optional', () => {

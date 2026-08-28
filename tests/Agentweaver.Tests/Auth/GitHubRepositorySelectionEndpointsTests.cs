@@ -26,13 +26,15 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         browse.StatusCode.Should().Be(HttpStatusCode.OK);
         var browseBody = await browse.Content.ReadFromJsonAsync<JsonElement>();
         var repository = browseBody.GetProperty("repositories").EnumerateArray().Single();
-        repository.GetProperty("repository_id").GetInt64().Should().Be(42);
+        repository.GetProperty("full_name").GetString().Should().Be("octo/secure-repo");
+        repository.TryGetProperty("repository_id", out _).Should().BeFalse();
+        repository.TryGetProperty("authorization_id", out _).Should().BeFalse();
         repository.TryGetProperty("permissions", out _).Should().BeFalse();
         repository.TryGetProperty("clone_url", out _).Should().BeFalse();
 
         var issue = await client.PostAsJsonAsync(
             "/api/github/repository-selections",
-            new { repository_id = 42 });
+            new { full_name = "octo/secure-repo" });
 
         issue.StatusCode.Should().Be(HttpStatusCode.OK);
         var issueBody = await issue.Content.ReadFromJsonAsync<JsonElement>();
@@ -40,11 +42,17 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         code.Should().NotBeNull().And.HaveLength(43);
         issueBody.TryGetProperty("repository_id", out _).Should().BeFalse();
         issueBody.TryGetProperty("installation_id", out _).Should().BeFalse();
+        issueBody.TryGetProperty("authorization_id", out _).Should().BeFalse();
+        issueBody.TryGetProperty("credential", out _).Should().BeFalse();
 
         using var scope = factory.Services.CreateScope();
         var broker = scope.ServiceProvider.GetRequiredService<GitHubRepositorySelectionBroker>();
         (await broker.TryConsumeAsync(code!, subject, CancellationToken.None))
-            .Should().Be(new ConsumedGitHubRepositorySelection(subject, 42));
+            .Should().BeEquivalentTo(new
+            {
+                EntraObjectId = subject,
+                RepositoryId = 42L,
+            });
     }
 
     [Fact]
@@ -57,12 +65,63 @@ public sealed class GitHubRepositorySelectionEndpointsTests
 
         var response = await client.PostAsJsonAsync(
             "/api/github/repository-selections",
-            new { repository_id = 99 });
+            new { full_name = "octo/not-authorized" });
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("error").GetString().Should().Be("github_capability_unavailable");
         body.TryGetProperty("repository_id", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateGitHubProject_RejectsDirectRepositoryInputAndConsumesOnlyTheCallerBoundCode()
+    {
+        const string subject = "selection-subject";
+        using var factory = new RepositorySelectionWebApplicationFactory();
+        await factory.SeedRepoAppAuthorizationAsync(subject);
+        var client = factory.CreateAuthenticatedClientForObjectId(subject, PlatformRoles.ProjectCreator);
+
+        var issue = await client.PostAsJsonAsync(
+            "/api/github/repository-selections",
+            new { full_name = "octo/secure-repo" });
+        var issued = await issue.Content.ReadFromJsonAsync<JsonElement>();
+        var code = issued.GetProperty("selection_code").GetString()!;
+
+        var directInput = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Rejected direct input",
+            origin = "github",
+            working_directory = factory.NewWorkingDirectory(),
+            repository_selection_code = code,
+            source_repository = "https://github.com/arbitrary/untrusted",
+        });
+        directInput.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var directInputBody = await directInput.Content.ReadFromJsonAsync<JsonElement>();
+        directInputBody.GetProperty("error").GetString().Should().Contain("repository_selection_code");
+        directInputBody.GetRawText().Should().NotContain("arbitrary/untrusted");
+
+        var created = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Server resolved GitHub project",
+            origin = "github",
+            working_directory = factory.NewWorkingDirectory(),
+            repository_selection_code = code,
+        });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var createdBody = await created.Content.ReadFromJsonAsync<JsonElement>();
+        createdBody.GetProperty("source_repository").GetString().Should().Be("https://github.com/octo/secure-repo");
+
+        var reused = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Reused selection code",
+            origin = "github",
+            working_directory = factory.NewWorkingDirectory(),
+            repository_selection_code = code,
+        });
+        reused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var reusedBody = await reused.Content.ReadFromJsonAsync<JsonElement>();
+        reusedBody.GetProperty("error").GetString().Should().Be("github_repository_selection_unavailable");
+        reusedBody.GetRawText().Should().NotContain("repository_id");
     }
 
     private sealed class RepositorySelectionWebApplicationFactory : EntraWebApplicationFactory

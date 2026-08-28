@@ -12,26 +12,22 @@ namespace Agentweaver.Tests.Mcp;
 public sealed class ProjectToolsTests
 {
     [Fact]
-    public void ProjectCreate_InputSchema_ExposesOptionalSourceRepository()
+    public void ProjectCreate_InputSchema_ExposesOptionalRepositorySelectionCode()
     {
         var schema = BuildTool().ProtocolTool.InputSchema;
 
         schema.TryGetProperty("properties", out var properties).Should().BeTrue();
-        properties.TryGetProperty("source_repository", out _).Should().BeTrue();
+        properties.TryGetProperty("repository_selection_code", out _).Should().BeTrue();
+        properties.TryGetProperty("source_repository", out _).Should().BeFalse();
 
         if (schema.TryGetProperty("required", out var required) && required.ValueKind == JsonValueKind.Array)
         {
-            required.EnumerateArray().Select(e => e.GetString()!).Should().NotContain("source_repository");
+            required.EnumerateArray().Select(e => e.GetString()!).Should().NotContain("repository_selection_code");
         }
     }
 
-    [Theory]
-    [InlineData("sabbour/sabbour.github.io", "https://github.com/sabbour/sabbour.github.io")]
-    [InlineData("https://github.com/sabbour/sabbour.github.io", "https://github.com/sabbour/sabbour.github.io")]
-    [InlineData("sabbour/sabbour.github.io.git", "https://github.com/sabbour/sabbour.github.io.git")]
-    public async Task ProjectCreate_NormalizesSourceRepository_ToFullGitHubHttpsUrl(
-        string sourceRepository,
-        string expectedSourceRepository)
+    [Fact]
+    public async Task ProjectCreate_ForwardsOnlyTheOpaqueRepositorySelectionCode()
     {
         HttpRequestMessage? capturedRequest = null;
         JsonElement capturedBody = default;
@@ -49,7 +45,7 @@ public sealed class ProjectToolsTests
             "sabbour.me-blog",
             @"C:\workspace\sabbour.me-blog",
             origin: "github",
-            source_repository: sourceRepository);
+            repository_selection_code: "opaque-selection-code");
 
         capturedRequest.Should().NotBeNull();
         capturedRequest!.Method.Should().Be(HttpMethod.Post);
@@ -58,21 +54,8 @@ public sealed class ProjectToolsTests
         capturedBody.GetProperty("name").GetString().Should().Be("sabbour.me-blog");
         capturedBody.GetProperty("working_directory").GetString().Should().Be(@"C:\workspace\sabbour.me-blog");
         capturedBody.GetProperty("origin").GetString().Should().Be("github");
-        capturedBody.GetProperty("source_repository").GetString().Should().Be(expectedSourceRepository);
-    }
-
-    [Theory]
-    [InlineData(null, null)]
-    [InlineData("sabbour/sabbour.github.io", "https://github.com/sabbour/sabbour.github.io")]
-    [InlineData("https://github.com/sabbour/sabbour.github.io.git", "https://github.com/sabbour/sabbour.github.io.git")]
-    [InlineData("  sabbour/sabbour.github.io  ", "https://github.com/sabbour/sabbour.github.io")]
-    [InlineData("git@github.com:sabbour/sabbour.github.io.git", "git@github.com:sabbour/sabbour.github.io.git")]
-    public void NormalizeGitHubSourceRepository_MatchesToolContract(string? sourceRepository, string? expected)
-    {
-        var method = typeof(ProjectTools).GetMethod("NormalizeGitHubSourceRepository", BindingFlags.NonPublic | BindingFlags.Static);
-
-        method.Should().NotBeNull();
-        method!.Invoke(null, [sourceRepository]).Should().Be(expected);
+        capturedBody.GetProperty("repository_selection_code").GetString().Should().Be("opaque-selection-code");
+        capturedBody.TryGetProperty("source_repository", out _).Should().BeFalse();
     }
 
     private static McpServerTool BuildTool()

@@ -96,6 +96,12 @@ public sealed class GitHubRepositorySelectionCodeRecord
     public string CodeHash { get; set; } = "";
     [System.Text.Json.Serialization.JsonIgnore]
     public string EntraObjectId { get; set; } = "";
+    /// <summary>
+    /// The exact live Repo App authorization that verified this selection. A code cannot be
+    /// consumed after this authorization is revoked or replaced.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string RepoAppAuthorizationId { get; set; } = "";
     public long RepositoryId { get; set; }
     public long ExpiresAtUnixMilliseconds { get; set; }
     public long? ConsumedAtUnixMilliseconds { get; set; }

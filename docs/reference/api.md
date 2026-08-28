@@ -129,7 +129,6 @@ credential, or the legacy token store.
 {
   "repositories": [
     {
-      "repository_id": 123,
       "full_name": "octo/example",
       "owner_login": "octo",
       "private": true,
@@ -142,26 +141,27 @@ credential, or the legacy token store.
 
 The list intentionally has no repository permission map, clone URL, installation ID,
 credential data, provider error, or assertion that public metadata proves operational access.
-`POST` accepts `{ "repository_id": 123 }` only as a user selection instruction. The server
-rechecks that ID against the caller's bounded Repo App browse result, then returns:
+`POST` accepts `{ "full_name": "octo/example" }` only as a user selection instruction. The server
+rechecks that name against the caller's bounded Repo App browse result, then returns:
 
 ```json
 { "selection_code": "opaque-43-character-base64url-value", "expires_at": "2026-08-28T00:05:00+00:00" }
 ```
 
 The code is cryptographically random, stored only as a digest, caller-bound, valid for five
-minutes, and atomically single-use. A code is not a general GitHub credential. Missing,
-revoked, malformed, expired, reused, or cross-subject codes fail closed and do not disclose
-repository scope. These endpoints return `409` with one of
+minutes, bound to the exact Repo App authorization used to issue it, and atomically single-use.
+A code is not a general GitHub credential. Missing, revoked, malformed, expired, reused, or
+cross-subject codes fail closed and do not disclose repository scope. Browser responses contain
+no GitHub repository IDs, installation or authorization IDs, tokens, secrets, or permission maps.
+These endpoints return `409` with one of
 `human_entra_subject_required`, `github_binding_unavailable`, or
 `github_capability_unavailable`; malformed selection input returns `400`.
 
-**Next stack contract:** the GitHub branch of `POST /api/projects` must accept only
-`repository_selection_code` as repository authority. It must consume that code atomically,
-then resolve clone metadata and the canonical repository ID server-side. It must not accept a
-repository ID, URL, owner/name, installation ID, token, or permission map as authority.
-This slice leaves the existing project-create flow unchanged while that replacement lands in
-the next stack layer.
+The GitHub branch of `POST /api/projects` accepts only `repository_selection_code` as repository
+authority. It atomically consumes the code for the authenticated human Entra subject, verifies
+that its issuing Repo App authorization is still live, then resolves clone metadata server-side.
+It rejects client-supplied repository URLs, identifiers, owner/name, installation IDs, tokens,
+and permission maps.
 
 ### Memory
 
@@ -1365,14 +1365,16 @@ Request:
 }
 ```
 
-For a GitHub-origin project, add `"source_repository": "owner/repo"` and the server will clone the repository into `working_directory`.
+For a GitHub-origin project, first mint a `repository_selection_code` through the repository
+selection endpoints, then provide that code. The server verifies and consumes it before resolving
+the repository and cloning into `working_directory`; direct repository URLs and identifiers are rejected.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `name` | string | Yes | Display name |
 | `origin` | string | Yes | `"blank"` or `"github"` |
 | `working_directory` | string | Yes | Absolute local path for the project |
-| `source_repository` | string | When `origin` is `"github"` | GitHub repository in `owner/repo` format |
+| `repository_selection_code` | string | When `origin` is `"github"` | Short-lived opaque selection code from `POST /api/github/repository-selections` |
 | `default_provider` | string | No | `"github-copilot"` or `"microsoft-foundry"`. Falls back to the runtime default when omitted. |
 | `default_model_github_copilot` | string | No | Model name override for the GitHub Copilot provider |
 | `default_model_microsoft_foundry` | string | No | Model name override for the Microsoft Foundry provider |

@@ -120,7 +120,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | Tool | Description |
 | --- | --- |
 | `project_configure` | Configure the AI model provider settings for a project. |
-| `project_create` | Create a new Agentweaver project. When origin is 'github', source_repository is required. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
+| `project_create` | Create a new Agentweaver project. When origin is 'github', repository_selection_code is required after selecting an authorized repository. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
 | `project_delete` | Delete a project by ID. |
 | `project_get` | Get a project by ID. |
 | `project_list` | List all Agentweaver projects. |
@@ -200,4 +200,3 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `get_project_workspace_file` | Get the content of a file in a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace` | List the flat file tree for a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace_refs` | List the browsable git refs for a project workspace: the base branch and any active run worktrees. |
-
