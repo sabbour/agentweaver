@@ -15,9 +15,10 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
     private readonly string? _configFallbackToken;
     private readonly string? _configFallbackTokenFile;
     private readonly string? _runtimeCliPath;
-    private readonly IGitHubTokenStore _tokenStore;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
+    private readonly IGitHubTokenStore? _tokenStore;
+    private readonly IGitHubTokenScopeProvider? _scopeProvider;
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
+    private readonly ICopilotCredentialProvider? _runBoundCredentialProvider;
     private readonly ILogger<GitHubCopilotClientFactory>? _logger;
     private static readonly TimeSpan TokenExpirySkew = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan[] RateLimitRetryDelays =
@@ -29,14 +30,16 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
 
     public GitHubCopilotClientFactory(
         IConfiguration configuration,
-        IGitHubTokenStore tokenStore,
-        IGitHubTokenScopeProvider scopeProvider,
+        IGitHubTokenStore? tokenStore = null,
+        IGitHubTokenScopeProvider? scopeProvider = null,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
-        ILogger<GitHubCopilotClientFactory>? logger = null)
+        ILogger<GitHubCopilotClientFactory>? logger = null,
+        ICopilotCredentialProvider? runBoundCredentialProvider = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentNullException.ThrowIfNull(tokenStore);
-        ArgumentNullException.ThrowIfNull(scopeProvider);
+        if (tokenStore is null && runBoundCredentialProvider is null)
+            throw new ArgumentException(
+                "A token store or a run-bound Copilot credential provider is required.");
 
         var section = configuration.GetSection("Providers:GitHubCopilot");
         _configFallbackToken = section.GetValue<string>("GitHubToken")
@@ -55,6 +58,7 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
         _scopeProvider = scopeProvider;
         _accessTokenProvider = accessTokenProvider;
         _logger = logger;
+        _runBoundCredentialProvider = runBoundCredentialProvider;
     }
 
     /// <summary>
@@ -82,7 +86,17 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
     {
         var options = new CopilotClientOptions();
         ApplyRuntimeConnection(options);
-        var entry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
+        if (_runBoundCredentialProvider is not null)
+        {
+            var credential = await _runBoundCredentialProvider.GetAsync(ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(credential?.AccessToken))
+                throw new GitHubCopilotUnauthorizedException(
+                    "GitHub Copilot is not authorized for this run.");
+            options.GitHubToken = credential.AccessToken;
+            return new CopilotClient(options);
+        }
+
+        var entry = await _tokenStore!.GetAsync(scope, ct).ConfigureAwait(false);
         var token = entry.Status switch
         {
             // Route signed-in tokens through the refresh-aware provider so an expired access
@@ -140,14 +154,20 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
 
     public async Task<bool> ShouldRefreshBeforeAiCallAsync(GitHubTokenScope scope, CancellationToken ct)
     {
-        var token = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
+        if (_runBoundCredentialProvider is not null)
+        {
+            var credential = await _runBoundCredentialProvider.GetAsync(ct).ConfigureAwait(false);
+            return credential?.ExpiresAt <= DateTimeOffset.UtcNow.Add(TokenExpirySkew);
+        }
+
+        var token = await _tokenStore!.GetTokenAsync(scope, ct).ConfigureAwait(false);
         if (token?.ExpiresAt is null)
             return false;
 
         return token.ExpiresAt <= DateTimeOffset.UtcNow.Add(TokenExpirySkew);
     }
 
-    public static bool IsUnauthorized(Exception ex) =>
+        public static bool IsUnauthorized(Exception ex) =>
         HasStatusCode(ex, HttpStatusCode.Unauthorized) || ExceptionText(ex).Contains("401", StringComparison.OrdinalIgnoreCase);
 
     public static bool IsRateLimited(Exception ex) =>
@@ -219,6 +239,15 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
+
+/// <summary>Trusted provider for ephemeral, inference-only Copilot sign-in material.</summary>
+public interface ICopilotCredentialProvider
+{
+    Task<CopilotCredential?> GetAsync(CancellationToken ct = default);
+}
+
+/// <summary>Non-serializable Copilot credential held only by a trusted runtime process.</summary>
+public sealed record CopilotCredential(string AccessToken, DateTimeOffset? ExpiresAt);
 
 /// <summary>
 /// Thrown when no valid GitHub token is available for Copilot.

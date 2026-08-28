@@ -1393,9 +1393,7 @@
         "dependencies": {
           "Agentweaver.AgentRuntime": "[1.0.0, )",
           "Agentweaver.Domain": "[1.0.0, )",
-          "Azure.Identity": "[1.21.0, )",
           "Azure.Monitor.OpenTelemetry.Exporter": "[1.8.3, )",
-          "Azure.Security.KeyVault.Secrets": "[4.11.0, )",
           "Microsoft.Agents.AI.Hosting.A2A": "[1.11.1-preview.260625.1, )",
           "Microsoft.Agents.AI.Hosting.A2A.AspNetCore": "[1.11.1-preview.260625.1, )",
           "Microsoft.Extensions.AI": "[10.9.0, )",

@@ -58,9 +58,16 @@ public sealed class KubernetesSandboxExecutorClaimTests
         IGitHubTokenScopeProvider? tokenScopeProvider = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
-            httpClientFactory: httpClientFactory, runOptions: runOptions, tokenStore: tokenStore,
-            accessTokenProvider: accessTokenProvider, previewService: previewService,
-            tokenScopeProvider: tokenScopeProvider);
+            httpClientFactory: httpClientFactory, runOptions: runOptions, previewService: previewService,
+            copilotCredentialIssuer: new StubRunBoundCopilotCredentialIssuer("test-copilot-token"));
+
+    private sealed class StubRunBoundCopilotCredentialIssuer(string? accessToken) : IRunBoundCopilotCredentialIssuer
+    {
+        public Task<RunBoundCopilotCredential?> TryIssueAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(string.IsNullOrWhiteSpace(accessToken)
+                ? null
+                : new RunBoundCopilotCredential(accessToken, DateTimeOffset.UtcNow.AddMinutes(5)));
+    }
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
@@ -412,9 +419,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("runId").GetString().Should().Be(runId);
         body.GetProperty("userId").GetString().Should().Be("sabbour");
         body.GetProperty("turnBearerToken").GetString().Should().NotBeNullOrEmpty();
-        body.GetProperty("kvUserSecretName").GetString().Should()
-            .StartWith("ghtok-user--",
-                "the pod must fetch ONLY the run owner's KV secret (base32-encoded user id)");
+        body.TryGetProperty("kvUserSecretName", out _).Should().BeFalse(
+            "the pod must not receive a Key Vault credential locator");
+        body.GetProperty("copilotAccessToken").GetString().Should().Be("test-copilot-token");
     }
 
     [Fact]
@@ -448,9 +455,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         var body = doc.RootElement;
         body.GetProperty("callerBearerToken").GetString().Should().Be(callerBearerToken);
-        body.GetProperty("gitHubAccessToken").GetString().Should().Be("linked-github-token");
+        body.GetProperty("copilotAccessToken").GetString().Should().Be("test-copilot-token");
         body.GetProperty("callerBearerToken").GetString().Should().NotBe(
-            body.GetProperty("gitHubAccessToken").GetString(),
+            body.GetProperty("copilotAccessToken").GetString(),
             "the Entra platform credential and linked GitHub/Copilot credential have different trust purposes");
     }
 
@@ -477,7 +484,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
             turnTokenRegistry: turnTokens,
             readinessProbe: null,
             submittingUserResolver: new StubSubmittingUserResolver("entra-object-id"),
-            httpClientFactory: new StubHttpClientFactory(configureHandler));
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentialIssuer: new StubRunBoundCopilotCredentialIssuer("test-copilot-token"));
 
         await executor.LaunchAgentHostPodAsync(
             runId,
@@ -530,9 +538,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         await executor.LaunchAgentHostPodAsync(runId);
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
-        doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("freshly-rotated-token",
-            "the refresh-aware provider must be consulted (and win) over the raw, non-refreshing token " +
-            "store read so a newly-launched pod never receives a stale/near-expiry access token");
+        doc.RootElement.GetProperty("copilotAccessToken").GetString().Should().Be("test-copilot-token",
+            "the executor accepts only its run-bound Copilot credential issuer, never a raw token store");
     }
 
     [Fact]
@@ -563,11 +570,8 @@ var selectedScope = GitHubTokenScope.ForLinkedIdentity(userId, "bob");
 
         await executor.LaunchAgentHostPodAsync(runId);
 
-        scopeProvider.UserId.Should().Be(userId);
-        scopeProvider.ProjectId.Should().Be(projectId);
-        accessTokenProvider.LastScope.Should().BeEquivalentTo(selectedScope);
         using var doc = JsonDocument.Parse(configureHandler.Body!);
-        doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("tok-bob");
+        doc.RootElement.GetProperty("copilotAccessToken").GetString().Should().Be("test-copilot-token");
     }
 
     [Fact]
@@ -598,12 +602,9 @@ var selectedScope = GitHubTokenScope.ForLinkedIdentity(userId, "bob");
 
         await executor.LaunchAgentHostPodAsync(runId);
 
-        accessTokenProvider.LastValidScope.Should().Be(effectiveScope,
-            "the pre-resolved token and Key Vault secret must target the same active linked identity");
         using var doc = JsonDocument.Parse(configureHandler.Body!);
-        doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("fresh-linked-token");
-        doc.RootElement.GetProperty("kvUserSecretName").GetString().Should()
-            .Be(KeyVaultSecretStore.SanitizeKey(effectiveScope.Key));
+        doc.RootElement.GetProperty("copilotAccessToken").GetString().Should().Be("test-copilot-token");
+        doc.RootElement.TryGetProperty("kvUserSecretName", out _).Should().BeFalse();
     }
 
 
@@ -639,11 +640,9 @@ var selectedScope = GitHubTokenScope.ForLinkedIdentity(userId, "bob");
         var act = () => executor.LaunchAgentHostPodAsync(runId);
 
         var exception = await act.Should().ThrowAsync<AgentHostConfigureException>();
-        exception.Which.Reason.Should().Be("agenthost_configure_copilot_token_refreshed");
-        exception.Which.Retryable.Should().BeTrue();
-        exception.Which.RecoveryAction.Should().Be("recreate_pod_with_refreshed_credential");
-        accessTokenProvider.LastRejectedScope.Should().Be(effectiveScope);
-        accessTokenProvider.RejectedToken.Should().Be("rejected-token");
+        exception.Which.Reason.Should().Be("agenthost_configure_copilot_unauthorized");
+        exception.Which.Retryable.Should().BeFalse();
+        exception.Which.RecoveryAction.Should().BeNull();
         handler.Requests.Should().Contain(r =>
             r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
             "the one-time-configured pod must be discarded before the refreshed credential is retried");
@@ -678,7 +677,7 @@ var selectedScope = GitHubTokenScope.ForLinkedIdentity(userId, "bob");
         await executor.LaunchAgentHostPodAsync(runId);
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
-        doc.RootElement.GetProperty("gitHubAccessToken").GetString().Should().Be("raw-store-token");
+        doc.RootElement.GetProperty("copilotAccessToken").GetString().Should().Be("test-copilot-token");
     }
 
     [Fact]
@@ -706,8 +705,8 @@ var selectedScope = GitHubTokenScope.ForLinkedIdentity(userId, "bob");
         await executor.LaunchAgentHostPodAsync(runId);
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
-        doc.RootElement.GetProperty("gitHubAccessToken").ValueKind.Should().Be(JsonValueKind.Null,
-            "a refresh failure must not weaken auth by forwarding the stale raw token");
+        doc.RootElement.GetProperty("copilotAccessToken").GetString().Should().Be("test-copilot-token",
+            "the raw-token fallback is removed");
     }
 
     [Fact]
@@ -920,7 +919,8 @@ var selectedScope = GitHubTokenScope.ForLinkedIdentity(userId, "bob");
             ClientFor(fault, fake), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: null, turnTokenRegistry: turnTokens, readinessProbe: null,
             submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
-            httpClientFactory: new StubHttpClientFactory(configureHandler));
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentialIssuer: new StubRunBoundCopilotCredentialIssuer("test-copilot-token"));
 
         var endpoint = await executor.LaunchAgentHostPodAsync(runId);
 
@@ -957,7 +957,8 @@ var selectedScope = GitHubTokenScope.ForLinkedIdentity(userId, "bob");
             ClientFor(fault, fake), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: null, turnTokenRegistry: turnTokens, readinessProbe: null,
             submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
-            httpClientFactory: new StubHttpClientFactory(configureHandler));
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentialIssuer: new StubRunBoundCopilotCredentialIssuer("test-copilot-token"));
 
         var endpoint = await executor.LaunchAgentHostPodAsync(runId);
 

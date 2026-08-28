@@ -13,7 +13,7 @@ namespace Agentweaver.AgentHost;
 ///   <item><b>Env-var launch</b> (non-warm pod): <see cref="AgentHostOptions.RunId"/> is set at
 ///   startup, so <see cref="StartAsync"/> runs <c>SetupAsync</c> immediately and the pod is ready
 ///   when <see cref="StartAsync"/> returns (legacy behaviour).</item>
-///   <item><b>Warm pool</b> (Option C): the pod starts with NO RunId and enters <b>standby</b> —
+///   <item><b>Warm pool</b>: the pod starts with NO RunId and enters <b>standby</b> —
 ///   <c>SetupAsync</c> is deferred until the executor calls <see cref="ConfigureAsync"/> from the
 ///   <c>POST /configure</c> handler at run-launch time. The .NET process and Copilot SDK are
 ///   already warm, so only the per-run setup runs on the request path.</item>
@@ -89,8 +89,7 @@ internal sealed class AgentHostStartupService : IHostedService
                 opts.RunId,
                 opts.UserId ?? string.Empty,
                 opts.TurnBearerToken ?? string.Empty,
-                opts.KvUserSecretName,
-                GitHubAccessToken: null,
+                CopilotAccessToken: null,
                 PreviewRunnerCredential: null,
                 SharedWorkingDirectory: null,
                 ProjectId: opts.ProjectId,
@@ -106,8 +105,7 @@ internal sealed class AgentHostStartupService : IHostedService
         string runId,
         string userId,
         string turnBearerToken,
-        string? kvUserSecretName,
-        string? gitHubAccessToken,
+        string? copilotAccessToken,
         string? workingDirectory,
         bool autoApproveTools,
         CancellationToken ct)
@@ -116,8 +114,7 @@ internal sealed class AgentHostStartupService : IHostedService
                 runId,
                 userId,
                 turnBearerToken,
-                kvUserSecretName,
-                gitHubAccessToken,
+                copilotAccessToken,
                 PreviewRunnerCredential: null,
                 SharedWorkingDirectory: workingDirectory),
             autoApproveTools,

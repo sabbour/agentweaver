@@ -737,7 +737,7 @@ internal sealed class PreviewRunner : BackgroundService, IPreviewRunner
             {
                 _runtimeState?.TurnBearerToken,
                 _runtimeState?.PreviewRunnerCredential,
-                _runtimeState?.GitHubAccessToken,
+                _runtimeState?.CopilotAccessToken,
                 _runtimeState?.CallerBearerToken,
             }
             .Where(s => !string.IsNullOrEmpty(s))

@@ -25,24 +25,20 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly Security.IRunAuthorshipCapabilityStore? _authorshipCapabilityStore;
     private readonly IHttpClientFactory? _httpClientFactory;
     private readonly IRunSubmittingUserResolver? _submittingUserResolver;
-    private readonly IGitHubTokenStore? _tokenStore;
-    private readonly IGitHubTokenScopeProvider? _tokenScopeProvider;
     private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
     private readonly IRunEventStream? _runEventStream;
     private readonly IRunOptionsStore? _runOptions;
-    private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
+    private readonly IRunBoundCopilotCredentialIssuer? _copilotCredentialIssuer;
     private readonly Preview.ISandboxPreviewService? _previewService;
 
     public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
         IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null,
         IRunSubmittingUserResolver? submittingUserResolver = null,
         IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
-        IGitHubTokenStore? tokenStore = null,
-        IGitHubTokenScopeProvider? tokenScopeProvider = null,
         Agentweaver.Api.Auth.ISecretStore? secretStore = null,
         IRunEventStream? runEventStream = null,
         IRunOptionsStore? runOptions = null,
-        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        IRunBoundCopilotCredentialIssuer? copilotCredentialIssuer = null,
         Preview.ISandboxPreviewService? previewService = null,
         Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null)
     {
@@ -52,12 +48,10 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _turnTokenRegistry = turnTokenRegistry;
         _httpClientFactory = httpClientFactory;
         _submittingUserResolver = submittingUserResolver;
-        _tokenStore = tokenStore;
-        _tokenScopeProvider = tokenScopeProvider;
         _secretStore = secretStore;
         _runEventStream = runEventStream;
         _runOptions = runOptions;
-        _accessTokenProvider = accessTokenProvider;
+        _copilotCredentialIssuer = copilotCredentialIssuer;
         _previewService = previewService;
         _authorshipCapabilityStore = authorshipCapabilityStore;
     }
@@ -113,9 +107,6 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                     _config["Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds"], out int rt) ? rt : 90,
                 AgentHostReadyPollIntervalMs = int.TryParse(
                     _config["Sandbox:Kubernetes:AgentHostReadyPollIntervalMs"], out int ri) ? ri : 1000,
-                // Option C warm-pool token fetch: same KV the API persists user tokens to.
-                KvUri = _config["Sandbox:AgentHost:KeyVaultUri"]
-                    ?? _config["Auth:TokenStore:KeyVaultUri"],
             };
             var k8sLogger = _loggerFactory.CreateLogger<KubernetesSandboxExecutor>();
             WarnIfServiceCidrNotExcluded(sandboxOptions, logger);
@@ -144,9 +135,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 sandboxOptions.Namespace, sandboxOptions.WorkspaceMountPath);
             return new KubernetesSandboxExecutor(
                 k8sClient, sandboxOptions, k8sLogger, _podRegistry, _turnTokenRegistry, readinessProbe,
-                _submittingUserResolver, _httpClientFactory, _tokenStore, _secretStore, _runEventStream,
-                _runOptions, _accessTokenProvider, _previewService,
-                tokenScopeProvider: _tokenScopeProvider,
+                _submittingUserResolver, _httpClientFactory, _secretStore, _runEventStream,
+                _runOptions, _previewService, _copilotCredentialIssuer,
                 authorshipCapabilityStore: _authorshipCapabilityStore);
         }
         catch (Exception ex)

@@ -4,24 +4,22 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.Domain;
 using FluentAssertions;
 using Xunit;
-using SharedUserScopeProvider = agenthost::Agentweaver.AgentHost.SharedUserScopeProvider;
+using AgentHostRuntimeState = agenthost::Agentweaver.AgentHost.AgentHostRuntimeState;
+using AgentHostRunConfiguration = agenthost::Agentweaver.AgentHost.AgentHostRunConfiguration;
+using RunBoundCopilotScopeProvider = agenthost::Agentweaver.AgentHost.RunBoundCopilotScopeProvider;
 
 namespace Agentweaver.Tests;
 
 /// <summary>
-/// Verifies the in-pod GitHub Copilot auth resolution path that the AgentHost__UserId injection
-/// (KubernetesSandboxExecutor) drives: when the run's submitting user id is configured the pod
-/// resolves the per-user token scope (user_&lt;id&gt;.json); when it is absent it degrades. Also
-/// verifies the clear-error detection that replaces the opaque SDK auth failure.
+/// Verifies that AgentHost uses only its server-bound run identity for Copilot initialization.
 /// </summary>
 public sealed class AgentHostUserAuthTests
 {
     [Fact]
     public void Resolve_uses_configured_user_id_when_set()
     {
-        // Configured user id (AgentHost:UserId / the run's submitting user) wins → per-user scope,
-        // so SharedHomeGitHubTokenStore reads user_<id>.json (the Copilot-entitled token).
-        var provider = new SharedUserScopeProvider(authDir: "/nonexistent", configuredUserId: "sabbour");
+        var state = ConfiguredState("sabbour");
+        var provider = new RunBoundCopilotScopeProvider(state);
 
         var scope = provider.Resolve(userId: null);
 
@@ -29,25 +27,14 @@ public sealed class AgentHostUserAuthTests
     }
 
     [Fact]
-    public void Resolve_fails_closed_when_no_user_and_no_signed_in_file()
+    public void Resolve_fails_closed_when_host_has_no_run_identity()
     {
-        // No configured user id and no discoverable signed-in user_*.json → fail closed. Installation
-        // tokens cannot authorize Copilot turns, so falling back would hide the real configuration bug.
-        var emptyDir = Path.Combine(Path.GetTempPath(), "agentweaver-scope-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(emptyDir);
-        try
-        {
-            var provider = new SharedUserScopeProvider(authDir: emptyDir, configuredUserId: null);
+        var provider = new RunBoundCopilotScopeProvider(new AgentHostRuntimeState());
 
-            var act = () => provider.Resolve(userId: null);
+        var act = () => provider.Resolve(userId: "attacker-selected-user");
 
-            act.Should().Throw<InvalidOperationException>()
-                .WithMessage("*submitting user identity*");
-        }
-        finally
-        {
-            Directory.Delete(emptyDir, recursive: true);
-        }
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*run-bound Copilot identity*");
     }
 
     [Fact]
@@ -74,5 +61,18 @@ public sealed class AgentHostUserAuthTests
     {
         CopilotAIAgent.IsMissingCopilotAuth(new InvalidOperationException("Connection refused"))
             .Should().BeFalse();
+    }
+
+    private static AgentHostRuntimeState ConfiguredState(string userId)
+    {
+        var state = new AgentHostRuntimeState();
+        state.TryConfigure(new AgentHostRunConfiguration(
+            RunId: "run-auth",
+            UserId: userId,
+            TurnBearerToken: "turn",
+            CopilotAccessToken: "copilot-sign-in",
+            PreviewRunnerCredential: null,
+            SharedWorkingDirectory: "/workspace/run-auth"));
+        return state;
     }
 }

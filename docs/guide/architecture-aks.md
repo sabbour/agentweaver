@@ -144,7 +144,7 @@ See [Deploy to AKS](/guide/deployment-aks#sandbox-setup) for setup details.
 
 ### Secrets management
 
-Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**. API app secrets still use the Secrets Store CSI driver; AgentHost user GitHub tokens are resolved on the API side and brokered to the sandbox pod in the one-time `/configure` call (`gitHubAccessToken`), because the sandbox identity has no Key Vault access (issue #471). There are no static credentials in any manifest.
+Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity** to trusted API services only. The AgentHost has no Key Vault identity, CSI mount, repository token, credential locator, or credential helper. At launch the API derives a Copilot-only snapshot from the persisted run, fences it before and after vault access, and supplies only short-lived inference material in its one-time `/configure` control message. There are no static credentials in any manifest.
 
 ![Secrets management: Managed Identity, ServiceAccount, ServiceAccount, AKS OIDC Issuer, AKS OIDC Issuer, Azure Key Vault, SecretProviderClass, Per-user GitHub token secret, API Pod, Warm AgentHost Pod, MCP Pod](../diagrams/guide-architecture-aks-fig5.png)
 
@@ -153,7 +153,7 @@ Secrets are delivered from **Azure Key Vault** with **Azure Workload Identity**.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
-The API's and worker's `ServiceAccount`s (`agentweaver-api`, `agentweaver-worker`) are federated to the shared, Key-Vault-privileged user-assigned `agentweaver-api-identity` through the cluster's OIDC issuer (`agentweaver-api-fedcred` and `agentweaver-worker-fedcred` respectively). The worker has its own Kubernetes RBAC identity and receives only sandbox lifecycle and legacy exec permissions; it does not inherit the API's preview-management permissions. The `agentweaver-agent-host` ServiceAccount is federated to a **separate, dedicated managed identity (`agentweaver-agenthost-identity`) that has no Key Vault role assignments** (issue #471) via its own federated credential (`agentweaver-agenthost-fedcred`). Because the sandbox runs untrusted shell/tool code, it must not be able to read Key Vault; the run owner's GitHub token is instead brokered per-run by the API in the `/configure` call.
+The API's and worker's `ServiceAccount`s (`agentweaver-api`, `agentweaver-worker`) are federated to the shared, Key-Vault-privileged user-assigned `agentweaver-api-identity` through the cluster's OIDC issuer (`agentweaver-api-fedcred` and `agentweaver-worker-fedcred` respectively). The worker has its own Kubernetes RBAC identity and receives only sandbox lifecycle and legacy exec permissions; it does not inherit the API's preview-management permissions. `agentweaver-agent-host` has no workload identity or service-account token because sandbox shell/tool code must not reach Key Vault or repository credentials.
 
 One static `SecretProviderClass` object syncs app secrets from Key Vault into the API pod volume:
 
@@ -169,7 +169,7 @@ The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted
 
 Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
 
-Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. Each authenticated user's GitHub OAuth token is stored in Key Vault under a per-user key (`ghtok-user--{base32(userId)}`). At run launch, `KubernetesSandboxExecutor` claims a pod from the shared `agentweaver-agent-host` pool, calls `POST /configure` with the run owner's secret name, and the pod's `KeyVaultUserTokenProvider` fetches only that secret through `SecretClient` + `DefaultAzureCredential`, caching it for the pod lifetime.
+Secret rotation polling is set to 2 minutes (`secrets-store.csi.k8s.io/rotation-poll-interval: "2m"`) for CSI-mounted API app secrets. Authenticated GitHub credentials remain in the API-side credential vault. At run launch, `KubernetesSandboxExecutor` claims a pod from the shared `agentweaver-agent-host` pool and the trusted API-side broker uses the immutable run snapshot to issue bounded Copilot inference material. Repository reads, materialization, and writeback remain API-owned, snapshot-fenced operations; sandbox code receives neither repository authority nor a broker endpoint. NetworkPolicy limits are defense in depth, not the authority that protects credentials.
 
 ---
 

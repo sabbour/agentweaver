@@ -12,8 +12,8 @@ using Agentweaver.Domain;
 /// <list type="bullet">
 ///   <item>Env-var launch (non-warm pod): <see cref="AgentHostStartupService"/> seeds this from
 ///   <see cref="AgentHostOptions"/> at startup via <see cref="InitializeFromOptions"/>.</item>
-///   <item>Warm pool: the pod starts in standby with no run context; the executor injects RunId /
-///   UserId / TurnBearerToken / KvUserSecretName at run-launch time via <see cref="TryConfigure"/>.</item>
+///   <item>Warm pool: the pod starts in standby with no run context; the executor injects run-bound
+///   control data through <see cref="TryConfigure"/>.</item>
 /// </list>
 /// </para>
 ///
@@ -74,22 +74,15 @@ internal sealed class AgentHostRuntimeState
     public string PreviewRunnerCredential { get; private set; } = string.Empty;
 
     /// <summary>
-    /// Key Vault secret name for the run owner's GitHub token (Option C warm-pool path).
-    /// Supplied by the executor in the /configure call; consumed by
-    /// <see cref="KeyVaultUserTokenProvider"/>. Null on the file-mount/shared-store paths.
-    /// </summary>
-    public string? KvUserSecretName { get; private set; }
-
     /// <summary>
-    /// Pre-resolved GitHub OAuth access token supplied by the API in the /configure body.
-    /// When set, <see cref="KeyVaultUserTokenProvider"/> uses this directly and skips the KV call,
-    /// allowing the pod to work without outbound access to Azure AD or Key Vault.
+    /// Bounded Copilot sign-in material delivered in memory to this trusted host only. It is never
+    /// inherited by the executor sidecar or preview children and is not a repository credential.
     /// </summary>
-    public string? GitHubAccessToken { get; private set; }
+    public string? CopilotAccessToken { get; private set; }
 
     /// <summary>
     /// The authenticated platform caller token forwarded only for operator-assistant MCP requests.
-    /// This is distinct from <see cref="GitHubAccessToken"/>: in Entra deployments the former is the
+    /// This is distinct from <see cref="CopilotAccessToken"/>: in Entra deployments the former is the
     /// Entra API access token while the latter is the linked GitHub token used by Copilot.
     /// </summary>
     public string? CallerBearerToken { get; private set; }
@@ -105,8 +98,7 @@ internal sealed class AgentHostRuntimeState
         UserId = options.UserId ?? string.Empty;
         TurnBearerToken = options.TurnBearerToken ?? string.Empty;
         PreviewRunnerCredential = string.Empty; // not available on env-var launch path
-        KvUserSecretName = options.KvUserSecretName;
-        GitHubAccessToken = null; // not available on env-var launch path
+        CopilotAccessToken = null; // credentials are never injected through the pod environment
         CallerBearerToken = null; // operator-assistant-only warm-pod input
         Purpose = AgentHostPurpose.Default;
         WorkspaceMode = ExecutionWorkspaceMode.Shared;
@@ -127,13 +119,12 @@ internal sealed class AgentHostRuntimeState
     /// Atomically transitions the pod from standby to configured. Returns <see langword="false"/>
     /// when the pod was already configured (one-time semantics → caller returns 409).
     /// </summary>
-    public bool TryConfigure(string runId, string userId, string turnBearerToken, string? kvUserSecretName, string? gitHubAccessToken, string? previewRunnerCredential = null)
+    public bool TryConfigure(string runId, string userId, string turnBearerToken, string? copilotAccessToken, string? previewRunnerCredential = null)
         => TryConfigure(new AgentHostRunConfiguration(
             runId,
             userId,
             turnBearerToken,
-            kvUserSecretName,
-            gitHubAccessToken,
+            copilotAccessToken,
             previewRunnerCredential,
             SharedWorkingDirectory: null));
 
@@ -147,12 +138,9 @@ internal sealed class AgentHostRuntimeState
         UserId = configuration.UserId ?? string.Empty;
         TurnBearerToken = configuration.TurnBearerToken ?? string.Empty;
         PreviewRunnerCredential = configuration.PreviewRunnerCredential ?? string.Empty;
-        KvUserSecretName = string.IsNullOrWhiteSpace(configuration.KvUserSecretName)
+        CopilotAccessToken = string.IsNullOrWhiteSpace(configuration.CopilotAccessToken)
             ? null
-            : configuration.KvUserSecretName;
-        GitHubAccessToken = string.IsNullOrWhiteSpace(configuration.GitHubAccessToken)
-            ? null
-            : configuration.GitHubAccessToken;
+            : configuration.CopilotAccessToken;
         CallerBearerToken = string.IsNullOrWhiteSpace(configuration.CallerBearerToken)
             ? null
             : configuration.CallerBearerToken;
@@ -193,8 +181,7 @@ internal sealed record AgentHostRunConfiguration(
     string RunId,
     string UserId,
     string TurnBearerToken,
-    string? KvUserSecretName,
-    string? GitHubAccessToken,
+    string? CopilotAccessToken,
     string? PreviewRunnerCredential,
     string? SharedWorkingDirectory,
     AgentHostPurpose Purpose = AgentHostPurpose.Default,

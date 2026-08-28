@@ -28,7 +28,7 @@ public sealed class PreviewRunnerAuthAndScrubTests
     private static AgentHostRuntimeState Configured(string? turn, string? credential)
     {
         var state = new AgentHostRuntimeState();
-        state.TryConfigure("run-1", "user-1", turn ?? string.Empty, null, null, credential);
+        state.TryConfigure("run-1", "user-1", turn ?? string.Empty, null, credential);
         return state;
     }
 

@@ -80,7 +80,6 @@ configMapGenerator:
       - "HOST=agentweaver.example.com"
       - "PREVIEW_HOSTNAME=*.example.com"
       - "IDENTITY_CLIENT_ID=changeme"
-      - "AGENTHOST_IDENTITY_CLIENT_ID=changeme"
       - "KEYVAULT_NAME=changeme"
       - "TENANT_ID=changeme"
       - "OAUTH_ISSUER=https://agentweaver.example.com"
@@ -96,7 +95,6 @@ configMapGenerator:
       - "ENTRA_TENANT_ID="
       - "ENTRA_REDIRECT_URI=https://agentweaver.example.com/auth/entra/callback"
       - "TOKEN_STORE_KEYVAULT_URI=https://changeme.vault.azure.net"
-      - "AGENTHOST_KEYVAULT_URI=https://changeme.vault.azure.net/"
       - "APPINSIGHTS_WORKSPACE_ID="
       - "SANDBOX_PREVIEW_ZONE_SUFFIX=example.com"
 
@@ -142,19 +140,6 @@ replacements:
         reject:
           - kind: ServiceAccount
             name: agentweaver-agent-host
-        fieldPaths:
-          - metadata.annotations.[azure.workload.identity/client-id]
-  - source:
-      kind: ConfigMap
-      name: agentweaver-runtime-config
-      fieldPath: data.AGENTHOST_IDENTITY_CLIENT_ID
-    targets:
-      # Dedicated least-privilege AgentHost identity (issue #471): NO Key Vault roles. The sandbox
-      # cannot exchange its workload-identity token for a vault token; the run owner's GitHub token is
-      # brokered per-run via the API /configure call instead.
-      - select:
-          kind: ServiceAccount
-          name: agentweaver-agent-host
         fieldPaths:
           - metadata.annotations.[azure.workload.identity/client-id]
   - source:

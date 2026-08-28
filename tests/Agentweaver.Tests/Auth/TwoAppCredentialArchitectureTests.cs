@@ -117,6 +117,28 @@ public sealed class TwoAppCredentialArchitectureTests
             .Should().BeEmpty();
     }
 
+    [Fact]
+    public void AgentHost_HasNoRepositoryCredentialOrVaultDeliveryPath()
+    {
+        var root = FindRepositoryRoot();
+        var agentHost = Path.Combine(root, "apps", "Agentweaver.AgentHost");
+        var source = Directory.EnumerateFiles(agentHost, "*.cs", SearchOption.AllDirectories)
+            .Select(File.ReadAllText)
+            .ToArray();
+
+        source.Should().NotContain(text => text.Contains("KeyVaultUserTokenProvider", StringComparison.Ordinal)
+            || text.Contains("IGitHubTokenStore", StringComparison.Ordinal)
+            || text.Contains("SharedTokenStore", StringComparison.Ordinal)
+            || text.Contains("CsiMountedGitHub", StringComparison.Ordinal)
+            || text.Contains("CredentialLocator", StringComparison.Ordinal));
+
+        var manifest = File.ReadAllText(Path.Combine(
+            root, "k8s", "base", "sandbox-template-agenthost.yaml"));
+        manifest.Should().NotContain("secrets-store")
+            .And.NotContain("azure.workload.identity")
+            .And.Contain("automountServiceAccountToken: false");
+    }
+
     private static bool ContainsReservedCredentialPrefix(string source) =>
         source.Contains("repo-app-user-credential", StringComparison.Ordinal) ||
         source.Contains("copilot-app-project", StringComparison.Ordinal) ||

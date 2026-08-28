@@ -14,6 +14,12 @@ internal sealed record GitHubCapabilityGrant(
     DateTimeOffset ExpiresAt);
 
 /// <summary>
+/// Ephemeral inference credential issued only to the trusted AgentHost launch control path.
+/// It is deliberately internal, non-serializable, and never represents repository authority.
+/// </summary>
+public sealed record RunBoundCopilotCredential(string AccessToken, DateTimeOffset ExpiresAt);
+
+/// <summary>
 /// Internal run-bound broker boundary. It accepts only a purpose and opaque snapshot reference,
 /// never a user, project, repository, grant, or ambient scope.
 /// </summary>
@@ -85,6 +91,38 @@ internal sealed class GitHubCapabilityBroker(
             : (GitHubCapabilityBrokerOutcome.Issued, new(fenced.Purpose, operation, expiresAt));
     }
 
+    /// <summary>
+    /// Acquires an inference credential only after the immutable Copilot snapshot has been fenced.
+    /// The caller is the internal AgentHost launch path; it receives no repository metadata,
+    /// locator, or selectable purpose.
+    /// </summary>
+    internal async Task<RunBoundCopilotCredential?> TryAcquireCopilotCredentialAsync(
+        GitHubCapabilityPurpose purpose,
+        SnapshotRef snapshotRef,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        if (!IsOperationAllowed(purpose, GitHubCapabilityOperation.CopilotInference))
+            return null;
+
+        var fenced = await persistence.TryFenceLiveSnapshotAsync(purpose, snapshotRef, now, ct)
+            .ConfigureAwait(false);
+        if (fenced is null)
+            return null;
+
+        var secret = await vault.ReadCurrentAsync(fenced.CredentialLocator!, ct).ConfigureAwait(false);
+        if (!secret.Found || !TryReadAccessToken(secret.Value, out var accessToken, out var providerExpiresAt))
+            return null;
+
+        if (await persistence.TryFenceLiveSnapshotAsync(purpose, snapshotRef, now, ct).ConfigureAwait(false) is null)
+            return null;
+
+        var expiresAt = providerExpiresAt is not null && providerExpiresAt < now.Add(MaximumCapabilityLifetime)
+            ? providerExpiresAt.Value
+            : now.Add(MaximumCapabilityLifetime);
+        return expiresAt <= now ? null : new RunBoundCopilotCredential(accessToken!, expiresAt);
+    }
+
     internal static bool IsOperationAllowed(
         GitHubCapabilityPurpose purpose,
         GitHubCapabilityOperation operation) =>
@@ -98,7 +136,14 @@ internal sealed class GitHubCapabilityBroker(
         };
 
     private static bool HasUsableAccessToken(string? value, out DateTimeOffset? expiresAt)
+        => TryReadAccessToken(value, out _, out expiresAt);
+
+    private static bool TryReadAccessToken(
+        string? value,
+        out string? accessToken,
+        out DateTimeOffset? expiresAt)
     {
+        accessToken = null;
         expiresAt = null;
         if (string.IsNullOrWhiteSpace(value))
             return false;
@@ -110,6 +155,7 @@ internal sealed class GitHubCapabilityBroker(
                 !document.RootElement.TryGetProperty("accessToken", out var token) ||
                 string.IsNullOrWhiteSpace(token.GetString()))
                 return false;
+            accessToken = token.GetString();
             if (document.RootElement.TryGetProperty("expiresAt", out var expiry) &&
                 expiry.ValueKind == JsonValueKind.String &&
                 DateTimeOffset.TryParse(expiry.GetString(), out var parsed))

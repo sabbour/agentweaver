@@ -30,7 +30,7 @@ public sealed class AgentHostToolApprovalEndpointTests
         gate.IsAutoApproved("run-1", "web_fetch", "https://before-configure.test")
             .Should().BeFalse();
 
-        state.TryConfigure("run-1", "user-1", "", null, null, "pod-credential")
+        state.TryConfigure("run-1", "user-1", "", null, "pod-credential")
             .Should().BeTrue();
         ownerResolver.GetCanonicalOwner("run-1").Should().Be("user-1");
         ownerResolver.GetCanonicalOwner("different-run").Should().BeNull();
@@ -154,7 +154,7 @@ public sealed class AgentHostToolApprovalEndpointTests
     private static AgentHostRuntimeState ConfiguredState()
     {
         var state = new AgentHostRuntimeState();
-        state.TryConfigure("run-1", "user-1", "", null, null, "pod-credential").Should().BeTrue();
+        state.TryConfigure("run-1", "user-1", "", null, "pod-credential").Should().BeTrue();
         return state;
     }
 

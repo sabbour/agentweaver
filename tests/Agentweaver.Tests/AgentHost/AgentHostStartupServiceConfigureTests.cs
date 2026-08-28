@@ -62,7 +62,7 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
         // so its eventual (expected) SetupAsync failure never surfaces as an unobserved exception.
         var task = service.ConfigureAsync(
             runId, userId: "sabbour", turnBearerToken: "tok",
-            kvUserSecretName: null, gitHubAccessToken: null, workingDirectory: null,
+            copilotAccessToken: null, workingDirectory: null,
             autoApproveTools: true, ct: new CancellationToken(canceled: true));
         _ = task.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
 
@@ -85,7 +85,7 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
 
         var task = service.ConfigureAsync(
             runId, userId: "sabbour", turnBearerToken: "tok",
-            kvUserSecretName: null, gitHubAccessToken: null, workingDirectory: null,
+            copilotAccessToken: null, workingDirectory: null,
             autoApproveTools: false, ct: new CancellationToken(canceled: true));
         _ = task.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
 
@@ -194,8 +194,7 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
                     runId,
                     UserId: "sabbour",
                     TurnBearerToken: "tok",
-                    KvUserSecretName: null,
-                    GitHubAccessToken: null,
+                    CopilotAccessToken: null,
                     PreviewRunnerCredential: null,
                     SharedWorkingDirectory: null),
                 autoApproveTools: false,
@@ -253,8 +252,7 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
             runId,
             userId: "sabbour",
             turnBearerToken: "tok",
-            kvUserSecretName: null,
-            gitHubAccessToken: null,
+            copilotAccessToken: null,
             workingDirectory: workspace,
             autoApproveTools: false,
             ct: new CancellationToken(canceled: true));
