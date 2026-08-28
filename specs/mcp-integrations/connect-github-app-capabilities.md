@@ -43,6 +43,9 @@ the identity and authorization boundary for Agentweaver.
       be independently bound to multiple projects.
 - [ ] MCP polling belongs only to the initiating subject and reveals only safe lifecycle
       status.
+- [ ] MCP browser handoff redemption requires the initiating user's authenticated Entra browser
+      session and callback completion revalidates that same session; an opaque transaction ID or
+      browser URL alone cannot mint a callback binding.
 - [ ] Brokered, explicit purpose and snapshot selection is the only credential path.
 - [ ] One App webhook verifies constrained raw deliveries and routes with installation ID
       plus canonical repository ID.

@@ -92,12 +92,25 @@ public sealed class ProjectCopilotBindingService(
 
     internal async Task<(string AuthorizationUrl, string CallbackCookie)?> TakeMcpBrowserHandoffAsync(
         string transactionId,
+        string browserSessionId,
+        string browserEntraObjectId,
         CancellationToken ct = default)
     {
+        if (!await persistence.BindMcpBrowserSessionAsync(
+                transactionId,
+                GitHubAppKind.Copilot,
+                GitHubAuthorizationPurpose.InteractiveCopilot,
+                browserEntraObjectId,
+                browserSessionId,
+                ct).ConfigureAwait(false))
+            return null;
+
         var transaction = await persistence.GetMcpBrowserHandoffTransactionAsync(
             transactionId,
             GitHubAppKind.Copilot,
             GitHubAuthorizationPurpose.InteractiveCopilot,
+            browserEntraObjectId,
+            browserSessionId,
             ct).ConfigureAwait(false);
         if (transaction is null)
             return null;
@@ -194,6 +207,8 @@ public sealed class ProjectCopilotBindingService(
     }
 
     public async Task<CopilotBindingOutcome> CompleteBrowserCallbackAsync(
+        string? browserSessionId,
+        string? browserEntraObjectId,
         string? state,
         string? code,
         string? callbackCookie,
@@ -203,6 +218,9 @@ public sealed class ProjectCopilotBindingService(
             return CopilotBindingOutcome.AuthorizationTransactionInvalid;
         var transaction = await persistence.GetCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
         if (transaction is null || !ProjectId.TryParse(transaction.ProjectId, out var projectId) ||
+            (transaction.BrowserSessionId is not null &&
+             (!string.Equals(transaction.BrowserSessionId, browserSessionId, StringComparison.Ordinal) ||
+              !string.Equals(transaction.EntraObjectId, browserEntraObjectId, StringComparison.Ordinal))) ||
             string.IsNullOrWhiteSpace(callbackCookie) ||
             !FixedTimeCookieHashEquals(transaction.CallbackCookieHash, callbackCookie))
             return CopilotBindingOutcome.AuthorizationTransactionInvalid;

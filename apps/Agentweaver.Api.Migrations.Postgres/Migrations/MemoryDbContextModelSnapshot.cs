@@ -41,6 +41,25 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.ToTable("EntraOAuthStates");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.BrowserEntraSession", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text");
+
+                    b.Property<string>("EntraObjectId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("BrowserEntraSessions");
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.McpAuthorizationCode", b =>
                 {
                     b.Property<int>("Id")
@@ -1232,6 +1251,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("callback_cookie_hash");
+
+                    b.Property<string>("BrowserSessionId")
+                        .HasColumnType("text")
+                        .HasColumnName("browser_session_id");
 
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")

@@ -60,12 +60,41 @@ public sealed class RepoAppUserAuthorizationServiceTests
         System.Text.Json.JsonSerializer.Serialize(begin).Should()
             .NotContain("state").And.NotContain("cookie").And.NotContain("code_challenge");
 
-        var handoff = await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!);
+        var handoff = await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!, "browser-session", "entra");
         handoff.Should().NotBeNull();
         handoff!.Value.AuthorizationUrl.Should().Contain("state=").And.NotContain(begin.TransactionId!);
         handoff.Value.CallbackCookie.Should().NotBeNullOrWhiteSpace();
-        (await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!)).Should().BeNull(
+        (await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!, "browser-session", "entra")).Should().BeNull(
             "a callback cookie is transferred only to the first browser opening the opaque handoff URL");
+    }
+
+    [Fact]
+    public async Task McpBrowserHandoff_RequiresTheInitiatingEntraBrowserSessionThroughCallback()
+    {
+        await using var database = await OpenDatabaseAsync();
+        var secrets = new InMemorySecretStore();
+        var factory = new StubHttpClientFactory(TokenResponse());
+        var service = CreateService(database, secrets, factory);
+        var begin = await service.BeginMcpHandoffAsync(Human("entra"), HumanPrincipal(), "settings");
+        var attackerHandoff = await service.TakeMcpBrowserHandoffAsync(
+            begin.TransactionId!, "attacker-session", "attacker");
+        attackerHandoff.Should().BeNull();
+        var state = (await database.GitHubAuthorizations.SingleAsync()).State;
+
+        var handoff = await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!, "initiator-session", "entra");
+        handoff.Should().NotBeNull();
+        (await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!, "other-entra-browser", "entra"))
+            .Should().BeNull("the callback must remain bound to the browser session that redeemed the handoff");
+
+        (await service.CompleteBrowserCallbackAsync(
+            "attacker-session", "attacker", state, "code", handoff!.Value.CallbackCookie))
+            .Outcome.Should().Be(RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid);
+        (await database.GitHubAuthorizations.SingleAsync()).Status.Should().Be(GitHubAuthorizationStatus.Pending);
+        factory.RequestBodies.Should().BeEmpty();
+
+        (await service.CompleteBrowserCallbackAsync(
+            "initiator-session", "entra", state, "code", handoff.Value.CallbackCookie))
+            .Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
     }
 
     [Fact]

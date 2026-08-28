@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Net.Http.Headers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Tests.Helpers;
 
@@ -158,6 +159,11 @@ public sealed class EntraSignInEndpointsTests
         var exchangeJson = JsonDocument.Parse(await exchangeResp.Content.ReadAsStringAsync());
         var sessionToken = exchangeJson.RootElement.GetProperty("session_token").GetString();
         sessionToken.Should().NotBeNullOrEmpty();
+        exchangeResp.Headers.GetValues("Set-Cookie").Should().Contain(cookie =>
+            cookie.StartsWith($"{BrowserEntraSessionService.CookieName}=", StringComparison.Ordinal) &&
+            cookie.Contains("httponly", StringComparison.OrdinalIgnoreCase) &&
+            cookie.Contains("secure", StringComparison.OrdinalIgnoreCase) &&
+            cookie.Contains("samesite=lax", StringComparison.OrdinalIgnoreCase));
 
         // 4. The session token IS the validated Entra access token: it authenticates an API request
         //    and resolves to the signed-in object id.

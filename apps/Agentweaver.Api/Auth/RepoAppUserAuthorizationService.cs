@@ -109,12 +109,25 @@ public sealed class RepoAppUserAuthorizationService(
 
     internal async Task<(string AuthorizationUrl, string CallbackCookie)?> TakeMcpBrowserHandoffAsync(
         string transactionId,
+        string browserSessionId,
+        string browserEntraObjectId,
         CancellationToken ct = default)
     {
+        if (!await persistence.BindMcpBrowserSessionAsync(
+                transactionId,
+                GitHubAppKind.Repo,
+                GitHubAuthorizationPurpose.InteractiveRepository,
+                browserEntraObjectId,
+                browserSessionId,
+                ct).ConfigureAwait(false))
+            return null;
+
         var transaction = await persistence.GetMcpBrowserHandoffTransactionAsync(
             transactionId,
             GitHubAppKind.Repo,
             GitHubAuthorizationPurpose.InteractiveRepository,
+            browserEntraObjectId,
+            browserSessionId,
             ct).ConfigureAwait(false);
         if (transaction is null)
             return null;
@@ -309,6 +322,8 @@ public sealed class RepoAppUserAuthorizationService(
     /// Entra-authenticated begin; the callback never accepts an identity from the browser.
     /// </summary>
     public async Task<RepoAppAuthorizationCallbackResult> CompleteBrowserCallbackAsync(
+        string? browserSessionId,
+        string? browserEntraObjectId,
         string? state,
         string? code,
         string? callbackCookie,
@@ -321,6 +336,9 @@ public sealed class RepoAppUserAuthorizationService(
         if (transaction is null ||
             transaction.AppKind != GitHubAppKind.Repo ||
             transaction.Purpose != GitHubAuthorizationPurpose.InteractiveRepository ||
+            (transaction.BrowserSessionId is not null &&
+             (!string.Equals(transaction.BrowserSessionId, browserSessionId, StringComparison.Ordinal) ||
+              !string.Equals(transaction.EntraObjectId, browserEntraObjectId, StringComparison.Ordinal))) ||
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > transaction.ExpiresAtUnixMilliseconds ||
             string.IsNullOrWhiteSpace(callbackCookie) ||
             !FixedTimeCookieHashEquals(transaction.CallbackCookieHash, callbackCookie))

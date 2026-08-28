@@ -54,10 +54,39 @@ public sealed class ProjectCopilotBindingServiceTests
         JsonSerializer.Serialize(begin).Should().NotContain("state").And.NotContain("cookie")
             .And.NotContain("repository").And.NotContain("installation");
 
-        var handoff = await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!);
+        var handoff = await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!, "browser-session", "owner");
         handoff.Should().NotBeNull();
         handoff!.Value.AuthorizationUrl.Should().Contain("state=").And.NotContain(begin.TransactionId!);
-        (await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!)).Should().BeNull();
+        (await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!, "browser-session", "owner")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task McpBrowserHandoff_RejectsAnotherEntraBrowserAndCompletesOnlyTheMatchingSession()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var project = ProjectId.New();
+        await SeedProjectAsync(db, project);
+        roles.SetOwner(project, "owner");
+        var service = CreateService(db, roles, new InMemorySecretStore());
+        var begin = await service.BeginMcpHandoffAsync(Human("owner"), HumanPrincipal(), project);
+
+        (await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!, "attacker-session", "attacker"))
+            .Should().BeNull();
+        var handoff = await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!, "owner-session", "owner");
+        handoff.Should().NotBeNull();
+        (await service.TakeMcpBrowserHandoffAsync(begin.TransactionId!, "other-owner-browser", "owner"))
+            .Should().BeNull("the callback must remain bound to the browser session that redeemed the handoff");
+        var state = (await db.GitHubAuthorizations.SingleAsync()).State;
+
+        (await service.CompleteBrowserCallbackAsync(
+            "attacker-session", "attacker", state, "code", handoff!.Value.CallbackCookie))
+            .Should().Be(CopilotBindingOutcome.AuthorizationTransactionInvalid);
+        (await db.ProjectCopilotBindings.CountAsync()).Should().Be(0);
+
+        (await service.CompleteBrowserCallbackAsync(
+            "owner-session", "owner", state, "code", handoff.Value.CallbackCookie))
+            .Should().Be(CopilotBindingOutcome.Success);
     }
 
     [Fact]

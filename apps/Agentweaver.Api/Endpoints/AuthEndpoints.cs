@@ -150,14 +150,22 @@ app.MapGet("/auth/github/repo-app/handoff/{transactionId}", async (
     HttpContext httpContext,
     string transactionId,
     IConfiguration configuration,
+    BrowserEntraSessionService browserSessions,
     TwoAppPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     CancellationToken ct) =>
 {
+    // This route remains AllowAnonymous because it is a browser navigation rather than an API
+    // bearer request. It authenticates explicitly with the opaque, HttpOnly Entra browser session.
+    var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
+    if (browserSession is null)
+        return Results.Unauthorized();
+
     var service = new RepoAppUserAuthorizationService(
         configuration, persistence, secretStore, httpClientFactory);
-    var handoff = await service.TakeMcpBrowserHandoffAsync(transactionId, ct).ConfigureAwait(false);
+    var handoff = await service.TakeMcpBrowserHandoffAsync(
+        transactionId, browserSession.Id, browserSession.EntraObjectId, ct).ConfigureAwait(false);
     if (handoff is null)
         return Results.NotFound();
 
@@ -174,6 +182,7 @@ app.MapGet("/auth/github/repo-app/callback", async (
     string? state,
     string? error,
     IConfiguration configuration,
+    BrowserEntraSessionService browserSessions,
     TwoAppPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
@@ -183,7 +192,10 @@ app.MapGet("/auth/github/repo-app/callback", async (
         configuration, persistence, secretStore, httpClientFactory);
     var callbackCookie = RepoAppUserAuthorizationService.ReadCallbackCookie(httpContext);
     RepoAppUserAuthorizationService.ClearCallbackCookie(httpContext);
+    var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
     var result = await repoAppAuthorization.CompleteBrowserCallbackAsync(
+        browserSession?.Id,
+        browserSession?.EntraObjectId,
         state,
         string.IsNullOrWhiteSpace(error) ? code : null,
         callbackCookie,
@@ -451,8 +463,12 @@ app.MapGet("/auth/entra/callback", async (
 // AllowAnonymous: the opaque, single-use code is itself the credential. The GitHub access token is
 // never placed in a URL; it is returned only here, in the response body, over the server-side POST.
 app.MapPost("/api/auth/session/exchange", async (
+    HttpContext httpContext,
     SessionExchangeRequest request,
     WebSessionExchangeService webSessionExchange,
+    BrowserEntraSessionService browserSessions,
+    EntraAccessTokenValidator entraTokenValidator,
+    IConfiguration configuration,
     CancellationToken ct) =>
 {
     if (request is null) return Results.BadRequest(new { error = "invalid_code" });
@@ -460,6 +476,14 @@ app.MapPost("/api/auth/session/exchange", async (
     var (success, accessToken, login) = await webSessionExchange.TryRedeemAsync(request.Code, ct).ConfigureAwait(false);
     if (!success)
         return Results.BadRequest(new { error = "invalid_code" });
+
+    if (AuthModeResolver.Resolve(configuration) == AuthMode.Entra)
+    {
+        var claims = await entraTokenValidator.ValidateAsync(accessToken, ct).ConfigureAwait(false);
+        if (claims is null)
+            return Results.BadRequest(new { error = "invalid_code" });
+        await browserSessions.IssueAsync(httpContext, claims, ct).ConfigureAwait(false);
+    }
 
     return Results.Ok(new SessionExchangeResponse(accessToken, login));
 }).AllowAnonymous();

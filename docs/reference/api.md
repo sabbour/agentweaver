@@ -179,6 +179,8 @@ Agent loopback writes authenticate with the normal internal API key plus a run-s
 | `POST` | `/api/auth/github-accounts/link` | Start a second GitHub OAuth round-trip that links another GitHub account to the current Entra user |
 | `DELETE` | `/api/auth/github-accounts/{login}` | Unlink one linked GitHub account; if it was default, the store promotes the next remaining linked account |
 | `POST` | `/api/auth/github/repo-app/authorizations` | Begin an Entra-user-bound Repo App authorization; returns an authorization URL and opaque transaction ID |
+| `POST` | `/api/auth/github/repo-app/authorizations/handoff` | Begin an MCP-safe Repo App browser handoff; returns only an opaque transaction ID, browser URL, and expiry |
+| `GET` | `/auth/github/repo-app/handoff/{transactionId}` | Redeem an MCP browser URL only from the initiating user's authenticated Entra browser session; issues the callback cookie and redirects to GitHub |
 | `GET` | `/auth/github/repo-app/callback` | Complete the Repo App browser callback with its one-time callback cookie |
 | `GET` | `/api/auth/github/repo-app/authorizations/{transactionId}` | Return only the initiating subject's safe transaction status |
 | `POST` | `/api/auth/github/repo-app/authorization/refresh` | Refresh the caller's Repo App authorization without changing its grant identity |
@@ -188,6 +190,12 @@ Agent loopback writes authenticate with the normal internal API key plus a run-s
 | `GET` | `/api/github/accounts` | List the signed-in user's personal account followed by organizations |
 | `GET` | `/api/github/repos` | List repositories for the signed-in GitHub user or selected account |
 | `POST` | `/api/auth/github/sign-out` | Sign out and delete the stored token |
+
+Project Copilot App authorization has equivalent project-scoped endpoints at
+`/api/projects/{id}/github/copilot/authorizations/handoff` and
+`/auth/github/copilot-app/handoff/{transactionId}`. Handoff URLs require the same
+initiating Entra browser session through callback completion; the transaction ID alone
+cannot issue a callback cookie or authorize a GitHub account.
 
 The linked-account and per-project GitHub-identity endpoints are available only in Entra auth mode and require an authenticated caller with an Entra object id. `GET /api/projects/{id}/github-identity` requires project `Viewer` or higher; `PUT /api/projects/{id}/github-identity` requires project `Contributor` or higher. These endpoints surface the real GitHub permissions reported by each linked identity; Agentweaver project roles do not simulate or override GitHub repo rights.
 

@@ -112,6 +112,7 @@ app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
     HttpContext httpContext,
     string transactionId,
     IConfiguration configuration,
+    BrowserEntraSessionService browserSessions,
     TwoAppPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
@@ -119,9 +120,16 @@ app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
     CopilotAppRegistrationService registration,
     CancellationToken ct) =>
 {
+    // This browser route has no bearer header, so it validates the authenticated Entra browser
+    // session before an opaque MCP transaction can mint a callback cookie.
+    var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
+    if (browserSession is null)
+        return Results.Unauthorized();
+
     var service = new ProjectCopilotBindingService(
         configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration);
-    var handoff = await service.TakeMcpBrowserHandoffAsync(transactionId, ct).ConfigureAwait(false);
+    var handoff = await service.TakeMcpBrowserHandoffAsync(
+        transactionId, browserSession.Id, browserSession.EntraObjectId, ct).ConfigureAwait(false);
     if (handoff is null)
         return Results.NotFound();
 
@@ -137,6 +145,7 @@ app.MapGet("/auth/github/copilot-app/callback", async (
     string? state,
     string? error,
     IConfiguration configuration,
+    BrowserEntraSessionService browserSessions,
     TwoAppPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
@@ -148,7 +157,10 @@ app.MapGet("/auth/github/copilot-app/callback", async (
         configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration);
     var cookie = ProjectCopilotBindingService.ReadCallbackCookie(httpContext);
     ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
+    var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
     var outcome = await service.CompleteBrowserCallbackAsync(
+        browserSession?.Id,
+        browserSession?.EntraObjectId,
         state, string.IsNullOrWhiteSpace(error) ? code : null, cookie, ct).ConfigureAwait(false);
     return Results.Redirect(service.GetCallbackRedirect(outcome));
 }).AllowAnonymous();

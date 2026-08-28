@@ -17,6 +17,25 @@ namespace Agentweaver.Api.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.7");
 
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.BrowserEntraSession", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EntraObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("BrowserEntraSessions");
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.EntraOAuthState", b =>
                 {
                     b.Property<string>("State")
@@ -876,6 +895,10 @@ namespace Agentweaver.Api.Migrations
                     b.Property<int>("AppKind")
                         .HasColumnType("INTEGER")
                         .HasColumnName("app_kind");
+
+                    b.Property<string>("BrowserSessionId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("browser_session_id");
 
                     b.Property<string>("CallbackCookieHash")
                         .IsRequired()

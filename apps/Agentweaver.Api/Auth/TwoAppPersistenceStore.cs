@@ -67,8 +67,9 @@ internal sealed record RepoAppAuthorizationTransaction(
     long ExpiresAtUnixMilliseconds,
     string ReturnRouteKey,
     string PkceVerifierProtected,
-    string CallbackCookieHash);
-internal sealed record CopilotAuthorizationTransaction(string State, string EntraObjectId, string ProjectId, long ExpiresAtUnixMilliseconds, string ReturnRouteKey, string PkceVerifierProtected, string CallbackCookieHash);
+    string CallbackCookieHash,
+    string? BrowserSessionId);
+internal sealed record CopilotAuthorizationTransaction(string State, string EntraObjectId, string ProjectId, long ExpiresAtUnixMilliseconds, string ReturnRouteKey, string PkceVerifierProtected, string CallbackCookieHash, string? BrowserSessionId);
 internal sealed record RepoAppCredentialReference(
     string Id,
     string CredentialReference,
@@ -177,18 +178,21 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
                 x.ExpiresAtUnixMilliseconds,
                 x.ReturnRouteKey,
                 x.PkceVerifierProtected,
-                x.CallbackCookieHash))
+                x.CallbackCookieHash,
+                x.BrowserSessionId))
             .SingleOrDefaultAsync(ct);
     internal Task<CopilotAuthorizationTransaction?> GetCopilotAuthorizationTransactionAsync(string state, CancellationToken ct = default) =>
         db.GitHubAuthorizations.AsNoTracking().Where(x => x.State == state && x.AppKind == GitHubAppKind.Copilot && x.Purpose == GitHubAuthorizationPurpose.InteractiveCopilot && x.ProjectId != null)
-            .Select(x => new CopilotAuthorizationTransaction(x.State, x.EntraObjectId, x.ProjectId!, x.ExpiresAtUnixMilliseconds, x.ReturnRouteKey, x.PkceVerifierProtected, x.CallbackCookieHash)).SingleOrDefaultAsync(ct);
+            .Select(x => new CopilotAuthorizationTransaction(x.State, x.EntraObjectId, x.ProjectId!, x.ExpiresAtUnixMilliseconds, x.ReturnRouteKey, x.PkceVerifierProtected, x.CallbackCookieHash, x.BrowserSessionId)).SingleOrDefaultAsync(ct);
     internal Task<CopilotAuthorizationTransaction?> GetCopilotAuthorizationTransactionByIdAsync(string id, string subject, CancellationToken ct = default) =>
         db.GitHubAuthorizations.AsNoTracking().Where(x => x.ExternalTransactionId == id && x.EntraObjectId == subject && x.AppKind == GitHubAppKind.Copilot && x.Purpose == GitHubAuthorizationPurpose.InteractiveCopilot && x.ProjectId != null)
-            .Select(x => new CopilotAuthorizationTransaction(x.State, x.EntraObjectId, x.ProjectId!, x.ExpiresAtUnixMilliseconds, x.ReturnRouteKey, x.PkceVerifierProtected, x.CallbackCookieHash)).SingleOrDefaultAsync(ct);
+            .Select(x => new CopilotAuthorizationTransaction(x.State, x.EntraObjectId, x.ProjectId!, x.ExpiresAtUnixMilliseconds, x.ReturnRouteKey, x.PkceVerifierProtected, x.CallbackCookieHash, x.BrowserSessionId)).SingleOrDefaultAsync(ct);
     internal Task<McpBrowserHandoffTransaction?> GetMcpBrowserHandoffTransactionAsync(
         string transactionId,
         GitHubAppKind appKind,
         GitHubAuthorizationPurpose purpose,
+        string entraObjectId,
+        string browserSessionId,
         CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -197,6 +201,8 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             .Where(x => x.ExternalTransactionId == transactionId &&
                         x.AppKind == appKind &&
                         x.Purpose == purpose &&
+                        x.EntraObjectId == entraObjectId &&
+                        x.BrowserSessionId == browserSessionId &&
                         x.Status == GitHubAuthorizationStatus.Pending &&
                         x.ExpiresAtUnixMilliseconds >= now)
             .Select(x => new McpBrowserHandoffTransaction(
@@ -205,6 +211,38 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
                 DateTimeOffset.FromUnixTimeMilliseconds(x.ExpiresAtUnixMilliseconds),
                 x.Status))
             .SingleOrDefaultAsync(ct);
+    }
+
+    internal async Task<bool> BindMcpBrowserSessionAsync(
+        string transactionId,
+        GitHubAppKind appKind,
+        GitHubAuthorizationPurpose purpose,
+        string entraObjectId,
+        string browserSessionId,
+        CancellationToken ct = default)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var changed = await db.GitHubAuthorizations
+            .Where(x => x.ExternalTransactionId == transactionId &&
+                        x.AppKind == appKind &&
+                        x.Purpose == purpose &&
+                        x.EntraObjectId == entraObjectId &&
+                        x.Status == GitHubAuthorizationStatus.Pending &&
+                        x.ExpiresAtUnixMilliseconds >= now &&
+                        x.BrowserSessionId == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.BrowserSessionId, browserSessionId), ct)
+            .ConfigureAwait(false);
+        if (changed == 1)
+            return true;
+
+        return await db.GitHubAuthorizations.AsNoTracking().AnyAsync(x =>
+            x.ExternalTransactionId == transactionId &&
+            x.AppKind == appKind &&
+            x.Purpose == purpose &&
+            x.EntraObjectId == entraObjectId &&
+            x.Status == GitHubAuthorizationStatus.Pending &&
+            x.ExpiresAtUnixMilliseconds >= now &&
+            x.BrowserSessionId == browserSessionId, ct).ConfigureAwait(false);
     }
 
     public async Task<AuthorizationClaimResult> ClaimAuthorizationByTransactionIdAsync(
