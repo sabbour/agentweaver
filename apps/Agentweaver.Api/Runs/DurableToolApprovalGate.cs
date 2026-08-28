@@ -410,7 +410,7 @@ public sealed class DurableToolApprovalGate(
         if (RunId.TryParse(runId, out var sourceRunId))
             yield return sourceRunId;
 
-        if (scope != ApprovalScope.Always
+        if (scope == ApprovalScope.Run
             && parentId is not null
             && subject is not null
             && SamePrincipal(parentSubject, subject)
@@ -494,7 +494,7 @@ public sealed class DurableToolApprovalGate(
             yield break;
         }
 
-        if (parentId is not null && SamePrincipal(parentSubject, subject))
+        if (scope == ApprovalScope.Run && parentId is not null && SamePrincipal(parentSubject, subject))
             yield return parentId;
     }
 
@@ -527,7 +527,10 @@ public sealed class DurableToolApprovalGate(
             new(runId, new PolicyGrant(subject.ProjectId?.ToString(), subject.Owner, toolName,
                 ToolApprovalPolicySemantics.RiskFor(toolName), subject.ApprovalGeneration))
         };
-        if (parentId is not null && parentSubject is { } parent && SamePrincipal(parent, subject))
+        if (scope == ApprovalScope.Run &&
+            parentId is not null &&
+            parentSubject is { } parent &&
+            SamePrincipal(parent, subject))
             destinations.Add(new PolicyDestination(parentId,
                 new PolicyGrant(parent.ProjectId?.ToString(), parent.Owner, toolName,
                     ToolApprovalPolicySemantics.RiskFor(toolName), parent.ApprovalGeneration)));

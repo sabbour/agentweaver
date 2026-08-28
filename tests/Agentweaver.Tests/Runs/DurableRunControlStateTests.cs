@@ -79,10 +79,38 @@ public sealed class DurableRunControlStateTests : IDisposable
 
         var wait = child.WaitForApprovalAsync(
             childId, "req-2", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
-        await WaitUntilAsync(() => sibling.GrantAsync(childId, "req-2", ApprovalScope.Tool));
+        await WaitUntilAsync(() => sibling.GrantAsync(childId, "req-2", ApprovalScope.Run));
 
         (await wait).Should().BeTrue();
         sibling.IsAutoApproved(siblingId, "web_fetch", "https://other.test").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ToolScopedApproval_OnChild_DoesNotAuthorizeSiblingOrFutureChild()
+    {
+        var parent = await InsertOwnedRunAsync("owner");
+        var child = await InsertOwnedRunAsync("owner");
+        var sibling = await InsertOwnedRunAsync("owner");
+        var futureChild = await InsertOwnedRunAsync("owner");
+        var gate = NewApprovalGate();
+        var parentId = parent.Id.ToString();
+        var childId = child.Id.ToString();
+
+        gate.RegisterParentRun(childId, parentId);
+        gate.RegisterParentRun(sibling.Id.ToString(), parentId);
+        var wait = gate.WaitForApprovalAsync(
+            childId, "tool-only", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
+        (await gate.GrantAsync(childId, "tool-only", ApprovalScope.Tool)).Should().BeTrue();
+        (await wait).Should().BeTrue();
+
+        gate.IsAutoApproved(childId, "web_fetch", "https://same-child.test").Should().BeTrue(
+            "Tool scope covers the approving child for the rest of its run");
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://sibling.test").Should().BeFalse(
+            "Tool scope must not become a coordinator policy for an active sibling");
+
+        gate.RegisterParentRun(futureChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(futureChild.Id.ToString(), "web_fetch", "https://future-child.test").Should().BeFalse(
+            "Tool scope must not become a coordinator policy for a future child");
     }
 
     [Fact]

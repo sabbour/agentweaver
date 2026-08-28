@@ -217,12 +217,13 @@ public sealed class ToolApprovalGateTests
     // ── Sibling propagation (RegisterParentRun, commit cb7fbbf) ───────────────────
 
     [Fact]
-    public async Task ToolScope_GrantInChildA_PropagatesToSiblingChildB()
+    public async Task ToolScope_GrantInChildA_RemainsConfinedToChildA()
     {
         var gate = CreateGate();
         const string parent = "coord-1";
         const string childA = "child-A";
         const string childB = "child-B";
+        const string childC = "child-C";
 
         gate.RegisterParentRun(childA, parent);
         gate.RegisterParentRun(childB, parent);
@@ -232,12 +233,18 @@ public sealed class ToolApprovalGateTests
         await gate.GrantAsync(childA, "req-1", ApprovalScope.Tool);
         (await task).Should().BeTrue();
 
-        // Sibling child B sees the policy for the same tool (any URL).
-        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeTrue();
+        gate.IsAutoApproved(childA, "web_fetch", "https://another-url.test").Should().BeTrue(
+            "Tool scope remains URL-agnostic within the approving child run");
+        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeFalse(
+            "Tool scope must not authorize a sibling child");
+
+        gate.RegisterParentRun(childC, parent);
+        gate.IsAutoApproved(childC, "web_fetch", "https://future-child.test").Should().BeFalse(
+            "Tool scope must not authorize a future child");
     }
 
     [Fact]
-    public async Task ToolScope_PropagatesAcrossUrls_RunScope_DoesNot()
+    public async Task RunScope_PropagatesAcrossChildren_WhileToolScopeDoesNot()
     {
         var gate = CreateGate();
         const string parent = "coord-2";
@@ -255,13 +262,13 @@ public sealed class ToolApprovalGateTests
         // The propagated run-scoped grant covers the tool for every URL.
         gate.IsAutoApproved(childB, "web_fetch", "https://other.com").Should().BeTrue();
 
-        // Tool scope is URL-agnostic: grant for a different tool in child A.
+        // Tool scope is URL-agnostic, but only within the approving child.
         var toolTask = Register(gate, childA, "req-tool", toolName: "shell", url: "https://anything.com");
         await gate.GrantAsync(childA, "req-tool", ApprovalScope.Tool);
         (await toolTask).Should().BeTrue();
 
-        // Tool-scoped grant propagates to the sibling for ANY URL of that tool.
-        gate.IsAutoApproved(childB, "shell", "https://different.com").Should().BeTrue();
+        gate.IsAutoApproved(childA, "shell", "https://different.com").Should().BeTrue();
+        gate.IsAutoApproved(childB, "shell", "https://different.com").Should().BeFalse();
     }
 
     [Fact]
@@ -276,7 +283,7 @@ public sealed class ToolApprovalGateTests
         gate.RegisterParentRun(childB, parent);
 
         var task = Register(gate, childA, "req-1", url: "https://example.com");
-        await gate.GrantAsync(childA, "req-1", ApprovalScope.Tool);
+        await gate.GrantAsync(childA, "req-1", ApprovalScope.Run);
         (await task).Should().BeTrue();
 
         gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeTrue();

@@ -347,6 +347,46 @@ public sealed class ToolApprovalPersistenceTests(PostgresFixture pg)
             "a recovered coordinator must not reactivate a policy granted during its prior lifecycle");
     }
 
+    [PostgresFact]
+    public async Task ToolScopedChildGrant_DoesNotAuthorizeSiblingOrFutureChild()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var project = ProjectId.New();
+        var parent = NewRun($"alice-{suffix}", project);
+        var child = NewRun($"alice-{suffix}", project);
+        var sibling = NewRun($"alice-{suffix}", project);
+        var futureChild = NewRun($"alice-{suffix}", project);
+        var runStore = new EfRunStore(pg.Factory);
+        foreach (var run in new[] { parent, child, sibling, futureChild })
+            await runStore.InsertAsync(run);
+
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(options =>
+            options.UseNpgsql(
+                pg.ConnectionString,
+                npgsql => npgsql.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
+        using var provider = services.BuildServiceProvider();
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var gate = new DurableToolApprovalGate(
+            new DurableRunControlState(provider.GetRequiredService<IServiceScopeFactory>(), eventStream),
+            runStore: runStore);
+        var parentId = parent.Id.ToString();
+        var childId = child.Id.ToString();
+
+        gate.RegisterParentRun(childId, parentId);
+        gate.RegisterParentRun(sibling.Id.ToString(), parentId);
+        var wait = gate.WaitForApprovalAsync(
+            childId, "tool-only", "web_fetch", "https://child.test", TimeSpan.FromSeconds(10), default);
+        (await gate.GrantAsync(childId, "tool-only", ApprovalScope.Tool)).Should().BeTrue();
+        (await wait).Should().BeTrue();
+
+        gate.IsAutoApproved(childId, "web_fetch", "https://same-child.test").Should().BeTrue();
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://sibling.test").Should().BeFalse();
+
+        gate.RegisterParentRun(futureChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(futureChild.Id.ToString(), "web_fetch", "https://future-child.test").Should().BeFalse();
+    }
+
     private static Run NewRun(string owner, ProjectId projectId, RunStatus status = RunStatus.InProgress) => new()
     {
         Id = RunId.New(),

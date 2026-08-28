@@ -292,7 +292,8 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalTo
             owner,
             context.ToolName,
             ToolApprovalPolicySemantics.RiskFor(context.ToolName));
-        var parentRunId = _parentRuns.TryGetValue(runId, out var parentId) &&
+        var parentRunId = scope == ApprovalScope.Run &&
+            _parentRuns.TryGetValue(runId, out var parentId) &&
             OwnerOf(parentId) is { } parentOwner &&
             string.Equals(parentOwner, owner, StringComparison.Ordinal)
             ? parentId
@@ -313,7 +314,7 @@ public sealed class InMemoryToolApprovalGate : IToolApprovalGate, IProvisionalTo
         if (scope is ApprovalScope.Run or ApprovalScope.Tool)
         {
             AddRunPolicy(runId, scopeGrant?.Id, policy);
-            if (parentRunId is not null)
+            if (scope == ApprovalScope.Run && parentRunId is not null)
                 AddRunPolicy(parentRunId, scopeGrant?.Id, policy);
         }
         else if (scope == ApprovalScope.Always &&
