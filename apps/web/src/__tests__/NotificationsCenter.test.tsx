@@ -332,10 +332,11 @@ describe('NotificationBell + NotificationsProvider', () => {
     });
     const firstToast = (await screen.findByText(firstApproval.title)).closest('[role="listitem"]');
     const secondToast = (await screen.findByText(secondApproval.title)).closest('[role="listitem"]');
-    expect(firstToast).not.toBeNull();
-    expect(secondToast).not.toBeNull();
-    await user.click(within(firstToast!).getByText('Review now'));
-    await user.click(within(secondToast!).getByText('Review now'));
+    if (!(firstToast instanceof HTMLElement) || !(secondToast instanceof HTMLElement)) {
+      throw new Error('Expected approval toasts to be HTML elements.');
+    }
+    await user.click(within(firstToast).getByText('Review now'));
+    await user.click(within(secondToast).getByText('Review now'));
     await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(4));
 
     await act(async () => {
