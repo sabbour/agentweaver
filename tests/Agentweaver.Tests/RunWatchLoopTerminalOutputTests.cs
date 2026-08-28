@@ -15,6 +15,7 @@ namespace Agentweaver.Tests.Api;
 /// Verifies that genuinely terminal outputs return true (triggering cleanup) while
 /// a leaked "blocked" output returns false (preserving registry + checkpoints).
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApplicationFactory>
 {
     private readonly ReviewWebApplicationFactory _factory;

@@ -178,7 +178,7 @@ purposes:
 
 | Job | What it runs | Gating | Runs when |
 |---|---|---|---|
-| `.NET tests` | Locked restore, one build, then full test with `--no-build --no-restore` | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
+| `.NET tests` | Stable namespace shards plus isolated PostgreSQL/Testcontainers, process-global environment, and Kata runtime gates; every shard writes TRX results | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
 | `Node toolchain tests` | Full Node toolchain/CI-helper tests plus `npm --prefix scripts/ui-harness test` | Blocking — must pass | Node toolchain paths or UI harness/shared harness paths changed |
 | `Web tests` | Web tests and lint after one isolated `npm ci` | Blocking — must pass | `apps/web/**` changed |
 | `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |

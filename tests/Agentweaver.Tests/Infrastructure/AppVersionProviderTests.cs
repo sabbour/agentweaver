@@ -12,6 +12,7 @@ namespace Agentweaver.Tests.Infrastructure;
 /// real release build, while a SHA-tagged `azure:upgrade`/`azure:deploy-from-local` build (or
 /// local `dotnet run` outside Docker) must fall back to the VERSION file for the base semver.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class AppVersionProviderTests : IDisposable
 {
     private readonly string _dir;

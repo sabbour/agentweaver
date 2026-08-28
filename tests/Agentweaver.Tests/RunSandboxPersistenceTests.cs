@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Api;
 
+[Trait("Category", "ProcessEnvironment")]
 public sealed class RunSandboxPersistenceTests : IClassFixture<ReviewWebApplicationFactory>
 {
     private readonly ReviewWebApplicationFactory _factory;

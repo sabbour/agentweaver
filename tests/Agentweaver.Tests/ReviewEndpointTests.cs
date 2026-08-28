@@ -34,6 +34,7 @@ namespace Agentweaver.Tests.Api;
 ///   FR-014        — GET /api/runs/{id} returns diff + step_count + tree_hash
 ///                   when the run is in awaiting_review
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFactory>, IDisposable
 {
     private readonly ReviewWebApplicationFactory _factory;

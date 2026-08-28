@@ -17,6 +17,7 @@ namespace Agentweaver.Tests.Sandbox;
 /// These tests pin the two properties that make that safe: it is per-run, and every failure mode
 /// leaves the command *more* restricted (read-only system root) rather than less.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class SandboxWritableSystemRootTests : IDisposable
 {
     private readonly string _root =

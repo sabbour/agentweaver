@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Api;
 
+[Trait("Category", "ProcessEnvironment")]
 public sealed class A2ATransportTimeoutTests : IClassFixture<ReviewWebApplicationFactory>
 {
     private readonly ReviewWebApplicationFactory _factory;

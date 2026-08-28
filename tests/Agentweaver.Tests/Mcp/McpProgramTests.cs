@@ -6,6 +6,7 @@ using Xunit;
 
 namespace Agentweaver.Tests.Mcp;
 
+[Trait("Category", "ProcessEnvironment")]
 public sealed class McpProgramTests : IDisposable
 {
     public McpProgramTests()
