@@ -35,12 +35,13 @@ import {
 import { BlueprintPanel } from '../components/BlueprintPicker';
 import { applyBlueprintToRequest, NO_BLUEPRINT, useBlueprintGeneration } from '../components/BlueprintPicker.helpers';
 import { GitHubIcon } from '../components/GitHubIcon';
+import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
 import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, TileGrid } from '../components/ui';
 import { Pager } from '../copilot-fluent-system';
 import { GITHUB_AUTHORIZE_URL } from '../config';
 import { useProjectList } from '../hooks/useProjectList';
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   AccessibleGitHubRepo,
   CreateProjectRequest,
@@ -946,6 +947,7 @@ function ProjectCard({ project, onOpen, highlight }: { project: Project; onOpen:
 
 export function ProjectGalleryPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { appendProject, refetch } = useProjectList();
   const [projectPage, setProjectPage] = useState<PagedResult<Project> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1066,6 +1068,13 @@ export function ProjectGalleryPage() {
   const totalProjects = projectPage?.total_count ?? 0;
   const totalProjectPages = projectPage?.total_pages ?? 1;
   const showGalleryActions = !loading && !authError && totalProjects > 0;
+  const copilotAuthorizationResult = searchParams.get('copilot_app_auth');
+
+  const dismissCopilotAuthorizationResult = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('copilot_app_auth');
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <PageContainer>
@@ -1079,6 +1088,11 @@ export function ProjectGalleryPage() {
             <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
           </>
         ) : undefined}
+      />
+
+      <CopilotAuthorizationResultNotice
+        code={copilotAuthorizationResult}
+        onDismiss={dismissCopilotAuthorizationResult}
       />
 
       {loading && <LoadingState label="Loading projects" rows={4} />}
