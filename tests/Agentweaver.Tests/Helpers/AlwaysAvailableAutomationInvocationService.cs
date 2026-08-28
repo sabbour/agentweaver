@@ -10,6 +10,10 @@ public sealed class AlwaysAvailableAutomationInvocationService : IAutomationInvo
         ProjectId projectId, string occurrenceKey, string? deliveryId, string? eventName, CancellationToken ct = default) =>
         Task.FromResult<AutomationInvocationClaim?>(new(SnapshotRef.Create().Value));
 
+    public Task<AutomationInvocationClaim?> TryGetClaimedInvocationForProjectAsync(
+        ProjectId projectId, string occurrenceKey, string? deliveryId, string? eventName, CancellationToken ct = default) =>
+        Task.FromResult<AutomationInvocationClaim?>(null);
+
     public Task<bool> TryBindBacklogTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
         Task.FromResult(true);
@@ -52,6 +56,10 @@ public sealed class CoordinatorInterleavingAutomationInvocationService(IBacklogT
     public Task<AutomationInvocationClaim?> TryClaimForProjectAsync(
         ProjectId projectId, string occurrenceKey, string? deliveryId, string? eventName, CancellationToken ct = default) =>
         Task.FromResult<AutomationInvocationClaim?>(new(SnapshotRef.Create().Value));
+
+    public Task<AutomationInvocationClaim?> TryGetClaimedInvocationForProjectAsync(
+        ProjectId projectId, string occurrenceKey, string? deliveryId, string? eventName, CancellationToken ct = default) =>
+        Task.FromResult<AutomationInvocationClaim?>(null);
 
     public async Task<bool> TryBindBacklogTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default)

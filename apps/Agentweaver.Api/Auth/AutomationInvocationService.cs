@@ -17,6 +17,17 @@ public interface IAutomationInvocationService
         string? eventName,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Retrieves an existing event invocation only when its active server-owned activation and
+    /// occurrence identity are still the exact values supplied by the trusted trigger path.
+    /// </summary>
+    Task<AutomationInvocationClaim?> TryGetClaimedInvocationForProjectAsync(
+        ProjectId projectId,
+        string occurrenceKey,
+        string? deliveryId,
+        string? eventName,
+        CancellationToken ct = default);
+
     Task<bool> TryBindBacklogTaskAsync(
         string invocationId,
         ProjectId projectId,
@@ -115,6 +126,45 @@ public sealed class AutomationInvocationService(
             .SingleOrDefaultAsync(ct)
             .ConfigureAwait(false);
         return string.IsNullOrWhiteSpace(invocationId) ? null : new(invocationId);
+    }
+
+    public async Task<AutomationInvocationClaim?> TryGetClaimedInvocationForProjectAsync(
+        ProjectId projectId,
+        string occurrenceKey,
+        string? deliveryId,
+        string? eventName,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(occurrenceKey))
+            return null;
+
+        var activation = await db.AutomationActivations.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.ProjectId == projectId.ToString() &&
+                                      x.Status == AutomationActivationStatus.Active, ct)
+            .ConfigureAwait(false);
+        if (activation is null)
+            return null;
+
+        var invocation = await db.AutomationInvocations.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.ActivationId == activation.Id &&
+                                      x.ProjectId == projectId.ToString() &&
+                                      x.OccurrenceKey == occurrenceKey &&
+                                      x.DeliveryId == deliveryId &&
+                                      x.EventName == eventName &&
+                                      x.Outcome == AutomationInvocationOutcome.Claimed, ct)
+            .ConfigureAwait(false);
+        if (invocation is null)
+            return null;
+
+        var fencedActivation = await persistence.TryFenceAutomationActivationAsync(activation.Id, ct)
+            .ConfigureAwait(false);
+        return fencedActivation is null ||
+               fencedActivation.ProjectId != invocation.ProjectId ||
+               fencedActivation.ProjectId != projectId.ToString() ||
+               fencedActivation.InstallationId != invocation.InstallationId ||
+               fencedActivation.RepositoryId != invocation.RepositoryId
+            ? null
+            : new(invocation.Id);
     }
 
     public async Task<bool> TryBindBacklogTaskAsync(
