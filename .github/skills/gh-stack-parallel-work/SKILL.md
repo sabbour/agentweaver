@@ -1,140 +1,81 @@
 ---
 name: "gh-stack-parallel-work"
-description: "Agentweaver override for coordinated gh stack work across dependent PR layers"
+description: "Agentweaver coordinator policy for parallel implementation in gh-stack PRs"
 domain: "version-control"
 confidence: "high"
-source: "team-decision and GitHub gh-stack overview/workflows"
+source: "team-decision"
 ---
 
-## When to use this skill
+## Scope
 
-Use this skill whenever work may use a stacked PR, `gh stack`, two or more dependent
-layers, or a large feature that spans auth, backend, frontend, and tests. It overrides
-generic stack and worktree guidance for that work. A stack has **two or more logical PR
-layers**. A local one-branch tracking setup, or an ordinary one-branch PR, is not a
-stacked PR.
+Use this overlay whenever work may use `gh stack`, dependent PR layers, or a large
+feature spanning auth, backend, frontend, and tests. It overrides generic agent
+ownership guidance, not the official `gh stack` operational guidance.
 
-For independent issues with no branch-to-branch dependency, use the normal issue and
-worktree workflow instead.
+An actual stacked PR has **two or more logical PR layers**. A local one-branch tracking
+setup or an ordinary one-branch PR is not a stack. Use the normal Agentweaver PR workflow
+for ordinary PRs.
 
-## Ownership boundary
+## Authoritative operational reference
 
-**The coordinator owns stack design and all `gh stack` operations.**
+Before deciding whether work belongs in a stack, or choosing its layers' count, order,
+or content, coordinators must read [the official stack-design reference](../../../.agents/skills/gh-stack/references/stack-design.md).
+Read [the official gh-stack skill](../../../.agents/skills/gh-stack/SKILL.md) before
+running any stack command. It is authoritative for command syntax and flags, command
+behavior and side effects, errors and recovery, non-interactive forms, remote selection,
+and stack-design references.
 
-The coordinator, and not individual agents:
+In particular, coordinators must use the official safe non-interactive forms: JSON view
+output, automatic PR submission, and explicit branch names for initialization and added
+layers. The official skill and command-specific `gh stack <command> --help` define
+supported flags and remote selection. Its multi-remote `--remote <name>` rule applies
+only to supported `push`, `submit`, `sync`, `rebase`, and `link` operations; `init`
+does not accept `--remote`. Do not invent flags or rely on interactive prompts.
 
-- analyzes the feature dependency graph and chooses atomic review layers;
-- decides the ordered branches and each branch's base;
-- centrally establishes the initial ordered stack with `gh stack init` exactly once;
-- runs `gh stack add` while adding each subsequent layer;
-- arranges isolated worktrees after the initial stack is established;
-- supplies agents their assigned layer, base, lower-layer dependency, and complete stack
-  context;
-- runs `gh stack submit`, `gh stack sync`, `gh stack rebase`, `gh stack push`,
-  `gh stack modify`, and `gh stack merge`; and
-- coordinates readiness, handoffs, and dependencies between layer owners.
+## Coordinator-owned stack lifecycle
 
-An assigned agent works only in the coordinator-provided worktree and branch. Agents
-must not independently run `gh stack init`, `gh stack add`, `gh stack submit`,
-`gh stack sync`, `gh stack rebase`, `gh stack push`, `gh stack modify`, or
-`gh stack merge`; agents also do not perform direct rebase/merge operations that change
-stack topology. An agent reports its readiness, validation, blockers, and dependencies
-to the coordinator instead.
+**Only the coordinator owns feature stack topology and lifecycle.** The coordinator:
 
-Agents may make their assigned changes, commit them, and provide the resulting commit
-SHA to the coordinator. The coordinator decides when and how those commits enter the
-managed stack.
+- analyzes dependencies and chooses atomic, ordered review layers;
+- centrally initializes the stack once, with exact ordered branch names, and adds later
+  layers centrally;
+- gives every agent an isolated worktree, assigned branch, lower-layer dependency, and
+  full stack context;
+- serializes stack commands. A stack state can be locked, so agents and coordinators do
+  not run competing operations against the same stack;
+- submits, synchronizes, rebases, pushes, and links the stack; and
+- coordinates review, merge readiness, and recovery.
 
-## Stack model and review behavior
+Arrange the initial stack before distributing per-layer worktrees. Branches checked out
+in other worktrees can prevent local stack adoption or initialization. Worktree isolation
+remains mandatory for concurrent implementation after that initial setup.
 
-A stack is a dependency chain of atomic, independently reviewable PRs:
+When upstream or a lower layer changes, the coordinator follows the official sync and
+rebase workflow. A fix belongs in the lowest layer that owns it, never in an upper PR for
+convenience. The coordinator uses `gh stack push`, not a raw push, after stack rebases.
 
-```text
-feature/frontend-and-tests  -> feature/backend-contracts
-feature/backend-contracts   -> feature/auth-foundation
-feature/auth-foundation     -> dev (the trunk for this feature)
-```
+`gh stack modify` is TUI-only; it is not a non-interactive recovery path. When
+restructuring is necessary in an automated or agent workflow, the coordinator follows the
+official recovery guidance, including coordinator-directed unstack/re-initialize when
+appropriate, then re-submits or syncs.
 
-- The bottom layer targets trunk. For ordinary Agentweaver work, trunk is `dev`.
-- Every upper layer targets the branch immediately below it, never `dev` directly.
-- The GitHub stack UI shows the complete chain, layer status, and review context, so a
-  reviewer can see how one focused PR fits the feature.
-- Protection rules and CI requirements for every layer derive from the bottom layer's
-  base. A mid-stack PR does not evade the quality bar merely because its direct base is
-  another feature branch.
-- Selecting a layer to merge also lands every unmerged lower layer, in bottom-up order.
-  A layer cannot merge while leaving an unmerged dependency below it.
-- After a partial merge, GitHub automatically rebases the remaining stack so its next
-  layer targets trunk and remains ready for review.
+## Agent boundaries
 
-`gh stack` manages the dependency-sensitive mechanics: branch creation and bases,
-cascading rebase, push, PR creation, PR linking, and stack synchronization. The
-coordinator uses it as the one authority for those operations.
+Assigned agents work only in their coordinator-provided worktree and branch. They do not
+initialize, add, submit, sync, rebase, push, modify, or merge a stack; change a stack PR
+base; or create competing stack branches.
 
-This prevents three common failures:
+Agents use pathspec-scoped `git add <files>` only. They must not use all-files staging
+shortcuts, including `gh stack add -Am`, in shared or agent worktrees. They commit only
+their assigned layer and report the commit SHA, validation, readiness, dependencies, and
+blockers to the coordinator.
 
-1. Calling a one-branch PR a “stack” gives reviewers no dependency chain or stack UI
-   context.
-2. Independently created branches often target the wrong base, producing duplicate diffs
-   and broken merge order.
-3. Multiple agents changing stack branches or rebasing at once creates avoidable branch,
-   worktree, and force-push contention.
+## Merge policy
 
-## Reconciliation, fixes, and recovery
-
-- **Merged lower layers or upstream changes:** The coordinator uses `gh stack sync` as
-  the normal reconciliation path. It fetches, reconciles remote and local composition,
-  fast-forwards trunk, cascades a rebase, safely pushes, syncs PR state and links, and
-  can prune merged local branches. If remote and local composition diverge, resolve that
-  centrally before retrying; do not let agents improvise stack changes.
-- **Fixes found above their layer:** Put the fix in the lowest layer that owns it, never
-  in an upper PR merely because that branch is checked out. The coordinator coordinates
-  `gh stack rebase` and then `gh stack push` for dependent layers above it.
-- **Pushing rebased layers:** `gh stack push` uses safe `--force-with-lease` behavior.
-  Its multi-branch update is not atomic: report every rejected branch to the coordinator
-  and investigate it before retrying. Never use a raw force push for stack branches.
-- **Changing composition:** Only the coordinator uses `gh stack modify` to add, remove,
-  fold, rename, or reorder layers, then follows with `gh stack submit` or
-  `gh stack sync` as appropriate.
-- **Merging:** For an actual stack, only `gh stack merge` is used. Without a merge queue
-  it atomically lands the selected layer and all lower unmerged layers. With a merge
-  queue, it adds the chosen PRs together and the queue may land them in ordered groups.
-  Ordinary PRs continue to use the repository's normal PR merge policy.
-- **Staging:** Do not use all-files shortcuts such as `gh stack add -Am` in shared or
-  agent worktrees. Preserve Agentweaver's pathspec-only `git add <files>` rule.
-
-## Coordinator procedure
-
-1. **Analyze dependencies.** Map shared types/schema/auth first; then backend contracts;
-   then frontend consumers, integration tests, and documentation. Keep a dependency in
-   its layer or a lower layer.
-2. **Choose atomic review layers.** Each layer must tell one coherent review story and
-   remain meaningful on its own. Split by dependency direction and review audience, not
-   by arbitrary file count.
-3. **Establish the stack centrally.** Before distributing layer worktrees, initialize
-   the bottom branch with `gh stack init` once and create each ordered upper branch with
-   `gh stack add`, ensuring its base is the previous layer. Already checked-out branches
-   can prevent local adoption or initialization, so this order is required.
-4. **Assign isolated worktrees.** Create or assign one worktree and one named branch per
-   layer after setup. Worktree isolation remains mandatory for concurrent implementation;
-   do not give two agents the same worktree or branch.
-5. **Distribute complete context.** Tell every agent its exact worktree path, assigned
-   branch, immediate lower dependency, scope, validation command, and the prohibition on
-   direct stack commands.
-6. **Collect layer readiness.** Confirm commits, validation results, and remaining
-   dependencies in bottom-up order. Resolve cross-layer needs before changing stack
-   structure.
-7. **Operate the stack centrally.** The coordinator uses `gh stack submit` and
-   `gh stack sync` to push, create/update, and link PRs; it uses `gh stack merge` for
-   stack merges. Coordinate review and merge at stack level; do not ask layer agents to
-   rebase or merge.
-
-Use only commands offered by the installed `gh stack` version. This skill intentionally
-does not prescribe command flags beyond the safe behavior described above.
+For a real stack, only the coordinator uses `gh stack merge`; never use raw `gh pr merge`
+for it. Ordinary one-branch PRs use the repository's normal PR merge policy.
 
 ## Agent assignment prompt
-
-Provide this block, completed for the assigned layer:
 
 ```text
 You own one assigned layer of a coordinator-managed gh stack.
@@ -146,14 +87,7 @@ LOWER_LAYER_DEPENDENCY: <branch/PR and what it provides, or none>
 STACK_CONTEXT: <ordered bottom-to-top branch list and this layer's scope>
 
 Work only in WORKTREE_PATH and on ASSIGNED_STACK_BRANCH. Do not run gh stack commands,
-change PR bases, rebase/merge the stack, or create competing branches. Use pathspec-only
-`git add <files>`; never use all-files staging shortcuts. Commit only your assigned
-layer. Report the commit SHA, validation performed, readiness, and any dependency/blocker
-to the coordinator.
+change PR bases, rebase/merge/push the stack, or create competing branches. Use
+pathspec-only `git add <files>`. Commit only your layer and report commit SHA, validation,
+readiness, and any dependency/blocker to the coordinator.
 ```
-
-## Reference
-
-This policy follows the GitHub `gh stack` overview and workflows guide:
-<https://github.github.com/gh-stack/introduction/overview/>
-and <https://github.github.com/gh-stack/guides/workflows/>.
