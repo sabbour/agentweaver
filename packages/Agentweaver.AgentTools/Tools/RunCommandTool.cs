@@ -196,14 +196,7 @@ internal sealed class RunCommandTool : ISandboxTool
         return environment;
     }
 
-    private static readonly HashSet<string> BuiltInGitCommands = new(StringComparer.Ordinal)
-    {
-        "add", "apply", "blame", "branch", "checkout", "clean", "clone", "commit",
-        "diff", "fetch", "grep", "log", "ls-files", "ls-remote", "ls-tree", "merge",
-        "merge-base", "mv", "pull", "push", "rebase", "remote", "reset", "restore",
-        "revert", "rm", "show", "show-ref", "sparse-checkout", "stash", "status",
-        "switch", "tag", "worktree",
-    };
+    private const string CredentialSafeGitCommand = "status";
 
     private static readonly HashSet<string> BuiltInGhCommands = new(StringComparer.Ordinal)
     {
@@ -241,6 +234,8 @@ internal sealed class RunCommandTool : ISandboxTool
                 "--no-pager",
                 "-c", "credential.helper=",
                 "-c", "core.hooksPath=/dev/null",
+                "-c", "core.fsmonitor=false",
+                "-c", "submodule.recurse=false",
                 "-c", "protocol.allow=never",
                 "-c", "protocol.https.allow=always",
                 "-c", $"http.https://github.com/.extraheader=AUTHORIZATION: basic {basicAuthorization}",
@@ -282,40 +277,18 @@ internal sealed class RunCommandTool : ISandboxTool
         out string? error)
     {
         error = null;
-        if (arguments.Count < 2 || !BuiltInGitCommands.Contains(arguments[1]))
+        // Git's built-in command set is not a safety boundary. Many built-ins can invoke
+        // repository-configured helpers (diffs, filters, merge drivers, signing, and hooks), and
+        // Git forwards -c configuration to those children. Keep the credential path to the one
+        // argument-free inspection command for which Git starts no repository-controlled child.
+        if (arguments.Count != 2 || arguments[1] != CredentialSafeGitCommand)
         {
-            error = "Command rejected: repository credentials require a built-in git command.";
-            return false;
-        }
-
-        foreach (var argument in arguments.Skip(2))
-        {
-            if (!IsUnsafeGitArgument(argument))
-                continue;
-
-            error = "Command rejected: git configuration, aliases, helpers, and alternate worktrees are not allowed with repository credentials.";
+            error = "Command rejected: repository credentials only allow 'git status' without arguments.";
             return false;
         }
 
         return true;
     }
-
-    private static bool IsUnsafeGitArgument(string argument) =>
-        argument == "-c" ||
-        argument.StartsWith("-c", StringComparison.Ordinal) ||
-        argument == "-C" ||
-        argument.StartsWith("--config", StringComparison.Ordinal) ||
-        argument.StartsWith("--exec-path", StringComparison.Ordinal) ||
-        argument.StartsWith("--git-dir", StringComparison.Ordinal) ||
-        argument.StartsWith("--work-tree", StringComparison.Ordinal) ||
-        argument.StartsWith("--namespace", StringComparison.Ordinal) ||
-        argument.StartsWith("--upload-pack", StringComparison.Ordinal) ||
-        argument.StartsWith("--receive-pack", StringComparison.Ordinal) ||
-        argument.StartsWith("--git-upload-pack", StringComparison.Ordinal) ||
-        argument.StartsWith("--git-receive-pack", StringComparison.Ordinal) ||
-        argument.StartsWith("--paginate", StringComparison.Ordinal) ||
-        argument == "-p" ||
-        argument.StartsWith("ext::", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryValidateGhArguments(
         IReadOnlyList<string> arguments,

@@ -64,6 +64,8 @@ public sealed class AgentHostReaperService : IAgentHostReaper
     /// <inheritdoc />
     public async Task<int> SweepOrphanedPodsAsync(CancellationToken ct = default)
     {
+        await RetryRetainedRepositoryCredentialRevocationsAsync(ct).ConfigureAwait(false);
+
         var activeMap = await GetActiveClaimMapAsync(ct).ConfigureAwait(false);
         var claims = await ListAgentHostClaimsAsync(ct).ConfigureAwait(false);
         var now = DateTimeOffset.UtcNow;
@@ -267,6 +269,22 @@ public sealed class AgentHostReaperService : IAgentHostReaper
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "AgentHostReaper: failed to revoke repository credential for run {RunId}", runId);
+        }
+    }
+
+    private async Task RetryRetainedRepositoryCredentialRevocationsAsync(CancellationToken ct)
+    {
+        if (_repositoryCredentials is null)
+            return;
+
+        var failures = await _repositoryCredentials.RetryFailedRevocationsAsync(ct).ConfigureAwait(false);
+        foreach (var failure in failures)
+        {
+            _logger.LogWarning(
+                failure.Exception,
+                "AgentHostReaper: retained repository credential revocation retry failed for run {RunId}; " +
+                "it will retry with backoff until credential expiry",
+                failure.RunId);
         }
     }
 

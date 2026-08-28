@@ -156,6 +156,8 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             observed.DirectExecution.Environment.Should().BeNull();
             observed.DirectExecution.Arguments.Should().Contain("credential.helper=")
                 .And.Contain("core.hooksPath=/dev/null")
+                .And.Contain("core.fsmonitor=false")
+                .And.Contain("submodule.recurse=false")
                 .And.NotContain("repository-access-token");
         }
         else
@@ -242,6 +244,31 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     }
 
     [Theory]
+    [InlineData("git status --short")]
+    [InlineData("git diff --ext-diff")]
+    [InlineData("git commit -S -m signed")]
+    [InlineData("git add .")]
+    [InlineData("git merge main")]
+    [InlineData("git config --get alias.steal")]
+    [InlineData("git credential fill")]
+    [InlineData("git steal")]
+    [InlineData("git fetch origin")]
+    public async Task Controlled_run_command_rejects_git_commands_that_can_start_child_programs(string command)
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker, repositoryAccessToken: "repository-access-token"),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        result?.ToString().Should().Contain("only allow 'git status' without arguments");
+        executor.ExecuteCalls.Should().Be(0);
+    }
+
+    [Theory]
     [InlineData("gh secret set DEPLOY_KEY --body value")]
     [InlineData("gh auth token")]
     public async Task Controlled_run_command_requires_operator_approval_for_sensitive_gh_commands(string command)
@@ -265,29 +292,38 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     }
 
     [Fact]
-    public async Task Controlled_run_command_keeps_the_sentinel_out_of_git_alias_hooks_and_helpers()
+    public async Task Controlled_run_command_does_not_leak_the_sentinel_to_a_repository_configured_external_diff()
     {
         const string sentinel = "sentinel-repository-token";
         var repository = Path.Combine(_root, "credential-boundary");
-        var hookOutput = Path.Combine(_root, "hook-token.txt");
-        var aliasOutput = Path.Combine(_root, "alias-token.txt");
-        var helperOutput = Path.Combine(_root, "helper-token.txt");
+        var observerOutput = Path.Combine(_root, "external-diff-token.txt");
+        var observerExecutable = Path.Combine(repository, "credential-observer.sh");
         Directory.CreateDirectory(repository);
         await RunGitAsync(repository, "init");
         await RunGitAsync(repository, "config", "user.name", "Sandbox Test");
         await RunGitAsync(repository, "config", "user.email", "sandbox@example.invalid");
-        var hookPath = Path.Combine(repository, ".git", "hooks", "pre-commit");
-        File.WriteAllText(
-            hookPath,
-            $"#!/bin/sh{Environment.NewLine}printenv > {PosixQuote(hookOutput)}{Environment.NewLine}");
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(
-                hookPath,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        }
-        await RunGitAsync(repository, "config", "alias.steal", $"!printenv > {PosixQuote(aliasOutput)}");
-        await RunGitAsync(repository, "config", "credential.helper", $"!printenv > {PosixQuote(helperOutput)}");
+        var trackedFile = Path.Combine(repository, "tracked.txt");
+        File.WriteAllText(trackedFile, "before");
+        await RunGitAsync(repository, "add", "tracked.txt");
+        await RunGitAsync(repository, "commit", "-m", "initial");
+        File.WriteAllText(trackedFile, "after");
+        WriteEnvironmentObserver(observerExecutable, observerOutput);
+        var externalDiffCommand = OperatingSystem.IsWindows()
+            ? $"sh {PosixQuote(ToGitShellPath(observerExecutable))}"
+            : observerExecutable;
+        await RunGitAsync(repository, "config", "diff.external", externalDiffCommand);
+        var basicAuthorization = Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes($"x-access-token:{sentinel}"));
+        await RunGitAsync(
+            repository,
+            "-c",
+            $"http.https://github.com/.extraheader=AUTHORIZATION: basic {basicAuthorization}",
+            "diff",
+            "--ext-diff");
+        File.ReadAllText(observerOutput).Should().Contain(basicAuthorization,
+            "an unprotected external diff would receive Git configuration containing the sentinel authorization");
+        File.Delete(observerOutput);
+        await RunGitAsync(repository, "config", "core.fsmonitor", externalDiffCommand);
 
         var executor = SandboxExecutorFactory.CreatePassthrough();
         using var tracker = new ShellExecutionTracker();
@@ -299,19 +335,17 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
                 repositoryAccessToken: sentinel),
             includeControlledRunCommand: true).Single(t => t.Name == "run_command");
 
-        var commit = await tool.InvokeAsync(new AIFunctionArguments(
-            new Dictionary<string, object?> { ["command"] = "git commit --allow-empty -m credential-boundary" }));
-        var alias = await tool.InvokeAsync(new AIFunctionArguments(
-            new Dictionary<string, object?> { ["command"] = "git steal" }));
-        var helper = await tool.InvokeAsync(new AIFunctionArguments(
-            new Dictionary<string, object?> { ["command"] = "git credential fill" }));
+        var diff = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "git diff --ext-diff" }));
+        var status = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "git status" }));
 
-        commit?.ToString().Should().Contain("exit_code: 0");
-        alias?.ToString().Should().Contain("built-in git command");
-        helper?.ToString().Should().Contain("built-in git command");
-        File.Exists(hookOutput).Should().BeFalse();
-        File.Exists(aliasOutput).Should().BeFalse();
-        File.Exists(helperOutput).Should().BeFalse();
+        diff?.ToString().Should().Contain("only allow 'git status' without arguments");
+        File.Exists(observerOutput).Should().BeFalse(
+            "the credential-bearing command must be rejected before its repository-configured child can start");
+        status?.ToString().Should().Contain("exit_code: 0");
+        File.Exists(observerOutput).Should().BeFalse(
+            "the allowed credential-bearing status command disables repository-configured filesystem monitors");
     }
 
     [Fact]
@@ -609,6 +643,30 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
 
     private static string PosixQuote(string value) =>
         "'" + value.Replace("'", "'\\''") + "'";
+
+    private static void WriteEnvironmentObserver(string executable, string outputPath)
+    {
+        File.WriteAllText(
+            executable,
+            $"#!/bin/sh{Environment.NewLine}printenv > {PosixQuote(ToGitShellPath(outputPath))}{Environment.NewLine}");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                executable,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private static string ToGitShellPath(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+            return path;
+
+        var fullPath = Path.GetFullPath(path).Replace('\\', '/');
+        return fullPath.Length >= 3 && fullPath[1] == ':'
+            ? $"/{char.ToLowerInvariant(fullPath[0])}{fullPath[2..]}"
+            : fullPath;
+    }
 
     private sealed class RecordingExecutor(ISandboxExecutor inner) : ISandboxExecutor
     {

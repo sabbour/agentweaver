@@ -86,16 +86,20 @@ The policy is read through `ISandboxPolicyStore.GetPolicyAsync` and is configura
 
 The API sends one short-lived installation credential for the selected repository and run. When
 that credential is used, the sandbox parses the command and starts the approved `git` or `gh`
-executable directly instead of placing the credential in a shell environment. Shell syntax,
-Git aliases, configured helpers, alternate worktrees, and helper-selecting Git options are
-rejected for this path. Git runs with hooks and credential helpers disabled; its GitHub
-authorization header is scoped to the directly-started Git process.
+executable directly instead of placing the credential in a shell environment. Credential-bearing
+Git is limited to argument-free `git status`; all other Git subcommands and flags are rejected.
+This prevents repository configuration from selecting external diffs, signing programs, filters,
+merge drivers, hooks, aliases, helpers, or remote helpers. The direct Git process disables hooks,
+credential helpers, filesystem monitors, and recursive submodules. Its GitHub authorization
+header is scoped to that process; it is never supplied to a child process.
 
 The approval policy gates `git push`, remote changes, `gh pr` changes, `gh repo` changes, `gh api`,
 `gh secret set`, and `gh auth` commands (including `gh auth token`). The API does not inspect or
 proxy these commands.
 
-The system keeps this credential out of pod specs, files, logs, events, annotations, shared environments, and credential-helper files. Normal release and orphan cleanup log failed revocations and retain the in-memory retry state until a later cleanup succeeds or the credential actually expires.
+The system keeps this credential out of pod specs, files, logs, events, annotations, shared environments, and credential-helper files. Normal release and orphan cleanup log failed revocations. The
+registry retains failed revocations independently of their SandboxClaim, and each reaper sweep retries
+due revocations with capped exponential backoff until they succeed or the credential actually expires.
 
 ## Security model
 

@@ -13,8 +13,14 @@ namespace Agentweaver.Api.Sandbox;
 /// </summary>
 public sealed class RunRepositoryCredentialRegistry
 {
+    internal static readonly TimeSpan InitialRevocationRetryDelay = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan MaximumRevocationRetryDelay = TimeSpan.FromMinutes(1);
+
     private readonly IRunRepositoryCredentialMinter _credentialMinter;
+    private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, RepositoryCredential> _entries = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, RetainedRevocation> _retainedRevocations =
+        new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _mintLocks = new(StringComparer.Ordinal);
 
     public RunRepositoryCredentialRegistry(IServiceScopeFactory scopeFactory)
@@ -22,8 +28,13 @@ public sealed class RunRepositoryCredentialRegistry
     {
     }
 
-    internal RunRepositoryCredentialRegistry(IRunRepositoryCredentialMinter credentialMinter) =>
+    internal RunRepositoryCredentialRegistry(
+        IRunRepositoryCredentialMinter credentialMinter,
+        TimeProvider? timeProvider = null)
+    {
         _credentialMinter = credentialMinter;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public async Task<string?> MintAsync(string runId, CancellationToken ct = default)
     {
@@ -31,15 +42,24 @@ public sealed class RunRepositoryCredentialRegistry
         await mintLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            var now = _timeProvider.GetUtcNow();
+            if (_retainedRevocations.TryGetValue(runId, out var retained))
+            {
+                if (retained.ExpiresAt > now)
+                    return null;
+
+                _retainedRevocations.TryRemove(runId, out _);
+            }
+
             if (_entries.TryGetValue(runId, out var current))
             {
-                if (current.ExpiresAt > DateTimeOffset.UtcNow)
+                if (current.ExpiresAt > now)
                     return null;
                 _entries.TryRemove(runId, out _);
             }
 
             var minted = await _credentialMinter.MintAsync(runId, ct).ConfigureAwait(false);
-            if (minted is null || minted.ExpiresAt <= DateTimeOffset.UtcNow)
+            if (minted is null || minted.ExpiresAt <= _timeProvider.GetUtcNow())
                 return null;
 
             _entries[runId] = minted;
@@ -60,24 +80,139 @@ public sealed class RunRepositoryCredentialRegistry
         await mintLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            var now = _timeProvider.GetUtcNow();
+            if (_retainedRevocations.TryGetValue(runId, out var retained))
+            {
+                if (retained.ExpiresAt <= now)
+                {
+                    _retainedRevocations.TryRemove(runId, out _);
+                    _entries.TryRemove(runId, out _);
+                }
+                return;
+            }
+
             if (!_entries.TryGetValue(runId, out var entry))
                 return;
-
-            if (entry.ExpiresAt <= DateTimeOffset.UtcNow)
+            if (entry.ExpiresAt <= now)
             {
                 _entries.TryRemove(runId, out _);
                 return;
             }
 
-            await _credentialMinter.RevokeAsync(entry.AccessToken, ct).ConfigureAwait(false);
-            _entries.TryRemove(runId, out _);
+            await RevokeAndRemoveAsync(runId, entry.AccessToken, entry.ExpiresAt, ct).ConfigureAwait(false);
         }
         finally
         {
             mintLock.Release();
         }
     }
+
+    /// <summary>
+    /// Retries failed repository-token revocations that are due, including those whose owning
+    /// SandboxClaim was already deleted. The expiry is an absolute stop: expired tokens are removed
+    /// without another provider call.
+    /// </summary>
+    internal async Task<IReadOnlyList<FailedRepositoryCredentialRevocation>> RetryFailedRevocationsAsync(
+        CancellationToken ct = default)
+    {
+        var failures = new List<FailedRepositoryCredentialRevocation>();
+        foreach (var runId in _retainedRevocations.Keys)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var mintLock = _mintLocks.GetOrAdd(runId, static _ => new SemaphoreSlim(1, 1));
+            await mintLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                if (!_retainedRevocations.TryGetValue(runId, out var retained))
+                    continue;
+
+                var now = _timeProvider.GetUtcNow();
+                if (retained.ExpiresAt <= now)
+                {
+                    _retainedRevocations.TryRemove(runId, out _);
+                    _entries.TryRemove(runId, out _);
+                    continue;
+                }
+
+                if (retained.NextAttemptAt > now)
+                    continue;
+
+                try
+                {
+                    await _credentialMinter.RevokeAsync(retained.AccessToken, ct).ConfigureAwait(false);
+                    _retainedRevocations.TryRemove(runId, out _);
+                    _entries.TryRemove(runId, out _);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    RetainFailedRevocation(runId, retained.AccessToken, retained.ExpiresAt);
+                    failures.Add(new FailedRepositoryCredentialRevocation(runId, ex));
+                }
+            }
+            finally
+            {
+                mintLock.Release();
+            }
+        }
+
+        return failures;
+    }
+
+    private async Task RevokeAndRemoveAsync(
+        string runId,
+        string accessToken,
+        DateTimeOffset expiresAt,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _credentialMinter.RevokeAsync(accessToken, ct).ConfigureAwait(false);
+            _retainedRevocations.TryRemove(runId, out _);
+            _entries.TryRemove(runId, out _);
+        }
+        catch
+        {
+            RetainFailedRevocation(runId, accessToken, expiresAt);
+            throw;
+        }
+    }
+
+    private void RetainFailedRevocation(string runId, string accessToken, DateTimeOffset expiresAt)
+    {
+        var failures = _retainedRevocations.TryGetValue(runId, out var retained)
+            ? retained.FailureCount + 1
+            : 1;
+        var retryDelay = CalculateRetryDelay(failures);
+        _retainedRevocations[runId] = new RetainedRevocation(
+            accessToken,
+            expiresAt,
+            failures,
+            _timeProvider.GetUtcNow().Add(retryDelay));
+        _entries.TryRemove(runId, out _);
+    }
+
+    private static TimeSpan CalculateRetryDelay(int failureCount)
+    {
+        var multiplier = 1L << Math.Min(Math.Max(failureCount - 1, 0), 6);
+        var ticks = Math.Min(
+            InitialRevocationRetryDelay.Ticks * multiplier,
+            MaximumRevocationRetryDelay.Ticks);
+        return TimeSpan.FromTicks(ticks);
+    }
+
+    private sealed record RetainedRevocation(
+        string AccessToken,
+        DateTimeOffset ExpiresAt,
+        int FailureCount,
+        DateTimeOffset NextAttemptAt);
 }
+
+internal sealed record FailedRepositoryCredentialRevocation(string RunId, Exception Exception);
 
 /// <summary>
 /// The registry's credential-only dependency. It has no knowledge of git, gh, command text, or
