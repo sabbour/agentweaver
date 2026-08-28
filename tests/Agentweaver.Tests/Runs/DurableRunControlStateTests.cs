@@ -203,6 +203,30 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task UpgradedGenerationOneRun_DoesNotMatchLegacyPolicyWithoutGeneration()
+    {
+        var upgradedRun = NewOwnedRun("owner");
+        await _runStore.InsertAsync(upgradedRun);
+        var state = NewState();
+        state.Append(
+            upgradedRun.Id.ToString(),
+            "tool.approval_policy_granted",
+            new
+            {
+                projectId = (string?)null,
+                owner = "owner",
+                toolId = "web_fetch",
+                riskSemantics = "network-read/v1",
+            });
+
+        var gate = NewApprovalGate();
+
+        gate.IsAutoApproved(upgradedRun.Id.ToString(), "web_fetch", "https://upgraded.test")
+            .Should().BeFalse(
+                "legacy run policies lacking a lifecycle generation require renewed operator consent after upgrade");
+    }
+
+    [Fact]
     public async Task RunScopedApproval_OnChild_FailsWhenParentIsNoLongerActive()
     {
         var parent = await InsertOwnedRunAsync("owner");

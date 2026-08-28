@@ -725,9 +725,7 @@ public sealed class DurableToolApprovalGate(
                     && string.Equals(policy.ToolId, toolName, StringComparison.Ordinal)
                     && string.Equals(policy.RiskSemantics, risk, StringComparison.Ordinal)
                     && (lifecycleScoped
-                        ? policy.ApprovalGeneration is null
-                            ? subject.ApprovalGeneration == 1
-                            : policy.ApprovalGeneration == subject.ApprovalGeneration
+                        ? policy.ApprovalGeneration == subject.ApprovalGeneration
                         : policy.ApprovalGeneration is null))
                 {
                     return true;
