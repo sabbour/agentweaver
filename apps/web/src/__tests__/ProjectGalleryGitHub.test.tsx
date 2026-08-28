@@ -79,10 +79,10 @@ const REPO: GitHubRepo = { fullName: 'octocat/hello-world', defaultBranch: 'main
 const REPO_B: GitHubRepo = { fullName: 'octocat/aardvark', defaultBranch: 'main', private: false, description: null, htmlUrl: 'https://github.com/octocat/aardvark' };
 const REPO_C: GitHubRepo = { fullName: 'octocat/zebra', defaultBranch: 'main', private: false, description: 'Last alphabetically', htmlUrl: 'https://github.com/octocat/zebra' };
 
-function Wrapper({ children }: { children: ReactNode }) {
+function Wrapper({ children, initialEntries }: { children: ReactNode; initialEntries?: string[] }) {
   return (
     <AzureFluentProvider density="compact">
-      <MemoryRouter>
+      <MemoryRouter initialEntries={initialEntries}>
         <ProjectListProvider>
           {children}
         </ProjectListProvider>
@@ -120,6 +120,19 @@ async function openGitHubDialog() {
 }
 
 describe('ProjectGalleryPage — GitHub repo listing auth', () => {
+  it('shows a safe Copilot App callback result and removes it when dismissed', async () => {
+    render(
+      <Wrapper initialEntries={['/projects?copilot_app_auth=success']}>
+        <ProjectGalleryPage />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText(/The Copilot App is connected to this project/)).toBeDefined();
+    expect(screen.queryByText('success')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/The Copilot App is connected to this project/)).toBeNull();
+  });
+
   it('shows a connect affordance (not a silent empty list) when accounts return 401', async () => {
     vi.mocked(apiClient.listLinkedGitHubAccounts).mockRejectedValue(new ApiError(401, 'unauthorized'));
 
