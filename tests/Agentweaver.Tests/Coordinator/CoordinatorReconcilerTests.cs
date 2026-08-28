@@ -258,16 +258,52 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Sweep_CoordinatorBecomesTerminal_SettlesPreviouslyOrphanedDispatch()
+    public async Task Sweep_TerminalCoordinatorWithActiveChild_RearmsRecoveryUntilChildDrainsThenSettles()
+    {
+        var coord = RunId.New().ToString();
+        var child = await SeedChildRunAsync(RunStatus.AssembleReady, parentRunId: coord);
+        var (planId, subtaskIds) = await SeedPlanAsync(
+            coord, new[] { (SubtaskStatus.Running, (string?)child) });
+        _streamStore.Create(coord, "owner");
+
+        // This represents the first sweep after a pod restart: the coordinator already stopped, but
+        // its persisted child is still marked running. The real dispatch recovery loop must observe
+        // that child before the plan can become terminal.
+        await SeedCoordinatorRunAsync(coord, RunStatus.Failed);
+        var restartedPodDispatch = new RecoveringDispatch(BuildDispatch());
+        var restartedPodReconciler = BuildReconciler(restartedPodDispatch);
+
+        (await restartedPodReconciler.SweepAsync(default)).Should().Be(1);
+        await restartedPodDispatch.WaitForRecoveryAsync();
+
+        (await GetSubtaskAsync(subtaskIds[0])).Status.Should().Be(SubtaskStatus.AssembleReady,
+            "the restarted dispatch loop re-observes and drains the existing child");
+        (await GetPlanStatusAsync(planId)).Should().Be(WorkPlanStatus.AssemblyFailed,
+            "the terminal coordinator settles only after its active child drains");
+        restartedPodDispatch.StartDispatchCalls.Should().ContainSingle();
+        (await _runStore.GetRunsByParentAsync(coord)).Should().ContainSingle()
+            .Which.Id.Should().Be(RunId.Parse(child),
+                "terminal-coordinator recovery drains its existing child instead of creating a new one");
+
+        var nextPodDispatch = new RecordingDispatch();
+        (await BuildReconciler(nextPodDispatch).SweepAsync(default)).Should().Be(0);
+        nextPodDispatch.StartDispatchCalls.Should().BeEmpty(
+            "the durable terminal plan state prevents re-arming on later restarts");
+    }
+
+    [Fact]
+    public async Task Sweep_CoordinatorBecomesTerminalAfterChildDrains_SettlesPreviouslyOrphanedDispatch()
     {
         var coord = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coord);
-        var (planId, _) = await SeedPlanAsync(coord, new[] { (SubtaskStatus.Running, (string?)RunId.New().ToString()) });
+        var (planId, subtaskIds) = await SeedPlanAsync(
+            coord, new[] { (SubtaskStatus.Running, (string?)RunId.New().ToString()) });
         var dispatch = new RecordingDispatch();
         var reconciler = BuildReconciler(dispatch);
 
         (await reconciler.SweepAsync(default)).Should().Be(1,
             "a genuinely interrupted non-terminal coordinator still recovers");
+        await SetSubtaskStatusAsync(subtaskIds[0], SubtaskStatus.Completed);
         await _runStore.UpdateStatusAsync(RunId.Parse(coord), RunStatus.Failed, DateTimeOffset.UtcNow);
 
         (await reconciler.SweepAsync(default)).Should().Be(0);
@@ -628,7 +664,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
             runOptions: null, autopilot: null, configuration: config);
     }
 
-    private CoordinatorReconciler BuildReconciler(RecordingDispatch dispatch)
+    private CoordinatorReconciler BuildReconciler(ICoordinatorDispatch dispatch)
     {
         return new CoordinatorReconciler(
             _scopeFactory, _runStore, _streamStore, dispatch, NullLogger<CoordinatorReconciler>.Instance);
@@ -637,7 +673,10 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     private static CoordinatorDispatchContext Context(string coord) =>
         new(coord, "repo", "main", "owner", null);
 
-    private async Task<string> SeedChildRunAsync(RunStatus status, DateTimeOffset? startedAt = null)
+    private async Task<string> SeedChildRunAsync(
+        RunStatus status,
+        DateTimeOffset? startedAt = null,
+        string? parentRunId = null)
     {
         var id = RunId.New();
         var run = new Run
@@ -651,7 +690,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
             Status = RunStatus.InProgress,
             StartedAt = startedAt ?? DateTimeOffset.UtcNow,
             AgentName = "morpheus",
-            ParentRunId = RunId.New().ToString(),
+            ParentRunId = parentRunId ?? RunId.New().ToString(),
             SubtaskId = "0",
         };
         await _runStore.InsertAsync(run);
@@ -843,6 +882,23 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         public bool Active { get; set; }
         public void StartDispatch(CoordinatorDispatchContext context) => StartDispatchCalls.Add(context);
         public bool IsDispatchActive(string coordinatorRunId) => Active;
+    }
+
+    private sealed class RecoveringDispatch(CoordinatorDispatchService dispatch) : ICoordinatorDispatch
+    {
+        public List<CoordinatorDispatchContext> StartDispatchCalls { get; } = [];
+        private Task? RecoveryTask { get; set; }
+
+        public void StartDispatch(CoordinatorDispatchContext context)
+        {
+            StartDispatchCalls.Add(context);
+            RecoveryTask = dispatch.RunDispatchLoopAsync(context, CancellationToken.None);
+        }
+
+        public bool IsDispatchActive(string coordinatorRunId) => false;
+
+        public Task WaitForRecoveryAsync() =>
+            RecoveryTask ?? throw new InvalidOperationException("Recovery was not started.");
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

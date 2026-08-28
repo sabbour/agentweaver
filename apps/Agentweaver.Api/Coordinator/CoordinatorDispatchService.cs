@@ -442,7 +442,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 // subtask's bounded recovery budget — reset it to Pending so the frontier redispatches
                 // a fresh child (on a fresh pod) next iteration. Only when the budget is exhausted
                 // (RecoveryAttempts >= MaxRecoveryAttempts) does the stall become a genuine terminal.
-                if (await TryRedispatchStalledSubtaskAsync(
+                if (!coordinatorStopped
+                    && await TryRedispatchStalledSubtaskAsync(
                         context, workPlanId.Value, result.SubtaskId, result.ChildRunId, statusById, seq, ct)
                         .ConfigureAwait(false))
                     continue;

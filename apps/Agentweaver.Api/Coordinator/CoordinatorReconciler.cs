@@ -158,8 +158,8 @@ public sealed class CoordinatorReconciler
             {
                 // A prior process can stop after the coordinator run becomes terminal but before its
                 // work-plan status is settled. Work plans and runs use separate stores, so this check
-                // cannot be part of the EF candidate query. Persist the matching terminal plan state
-                // before considering an orphan re-arm; that durable transition survives pod restarts.
+                // cannot be part of the EF candidate query. Active children must first be recovered by
+                // the dispatch loop; it re-observes and drains them without launching new children.
                 if (await TrySetTerminalCoordinatorWorkPlanStatusAsync(plan, ct).ConfigureAwait(false))
                     continue;
 
@@ -492,9 +492,10 @@ public sealed class CoordinatorReconciler
     }
 
     /// <summary>
-    /// Settles a candidate whose coordinator run has reached a terminal result. The work-plan status is the
-    /// durable orphan-scan cursor, so persisting this transition makes future scans skip the run even
-    /// after this pod is replaced. Returns <c>true</c> when the candidate must not be re-armed.
+    /// Settles a candidate whose coordinator run has reached a terminal result and whose children have
+    /// all drained. The work-plan status is the durable orphan-scan cursor, so persisting this transition
+    /// makes future scans skip the run even after this pod is replaced. Returns <c>true</c> when the
+    /// candidate must not be re-armed.
     /// </summary>
     private async Task<bool> TrySetTerminalCoordinatorWorkPlanStatusAsync(
         PlanCandidate plan,
@@ -511,6 +512,14 @@ public sealed class CoordinatorReconciler
 
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var hasActiveSubtasks = await db.Subtasks
+            .AsNoTracking()
+            .AnyAsync(s => s.WorkPlanId == plan.WorkPlanId
+                        && (s.Status == SubtaskStatus.Dispatched || s.Status == SubtaskStatus.Running), ct)
+            .ConfigureAwait(false);
+        if (hasActiveSubtasks)
+            return false;
+
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
             .Where(w => w.Id == plan.WorkPlanId && w.Status == plan.Status)
