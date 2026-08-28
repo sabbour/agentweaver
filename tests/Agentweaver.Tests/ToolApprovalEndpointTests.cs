@@ -813,7 +813,7 @@ public sealed class ToolApprovalEndpointTests
     }
 
     [Fact]
-    public async Task PodPerRun_CurrentHostBridgeCoversNextCallBeforeDurablePolicyCommit()
+    public async Task PodPerRun_CurrentHostScopeDoesNotAuthorizeBeforeDurablePolicyCommit()
     {
         var source = RunId.New();
         const string requestId = "pod-current-host-bridge";
@@ -844,6 +844,7 @@ public sealed class ToolApprovalEndpointTests
         var approvalGate = factory.Services.GetRequiredService<IToolApprovalGate>();
         var secretStore = factory.Services.GetRequiredService<ISecretStore>();
         var persistence = factory.Services.GetRequiredService<BlockingAgentHostApprovalPersistence>();
+        agentHost.DurablePolicyAuthorizes = () => persistence.Committed;
         await InsertRunAsync(
             runStore,
             source,
@@ -864,14 +865,16 @@ public sealed class ToolApprovalEndpointTests
 
         agentHost.LastScope.Should().Be("run");
         (await agentHost.InitialTool.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue();
-        agentHost.IsAutoApproved("web_fetch", "https://following.test").Should().BeTrue(
-            "the current AgentHost accepts its local bridge before it releases the waiting tool");
+        agentHost.IsAutoApproved("web_fetch", "https://following.test").Should().BeFalse(
+            "the provisional AgentHost scope must not bypass the durable policy before it commits");
         approvalGate.IsAutoApproved(source.ToString(), "web_fetch", "https://following.test")
             .Should().BeFalse("the durable policy is still blocked from committing");
 
         persistence.Release();
         var response = await approval.WaitAsync(TimeSpan.FromSeconds(5));
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        agentHost.IsAutoApproved("web_fetch", "https://following.test").Should().BeTrue(
+            "the AgentHost may authorize once its durable policy reader confirms the committed policy");
         approvalGate.IsAutoApproved(source.ToString(), "web_fetch", "https://following.test")
             .Should().BeTrue("the durable policy is published after successful local acceptance");
     }
@@ -1468,6 +1471,7 @@ public sealed class ToolApprovalEndpointTests
         public int RollbackCalls { get; private set; }
         public Task<bool> InitialTool { get; }
         public bool DropScopedGrantResponse { get; set; }
+        public Func<bool>? DurablePolicyAuthorizes { get; set; }
 
         /// <summary>
         /// When greater than zero, the next that many <see cref="RollbackScopeAsync"/> calls
@@ -1479,6 +1483,7 @@ public sealed class ToolApprovalEndpointTests
         public int FailRollbackAttempts { get; set; }
 
         public bool IsAutoApproved(string toolName, string? url) =>
+            DurablePolicyAuthorizes?.Invoke() == true &&
             _gate.IsAutoApproved(_runId, toolName, url);
 
         public Task<AgentHostApprovalOutcome> GetPendingContextAsync(
@@ -1620,6 +1625,8 @@ public sealed class ToolApprovalEndpointTests
         public TaskCompletionSource Entered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public bool Committed { get; private set; }
+
         public void Release() => _release.TrySetResult();
 
         public async Task<bool> PersistAgentHostApprovalAsync(
@@ -1631,8 +1638,9 @@ public sealed class ToolApprovalEndpointTests
         {
             Entered.TrySetResult();
             await _release.Task.ConfigureAwait(false);
-            return await inner.PersistAgentHostApprovalAsync(runId, requestId, toolName, url, scope)
+            Committed = await inner.PersistAgentHostApprovalAsync(runId, requestId, toolName, url, scope)
                 .ConfigureAwait(false);
+            return Committed;
         }
     }
 

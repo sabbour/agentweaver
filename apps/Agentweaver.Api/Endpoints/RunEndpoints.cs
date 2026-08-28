@@ -1865,8 +1865,10 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
                             statusCode: StatusCodes.Status503ServiceUnavailable);
                     }
 
-                    // Finalization only retires the rollback handle; the durable policy has
-                    // already committed, so a lost finalization acknowledgement is harmless.
+                    // Finalization only retires the rollback handle. Every subsequent scoped
+                    // authorization consults the lifecycle-aware durable policy, so an
+                    // unconfirmed finalization cannot leave the provisional local policy as a
+                    // bypass while preserving the committed policy for an active run.
                     await TryFinalizeAgentHostScopeAsync(
                         targetRunId,
                         body.RequestId,

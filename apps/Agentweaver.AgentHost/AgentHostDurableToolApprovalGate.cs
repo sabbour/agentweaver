@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
@@ -17,7 +16,6 @@ internal sealed class AgentHostDurableToolApprovalGate(
 {
     private readonly InMemoryToolApprovalGate _local =
         new(new AgentHostToolApprovalOwnerResolver(runtimeState));
-    private readonly ConcurrentDictionary<ScopeGrantKey, byte> _finalizedScopeGrants = new();
 
     public Task<bool> WaitForApprovalAsync(
         string runId,
@@ -40,8 +38,6 @@ internal sealed class AgentHostDurableToolApprovalGate(
             return false;
 
         var locallyApproved = _local.IsAutoApproved(runId, toolName, url);
-        if (locallyApproved && !HasFinalizedScope(runId))
-            return true;
 
         try
         {
@@ -83,38 +79,16 @@ internal sealed class AgentHostDurableToolApprovalGate(
         _local.GetScopeGrantId(runId, requestId);
 
     public bool RollbackScopeGrant(string runId, string requestId, string scopeGrantId)
-    {
-        var rolledBack = _local.RollbackScopeGrant(runId, requestId, scopeGrantId);
-        if (rolledBack)
-            _finalizedScopeGrants.TryRemove(new ScopeGrantKey(runId, requestId), out _);
-        return rolledBack;
-    }
+        => _local.RollbackScopeGrant(runId, requestId, scopeGrantId);
 
     public bool FinalizeScopeGrant(string runId, string requestId, string scopeGrantId)
-    {
-        var finalized = _local.FinalizeScopeGrant(runId, requestId, scopeGrantId);
-        if (finalized)
-            _finalizedScopeGrants.TryAdd(new ScopeGrantKey(runId, requestId), 0);
-        return finalized;
-    }
+        => _local.FinalizeScopeGrant(runId, requestId, scopeGrantId);
 
-    public void Clear(string runId)
-    {
-        _local.Clear(runId);
-        foreach (var key in _finalizedScopeGrants.Keys.Where(key =>
-                     string.Equals(key.RunId, runId, StringComparison.Ordinal)))
-        {
-            _finalizedScopeGrants.TryRemove(key, out _);
-        }
-    }
+    public void Clear(string runId) => _local.Clear(runId);
 
     public void RegisterParentRun(string childRunId, string parentRunId) =>
         _local.RegisterParentRun(childRunId, parentRunId);
 
-    private bool HasFinalizedScope(string runId) =>
-        _finalizedScopeGrants.Keys.Any(key => string.Equals(key.RunId, runId, StringComparison.Ordinal));
-
-    private sealed record ScopeGrantKey(string RunId, string RequestId);
 }
 
 internal interface IAgentHostToolApprovalPolicyClient

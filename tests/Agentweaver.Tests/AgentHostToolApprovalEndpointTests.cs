@@ -27,7 +27,7 @@ public sealed class AgentHostToolApprovalEndpointTests
     [InlineData("run")]
     [InlineData("tool")]
     [InlineData("always")]
-    public async Task ProductionRuntimeWiring_ScopedGrant_AutoApprovesFollowingToolCallForConfiguredRun(
+    public async Task ProductionRuntimeWiring_ScopedGrant_DoesNotAutoApproveWithoutDurablePolicyReader(
         string scope)
     {
         var services = new ServiceCollection();
@@ -68,7 +68,8 @@ public sealed class AgentHostToolApprovalEndpointTests
         Status(result).Should().Be(StatusCodes.Status200OK);
         (await firstFetch).Should().BeTrue();
         gate.IsAutoApproved("run-1", "web_fetch", "https://second.test")
-            .Should().BeTrue($"a successful {scope}-scoped approval must cover following local tool calls");
+            .Should().BeFalse(
+                $"a {scope}-scoped approval must not authorize locally before the durable policy is readable");
         gate.IsAutoApproved("different-run", "web_fetch", "https://second.test")
             .Should().BeFalse();
     }
@@ -212,7 +213,9 @@ public sealed class AgentHostToolApprovalEndpointTests
         var secondScopeGrantId = Json(secondGrant).GetProperty("scopeGrantId").GetString();
         firstScopeGrantId.Should().Be("scope-first");
         secondScopeGrantId.Should().Be("scope-second");
-        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeTrue();
+        var scopeGate = ((IToolApprovalScopeRollback)gate);
+        scopeGate.GetScopeGrantId("run-1", "req-first").Should().Be("scope-first");
+        scopeGate.GetScopeGrantId("run-1", "req-second").Should().Be("scope-second");
 
         var rollback = await ToolApprovalEndpointHandlers.RollbackScopeAsync(
             Context("pod-credential"),
@@ -226,7 +229,8 @@ public sealed class AgentHostToolApprovalEndpointTests
             state);
 
         Status(rollback).Should().Be(StatusCodes.Status200OK);
-        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeTrue(
+        scopeGate.GetScopeGrantId("run-1", "req-first").Should().BeNull();
+        scopeGate.GetScopeGrantId("run-1", "req-second").Should().Be("scope-second",
             "a rollback must not revoke an equivalent scope granted by another approval");
 
         var secondRollback = await ToolApprovalEndpointHandlers.RollbackScopeAsync(
@@ -241,7 +245,7 @@ public sealed class AgentHostToolApprovalEndpointTests
             state);
 
         Status(secondRollback).Should().Be(StatusCodes.Status200OK);
-        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeFalse();
+        scopeGate.GetScopeGrantId("run-1", "req-second").Should().BeNull();
     }
 
     [Fact]
@@ -271,10 +275,51 @@ public sealed class AgentHostToolApprovalEndpointTests
 
         Status(result).Should().Be(StatusCodes.Status200OK);
         (await wait).Should().BeTrue();
-        gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeTrue();
-        await Task.Delay(400);
+        var scopeGate = ((IToolApprovalScopeRollback)gate);
+        scopeGate.GetScopeGrantId("run-1", "req-expiring").Should().Be("expiring-scope");
         gate.IsAutoApproved("run-1", "web_fetch", "https://following.test").Should().BeFalse(
-            "a response that cannot be finalized by the API must not leave a usable local scope");
+            "an unfinalized local scope must be verified by the durable policy before it authorizes");
+        await Task.Delay(400);
+        scopeGate.GetScopeGrantId("run-1", "req-expiring").Should().BeNull(
+            "a response that cannot be finalized by the API must not leave a local scope behind");
+    }
+
+    [Fact]
+    public async Task UnconfirmedFinalization_UsesDurablePolicyUntilThePodIsReaped()
+    {
+        // A dropped response, timeout, or 5xx can leave the pod's finalize endpoint uncalled
+        // after the API durably commits the policy. Model that state by intentionally retaining
+        // the provisional grant, then terminalize the policy before the pod can be reaped.
+        var state = ConfiguredState();
+        var policyClient = new RecordingPolicyClient(autoApproved: true);
+        var gate = new AgentHostDurableToolApprovalGate(state, policyClient);
+        var pending = gate.WaitForApprovalAsync(
+            "run-1", "req-unconfirmed-finalization", "web_fetch", "https://first.test",
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        var grant = await ToolApprovalEndpointHandlers.GrantAsync(
+            Context("pod-credential"),
+            new AgentHostToolApprovalRequest
+            {
+                RunId = "run-1",
+                RequestId = "req-unconfirmed-finalization",
+                Scope = "run",
+                ScopeGrantId = "scope-unconfirmed-finalization",
+                ScopeExpiresAt = DateTimeOffset.UtcNow.AddMinutes(1),
+            },
+            gate,
+            state);
+        Status(grant).Should().Be(StatusCodes.Status200OK);
+        (await pending).Should().BeTrue();
+
+        gate.IsAutoApproved("run-1", "web_fetch", "https://before-cancellation.test").Should().BeTrue(
+            "the persisted policy remains usable even when finalization is unconfirmed");
+        policyClient.AutoApproved = false;
+
+        gate.IsAutoApproved("run-1", "web_fetch", "https://after-cancellation.test").Should().BeFalse(
+            "a cancelled run cannot use the retained provisional scope before its pod is reaped");
+        policyClient.Requests.Should().HaveCount(2,
+            "every provisional scoped decision must query the lifecycle-aware durable policy");
     }
 
     [Theory]
