@@ -33,6 +33,12 @@ public sealed class RunRepositoryCredentialRegistry
         }
     }
 
+    /// <summary>
+    /// Returns this replica's locally minted credential owners. The access tokens stay
+    /// private to this registry; callers receive only run identifiers for liveness reconciliation.
+    /// </summary>
+    internal IReadOnlyList<string> GetActiveCredentialRunIds() => _entries.Keys.ToArray();
+
     public RunRepositoryCredentialRegistry(IServiceScopeFactory scopeFactory)
         : this(new RunRepositoryCredentialMinter(scopeFactory))
     {
@@ -171,6 +177,64 @@ public sealed class RunRepositoryCredentialRegistry
         }
 
         return failures;
+    }
+
+    /// <summary>
+    /// Revokes credentials this replica minted for runs whose durable run or SandboxClaim state has
+    /// become terminal or disappeared. Failed provider revocations remain in the in-memory retry
+    /// set until expiry, regardless of whether another replica deleted the claim that prompted this
+    /// reconciliation.
+    /// </summary>
+    internal async Task<IReadOnlyList<FailedRepositoryCredentialRevocation>> ReconcileTerminalOrGoneAsync(
+        IReadOnlySet<string> terminalOrGoneRunIds,
+        CancellationToken ct = default)
+    {
+        var failures = new List<FailedRepositoryCredentialRevocation>();
+        var activeRunIds = _entries.Keys.ToArray();
+        foreach (var runId in activeRunIds)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (!terminalOrGoneRunIds.Contains(runId))
+            {
+                await RemoveExpiredEntryAsync(runId, ct).ConfigureAwait(false);
+                continue;
+            }
+
+            try
+            {
+                await RevokeAsync(runId, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                failures.Add(new FailedRepositoryCredentialRevocation(runId, ex));
+            }
+        }
+
+        failures.AddRange(await RetryFailedRevocationsAsync(ct).ConfigureAwait(false));
+        return failures;
+    }
+
+    private async Task RemoveExpiredEntryAsync(string runId, CancellationToken ct)
+    {
+        using var mintLockLease = AcquireMintLock(runId);
+        await mintLockLease.Semaphore.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_entries.TryGetValue(runId, out var entry) &&
+                entry.ExpiresAt <= _timeProvider.GetUtcNow())
+            {
+                _entries.TryRemove(runId, out _);
+            }
+        }
+        finally
+        {
+            mintLockLease.Semaphore.Release();
+        }
     }
 
     private RunCredentialLockLease AcquireMintLock(string runId)
