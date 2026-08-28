@@ -123,6 +123,38 @@ public sealed class RepoAppInstallationServiceTests
         handler.RequestCount.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task Revoke_FailsForAnyNonSuccessGitHubResponse(HttpStatusCode statusCode)
+    {
+        await using var db = await OpenDbAsync();
+        var service = new RepoAppInstallationTokenService(
+            Config(),
+            db,
+            new InMemorySecretStore(),
+            new StubHttpClientFactory(new StatusHandler(statusCode)));
+
+        var revoke = () => service.RevokeRepositoryTokenAsync("revoke-sentinel");
+
+        await revoke.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    [Fact]
+    public async Task Revoke_PropagatesThrownProviderFailure()
+    {
+        await using var db = await OpenDbAsync();
+        var service = new RepoAppInstallationTokenService(
+            Config(),
+            db,
+            new InMemorySecretStore(),
+            new StubHttpClientFactory(new ThrowingHandler()));
+
+        var revoke = () => service.RevokeRepositoryTokenAsync("revoke-sentinel");
+
+        await revoke.Should().ThrowAsync<HttpRequestException>();
+    }
+
     [Fact]
     public async Task Lifecycle_ClaimsDeliveriesOnce_AndRoutesOnlyNumericInstallationRepositoryGrant()
     {
@@ -336,7 +368,7 @@ public sealed class RepoAppInstallationServiceTests
         return db;
     }
 
-    private sealed class StubHttpClientFactory(RecordingHandler handler) : IHttpClientFactory
+    private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler);
     }
@@ -360,5 +392,17 @@ public sealed class RepoAppInstallationServiceTests
                 Content = new StringContent(_payloads.Dequeue(), Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    private sealed class StatusHandler(HttpStatusCode statusCode) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(statusCode));
+    }
+
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new HttpRequestException("GitHub transport failed.");
     }
 }

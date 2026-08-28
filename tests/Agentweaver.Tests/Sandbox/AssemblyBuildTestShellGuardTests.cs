@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentTools;
@@ -132,7 +133,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     [Theory]
     [InlineData("git status")]
     [InlineData("gh repo view")]
-    public async Task Controlled_run_command_supplies_repository_credential_only_to_git_and_gh(string command)
+    public async Task Controlled_run_command_uses_direct_execution_for_repository_credential_commands(string command)
     {
         SandboxCommand? observed = null;
         var executor = new CapturingExecutor(command => observed = command);
@@ -145,13 +146,26 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             new Dictionary<string, object?> { ["command"] = command }));
 
         observed.Should().NotBeNull();
-        observed!.Environment.Should().Contain(
-            new KeyValuePair<string, string>("GH_TOKEN", "repository-access-token"));
-        observed.Environment.Should().Contain(
-            new KeyValuePair<string, string>("GITHUB_TOKEN", "repository-access-token"));
-        observed.Environment.Should().Contain(
-            new KeyValuePair<string, string>("GIT_CONFIG_VALUE_0", "!gh auth git-credential"));
+        observed!.DirectExecution.Should().NotBeNull();
         observed.CommandLine.Should().NotContain("repository-access-token");
+        observed.Environment.Should().NotContain(pair => pair.Value == "repository-access-token");
+
+        if (command.StartsWith("git", StringComparison.Ordinal))
+        {
+            observed.DirectExecution!.Executable.Should().Be("git");
+            observed.DirectExecution.Environment.Should().BeNull();
+            observed.DirectExecution.Arguments.Should().Contain("credential.helper=")
+                .And.Contain("core.hooksPath=/dev/null")
+                .And.NotContain("repository-access-token");
+        }
+        else
+        {
+            observed.DirectExecution!.Executable.Should().Be("gh");
+            observed.DirectExecution.Environment.Should().Contain(
+                new KeyValuePair<string, string>("GH_TOKEN", "repository-access-token"));
+            observed.DirectExecution.Environment.Should().NotContain(
+                new KeyValuePair<string, string>("GITHUB_TOKEN", "repository-access-token"));
+        }
     }
 
     [Fact]
@@ -203,8 +217,101 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         var result = await tool.InvokeAsync(new AIFunctionArguments(
             new Dictionary<string, object?> { ["command"] = command }));
 
-        result?.ToString().Should().Contain("GitHub credentials require one git or gh command");
+        result?.ToString().Should().Contain("direct git or gh command");
         executor.ExecuteCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("git -c core.hooksPath=/unsafe status")]
+    [InlineData("git status --config-env=credential.helper=GIT_HELPER")]
+    [InlineData("git fetch --upload-pack=/bin/sh")]
+    [InlineData("git status --exec-path=/unsafe")]
+    public async Task Controlled_run_command_rejects_git_options_that_can_select_helpers_or_configuration(string command)
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(executor, tracker, repositoryAccessToken: "repository-access-token"),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        result?.ToString().Should().Contain("Command rejected");
+        executor.ExecuteCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("gh secret set DEPLOY_KEY --body value")]
+    [InlineData("gh auth token")]
+    public async Task Controlled_run_command_requires_operator_approval_for_sensitive_gh_commands(string command)
+    {
+        var executor = new CountingExecutor();
+        using var tracker = new ShellExecutionTracker();
+        var context = BuildContext(
+            executor,
+            tracker,
+            destructivePatterns: [.. SandboxPolicy.Default(_root).DestructiveCommandPatterns],
+            rejectDestructiveCommands: false);
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            context,
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var result = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = command }));
+
+        result?.ToString().Should().Contain("requires operator approval");
+        executor.ExecuteCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Controlled_run_command_keeps_the_sentinel_out_of_git_alias_hooks_and_helpers()
+    {
+        const string sentinel = "sentinel-repository-token";
+        var repository = Path.Combine(_root, "credential-boundary");
+        var hookOutput = Path.Combine(_root, "hook-token.txt");
+        var aliasOutput = Path.Combine(_root, "alias-token.txt");
+        var helperOutput = Path.Combine(_root, "helper-token.txt");
+        Directory.CreateDirectory(repository);
+        await RunGitAsync(repository, "init");
+        await RunGitAsync(repository, "config", "user.name", "Sandbox Test");
+        await RunGitAsync(repository, "config", "user.email", "sandbox@example.invalid");
+        var hookPath = Path.Combine(repository, ".git", "hooks", "pre-commit");
+        File.WriteAllText(
+            hookPath,
+            $"#!/bin/sh{Environment.NewLine}printenv > {PosixQuote(hookOutput)}{Environment.NewLine}");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                hookPath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        await RunGitAsync(repository, "config", "alias.steal", $"!printenv > {PosixQuote(aliasOutput)}");
+        await RunGitAsync(repository, "config", "credential.helper", $"!printenv > {PosixQuote(helperOutput)}");
+
+        var executor = SandboxExecutorFactory.CreatePassthrough();
+        using var tracker = new ShellExecutionTracker();
+        var tool = CopilotAIAgent.BuildSessionConfigTools(
+            BuildContext(
+                executor,
+                tracker,
+                workspace: repository,
+                repositoryAccessToken: sentinel),
+            includeControlledRunCommand: true).Single(t => t.Name == "run_command");
+
+        var commit = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "git commit --allow-empty -m credential-boundary" }));
+        var alias = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "git steal" }));
+        var helper = await tool.InvokeAsync(new AIFunctionArguments(
+            new Dictionary<string, object?> { ["command"] = "git credential fill" }));
+
+        commit?.ToString().Should().Contain("exit_code: 0");
+        alias?.ToString().Should().Contain("built-in git command");
+        helper?.ToString().Should().Contain("built-in git command");
+        File.Exists(hookOutput).Should().BeFalse();
+        File.Exists(aliasOutput).Should().BeFalse();
+        File.Exists(helperOutput).Should().BeFalse();
     }
 
     [Fact]
@@ -458,7 +565,8 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
         string? workspace = null,
         string? scratchDirectory = null,
         string? repositoryAccessToken = null,
-        string[]? destructivePatterns = null) =>
+        string[]? destructivePatterns = null,
+        bool rejectDestructiveCommands = true) =>
         new(
             AgentId: "agent",
             WorkingDirectory: workspace ?? _root,
@@ -471,13 +579,36 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
             {
                 DestructiveCommandPatterns = destructivePatterns ?? ["rm -rf"],
                 RejectBackgroundCommands = true,
-                RejectDestructiveCommands = true,
+                RejectDestructiveCommands = rejectDestructiveCommands,
                 MaximumTimeoutMs = 600_000,
                 RepositoryAccessToken = repositoryAccessToken,
             },
             Logger: NullLogger.Instance,
             ShellExecutionTracker: tracker,
             ScratchDirectory: scratchDirectory);
+
+    private static async Task RunGitAsync(string workingDirectory, params string[] arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start git.");
+        await process.WaitForExitAsync();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException(await process.StandardError.ReadToEndAsync());
+    }
+
+    private static string PosixQuote(string value) =>
+        "'" + value.Replace("'", "'\\''") + "'";
 
     private sealed class RecordingExecutor(ISandboxExecutor inner) : ISandboxExecutor
     {

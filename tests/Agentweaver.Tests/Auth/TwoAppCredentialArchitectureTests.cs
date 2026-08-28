@@ -128,7 +128,7 @@ public sealed class TwoAppCredentialArchitectureTests
         source.Should().Contain("GetCapabilitySnapshotsAsync(runId, ct)")
             .And.Contain("GitHubCapabilityPurpose.UnattendedRepository")
             .And.Contain("TryUseRepositoryCredentialAsync")
-            .And.Contain("ConcurrentDictionary<string, Entry>")
+            .And.Contain("ConcurrentDictionary<string, RepositoryCredential>")
             .And.NotContain("CommandLine")
             .And.NotContain("endpoint")
             .And.NotContain("git ")

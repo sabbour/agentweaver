@@ -1389,11 +1389,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     {
         const int maxOutputBytes = 4 * 1024 * 1024;
 
-        var shellScript = BuildShellScript(command, podWorkingDirectory);
+        var execCommand = BuildExecCommand(command, podWorkingDirectory);
 
         var ws = await _client.WebSocketNamespacedPodExecAsync(
             podName, _options.Namespace,
-            new[] { "/bin/sh", "-c", shellScript },
+            execCommand,
             container: ContainerName,
             stdin: false, stdout: true, stderr: true, tty: false,
             cancellationToken: ct);
@@ -1532,6 +1532,33 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
         sb.Append(command.CommandLine);
         return sb.ToString();
+    }
+
+    private static string[] BuildExecCommand(SandboxCommand command, string podWorkingDirectory)
+    {
+        if (command.DirectExecution is not { } directExecution)
+            return ["/bin/sh", "-c", BuildShellScript(command, podWorkingDirectory)];
+
+        var environment = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (command.Environment is { Count: > 0 })
+        {
+            foreach (var (key, value) in command.Environment)
+                environment[key] = value;
+        }
+        if (directExecution.Environment is { Count: > 0 })
+        {
+            foreach (var (key, value) in directExecution.Environment)
+                environment[key] = value;
+        }
+
+        if (environment.Count == 0)
+            return [directExecution.Executable, .. directExecution.Arguments];
+
+        var execCommand = new List<string> { "/usr/bin/env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin" };
+        execCommand.AddRange(environment.Select(pair => $"{pair.Key}={pair.Value}"));
+        execCommand.Add(directExecution.Executable);
+        execCommand.AddRange(directExecution.Arguments);
+        return [.. execCommand];
     }
 
     private static string ShellSingleQuote(string s) =>

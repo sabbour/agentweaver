@@ -142,6 +142,12 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
                     {
                         Op = PodExecOps.Exec,
                         CommandLine = command.CommandLine,
+                        DirectExecutable = command.DirectExecution?.Executable,
+                        DirectArguments = command.DirectExecution?.Arguments.ToList(),
+                        DirectEnvironment = command.DirectExecution?.Environment?.ToDictionary(
+                            pair => pair.Key,
+                            pair => pair.Value,
+                            StringComparer.Ordinal),
                         WorkingDirectory = command.WorkingDirectory,
                         Environment = command.Environment?.ToDictionary(
                             pair => pair.Key,

@@ -115,20 +115,10 @@ public sealed class RepoAppInstallationTokenService(
         if (string.IsNullOrWhiteSpace(token))
             return;
 
-        try
-        {
-            using var request = CreateGitHubRequest(HttpMethod.Delete, "/installation/token", token);
-            using var response = await httpClientFactory.CreateClient("github").SendAsync(request, ct)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (HttpRequestException)
-        {
-            // Token expiry is the backstop. Release and orphan cleanup must not fail on revoke.
-        }
+        using var request = CreateGitHubRequest(HttpMethod.Delete, "/installation/token", token);
+        using var response = await httpClientFactory.CreateClient("github").SendAsync(request, ct)
+            .ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
     }
 
     /// <summary>

@@ -578,7 +578,13 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
             throw new PlatformNotSupportedException("Kata bubblewrap isolation requires Linux.");
 
         var mounts = BuildMountPlan(command);
-        var environment = BuildChildEnvironment(command);
+        var environment = BuildChildEnvironment(command)
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        if (command.DirectExecution?.Environment is { Count: > 0 } directEnvironment)
+        {
+            foreach (var (key, value) in directEnvironment)
+                environment[key] = value;
+        }
         var runRootPid = EnsureWritableSystemRoot(command);
         var psi = new ProcessStartInfo
         {
@@ -653,7 +659,16 @@ public sealed class KataBwrapExecutor : ISandboxExecutor, IRunWorkspaceRegistrar
         // group, so the workload must be exec'd directly: an extra /usr/bin/setsid would fork a
         // grandchild whose pid bwrap never reports, and the Kata guest kernel has no
         // /proc/<pid>/task/<pid>/children to walk.
-        Add(psi, "--", "/bin/bash", "-c", command.CommandLine);
+        Add(psi, "--");
+        if (command.DirectExecution is { } directExecution)
+        {
+            Add(psi, directExecution.Executable);
+            Add(psi, [.. directExecution.Arguments]);
+        }
+        else
+        {
+            Add(psi, "/bin/bash", "-c", command.CommandLine);
+        }
 
         psi.Environment.Clear();
         psi.Environment["PATH"] = "/usr/local/bin:/usr/bin:/bin";

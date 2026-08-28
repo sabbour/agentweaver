@@ -180,6 +180,16 @@ internal sealed class MxcSandboxExecutor : ISandboxExecutor
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command, CancellationToken ct = default)
     {
+        if (command.DirectExecution is not null)
+        {
+            return new SandboxExecResult(
+                126,
+                "",
+                "Command rejected: this sandbox backend cannot safely deliver repository credentials to a direct process.",
+                TimedOut: false,
+                OutputTruncated: false);
+        }
+
         // Build policy with enrichment (cached at construction). The enrichment provides a
         // selective tool-path allowlist via PolicyDiscovery.GetAvailableToolsPolicy(), replacing
         // the broad /usr bind that Copilot CLI does NOT use (Phase 6 alignment).

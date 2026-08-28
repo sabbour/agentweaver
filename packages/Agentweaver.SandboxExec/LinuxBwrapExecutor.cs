@@ -92,6 +92,9 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
     public async Task<SandboxExecResult> ExecuteAsync(
         SandboxCommand command, CancellationToken ct = default)
     {
+        if (command.DirectExecution is { } directExecution)
+            return await ExecuteDirectAsync(command, directExecution, ct).ConfigureAwait(false);
+
         var payload = BuildBwrapPayload(
             SandboxCommandEnvironment.PrefixPosixExports(command.CommandLine, command.Environment),
             command.WorkingDirectory,
@@ -154,6 +157,119 @@ internal sealed class LinuxBwrapExecutor : ISandboxExecutor
             if (proc is not null && !proc.HasExited)
                 try { proc.Kill(entireProcessTree: true); } catch { }
             proc?.Dispose();
+        }
+    }
+
+    private async Task<SandboxExecResult> ExecuteDirectAsync(
+        SandboxCommand command,
+        SandboxDirectExecution directExecution,
+        CancellationToken ct)
+    {
+        Process? proc = null;
+        try
+        {
+            var psi = BuildDirectProcessStartInfo(command, directExecution);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (command.TimeoutMs > 0)
+                cts.CancelAfter(command.TimeoutMs);
+
+            proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start bwrap process.");
+
+            const int stdoutCap = 4 * 1024 * 1024;
+            const int stderrCap = 1 * 1024 * 1024;
+            var stdoutTask = ReadBoundedAsync(proc.StandardOutput, stdoutCap, cts.Token);
+            var stderrTask = ReadBoundedAsync(proc.StandardError, stderrCap, cts.Token);
+
+            try { await proc.WaitForExitAsync(cts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException)
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                throw;
+            }
+
+            var (stdout, stdoutTrunc) = await stdoutTask.ConfigureAwait(false);
+            var (stderr, stderrTrunc) = await stderrTask.ConfigureAwait(false);
+            stdout = SandboxOutputRedactor.Default.Redact(stdout)
+                .Replace(command.WorkingDirectory, "/workspace", StringComparison.Ordinal);
+            stderr = SandboxOutputRedactor.Default.Redact(stderr)
+                .Replace(command.WorkingDirectory, "/workspace", StringComparison.Ordinal);
+            return new SandboxExecResult(proc.ExitCode, stdout, stderr, false, stdoutTrunc || stderrTrunc);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new SandboxExecResult(-1, "", "Timed out.", TimedOut: true, OutputTruncated: false);
+        }
+        finally
+        {
+            if (proc is not null && !proc.HasExited)
+                try { proc.Kill(entireProcessTree: true); } catch { }
+            proc?.Dispose();
+        }
+    }
+
+    private static ProcessStartInfo BuildDirectProcessStartInfo(
+        SandboxCommand command,
+        SandboxDirectExecution directExecution)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "bwrap",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        void Add(params string[] arguments)
+        {
+            foreach (var argument in arguments)
+                psi.ArgumentList.Add(argument);
+        }
+
+        Add("--bind", command.WorkingDirectory, "/workspace");
+        Add(
+            "--ro-bind-try", "/usr/bin", "/usr/bin",
+            "--ro-bind-try", "/usr/lib", "/usr/lib",
+            "--ro-bind-try", "/usr/lib64", "/usr/lib64",
+            "--ro-bind-try", "/usr/share/nodejs", "/usr/share/nodejs",
+            "--ro-bind-try", "/usr/local/bin", "/usr/local/bin",
+            "--ro-bind-try", "/usr/local/lib", "/usr/local/lib",
+            "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf",
+            "--ro-bind-try", "/etc/passwd", "/etc/passwd",
+            "--ro-bind-try", "/etc/group", "/etc/group",
+            "--ro-bind-try", "/etc/nsswitch.conf", "/etc/nsswitch.conf",
+            "--symlink", "usr/bin", "/bin",
+            "--symlink", "usr/lib", "/lib",
+            "--symlink", "usr/sbin", "/sbin",
+            "--proc", "/proc",
+            "--dev", "/dev",
+            "--tmpfs", "/tmp",
+            "--tmpfs", "/home",
+            "--tmpfs", "/root",
+            "--unshare-pid",
+            "--unshare-user");
+        if (!command.NetworkEnabled)
+            Add("--unshare-net");
+        Add("--new-session", "--clearenv", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin");
+        AddEnvironment(psi, command.Environment);
+        AddEnvironment(psi, directExecution.Environment);
+        Add("--chdir", "/workspace", "--", directExecution.Executable);
+        foreach (var argument in directExecution.Arguments)
+            psi.ArgumentList.Add(argument);
+        return psi;
+    }
+
+    private static void AddEnvironment(
+        ProcessStartInfo psi,
+        IReadOnlyDictionary<string, string>? environment)
+    {
+        if (environment is null)
+            return;
+        foreach (var (key, value) in environment)
+        {
+            psi.ArgumentList.Add("--setenv");
+            psi.ArgumentList.Add(key);
+            psi.ArgumentList.Add(value);
         }
     }
 

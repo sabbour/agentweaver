@@ -57,6 +57,9 @@ public sealed record PodExecRequest
     public string? Workspace { get; init; }
     public string? Home { get; init; }
     public string? CommandLine { get; init; }
+    public string? DirectExecutable { get; init; }
+    public List<string>? DirectArguments { get; init; }
+    public Dictionary<string, string>? DirectEnvironment { get; init; }
     public string? WorkingDirectory { get; init; }
     public Dictionary<string, string>? Environment { get; init; }
     public List<string>? ReadWritePaths { get; init; }

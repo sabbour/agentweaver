@@ -46,7 +46,22 @@ public sealed record SandboxCommand(
     /// <see cref="Agentweaver.Api.Sandbox.IPodNameRegistry"/> so that the preview
     /// port-forward service can locate the pod later.
     /// </summary>
-    string? AgentweaverRunId = null);
+    string? AgentweaverRunId = null,
+    /// <summary>
+    /// A parsed command that must be started directly rather than through a shell. This is used
+    /// only when a repository credential is present, keeping that credential out of shell
+    /// environments.
+    /// </summary>
+    SandboxDirectExecution? DirectExecution = null);
+
+/// <summary>
+/// A command whose executable and arguments have already been validated by the sandbox tool.
+/// <see cref="Environment"/> is applied only to its directly-started executable.
+/// </summary>
+public sealed record SandboxDirectExecution(
+    string Executable,
+    IReadOnlyList<string> Arguments,
+    IReadOnlyDictionary<string, string>? Environment = null);
 
 /// <summary>
 /// Filesystem policy handed to the sandbox engine. DeniedPaths maps to

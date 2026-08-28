@@ -99,9 +99,13 @@ internal sealed class RunCommandTool : ISandboxTool
                     timeout = ctx.Options.MinimumTimeoutMs;
                 if (ctx.Options.MaximumTimeoutMs > 0)
                     timeout = Math.Min(timeout, ctx.Options.MaximumTimeoutMs);
-                var environment = BuildCommandEnvironment(ctx.WorkingDirectory, scratchDirectory);
-                if (!TryAddRepositoryCredential(command, ctx.Options.RepositoryAccessToken, environment, out var credentialError))
+                if (!TryCreateRepositoryCredentialCommand(
+                        command,
+                        ctx.Options.RepositoryAccessToken,
+                        out var directExecution,
+                        out var credentialError))
                     return credentialError!;
+                var environment = BuildCommandEnvironment(ctx.WorkingDirectory, scratchDirectory);
 
                 var cmd = new SandboxCommand(
                     command,
@@ -110,7 +114,8 @@ internal sealed class RunCommandTool : ISandboxTool
                     fsPolicy,
                     timeout,
                     NetworkEnabled: ctx.Options.NetworkEnabled,
-                    AgentweaverRunId: string.IsNullOrEmpty(ctx.RunId) ? null : ctx.RunId);
+                    AgentweaverRunId: string.IsNullOrEmpty(ctx.RunId) ? null : ctx.RunId,
+                    DirectExecution: directExecution);
 
                 IDisposable? executionLease = null;
                 SandboxExecResult result;
@@ -191,46 +196,223 @@ internal sealed class RunCommandTool : ISandboxTool
         return environment;
     }
 
-    private static bool TryAddRepositoryCredential(
+    private static readonly HashSet<string> BuiltInGitCommands = new(StringComparer.Ordinal)
+    {
+        "add", "apply", "blame", "branch", "checkout", "clean", "clone", "commit",
+        "diff", "fetch", "grep", "log", "ls-files", "ls-remote", "ls-tree", "merge",
+        "merge-base", "mv", "pull", "push", "rebase", "remote", "reset", "restore",
+        "revert", "rm", "show", "show-ref", "sparse-checkout", "stash", "status",
+        "switch", "tag", "worktree",
+    };
+
+    private static readonly HashSet<string> BuiltInGhCommands = new(StringComparer.Ordinal)
+    {
+        "api", "attestation", "auth", "cache", "codespace", "completion", "config",
+        "gist", "gpg-key", "issue", "label", "org", "pr", "project", "release", "repo",
+        "ruleset", "search", "secret", "ssh-key", "status", "variable", "workflow",
+    };
+
+    private static bool TryCreateRepositoryCredentialCommand(
         string command,
         string? accessToken,
-        IDictionary<string, string> environment,
+        out SandboxDirectExecution? directExecution,
         out string? error)
     {
+        directExecution = null;
         error = null;
         if (string.IsNullOrWhiteSpace(accessToken))
             return true;
 
-        var trimmed = command.Trim();
-        var isGitHubCommand = trimmed.Equals("git", StringComparison.Ordinal) ||
-            trimmed.Equals("gh", StringComparison.Ordinal) ||
-            trimmed.StartsWith("git ", StringComparison.Ordinal) ||
-            trimmed.StartsWith("gh ", StringComparison.Ordinal);
-        if (!isGitHubCommand)
+        if (!TryParseCommand(command, out var arguments, out error))
+            return false;
+        if (arguments.Count == 0 ||
+            (arguments[0] != "git" && arguments[0] != "gh"))
             return true;
 
-        if (trimmed.IndexOfAny([';', '|', '&', '\r', '\n', '`', '<', '>']) >= 0 ||
-            trimmed.Contains("$(", StringComparison.Ordinal))
+        if (arguments[0] == "git")
         {
-            error = "Command rejected: GitHub credentials require one git or gh command.";
-            return false;
+            if (!TryValidateGitArguments(arguments, out error))
+                return false;
+
+            var basicAuthorization = Convert.ToBase64String(
+                System.Text.Encoding.UTF8.GetBytes($"x-access-token:{accessToken}"));
+            var gitArguments = new List<string>
+            {
+                "--no-pager",
+                "-c", "credential.helper=",
+                "-c", "core.hooksPath=/dev/null",
+                "-c", "protocol.allow=never",
+                "-c", "protocol.https.allow=always",
+                "-c", $"http.https://github.com/.extraheader=AUTHORIZATION: basic {basicAuthorization}",
+            };
+            gitArguments.AddRange(arguments.Skip(1));
+            directExecution = new SandboxDirectExecution("git", gitArguments);
+            return true;
         }
 
-        // GH_TOKEN supports gh and `gh auth git-credential` supports HTTPS Git without a token file.
-        environment["GH_TOKEN"] = accessToken;
-        environment["GITHUB_TOKEN"] = accessToken;
-        environment["GIT_CONFIG_COUNT"] = "1";
-        environment["GIT_CONFIG_KEY_0"] = "credential.helper";
-        environment["GIT_CONFIG_VALUE_0"] = "!gh auth git-credential";
+        if (!TryValidateGhArguments(arguments, out error))
+            return false;
+
+        directExecution = new SandboxDirectExecution(
+            "gh",
+            arguments.Skip(1).ToArray(),
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["GH_TOKEN"] = accessToken,
+                ["GH_PROMPT_DISABLED"] = "1",
+            });
         return true;
     }
 
     private static string RedactOutput(string value, SandboxToolContext ctx)
     {
         var redacted = ctx.Redactor.Redact(value);
-        return string.IsNullOrWhiteSpace(ctx.Options.RepositoryAccessToken)
-            ? redacted
-            : redacted.Replace(ctx.Options.RepositoryAccessToken, "***", StringComparison.Ordinal);
+        if (string.IsNullOrWhiteSpace(ctx.Options.RepositoryAccessToken))
+            return redacted;
+
+        var basicAuthorization = Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes($"x-access-token:{ctx.Options.RepositoryAccessToken}"));
+        return redacted
+            .Replace(ctx.Options.RepositoryAccessToken, "***", StringComparison.Ordinal)
+            .Replace(basicAuthorization, "***", StringComparison.Ordinal);
+    }
+
+    private static bool TryValidateGitArguments(
+        IReadOnlyList<string> arguments,
+        out string? error)
+    {
+        error = null;
+        if (arguments.Count < 2 || !BuiltInGitCommands.Contains(arguments[1]))
+        {
+            error = "Command rejected: repository credentials require a built-in git command.";
+            return false;
+        }
+
+        foreach (var argument in arguments.Skip(2))
+        {
+            if (!IsUnsafeGitArgument(argument))
+                continue;
+
+            error = "Command rejected: git configuration, aliases, helpers, and alternate worktrees are not allowed with repository credentials.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsUnsafeGitArgument(string argument) =>
+        argument == "-c" ||
+        argument.StartsWith("-c", StringComparison.Ordinal) ||
+        argument == "-C" ||
+        argument.StartsWith("--config", StringComparison.Ordinal) ||
+        argument.StartsWith("--exec-path", StringComparison.Ordinal) ||
+        argument.StartsWith("--git-dir", StringComparison.Ordinal) ||
+        argument.StartsWith("--work-tree", StringComparison.Ordinal) ||
+        argument.StartsWith("--namespace", StringComparison.Ordinal) ||
+        argument.StartsWith("--upload-pack", StringComparison.Ordinal) ||
+        argument.StartsWith("--receive-pack", StringComparison.Ordinal) ||
+        argument.StartsWith("--git-upload-pack", StringComparison.Ordinal) ||
+        argument.StartsWith("--git-receive-pack", StringComparison.Ordinal) ||
+        argument.StartsWith("--paginate", StringComparison.Ordinal) ||
+        argument == "-p" ||
+        argument.StartsWith("ext::", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryValidateGhArguments(
+        IReadOnlyList<string> arguments,
+        out string? error)
+    {
+        error = null;
+        if (arguments.Count < 2 || !BuiltInGhCommands.Contains(arguments[1]))
+        {
+            error = "Command rejected: repository credentials require a built-in gh command.";
+            return false;
+        }
+
+        var hasNestedCommand = (string topLevel, string nested) =>
+            arguments[1] == topLevel &&
+            arguments.Skip(2).Any(argument => argument == nested);
+        if (arguments[1] == "codespace" ||
+            arguments.Skip(2).Any(argument =>
+                argument is "--web" or "--browser" or "--editor") ||
+            hasNestedCommand("auth", "setup-git") ||
+            hasNestedCommand("repo", "clone") ||
+            hasNestedCommand("pr", "checkout"))
+        {
+            error = "Command rejected: gh commands that start another executable are not allowed with repository credentials.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryParseCommand(
+        string command,
+        out IReadOnlyList<string> arguments,
+        out string? error)
+    {
+        arguments = [];
+        error = null;
+        var parsed = new List<string>();
+        var current = new System.Text.StringBuilder();
+        var quote = '\0';
+        var escaping = false;
+
+        foreach (var character in command)
+        {
+            if (character is '\r' or '\n' or '\0' or ';' or '|' or '&' or '`' or '$' or
+                '<' or '>' or '(' or ')' or '{' or '}' or '[' or ']' or '*' or '?' or '!' or '~')
+            {
+                error = "Command rejected: GitHub credentials require one direct git or gh command without shell metacharacters.";
+                return false;
+            }
+
+            if (escaping)
+            {
+                current.Append(character);
+                escaping = false;
+                continue;
+            }
+
+            if (character == '\\' && quote != '\'')
+            {
+                escaping = true;
+                continue;
+            }
+
+            if (character is '\'' or '"')
+            {
+                if (quote == '\0')
+                    quote = character;
+                else if (quote == character)
+                    quote = '\0';
+                else
+                    current.Append(character);
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character) && quote == '\0')
+            {
+                if (current.Length > 0)
+                {
+                    parsed.Add(current.ToString());
+                    current.Clear();
+                }
+                continue;
+            }
+
+            current.Append(character);
+        }
+
+        if (escaping || quote != '\0')
+        {
+            error = "Command rejected: GitHub credentials require balanced, literal arguments.";
+            return false;
+        }
+        if (current.Length > 0)
+            parsed.Add(current.ToString());
+
+        arguments = parsed;
+        return true;
     }
 
     private static bool IsDestructivePattern(string command, string[] patterns)

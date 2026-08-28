@@ -69,7 +69,7 @@ public sealed record SandboxPolicy
         // GitHub repository changes and credential commands
         "gh pr create", "gh pr merge", "gh pr close",
         "gh repo delete", "gh repo archive",
-        "gh api", "gh auth login", "gh auth logout",
+        "gh api", "gh secret set", "gh auth login", "gh auth logout", "gh auth token",
         // PowerShell destructive
         "Remove-Item -Recurse", "Remove-Item -Force", "ri -r", "ri -Recurse",
         "Format-Volume", "Clear-Disk",

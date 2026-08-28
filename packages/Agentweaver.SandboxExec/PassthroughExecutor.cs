@@ -59,7 +59,14 @@ public sealed class PassthroughExecutor : ISandboxExecutor
                 WorkingDirectory = command.WorkingDirectory,
             };
 
-            if (OperatingSystem.IsWindows())
+            if (command.DirectExecution is { } directExecution)
+            {
+                SandboxCommandEnvironment.RemoveInheritedCommandHelperVariables(psi);
+                psi.FileName = directExecution.Executable;
+                foreach (var argument in directExecution.Arguments)
+                    psi.ArgumentList.Add(argument);
+            }
+            else if (OperatingSystem.IsWindows())
             {
                 psi.FileName = "cmd.exe";
                 psi.ArgumentList.Add("/c");
@@ -72,6 +79,7 @@ public sealed class PassthroughExecutor : ISandboxExecutor
                 psi.ArgumentList.Add(command.CommandLine);
             }
             SandboxCommandEnvironment.ApplyToProcessStartInfo(psi, command.Environment);
+            SandboxCommandEnvironment.ApplyToProcessStartInfo(psi, command.DirectExecution?.Environment);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             if (command.TimeoutMs > 0)
