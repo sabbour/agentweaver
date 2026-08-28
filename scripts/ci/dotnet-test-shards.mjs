@@ -36,7 +36,7 @@ export const TEST_SHARDS = [
       'AgentHost', 'Async', 'ClusterDiagnostics', 'Connect', 'Diagnostics', 'Durable', 'Foundry', 'Infrastructure',
       'Kubernetes', 'Memory', 'Metrics', 'Observability', 'RealPath', 'Remote', 'Repository',
       'RunEvent', 'RunOptions', 'RunOrchestrator', 'Runtime', 'Sandbox', 'Shell', 'System',
-      'ToolApproval', 'Workspace',
+      'ToolApproval', 'RunActiveClaimGuard', 'Workspace',
     ]),
   },
   {

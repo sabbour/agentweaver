@@ -60,7 +60,11 @@ test("no echo-only stub jobs remain in the pipeline", () => {
 
 test(".NET tests run as stable independent shards", () => {
   const jobs = workflowSection("  dotnet-test-plan:\n", "\n  node-toolchain-tests:\n");
+  const dotnetFilter = workflowSection("            dotnet:\n", "            web:\n");
 
+  assert.match(dotnetFilter, /- 'scripts\/ci\/dotnet-test-shards\.mjs'/);
+  assert.match(dotnetFilter, /- 'scripts\/ci\/tests\/dotnet-test-shards\.test\.mjs'/);
+  assert.match(dotnetFilter, /- 'tests\/Agentweaver\.Tests\/process-environment\.runsettings'/);
   assert.match(jobs, /node scripts\/ci\/dotnet-test-shards\.mjs matrix/);
   assert.match(jobs, /dotnet-test-shards:/);
   assert.match(jobs, /strategy:\n\s+fail-fast: false\n\s+matrix: \$\{\{ fromJSON\(needs\.dotnet-test-plan\.outputs\.matrix\) \}\}/);

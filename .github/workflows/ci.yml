@@ -75,6 +75,9 @@ jobs:
               - '**/*.sln'
               - 'global.json'
               - 'nuget.config'
+              - 'scripts/ci/dotnet-test-shards.mjs'
+              - 'scripts/ci/tests/dotnet-test-shards.test.mjs'
+              - 'tests/Agentweaver.Tests/process-environment.runsettings'
               - '.github/workflows/ci.yml'
             web:
               - 'apps/web/**'

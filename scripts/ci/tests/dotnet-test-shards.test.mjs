@@ -13,6 +13,10 @@ test('test shard definitions produce a stable CI matrix', () => {
     TEST_SHARDS.find((shard) => shard.id === 'process-environment').filter,
     /^Category=ProcessEnvironment&Category!=KataRuntime&Category!=PostgresIntegration$/,
   );
+  assert.match(
+    TEST_SHARDS.find((shard) => shard.id === 'runtime').filter,
+    /FullyQualifiedName~Agentweaver\.Tests\.RunActiveClaimGuard/,
+  );
   assert.deepEqual(
     JSON.parse(matrix()).include.map((shard) => shard.id),
     TEST_SHARDS.map((shard) => shard.id),
