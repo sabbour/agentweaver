@@ -14,6 +14,23 @@ public sealed class AlwaysAvailableAutomationInvocationService : IAutomationInvo
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
         Task.FromResult(true);
 
+    public Task<AutomationInvocationTaskReservation?> TryReserveBacklogTaskAsync(
+        string invocationId, ProjectId projectId, CancellationToken ct = default) =>
+        Task.FromResult<AutomationInvocationTaskReservation?>(new(BacklogTaskId.New(), IsBound: false));
+
+    public Task<bool> TryAdoptLegacyProvisionalTaskAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
+
+    public Task<IReadOnlyList<OutstandingScheduleInvocation>> ListOutstandingScheduleInvocationsAsync(
+        ProjectId projectId, string occurrenceKeyPrefix, IReadOnlyCollection<string> legacyProvisionalOccurrenceKeys,
+        int maximumCount, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<OutstandingScheduleInvocation>>([]);
+
+    public Task<bool> TryCompleteBacklogTaskReservationAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
+
     public Task<bool> TryDiscardInvocationForTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
         Task.FromResult(true);
@@ -57,6 +74,23 @@ public sealed class CoordinatorInterleavingAutomationInvocationService(IBacklogT
             ct);
         return true;
     }
+
+    public Task<AutomationInvocationTaskReservation?> TryReserveBacklogTaskAsync(
+        string invocationId, ProjectId projectId, CancellationToken ct = default) =>
+        Task.FromResult<AutomationInvocationTaskReservation?>(new(BacklogTaskId.New(), IsBound: false));
+
+    public Task<bool> TryAdoptLegacyProvisionalTaskAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
+
+    public Task<IReadOnlyList<OutstandingScheduleInvocation>> ListOutstandingScheduleInvocationsAsync(
+        ProjectId projectId, string occurrenceKeyPrefix, IReadOnlyCollection<string> legacyProvisionalOccurrenceKeys,
+        int maximumCount, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<OutstandingScheduleInvocation>>([]);
+
+    public Task<bool> TryCompleteBacklogTaskReservationAsync(
+        string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>
+        Task.FromResult(true);
 
     public Task<bool> TryDiscardInvocationForTaskAsync(
         string invocationId, ProjectId projectId, BacklogTaskId backlogTaskId, CancellationToken ct = default) =>

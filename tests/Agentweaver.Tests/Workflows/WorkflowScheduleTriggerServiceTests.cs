@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -7,6 +8,8 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using static Agentweaver.Tests.Backlog.BacklogTestData;
 
 namespace Agentweaver.Tests.Workflows;
@@ -99,6 +102,53 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
           type: schedule
           interval: weekly
           day_of_week: monday
+          time_of_day: "09:00"
+        """;
+
+    private const string DailyNineAmYaml = """
+        id: scheduled-triage
+        name: Scheduled Triage
+        start: work
+        nodes:
+          - id: work
+            type: prompt
+            label: Work
+            role: backend-engineer
+            prompt: "Triage new issues."
+          - id: done
+            type: terminal
+            label: Done
+            role: plumbing
+        edges:
+          - from: work
+            to: done
+        trigger:
+          type: schedule
+          interval: daily
+          time_of_day: "09:00"
+        """;
+
+    private const string MonthlyFirstNineAmYaml = """
+        id: scheduled-triage
+        name: Scheduled Triage
+        start: work
+        nodes:
+          - id: work
+            type: prompt
+            label: Work
+            role: backend-engineer
+            prompt: "Triage new issues."
+          - id: done
+            type: terminal
+            label: Done
+            role: plumbing
+        edges:
+          - from: work
+            to: done
+        trigger:
+          type: schedule
+          interval: monthly
+          day_of_month: 1
           time_of_day: "09:00"
         """;
 
@@ -216,6 +266,87 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
             because: "the occurrence already fired for this week — repeated ticks must not pile up runs");
     }
 
+    [Theory]
+    [InlineData("daily", true)]
+    [InlineData("weekly", false)]
+    [InlineData("monthly", false)]
+    public async Task RunTick_MigratedPreReservationHandoff_RecoversAcrossRolloverExactlyOnce(
+        string cadence,
+        bool wasBoundBeforeUpgrade)
+    {
+        var (yaml, interruptedAt, restartAt, interruptedPeriod) = cadence switch
+        {
+            "daily" => (DailyNineAmYaml,
+                new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 7, 14, 9, 0, 0, TimeSpan.Zero), "2026-07-13"),
+            "weekly" => (WeeklyMondayNineAmYaml,
+                new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 7, 20, 9, 0, 0, TimeSpan.Zero), "2026-07-13"),
+            "monthly" => (MonthlyFirstNineAmYaml,
+                new DateTimeOffset(2026, 8, 1, 9, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 9, 1, 9, 0, 0, TimeSpan.Zero), "2026-08"),
+            _ => throw new ArgumentOutOfRangeException(nameof(cadence)),
+        };
+        var project = await SeedProjectAsync(yaml);
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var invocationDb = new MemoryDbContext(new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite(connection, options => options.MigrationsAssembly("Agentweaver.Api")).Options);
+
+        await invocationDb.Database.MigrateAsync("20260828203038_AddAutomationInvocationBacklogBinding");
+        var activation = await ActivateAsync(invocationDb, project.Id);
+        var occurrenceKey = WorkflowScheduleTriggerService.BuildIdempotencyKey("scheduled-triage", interruptedPeriod);
+        var taskId = BacklogTaskId.New();
+        await invocationDb.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO automation_invocations
+                (id, project_id, activation_id, backlog_task_id, occurrence_key, delivery_id, event_name,
+                 installation_id, repository_id, outcome, received_at, completed_at)
+            VALUES
+                ({SnapshotRef.Create().Value}, {project.Id.ToString()}, {activation.Id},
+                 {(wasBoundBeforeUpgrade ? taskId.ToString() : null)}, {occurrenceKey}, NULL, 'schedule',
+                 1, 10, 0, {interruptedAt}, NULL);
+            """);
+        await _backlog.InsertAsync(new BacklogTask
+        {
+            Id = taskId,
+            ProjectId = project.Id,
+            Title = "Scheduled run: Scheduled Triage",
+            Description = "Interrupted before publication.",
+            State = BacklogTaskState.Backlog,
+            OrderKey = "n",
+            CapturedBy = WorkflowScheduleTriggerService.CapturedBy,
+            CreatedAt = interruptedAt,
+            WorkflowOverrideId = "scheduled-triage",
+            SourceFilePath = occurrenceKey,
+            IsAutomationInvocationPending = true,
+        });
+
+        await invocationDb.Database.MigrateAsync();
+        var recoveryRegistry = new WorkflowRegistry();
+        await using var provider = new ServiceCollection()
+            .AddSingleton<IProjectStore>(_projects)
+            .AddSingleton<IBacklogTaskStore>(_backlog)
+            .AddSingleton(recoveryRegistry)
+            .AddScoped<IAutomationInvocationService>(_ =>
+                new AutomationInvocationService(invocationDb, new TwoAppPersistenceStore(invocationDb)))
+            .BuildServiceProvider();
+        var service = new WorkflowScheduleTriggerService(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            new ConfigurationBuilder().Build(),
+            NullLogger<WorkflowScheduleTriggerService>.Instance);
+
+        await service.RunTickAsync(restartAt, CancellationToken.None);
+        await service.RunTickAsync(restartAt, CancellationToken.None);
+
+        var tasks = await _backlog.ListByProjectAsync(project.Id);
+        tasks.Should().HaveCount(2, "the recovered occurrence and the new occurrence each publish once");
+        tasks.Should().OnlyContain(task => task.State == BacklogTaskState.Ready && !task.IsAutomationInvocationPending);
+        tasks.Count(task => task.Id == taskId).Should().Be(1, "legacy staging must be adopted, not duplicated");
+        var legacyInvocation = await invocationDb.AutomationInvocations.SingleAsync(x => x.OccurrenceKey == occurrenceKey);
+        legacyInvocation.BacklogTaskId.Should().Be(taskId.ToString());
+        legacyInvocation.PendingBacklogTaskId.Should().BeNull();
+    }
+
     [Fact]
     public async Task RunTick_NextOccurrence_FiresAgain()
     {
@@ -272,5 +403,34 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
         await _service.RunTickAsync(now, CancellationToken.None);
 
         (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty();
+    }
+
+    private static async Task<AutomationActivationRecord> ActivateAsync(MemoryDbContext db, ProjectId projectId)
+    {
+        db.Projects.Add(new ProjectRecord { ProjectId = projectId.ToString() });
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = 1, AppKind = GitHubAppKind.Repo, ProjectId = projectId.ToString(), CreatedAt = DateTimeOffset.UtcNow,
+        });
+        db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = 1, RepositoryId = 10, ProjectId = projectId.ToString(), FullNameDisplay = "owner/repository",
+            PermissionDigest = "repo-digest", GrantedAt = DateTimeOffset.UtcNow,
+        });
+        db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+        {
+            Id = "binding", ProjectId = projectId.ToString(), EntraObjectId = "owner",
+            CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
+            Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
+        });
+        db.AutomationActivations.Add(new AutomationActivationRecord
+        {
+            Id = "activation", ProjectId = projectId.ToString(), InstallationId = 1, RepositoryId = 10,
+            RepositoryGrantDigest = "repo-digest", CopilotBindingId = "binding",
+            CopilotBindingGrantDigest = "copilot-digest", AutomationKey = "automation",
+            Status = AutomationActivationStatus.Active, ActivatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        return await db.AutomationActivations.SingleAsync();
     }
 }
