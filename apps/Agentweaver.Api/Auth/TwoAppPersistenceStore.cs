@@ -13,7 +13,6 @@ namespace Agentweaver.Api.Auth;
 public enum AuthorizationClaimResult { Claimed, Invalid, Consumed }
 public enum BindingWriteResult { Bound, Unavailable }
 public enum InvocationClaimResult { Claimed, Duplicate }
-
 /// <summary>
 /// Internal-only authorization state used to transfer the callback cookie to a browser opened
 /// from MCP. OAuth state and callback-cookie material never leave the API process.
@@ -24,6 +23,23 @@ internal sealed record McpBrowserHandoffTransaction(
     DateTimeOffset ExpiresAt,
     GitHubAuthorizationStatus Status);
 
+public enum AutomationActivationWriteResult
+{
+    Activated,
+    RepositoryGrantUnavailable,
+    RepositoryGrantAmbiguous,
+    CopilotBindingUnavailable,
+    CopilotBindingAmbiguous,
+    Conflict,
+}
+public sealed record FencedAutomationActivation(
+    string ActivationId,
+    string ProjectId,
+    long InstallationId,
+    long RepositoryId,
+    string RepositoryGrantDigest,
+    string CopilotBindingId,
+    string CopilotBindingGrantDigest);
 public sealed record SnapshotRef
 {
     public SnapshotRef(string value)
@@ -654,6 +670,12 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
                 .SetProperty(x => x.Status, GitHubBindingStatus.Inactive)
                 .SetProperty(x => x.DeactivatedAt, now), ct)
             .ConfigureAwait(false);
+        await db.AutomationActivations
+            .Where(x => x.ProjectId == binding.ProjectId && x.Status == AutomationActivationStatus.Active)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, AutomationActivationStatus.Invalidated)
+                .SetProperty(x => x.InvalidatedAt, now), ct)
+            .ConfigureAwait(false);
         db.ChangeTracker.Clear();
 
         db.ProjectCopilotBindings.Add(binding);
@@ -678,6 +700,8 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             var now = DateTimeOffset.UtcNow;
             await db.ProjectCopilotBindings.Where(x => x.ProjectId == binding.ProjectId && x.Status == GitHubBindingStatus.Active)
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, GitHubBindingStatus.Inactive).SetProperty(x => x.DeactivatedAt, now), ct).ConfigureAwait(false);
+            await db.AutomationActivations.Where(x => x.ProjectId == binding.ProjectId && x.Status == AutomationActivationStatus.Active)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, AutomationActivationStatus.Invalidated).SetProperty(x => x.InvalidatedAt, now), ct).ConfigureAwait(false);
             db.ChangeTracker.Clear(); db.ProjectCopilotBindings.Add(binding); db.GitHubAuditRecords.Add(audit);
             try
             {
@@ -712,6 +736,135 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, AutomationActivationStatus.Invalidated).SetProperty(x => x.InvalidatedAt, now), ct).ConfigureAwait(false);
             await db.SaveChangesAsync(ct).ConfigureAwait(false); await tx.CommitAsync(ct).ConfigureAwait(false); return binding;
         }
+
+    /// <summary>
+    /// Resolves exactly one current, project-bound Repo App grant and Copilot binding, then
+    /// atomically records their immutable identity tuple. Callers cannot supply any repository,
+    /// installation, provider display, permission, or credential value.
+    /// </summary>
+    internal async Task<(AutomationActivationWriteResult Result, AutomationActivationRecord? Activation)>
+        TryCreateAutomationActivationSnapshotAsync(
+            string projectId,
+            string? entraObjectId,
+            GitHubAuditActorKind actorKind,
+            CancellationToken ct = default)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        try
+        {
+            var grants = await db.GitHubRepositoryGrants.AsNoTracking()
+                .Where(grant => grant.ProjectId == projectId && grant.RevokedAt == null &&
+                    db.GitHubInstallations.Any(installation =>
+                        installation.InstallationId == grant.InstallationId &&
+                        installation.AppKind == GitHubAppKind.Repo &&
+                        installation.ProjectId == projectId &&
+                        installation.RevokedAt == null))
+                .Select(grant => new { grant.InstallationId, grant.RepositoryId, grant.PermissionDigest })
+                .ToListAsync(ct).ConfigureAwait(false);
+            var bindings = await db.ProjectCopilotBindings.AsNoTracking()
+                .Where(binding => binding.ProjectId == projectId &&
+                    binding.Status == GitHubBindingStatus.Active &&
+                    binding.DeactivatedAt == null)
+                .Select(binding => new { binding.Id, binding.GrantDigest })
+                .ToListAsync(ct).ConfigureAwait(false);
+
+            var result = grants.Count switch
+            {
+                0 => AutomationActivationWriteResult.RepositoryGrantUnavailable,
+                > 1 => AutomationActivationWriteResult.RepositoryGrantAmbiguous,
+                _ when bindings.Count == 0 => AutomationActivationWriteResult.CopilotBindingUnavailable,
+                _ when bindings.Count > 1 => AutomationActivationWriteResult.CopilotBindingAmbiguous,
+                _ => AutomationActivationWriteResult.Activated,
+            };
+            if (result != AutomationActivationWriteResult.Activated)
+            {
+                db.GitHubAuditRecords.Add(CreateActivationAudit(
+                    projectId, entraObjectId, actorKind, GitHubAuditOutcome.Denied,
+                    result is AutomationActivationWriteResult.RepositoryGrantAmbiguous or
+                        AutomationActivationWriteResult.CopilotBindingAmbiguous
+                        ? GitHubAuditReasonCode.ActivationPrerequisiteAmbiguous
+                        : GitHubAuditReasonCode.BindingUnavailable,
+                    null));
+                await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
+                return (result, null);
+            }
+
+            var grant = grants[0];
+            var binding = bindings[0];
+            var activation = new AutomationActivationRecord
+            {
+                Id = SnapshotRef.Create().Value,
+                ProjectId = projectId,
+                InstallationId = grant.InstallationId,
+                RepositoryId = grant.RepositoryId,
+                RepositoryGrantDigest = grant.PermissionDigest,
+                CopilotBindingId = binding.Id,
+                CopilotBindingGrantDigest = binding.GrantDigest,
+                AutomationKey = "internal-activation-snapshot",
+                Status = AutomationActivationStatus.Active,
+                ActivatedAt = DateTimeOffset.UtcNow,
+            };
+            EnsureAutomationActivationSnapshot(activation);
+            db.AutomationActivations.Add(activation);
+            db.GitHubAuditRecords.Add(CreateActivationAudit(
+                projectId, entraObjectId, actorKind, GitHubAuditOutcome.Succeeded,
+                GitHubAuditReasonCode.None, grant.PermissionDigest, activation.Id));
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return (AutomationActivationWriteResult.Activated, activation);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            await AppendAuditAsync(CreateActivationAudit(
+                projectId, entraObjectId, actorKind, GitHubAuditOutcome.Denied,
+                GitHubAuditReasonCode.ActivationConflict, null), ct).ConfigureAwait(false);
+            return (AutomationActivationWriteResult.Conflict, null);
+        }
+    }
+
+    /// <summary>
+    /// Fences a previously inserted activation against the exact live grant and binding tuple.
+    /// A current replacement is never substituted for the captured identity.
+    /// </summary>
+    internal async Task<FencedAutomationActivation?> TryFenceAutomationActivationAsync(
+        string activationId,
+        CancellationToken ct = default)
+    {
+        var activation = await db.AutomationActivations.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == activationId &&
+                x.Status == AutomationActivationStatus.Active, ct).ConfigureAwait(false);
+        if (activation is null ||
+            string.IsNullOrWhiteSpace(activation.RepositoryGrantDigest) ||
+            string.IsNullOrWhiteSpace(activation.CopilotBindingId) ||
+            string.IsNullOrWhiteSpace(activation.CopilotBindingGrantDigest))
+            return null;
+
+        var isLive = await db.GitHubRepositoryGrants.AsNoTracking().AnyAsync(grant =>
+            grant.InstallationId == activation.InstallationId &&
+            grant.RepositoryId == activation.RepositoryId &&
+            grant.ProjectId == activation.ProjectId &&
+            grant.PermissionDigest == activation.RepositoryGrantDigest &&
+            grant.RevokedAt == null &&
+            db.GitHubInstallations.Any(installation =>
+                installation.InstallationId == activation.InstallationId &&
+                installation.AppKind == GitHubAppKind.Repo &&
+                installation.ProjectId == activation.ProjectId &&
+                installation.RevokedAt == null) &&
+            db.ProjectCopilotBindings.Any(binding =>
+                binding.Id == activation.CopilotBindingId &&
+                binding.ProjectId == activation.ProjectId &&
+                binding.GrantDigest == activation.CopilotBindingGrantDigest &&
+                binding.Status == GitHubBindingStatus.Active &&
+                binding.DeactivatedAt == null), ct).ConfigureAwait(false);
+
+        return !isLive ? null : new(
+            activation.Id, activation.ProjectId, activation.InstallationId, activation.RepositoryId,
+            activation.RepositoryGrantDigest, activation.CopilotBindingId, activation.CopilotBindingGrantDigest);
+    }
 
     public async Task<InvocationClaimResult> ClaimInvocationAsync(
         AutomationInvocationRecord invocation,
@@ -1252,6 +1405,41 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         if (!valid)
             throw new ArgumentException("Capability snapshot purpose mapping is invalid.", nameof(snapshot));
     }
+
+    private static void EnsureAutomationActivationSnapshot(AutomationActivationRecord activation)
+    {
+        _ = new SnapshotRef(activation.Id);
+        if (string.IsNullOrWhiteSpace(activation.ProjectId) ||
+            activation.InstallationId <= 0 || activation.RepositoryId <= 0 ||
+            string.IsNullOrWhiteSpace(activation.RepositoryGrantDigest) ||
+            string.IsNullOrWhiteSpace(activation.CopilotBindingId) ||
+            string.IsNullOrWhiteSpace(activation.CopilotBindingGrantDigest) ||
+            activation.Status != AutomationActivationStatus.Active)
+            throw new ArgumentException("Activation snapshots require an exact live grant and binding tuple.", nameof(activation));
+    }
+
+    private static GitHubAuditRecord CreateActivationAudit(
+        string projectId,
+        string? entraObjectId,
+        GitHubAuditActorKind actorKind,
+        GitHubAuditOutcome outcome,
+        GitHubAuditReasonCode reasonCode,
+        string? grantDigest,
+        string? correlationId = null) =>
+        new()
+        {
+            EntraObjectId = actorKind == GitHubAuditActorKind.HumanEntraSubject ? entraObjectId : null,
+            ActorKind = actorKind,
+            Action = GitHubAuditAction.AutomationActivated,
+            ResourceId = projectId,
+            AppKind = GitHubAppKind.Repo,
+            CapabilityPurpose = GitHubCapabilityPurpose.UnattendedRepository,
+            Outcome = outcome,
+            ReasonCode = reasonCode,
+            CorrelationId = correlationId ?? SnapshotRef.Create().Value,
+            OccurredAt = DateTimeOffset.UtcNow,
+            GrantDigest = grantDigest,
+        };
 
     private async Task<RunGitHubCapabilitySnapshotRecord?> CreateUserAuthorizationSnapshotAsync(
         RunGitHubIdentitySnapshotRecord legacy,
