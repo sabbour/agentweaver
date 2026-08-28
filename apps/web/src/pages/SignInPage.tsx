@@ -1,7 +1,5 @@
 import { Button, MessageBar, MessageBarBody, MessageBarTitle, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
-import { ENTRA_AUTHORIZE_URL, GITHUB_AUTHORIZE_URL } from '../config';
-import { GitHubIcon } from '../components/GitHubIcon';
-import type { AuthMode } from '../api/types';
+import { ENTRA_AUTHORIZE_URL } from '../config';
 
 const useStyles = makeStyles({
   page: {
@@ -79,7 +77,6 @@ const useStyles = makeStyles({
 });
 
 export interface SignInPageProps {
-  authMode?: AuthMode;
   /**
    * A session-check failure surfaced by AuthGate (apps/web/src/App.tsx) — e.g. `/api/auth/session`
    * returning an unexpected status, a platform-role denial, or a network error. Distinct from
@@ -90,23 +87,11 @@ export interface SignInPageProps {
   sessionError?: string | null;
 }
 
-function authHeading(mode: AuthMode | undefined) {
-  return mode === 'entra' ? 'Sign in with Microsoft Entra ID' : 'Sign in with GitHub';
-}
-
-function authCopy(mode: AuthMode | undefined) {
-  return mode === 'entra'
-    ? 'Start with your Microsoft Entra ID account. After that, link one or more GitHub accounts for repository access and Copilot-backed work.'
-    : 'Use your GitHub account to continue to Agentweaver.';
-}
-
-export function SignInPage({ authMode = 'github-legacy', sessionError = null }: SignInPageProps) {
+export function SignInPage({ sessionError = null }: SignInPageProps) {
   const styles = useStyles();
 
   const params = new URLSearchParams(window.location.search);
   const authError = params.get('auth') === 'error' ? (params.get('reason') ?? 'Authentication failed.') : null;
-  const primaryUrl = authMode === 'entra' ? ENTRA_AUTHORIZE_URL : GITHUB_AUTHORIZE_URL;
-
   return (
     <div className={styles.page}>
       <div className={styles.card}>
@@ -125,33 +110,24 @@ export function SignInPage({ authMode = 'github-legacy', sessionError = null }: 
         )}
 
         <div>
-          <Text as="h1" className={styles.heading}>{authHeading(authMode)}</Text>
-          <Text as="p" className={styles.subheading}>{authCopy(authMode)}</Text>
+          <Text as="h1" className={styles.heading}>Sign in with Microsoft Entra ID</Text>
+          <Text as="p" className={styles.subheading}>Use your organization account to continue to Agentweaver.</Text>
         </div>
 
-        {authMode === 'entra' && (
-          <div className={styles.checklist}>
-            <Text className={styles.checklistItem}>1. Sign in to Agentweaver with your Entra ID account.</Text>
-            <Text className={styles.checklistItem}>2. Link at least one GitHub account before importing repositories or running GitHub/Copilot actions.</Text>
-            <Text className={styles.note}>
-              You can browse Agentweaver right after signing in; link a GitHub account whenever you're ready to import a repository or run GitHub/Copilot actions.
-            </Text>
-          </div>
-        )}
+        <div className={styles.checklist}>
+          <Text className={styles.checklistItem}>Sign in to Agentweaver with your Entra ID account.</Text>
+          <Text className={styles.note}>
+            Authorize the Repo App or Copilot App when a project needs its respective GitHub capability.
+          </Text>
+        </div>
 
         <div className={styles.actions}>
           <Button
             appearance="primary"
-            icon={authMode === 'entra' ? undefined : <GitHubIcon size={20} />}
-            onClick={() => { window.location.href = primaryUrl; }}
+            onClick={() => { window.location.href = ENTRA_AUTHORIZE_URL; }}
           >
-            {authMode === 'entra' ? 'Sign in with Microsoft Entra ID' : 'Sign in with GitHub'}
+            Sign in with Microsoft Entra ID
           </Button>
-          {authMode === 'github-legacy' && (
-            <Text className={styles.note}>
-              This deployment signs in directly with GitHub.
-            </Text>
-          )}
           {authError && (
             <Text role="alert" className={styles.error}>{authError}</Text>
           )}

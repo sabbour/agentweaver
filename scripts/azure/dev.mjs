@@ -367,15 +367,12 @@ export async function runLocalSetup({ exec = execDefault, log = logDefault, repo
   log.info("  Or both at once: npm run dev");
   if (scaffoldedDevelopmentAppSettings) {
     log.info(
-      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; set Auth:GitHub:ClientId in it, then store ClientSecret and Providers:GitHubCopilot:GitHubToken via dotnet user-secrets before first sign-in.",
+      "  Scaffolded apps/Agentweaver.Api/appsettings.Development.json from .example; configure Auth:Entra:ClientId and Auth:Entra:TenantId before first sign-in.",
     );
   }
-  log.info("  For local sign-in: create a GitHub OAuth App: https://github.com/settings/developers");
-  log.info("  Callback URL:      http://localhost:5000/auth/github/callback");
-  log.info("  Set Auth:GitHub:ClientId (non-secret) in apps/Agentweaver.Api/appsettings.Development.json.");
-  log.info("  Store secrets via user-secrets (run in apps/Agentweaver.Api), never in the JSON file:");
-  log.info('    dotnet user-secrets set Auth:GitHub:ClientSecret "<client-secret>"');
-  log.info('    dotnet user-secrets set Providers:GitHubCopilot:GitHubToken "<github-pat-with-copilot-access>"');
+  log.info("  For local sign-in, configure a Microsoft Entra app registration.");
+  log.info("  Callback URL:      http://localhost:5000/auth/entra/callback");
+  log.info("  Set Auth:Entra:ClientId and Auth:Entra:TenantId in apps/Agentweaver.Api/appsettings.Development.json.");
   log.info("  Full walkthrough:  docs/guide/getting-started.md#1-configure-the-api");
 
   return { ok: true };

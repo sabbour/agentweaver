@@ -5,27 +5,17 @@
 // Creates: user-assigned managed identities (one shared by the API and worker
 // service accounts, one dedicated least-privilege identity for AgentHost sandbox
 // pods with NO Key Vault roles -- issue #471), Key Vault (RBAC-authorized),
-// GitHub OAuth secrets, Key Vault role assignments (API/worker identity only),
+// Key Vault role assignments (API/worker identity only),
 // OIDC issuer + workload identity on the cluster, and federated credentials for
 // the api, worker, and agent-host service accounts (agent-host on its own
 // dedicated identity).
 //
-// SECURITY NOTE (see .squad/decisions.md "Staging AKS recovery" entry): this
-// port intentionally does NOT auto-resolve GitHub OAuth credentials from any
-// local source (e.g. .NET user-secrets) -- that incident showed a
-// local-development-only credential source is unsafe for staging, which uses
-// a separate GitHub OAuth App. Credentials must come from env/flags or an
-// explicit interactive prompt.
-//
 // cfg is the resolved variables.mjs output: RESOURCE_GROUP, CLUSTER_NAME,
-// LOCATION, KEYVAULT_NAME, NAMESPACE, TENANT_ID. Optional:
-// GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET (prompted interactively if omitted
-// and a TTY is available).
+// LOCATION, KEYVAULT_NAME, NAMESPACE, TENANT_ID.
 
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
 import * as azDefault from "../lib/az.mjs";
-import * as promptDefault from "../lib/prompt.mjs";
 import * as secretDefault from "../lib/secret.mjs";
 import os from "node:os";
 
@@ -38,31 +28,6 @@ export const IDENTITY_NAME = "agentweaver-api-identity";
 // API's /configure call (see KubernetesSandboxExecutor.ResolveGitHubAccessTokenAsync ->
 // AgentHostRuntimeState.GitHubAccessToken) instead of a direct vault fetch.
 export const AGENTHOST_IDENTITY_NAME = "agentweaver-agenthost-identity";
-
-/** Resolves GitHub OAuth credentials from cfg, falling back to an interactive prompt when available. */
-export async function resolveGithubCredentials(cfg, { prompt = promptDefault } = {}) {
-  let clientId = cfg.GITHUB_CLIENT_ID || "";
-  let clientSecret = cfg.GITHUB_CLIENT_SECRET || "";
-
-  if ((!clientId || !clientSecret) && prompt.isInteractive()) {
-    if (!clientId) {
-      clientId = await prompt.text("GitHub OAuth client ID: ");
-    }
-    if (!clientSecret) {
-      clientSecret = await prompt.secret("GitHub OAuth client secret: ");
-    }
-  }
-
-  const missing = [];
-  if (!clientId) missing.push("GITHUB_CLIENT_ID");
-  if (!clientSecret) missing.push("GITHUB_CLIENT_SECRET");
-  if (missing.length > 0) {
-    throw new Error(
-      `GitHub OAuth credentials are missing. Set the following variables (or supply via flags): ${missing.join(", ")}`,
-    );
-  }
-  return { clientId, clientSecret };
-}
 
 /**
  * Sets a Key Vault secret, tolerating transient RBAC-propagation Forbidden errors with bounded retry.
@@ -116,16 +81,12 @@ async function createRoleAssignmentIdempotent(args, { exec = execDefault } = {})
  * @param {object} [opts] Injectable collaborators, primarily for testing.
  */
 export async function run(cfg, opts = {}) {
-  const { exec = execDefault, log = logDefault, az = azDefault, prompt = promptDefault } = opts;
+  const { exec = execDefault, log = logDefault, az = azDefault } = opts;
 
   let TENANT_ID = cfg.TENANT_ID;
   if (!TENANT_ID) {
     TENANT_ID = await az.getTenantId();
   }
-
-  const { clientId: GITHUB_CLIENT_ID, clientSecret: GITHUB_CLIENT_SECRET } = await resolveGithubCredentials(cfg, {
-    prompt,
-  });
 
   log.info("");
   log.section("Step 1: Create user-assigned managed identity");
@@ -263,12 +224,7 @@ export async function run(cfg, opts = {}) {
   }
 
   log.info("");
-  log.section("Step 3: Store required secrets in Key Vault");
-  await setSecretWithRetry(cfg.KEYVAULT_NAME, "github-client-id", GITHUB_CLIENT_ID, { exec, log });
-  await setSecretWithRetry(cfg.KEYVAULT_NAME, "github-client-secret", GITHUB_CLIENT_SECRET, { exec, log });
-
-  log.info("");
-  log.section("Step 4: Grant Key Vault roles to managed identity");
+  log.section("Step 3: Grant Key Vault roles to managed identity");
   // These roles are granted to the API identity ONLY. The AgentHost identity
   // (AGENTHOST_IDENTITY_NAME) is intentionally excluded (issue #471): sandbox pods must have no
   // direct Key Vault access and instead receive the run owner's token via the API /configure broker.
@@ -282,7 +238,7 @@ export async function run(cfg, opts = {}) {
   );
 
   log.info("");
-  log.section("Step 5: Enable OIDC issuer + workload identity on cluster");
+  log.section("Step 4: Enable OIDC issuer + workload identity on cluster");
   const oidcEnabled = (
     await exec.capture("az", ["aks", "show", "--name", cfg.CLUSTER_NAME, "--resource-group", cfg.RESOURCE_GROUP, "--query", "oidcIssuerProfile.enabled", "-o", "tsv"], { allowFailure: true })
   ).stdout.trim();
@@ -319,7 +275,7 @@ export async function run(cfg, opts = {}) {
   log.field("OIDC issuer", OIDC_ISSUER);
 
   log.info("");
-  log.section("Step 6: Create federated credential");
+  log.section("Step 5: Create federated credential");
   const fedCredExists = await exec.capture(
     "az",
     ["identity", "federated-credential", "show", "--name", "agentweaver-api-fedcred", "--identity-name", IDENTITY_NAME, "--resource-group", cfg.RESOURCE_GROUP],

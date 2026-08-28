@@ -128,7 +128,7 @@ npm run setup
 npm run dev
 ```
 
-Before first sign-in, configure the GitHub OAuth client ID and user-secrets as
+Before first sign-in, configure the Microsoft Entra application as
 described in the [local authentication
 step](https://sabbour.me/agentweaver/guide/getting-started#1-configure-local-authentication-and-model-access).
 The first API build can take **1–3 minutes** (commonly longer through a
@@ -183,31 +183,16 @@ With no arguments, `azure:provision-infra` launches an interactive installer tha
 for: the Azure subscription (defaulting to your current `az` default), a
 resource group (pick an existing one or create a new one), a location, the
 AKS cluster / ACR / Key Vault names, the Postgres server/location/access-mode
-settings (prefilled with sensible defaults, editable), and a GitHub OAuth
-client ID + secret (the secret is entered with no echo). It then provisions
+settings (prefilled with sensible defaults, editable), and Microsoft Entra
+application and tenant IDs. It then provisions
 the cluster, identity, monitoring, the MCP OAuth signing key, PostgreSQL,
 builds and pushes images (or optionally imports already-published GHCR images
 by immutable ref, or four operator-specified fully-qualified custom image
 refs), verifies image provenance, and performs an initial SHA-identified
 deployment. At the end it prints an **outputs summary** (resource group,
-cluster, ACR, namespace, image tags, gateway host/IP, **GitHub OAuth callback
-URL**, verification pass/fail counts) — it never prints the OAuth client
-secret or any other credential.
-
-> **GitHub OAuth App callback URL — local vs. Azure.** The registered
-> callback URL must match where the app is actually running:
-> - **Local dev** → `http://localhost:5000/auth/github/callback`
-> - **Azure deployment** → `https://<gateway-host>/auth/github/callback` —
->   printed verbatim as **GitHub OAuth callback URL** in the outputs summary
->   above once the deploy finishes. It's only known *after* AKS App Routing
->   provisions the managed certificate on your first deploy, so there's no
->   way to know it in advance — deploy first with any placeholder callback
->   URL, then go back to the [OAuth App
->   settings](https://github.com/settings/developers) and paste in the
->   printed callback URL. GitHub OAuth Apps only support one callback URL
->   each — if you also do local dev, create a second OAuth App for
->   `localhost`, or swap the callback URL each time you switch between local
->   and Azure.
+cluster, ACR, namespace, image tags, gateway host/IP, and verification
+pass/fail counts). Configure the Entra app's redirect URI for each deployed
+environment (for example, `https://<gateway-host>/auth/entra/callback`).
 
 **Non-interactive usage** — via flags, environment variables, and/or a params
 file (precedence: flags > env > params file > detected defaults > prompt; a
@@ -227,8 +212,8 @@ npm run azure:provision-infra -- \
   --postgres-location eastus2 \
   --postgres-ha-mode Disabled \
   --postgres-access-mode public \
-  --github-client-id "$GITHUB_CLIENT_ID" \
-  --github-client-secret "$GITHUB_CLIENT_SECRET"
+  --entra-client-id "$ENTRA_CLIENT_ID" \
+  --entra-tenant-id "$ENTRA_TENANT_ID"
 ```
 
 Optional: pass `--node-vm-size <sku>` or set `NODE_VM_SIZE` to override the default `Standard_D4s_v6` for new AKS system/app/kata pools when your subscription or region requires a different allowed SKU. Existing clusters are unaffected: the value is only used during `az aks create` / `az aks nodepool add`, and the installer idempotently skips those calls when the cluster or pool already exists. You can also pass `--postgres-server-name <name>` or set `PG_SERVER_NAME` to override the default `agentweaver-pg` and route around the rare Azure-global Flexible Server name collision. Pass `--postgres-ha-mode <ZoneRedundant|Disabled>` or set `PG_HA_MODE` to override the default `ZoneRedundant`, which is useful in regions/environments where zone-redundant HA is unavailable (for example early-access/canary regions such as `eastus2euap`).
@@ -292,8 +277,8 @@ Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/
   "PG_HA_MODE": "Disabled",
   "PG_ACCESS_MODE": "public",
   "NAMESPACE": "agentweaver",
-  "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
-  "GITHUB_CLIENT_SECRET": "",
+  "ENTRA_CLIENT_ID": "your-entra-application-client-id",
+  "ENTRA_TENANT_ID": "your-entra-tenant-id",
   "IMAGE_TAG": "",
   "SKIP_POSTGRES": false,
   "SKIP_OAUTH_KEY": false
@@ -303,11 +288,6 @@ Or with a params file (copy [`scripts/azure/params.example.json`](scripts/azure/
 ```bash
 npm run azure:provision-infra -- --params-file scripts/azure/params.my-env.json
 ```
-
-> Never commit a params file containing a real `GITHUB_CLIENT_SECRET` — prefer
-> the `GITHUB_CLIENT_SECRET` environment variable or the interactive secret
-> prompt; the params file field exists only for unattended CI use against
-> disposable/test environments.
 
 To reuse the container images already published by `.github/workflows/publish-images.yml`
 instead of rebuilding them into ACR, pass `--image-source ghcr --ghcr-ref <ref>`.
@@ -404,12 +384,8 @@ dotnet run --project apps/Agentweaver.Mcp
 npm --prefix apps/web run dev
 ```
 
-Configure the GitHub OAuth client secret for local dev with .NET user-secrets (do not put it in `appsettings*.json`):
-
-```powershell
-cd apps/Agentweaver.Api
-dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
-```
+Configure local Entra client and tenant IDs as described in the [local
+authentication step](https://sabbour.me/agentweaver/guide/getting-started#1-configure-local-authentication-and-model-access).
 
 ### Package scripts
 

@@ -9,7 +9,7 @@
 //   - Define the current Agentweaver platform App Roles via Microsoft Graph.
 //   - Ensure the app's service principal exists.
 //   - Print the resulting identifiers in the config shapes Agentweaver will need.
-//   - Stay optional: deployments using Auth:Mode=GitHubLegacy do not need to run it.
+//   - Configure the Entra sign-in application used by every deployment.
 //
 // This lives in the Node-based `scripts/azure/` toolchain on purpose: the repo
 // removed the old bash/PowerShell Azure tooling and keeps cross-platform Azure
@@ -83,7 +83,7 @@ Flags:
 
 Notes:
   - This command is optional. Run it when a deployment chooses Auth:Mode=Entra.
-    Deployments using Auth:Mode=GitHubLegacy can ignore it.
+    Agentweaver deployments use this Entra application for browser sign-in.
   - The app is always enforced as single-tenant (${SIGN_IN_AUDIENCE}).
   - Redirect URIs are registered under the *publicClient* platform (not \`web\` or \`spa\`), and
     \`isFallbackPublicClient\` is enforced true, so the API can redeem authorization codes with
@@ -364,7 +364,7 @@ function printSummary(result, log) {
   log.field("Redirect URI(s) [publicClient]", result.redirectUris.join(", "));
 
   log.section("Agentweaver config handoff");
-  log.info("Optional Entra-mode config surface (ignored when Auth:Mode=GitHubLegacy):");
+  log.info("Entra browser sign-in configuration:");
   log.field("Auth:Mode", "Entra");
   log.info("Environment / params-file values:");
   log.field("ENTRA_CLIENT_ID", result.appId);

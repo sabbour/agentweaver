@@ -19,8 +19,8 @@
 // non-empty check. KEYVAULT_NAME has no hardcoded default in variables.mjs
 // (see that module's resolveKeyvaultName()) precisely because a wrong-but-
 // real vault name (e.g. a typo landing on an existing, unrelated vault)
-// fails SILENTLY downstream -- wrong GitHub OAuth secrets instead of a
-// clean error -- unless this existence check catches it first.
+// fails SILENTLY downstream -- wrong secret references instead of a clean
+// error -- unless this existence check catches it first.
 //
 // cfg is the resolved variables/config object produced by variables.mjs's
 // resolveVariables(): RESOURCE_GROUP, CLUSTER_NAME, ACR_NAME, LOCATION,
