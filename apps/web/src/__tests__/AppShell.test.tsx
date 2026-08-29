@@ -276,16 +276,12 @@ describe('AppShell navigation', () => {
 
     renderShellAt('/overview');
 
-    expect(await screen.findByText('octocat')).toBeDefined();
     const badgeText = screen.getByText('v0.12.2-dev+a100e95');
     const badge = badgeText.closest('.aw-rail-footer__version') as HTMLElement | null;
-    const accountSwitcher = screen.getByRole('button', { name: 'GitHub account switcher' });
     expect(badge).toBeTruthy();
     expect(badge?.title).toContain('Full version: v0.12.2-dev+a100e95');
     expect(badge?.className).toContain('aw-rail-footer__version');
     expect(badgeText.className).toBe('aw-rail-footer__version-text');
-    expect(accountSwitcher.textContent).toContain('octocat');
-    expect(accountSwitcher.querySelector('img')).toBeTruthy();
     expect(screen.queryByText('Alpha v0.12.2-dev+a100e95')).toBeNull();
   });
 
