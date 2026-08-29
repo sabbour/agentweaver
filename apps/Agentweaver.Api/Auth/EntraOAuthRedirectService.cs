@@ -131,6 +131,8 @@ public sealed class EntraOAuthRedirectService
     /// </summary>
     public async Task<string> BeginAuthorizationAsync(CancellationToken ct = default)
     {
+        ValidateAuthorizationConfiguration();
+
         var state = GenerateUrlSafeToken();
         var codeVerifier = GenerateUrlSafeToken();
         var codeChallenge = ComputeS256Challenge(codeVerifier);
@@ -148,6 +150,13 @@ public sealed class EntraOAuthRedirectService
         }
 
         return CreateAuthorizationUrl(state, codeChallenge);
+    }
+
+    private void ValidateAuthorizationConfiguration()
+    {
+        _ = RequireAuthorityBase();
+        _ = RequireClientId();
+        _ = RequireRedirectUri();
     }
 
     public string CreateAuthorizationUrl(string state, string codeChallenge) =>

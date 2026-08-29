@@ -2,7 +2,9 @@ using System.Net;
 using System.Text.Json;
 using System.Net.Http.Headers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Tests.Helpers;
@@ -35,6 +37,21 @@ public sealed class EntraSignInEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
         (await response.Content.ReadAsStringAsync()).Should().Contain("Auth:Entra:RedirectUri must be configured.");
+        (await factory.CountEntraOAuthStatesAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Authorize_WithoutConfiguredAuthority_ReturnsServiceUnavailableWithoutPersistingState()
+    {
+        await using var factory = new MissingAuthorityEntraWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+
+        var response = await client.GetAsync("/auth/entra/authorize");
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await response.Content.ReadAsStringAsync()).Should().Contain(
+            "Auth:Entra:TenantId or Auth:Entra:Authority must be configured.");
+        (await factory.CountEntraOAuthStatesAsync()).Should().Be(0);
     }
 
     [Fact]
@@ -79,6 +96,7 @@ public sealed class EntraSignInEndpointsTests
         var stateInUrl = EntraOAuthStateCookie.ExtractState(location);
         stateInUrl.Should().NotBeNullOrEmpty();
         setCookie!.Should().Contain($"{EntraOAuthStateCookie.Name}={stateInUrl}");
+        (await factory.CountEntraOAuthStatesAsync()).Should().Be(1);
     }
 
     // -------------------------------------------------------------------------
@@ -211,5 +229,19 @@ public sealed class EntraSignInEndpointsTests
                 return Uri.UnescapeDataString(pair[(key.Length + 1)..]);
         }
         return null;
+    }
+
+    private sealed class MissingAuthorityEntraWebApplicationFactory : EntraWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Auth:Entra:TenantId"] = string.Empty,
+                    ["Auth:Entra:Authority"] = string.Empty,
+                }));
+        }
     }
 }

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.JsonWebTokens;
@@ -10,6 +11,7 @@ using Microsoft.IdentityModel.Tokens;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Helpers;
@@ -94,6 +96,13 @@ public class EntraWebApplicationFactory : WebApplicationFactory<Program>
         var dir = Path.Combine(_workspaceRoot, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         return dir;
+    }
+
+    public async Task<int> CountEntraOAuthStatesAsync()
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.EntraOAuthStates.CountAsync();
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
