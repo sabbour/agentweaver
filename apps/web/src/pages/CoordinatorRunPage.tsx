@@ -3183,21 +3183,47 @@ export function CoordinatorRunPage() {
   const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
   const [outcomePlanClarificationReconcileEpoch, setOutcomePlanClarificationReconcileEpoch] = useState(0);
   const pendingApprovalCounts = useMemo(() => pendingApprovalsByRun(events, runId ?? ''), [events, runId]);
-  const latestOutcomePlanSequenceRef = useRef<number | null>(null);
+  const outcomePlanClarificationBaseSequenceRef = useRef<number | null>(null);
 
   useEffect(() => {
-    latestOutcomePlanSequenceRef.current = null;
+    outcomePlanClarificationBaseSequenceRef.current = null;
   }, [runId]);
 
   useEffect(() => {
     const sequence = latestOutcomePlanEvent?.sequence;
-    if (sequence == null) return;
-    const previousSequence = latestOutcomePlanSequenceRef.current;
-    latestOutcomePlanSequenceRef.current = sequence;
-    if (previousSequence != null && previousSequence !== sequence) {
+    const baseSequence = outcomePlanClarificationBaseSequenceRef.current;
+    if (outcomePlanClarifying && sequence != null && baseSequence != null && sequence > baseSequence) {
+      outcomePlanClarificationBaseSequenceRef.current = null;
       queueMicrotask(() => setOutcomePlanClarifying(false));
     }
-  }, [latestOutcomePlanEvent?.sequence]);
+  }, [latestOutcomePlanEvent?.sequence, outcomePlanClarifying]);
+
+  const handleOutcomePlanClarificationPendingChange = useCallback((
+    pending: boolean,
+    preSubmitPlanSequence?: number,
+  ) => {
+    if (!pending) {
+      outcomePlanClarificationBaseSequenceRef.current = null;
+      setOutcomePlanClarifying(false);
+      return;
+    }
+
+    // The coordinator can publish the replacement plan before the HTTP acknowledgement
+    // returns. Only arm the pending state when the plan that was submitted against is still
+    // current; otherwise a completed revision would be re-locked for the timeout window.
+    if (
+      preSubmitPlanSequence != null
+      && latestOutcomePlanEvent?.sequence != null
+      && latestOutcomePlanEvent.sequence > preSubmitPlanSequence
+    ) {
+      outcomePlanClarificationBaseSequenceRef.current = null;
+      setOutcomePlanClarifying(false);
+      return;
+    }
+
+    outcomePlanClarificationBaseSequenceRef.current = preSubmitPlanSequence ?? latestOutcomePlanEvent?.sequence ?? null;
+    setOutcomePlanClarifying(true);
+  }, [latestOutcomePlanEvent]);
 
   useEffect(() => {
     if (!outcomePlanClarifying) return;
@@ -3234,7 +3260,14 @@ export function CoordinatorRunPage() {
           refreshedDetail?.status ?? runLevelStatus,
           refreshedDetail?.coordinator_status ?? coordStatusField,
         );
-        if (serverStillDrafting) {
+        const clarificationBaseSequence = outcomePlanClarificationBaseSequenceRef.current;
+        const completedPlanObserved = clarificationBaseSequence != null
+          && reconciledEvents.some((event) =>
+            event.type === 'coordinator.outcome_spec'
+            && event.sequence > clarificationBaseSequence,
+          );
+        const reconciliationFailed = detail.status === 'rejected' || refreshedEvents.status === 'rejected';
+        if (serverStillDrafting || (reconciliationFailed && !completedPlanObserved)) {
           setOutcomePlanClarificationReconcileEpoch((value) => value + 1);
         } else {
           setOutcomePlanClarifying(false);
@@ -4739,7 +4772,7 @@ export function CoordinatorRunPage() {
                   onCoordinatorFollowUp={reconnectStream}
                   coordinatorActive={coordActive}
                   composerFocusSignal={composerFocusSignal}
-                  onOutcomePlanClarificationPendingChange={setOutcomePlanClarifying}
+                  onOutcomePlanClarificationPendingChange={handleOutcomePlanClarificationPendingChange}
                   artifactAdapter={coordAdapter}
                   runChips={runSummaryChips}
                   workPlanTopologyThumbnail={renderTopologyThumbnail('workplan')}
@@ -4789,6 +4822,7 @@ export function CoordinatorRunPage() {
             onCollapse={() => setPlanPanelOpen(false)}
             onReconnect={reconnectStream}
             onClarifyPlan={() => { setPlanPanelOpen(false); focusOutcomePlanComposer(); }}
+            clarificationSent={outcomePlanClarifying}
             onFooterChange={setPlanFooter}
           />
         </SlidePanel>

@@ -79,8 +79,8 @@ vi.mock('../api/sse', () => ({
 }));
 
 vi.mock('../components/OutcomePlanPanel', () => ({
-  OutcomePlanPanel: ({ onClarifyPlan }: { onClarifyPlan?: () => void }) => (
-    <button type="button" onClick={onClarifyPlan}>Clarify plan</button>
+  OutcomePlanPanel: ({ onClarifyPlan, clarificationSent = false }: { onClarifyPlan?: () => void; clarificationSent?: boolean }) => (
+    <button type="button" disabled={clarificationSent} onClick={onClarifyPlan}>Clarify plan</button>
   ),
 }));
 
@@ -1154,6 +1154,79 @@ describe('CoordinatorRunPage operator console redesign', () => {
     }));
     expect(await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
     expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
+  });
+
+  it('keeps the re-opened Goal panel locked after an acknowledged clarification', async () => {
+    const user = userEvent.setup();
+    currentEvents = [{
+      sequence: 10,
+      type: 'coordinator.outcome_spec',
+      payload: {
+        status: 'awaiting_confirmation',
+        goal: 'Ship the feature',
+        desiredOutcome: 'A working feature',
+      },
+    }];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await user.click(await screen.findByTestId('run-summary-chip-goal'));
+    await user.click(screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!);
+    const input = await screen.findByPlaceholderText('Message coordinator...');
+    await user.type(input, 'Clarify the outcome plan: support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.');
+    await user.click(await screen.findByTestId('run-summary-chip-goal'));
+
+    const goalPanelClarify = screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!;
+    expect(goalPanelClarify).toHaveProperty('disabled', true);
+  });
+
+  it('does not re-lock a completed redraft when its SSE plan arrives before the HTTP acknowledgement', async () => {
+    const user = userEvent.setup();
+    const initialPlanEvent: RunStreamEvent = {
+      sequence: 10,
+      type: 'coordinator.outcome_spec',
+      payload: {
+        status: 'awaiting_confirmation',
+        goal: 'Ship the feature',
+        desiredOutcome: 'A working feature',
+      },
+    };
+    let acknowledge!: (value: { status: string }) => void;
+    vi.mocked(apiClient.steerCoordinator).mockImplementation(() => new Promise((resolve) => {
+      acknowledge = resolve;
+    }) as never);
+    currentEvents = [initialPlanEvent];
+
+    const { rerender } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await user.click(await screen.findByTestId('run-summary-chip-goal'));
+    await user.click(screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!);
+    const input = await screen.findByPlaceholderText('Message coordinator...');
+    await user.type(input, 'Clarify the outcome plan: support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledTimes(1));
+
+    currentEvents = [{
+      ...initialPlanEvent,
+      sequence: 11,
+      payload: {
+        ...initialPlanEvent.payload,
+        desiredOutcome: 'A working feature with a dry run',
+      },
+    }];
+    rerender(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await act(async () => {
+      acknowledge({ status: 'applied' });
+      await Promise.resolve();
+    });
+
+    await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.');
+    expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', false);
+    expect(await screen.findByRole('treeitem', { name: /Select Outcome plan: Awaiting confirmation/i })).toBeTruthy();
   });
 
   it('keeps outcome-plan actions locked after 30 seconds while the server still reports drafting', async () => {

@@ -1549,7 +1549,7 @@ describe('AgentSessionPanel', () => {
     expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('clears outcome-plan clarification pending state when submission fails', async () => {
+  it('allows another clarification attempt when submission fails before acknowledgement', async () => {
     const user = userEvent.setup();
     vi.mocked(apiClient.steerCoordinator).mockRejectedValueOnce(new Error('message bus unavailable'));
 

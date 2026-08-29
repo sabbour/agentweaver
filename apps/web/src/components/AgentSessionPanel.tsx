@@ -785,7 +785,7 @@ export interface AgentSessionPanelProps {
   };
   variant?: 'modal' | 'docked';
   composerFocusSignal?: number;
-  onOutcomePlanClarificationPendingChange?: (pending: boolean) => void;
+  onOutcomePlanClarificationPendingChange?: (pending: boolean, preSubmitPlanSequence?: number) => void;
   /** Points the shared artifact browser at the coordinator's collective assembly (integration
    *  branch) when a coordinator-aggregate node is selected. Per-subtask runs use the standard
    *  per-run endpoints (no adapter). */
@@ -2210,6 +2210,14 @@ export function AgentSessionPanel({
     const instruction = followUp.trim();
     if (!instruction || followUpInFlightRef.current) return;
     const isOutcomePlanClarification = selectedItem?.nodeId === 'outcome-plan';
+    const preSubmitPlanSequence = isOutcomePlanClarification
+      ? events.reduce<number | undefined>(
+        (latest, event) => event.type === 'coordinator.outcome_spec' && (latest == null || event.sequence > latest)
+          ? event.sequence
+          : latest,
+        undefined,
+      )
+      : undefined;
     followUpInFlightRef.current = true;
     setFollowUpBusy(true);
     setFollowUpError(null);
@@ -2222,7 +2230,9 @@ export function AgentSessionPanel({
           ? { target_child_run_id: selectedItem.childRunId }
           : {}),
       });
-      if (isOutcomePlanClarification) onOutcomePlanClarificationPendingChange?.(true);
+      if (isOutcomePlanClarification) {
+        onOutcomePlanClarificationPendingChange?.(true, preSubmitPlanSequence);
+      }
       try {
         const persisted = await apiClient.getRunEvents(selectedRunId || coordinatorRunId);
         setSeedEvents(persisted.map((event) => ({
@@ -2240,14 +2250,13 @@ export function AgentSessionPanel({
         : 'Message sent to coordinator.');
       onCoordinatorFollowUp?.();
     } catch (err: unknown) {
-      if (isOutcomePlanClarification) onOutcomePlanClarificationPendingChange?.(false);
       setFollowUpNotice(null);
       setFollowUpError(formatApiErrorMessage(err, 'Could not send the coordinator message.'));
     } finally {
       followUpInFlightRef.current = false;
       setFollowUpBusy(false);
     }
-  }, [coordinatorRunId, followUp, onCoordinatorFollowUp, onOutcomePlanClarificationPendingChange, selectedItem, selectedRunId]);
+  }, [coordinatorRunId, events, followUp, onCoordinatorFollowUp, onOutcomePlanClarificationPendingChange, selectedItem, selectedRunId]);
 
   if (!selectedItem || !isVisible) return null;
 
