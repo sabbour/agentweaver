@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json.Serialization;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
 using Agentweaver.Api.Blueprints;
@@ -288,7 +289,9 @@ public static class SkillEndpoints
                 {
                     SkillOutcome.NotFound => Results.NotFound(),
                     SkillOutcome.GitHubConnectionRequired =>
-                        Results.Json(new { error }, statusCode: StatusCodes.Status401Unauthorized),
+                        Results.Json(
+                            GitHubCopilotConnectionRequirement.ForProject(projectId),
+                            statusCode: StatusCodes.Status401Unauthorized),
                     _ => Results.UnprocessableEntity(new { error }),
                 };
             }

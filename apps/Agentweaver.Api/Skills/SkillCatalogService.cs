@@ -151,10 +151,6 @@ public sealed class SkillCatalogService
     internal const string MarketplaceUnavailableMessage =
         "Could not reach the marketplace source. Check network/GitHub access and try again.";
 
-    /// <summary>Message returned when a non-run Copilot classifier needs an explicit GitHub capability.</summary>
-    internal const string MarketplaceGitHubConnectionRequiredMessage =
-        "Connect a GitHub account with GitHub Copilot access to classify this marketplace source, then try again.";
-
     /// <summary>Hard ceiling on how long a marketplace browse/import may spend fetching from GitHub.</summary>
     private static readonly TimeSpan MarketplaceFetchTimeout = TimeSpan.FromSeconds(60);
     private const int MarketplaceFetchConcurrency = 16;
@@ -627,7 +623,7 @@ public sealed class SkillCatalogService
                 projectId: project.Id).ConfigureAwait(false);
 
             if (index.RequiresGitHubConnection)
-                return (SkillOutcome.GitHubConnectionRequired, MarketplaceGitHubConnectionRequiredMessage, null);
+                return (SkillOutcome.GitHubConnectionRequired, GitHubCopilotConnectionRequirement.RequirementMessage, null);
 
             if (index.Entries.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);
