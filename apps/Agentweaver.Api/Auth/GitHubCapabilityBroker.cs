@@ -189,24 +189,32 @@ internal sealed class GitHubCapabilityBroker(
         if (capability is null)
             return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
 
-        var secret = await vault.ReadCurrentAsync(capability.CredentialLocator!, ct).ConfigureAwait(false);
-        if (!secret.Found || !TryGetUsableAccessToken(secret.Value, now, out var token, out var expiresAt) ||
-            expiresAt <= now)
-            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+        try
+        {
+            var secret = await vault.ReadCurrentAsync(capability.CredentialLocator!, ct).ConfigureAwait(false);
+            if (!secret.Found || !TryGetUsableAccessToken(secret.Value, now, out var token, out var expiresAt) ||
+                expiresAt <= now)
+                return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
 
-        if (!await persistence.IsClaimedMarketplaceCopilotCapabilityLiveAsync(capability, ct).ConfigureAwait(false))
-            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+            if (!await persistence.IsClaimedMarketplaceCopilotCapabilityLiveAsync(capability, ct).ConfigureAwait(false))
+                return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
 
-        var maximumExpiresAt = now.Add(MaximumCapabilityLifetime);
-        if (expiresAt > maximumExpiresAt)
-            expiresAt = maximumExpiresAt;
-        if (expiresAt > capability.ExpiresAt)
-            expiresAt = capability.ExpiresAt;
-        if (expiresAt <= now)
-            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+            var maximumExpiresAt = now.Add(MaximumCapabilityLifetime);
+            if (expiresAt > maximumExpiresAt)
+                expiresAt = maximumExpiresAt;
+            if (expiresAt > capability.ExpiresAt)
+                expiresAt = capability.ExpiresAt;
+            if (expiresAt <= now)
+                return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
 
-        await useCredential(token, expiresAt).ConfigureAwait(false);
-        return GitHubCapabilityBrokerOutcome.Issued;
+            await useCredential(token, expiresAt).ConfigureAwait(false);
+            return GitHubCapabilityBrokerOutcome.Issued;
+        }
+        finally
+        {
+            await persistence.DeleteClaimedMarketplaceCopilotCapabilityAsync(
+                capabilityReference, projectId, entraObjectId, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     internal static bool IsOperationAllowed(

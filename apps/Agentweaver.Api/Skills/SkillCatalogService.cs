@@ -611,25 +611,29 @@ public sealed class SkillCatalogService
         cts.CancelAfter(MarketplaceFetchTimeout);
         try
         {
+            if (_marketplaceCapabilityIssuer is not null)
+                await _marketplaceCapabilityIssuer.PruneAsync(cts.Token).ConfigureAwait(false);
+
             // Anonymous-first, full recursive tree (subpath ""), no placeholder scratch files: candidates
             // are derived in-memory from the tree by the indexer, so browse never touches the filesystem.
             var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath: string.Empty, token: null, cts.Token).ConfigureAwait(false);
-            // A non-run classification can only use a new, caller- and project-bound capability
-            // issued from the active Copilot App binding. No caller identity is ever reinterpreted
-            // as a credential, and the capability never crosses the HTTP boundary.
-            var capabilityReference = _marketplaceCapabilityIssuer is null
-                ? null
-                : await _marketplaceCapabilityIssuer.TryIssueAsync(project.Id, caller, cts.Token).ConfigureAwait(false);
-            var index = await _catalogIndexer.GetOrBuildForProjectAsync(
+            var index = await _catalogIndexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
                 owner,
                 repo,
                 branch,
                 blobs,
-                capabilityReference,
+                capabilityReference: null,
                 parseStrategy: parseStrategy,
                 cts.Token,
                 projectId: project.Id,
-                caller: caller).ConfigureAwait(false);
+                caller: caller,
+                issueCapabilityAsync: _marketplaceCapabilityIssuer is null
+                    ? null
+                    : issueCt => _marketplaceCapabilityIssuer.TryIssueAsync(project.Id, caller, issueCt),
+                hasCapabilityAsync: _marketplaceCapabilityIssuer is null
+                    ? null
+                    : checkCt => _marketplaceCapabilityIssuer.HasActiveBindingAsync(project.Id, caller, checkCt))
+                .ConfigureAwait(false);
 
             if (index.RequiresGitHubConnection)
                 return (SkillOutcome.GitHubConnectionRequired, GitHubCopilotConnectionRequirement.RequirementMessage, null);
