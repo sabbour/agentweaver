@@ -56,6 +56,13 @@ test("HELP_TEXT: mentions the key flags", () => {
   assert.match(HELP_TEXT, /--service-management-reference/);
 });
 
+test("run: requires an explicit redirect URI", async () => {
+  await assert.rejects(
+    () => run({ argv: [], exec: {}, log: noopLog() }),
+    /At least one --redirect-uri is required/,
+  );
+});
+
 test("normalizeRedirectUris: trims, validates, and de-dupes case-insensitively", () => {
   assert.deepEqual(normalizeRedirectUris([
     " http://localhost:5000/auth/entra/callback ",
@@ -113,7 +120,7 @@ test("run: creates app, patches roles, creates service principal, and returns co
     id: "33333333-3333-3333-3333-333333333333",
     isFallbackPublicClient: true,
     signInAudience: "AzureADMyOrg",
-    publicClient: { redirectUris: ["http://localhost:5000/auth/entra/callback"] },
+    publicClient: { redirectUris: ["https://agentweaver.example.com/auth/entra/callback"] },
     web: { redirectUris: [] },
   };
   const appWithRoles = { ...app, appRoles: DEFAULT_APP_ROLES };
@@ -146,13 +153,17 @@ test("run: creates app, patches roles, creates service principal, and returns co
     },
   };
 
-  const result = await run({ argv: [], exec, log: noopLog() });
+  const result = await run({
+    argv: ["--redirect-uri", "https://agentweaver.example.com/auth/entra/callback"],
+    exec,
+    log: noopLog(),
+  });
 
   assert.equal(result.ok, true);
   assert.equal(result.appId, app.appId);
   assert.equal(result.tenantId, "72f988bf-86f1-41af-91ab-2d7cd011db47");
   assert.equal(result.servicePrincipalObjectId, sp.id);
-  assert.deepEqual(result.redirectUris, ["http://localhost:5000/auth/entra/callback"]);
+  assert.deepEqual(result.redirectUris, ["https://agentweaver.example.com/auth/entra/callback"]);
   assert.ok(commands.some((entry) => entry.includes("ad") && entry.includes("app") && entry.includes("create")));
   assert.ok(commands.some((entry) => entry.includes("rest") && entry.includes("PATCH")));
   assert.ok(commands.some((entry) => entry.includes("ad") && entry.includes("sp") && entry.includes("create")));
@@ -221,7 +232,7 @@ test("run: summary explains the publicClient-only PKCE fix and prints role-grant
     id: "33333333-3333-3333-3333-333333333333",
     isFallbackPublicClient: true,
     signInAudience: "AzureADMyOrg",
-    publicClient: { redirectUris: ["http://localhost:5000/auth/entra/callback"] },
+    publicClient: { redirectUris: ["https://agentweaver.example.com/auth/entra/callback"] },
     web: { redirectUris: [] },
   };
   const sp = {
@@ -244,7 +255,11 @@ test("run: summary explains the publicClient-only PKCE fix and prints role-grant
     },
   };
 
-  const result = await run({ argv: [], exec, log });
+  const result = await run({
+    argv: ["--redirect-uri", "https://agentweaver.example.com/auth/entra/callback"],
+    exec,
+    log,
+  });
 
   assert.equal(result.ok, true);
   const warning = log.entries.filter(([level]) => level === "warn").map(([, message]) => String(message)).join("\n");

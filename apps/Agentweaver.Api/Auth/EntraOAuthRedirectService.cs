@@ -59,9 +59,9 @@ public sealed class EntraOAuthRedirectService
     private string? ClientId => _configuration["Auth:Entra:ClientId"];
     private string? ClientSecret => _configuration["Auth:Entra:ClientSecret"];
 
-    /// <summary>The redirect URI registered on the Entra app; defaults to a same-origin callback.</summary>
+    /// <summary>The redirect URI registered on the Entra app.</summary>
     private string? RedirectUri =>
-        _configuration["Auth:Entra:RedirectUri"] ?? "http://localhost:5000/auth/entra/callback";
+        _configuration["Auth:Entra:RedirectUri"];
 
     /// <summary>
     /// Scopes requested at /authorize. Defaults to the OIDC scopes plus this app's own resource via

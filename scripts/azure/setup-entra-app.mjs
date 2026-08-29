@@ -27,7 +27,7 @@ export const DEFAULT_APP_NAME = "agentweaver-authn";
 // client_assertion at the token endpoint, and `spa`-registered URIs are restricted to
 // browser/CORS-origin redemption -- neither works for this deployment's architecture,
 // and this tenant's policy blocks client-secret creation outright.
-export const DEFAULT_REDIRECT_URIS = Object.freeze(["http://localhost:5000/auth/entra/callback"]);
+export const DEFAULT_REDIRECT_URIS = Object.freeze([]);
 export const SIGN_IN_AUDIENCE = "AzureADMyOrg";
 export const MANAGED_ROLE_DESCRIPTION_PREFIX = "Agentweaver:";
 
@@ -77,7 +77,7 @@ Usage:
 Flags:
   --app-name <name>                     Display name to create/reuse (default: ${DEFAULT_APP_NAME}).
   --app-id <client-id>                  Target an existing application by client ID instead of display name lookup.
-  --redirect-uri <uri>                  Public-client redirect URI to ensure on the app. Repeatable; defaults to ${DEFAULT_REDIRECT_URIS[0]}.
+  --redirect-uri <uri>                  Public-client redirect URI to ensure on the app. Repeatable; required.
   --service-management-reference <id>   Optional app-create passthrough required by some corporate tenants.
   -h, --help                            Show this help.
 
@@ -433,6 +433,8 @@ export async function run({ argv = [], exec = execDefault, log = logDefault } = 
   const desiredRedirectUris = normalizeRedirectUris(
     flags.REDIRECT_URIS.length > 0 ? flags.REDIRECT_URIS : DEFAULT_REDIRECT_URIS,
   );
+  if (desiredRedirectUris.length === 0)
+    throw new Error("At least one --redirect-uri is required. Use the public deployment callback URI, or explicitly pass a local-development URI.");
 
   log.banner(
     "Agentweaver Entra app bootstrap",

@@ -249,12 +249,18 @@ export function buildRuntimeConfigLiterals(vars) {
   const str = (v) => (v === undefined || v === null ? "" : String(v));
   const host = str(vars.HOST);
   const authMode = str(vars.AUTH_MODE) || "Entra";
+  const isEntra = authMode.toLowerCase() === "entra";
 
-  // Guard: refuse to render a broken Entra config that would cause a 503 on startup.
-  if (authMode === "Entra" && (!str(vars.ENTRA_CLIENT_ID) || !str(vars.ENTRA_TENANT_ID))) {
+  // Guard: refuse to render a broken Entra config that would make browser sign-in unavailable.
+  if (isEntra && (!str(vars.ENTRA_CLIENT_ID) || !str(vars.ENTRA_TENANT_ID))) {
     throw new Error(
       'AUTH_MODE is "Entra" but ENTRA_CLIENT_ID or ENTRA_TENANT_ID is empty. ' +
       'Pass --params-file scripts/azure/params.<username>.json or set these values before deploying.',
+    );
+  }
+  if (isEntra && (!host || /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?$/i.test(host))) {
+    throw new Error(
+      'AUTH_MODE is "Entra" requires a non-loopback public HOST so Entra redirects never target localhost.',
     );
   }
 
@@ -272,6 +278,7 @@ export function buildRuntimeConfigLiterals(vars) {
     ENTRA_CLIENT_ID: str(vars.ENTRA_CLIENT_ID),
     ENTRA_TENANT_ID: str(vars.ENTRA_TENANT_ID),
     ENTRA_REDIRECT_URI: host ? `https://${host}/auth/entra/callback` : "",
+    ENTRA_FRONTEND_URL: host ? `https://${host}` : "",
     TOKEN_STORE_KEYVAULT_URI: vars.KEYVAULT_NAME ? `https://${vars.KEYVAULT_NAME}.vault.azure.net` : "",
     AGENTHOST_KEYVAULT_URI: str(vars.AGENTHOST_KEYVAULT_URI),
     APPINSIGHTS_WORKSPACE_ID: str(vars.APPINSIGHTS_WORKSPACE_ID),

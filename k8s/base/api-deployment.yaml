@@ -172,6 +172,11 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: ENTRA_REDIRECT_URI
+            - name: Auth__Entra__FrontendUrl
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: ENTRA_FRONTEND_URL
             # Backward-compat: allow raw GitHub tokens while clients migrate to the new flow.
             # Flip to "false" once all MCP clients are using Agentweaver-minted tokens.
             - name: Auth__Mcp__AllowGitHubPassthrough

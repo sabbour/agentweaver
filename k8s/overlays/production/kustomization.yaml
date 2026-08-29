@@ -87,6 +87,7 @@ configMapGenerator:
       - "ENTRA_CLIENT_ID="
       - "ENTRA_TENANT_ID="
       - "ENTRA_REDIRECT_URI=https://agentweaver.example.com/auth/entra/callback"
+      - "ENTRA_FRONTEND_URL=https://agentweaver.example.com"
       - "TOKEN_STORE_KEYVAULT_URI=https://changeme.vault.azure.net"
       - "AGENTHOST_KEYVAULT_URI=https://changeme.vault.azure.net/"
       - "APPINSIGHTS_WORKSPACE_ID="

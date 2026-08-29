@@ -227,7 +227,12 @@ public static class AuthEndpoints
             IConfiguration configuration,
             CancellationToken ct) =>
         {
-            var frontendUrl = (configuration["Auth:Entra:FrontendUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            var frontendUrl = configuration["Auth:Entra:FrontendUrl"]?.TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(frontendUrl))
+                return Results.Problem(
+                    "Auth:Entra:FrontendUrl must be configured.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+
             if (string.IsNullOrWhiteSpace(state))
                 return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
 

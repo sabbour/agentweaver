@@ -25,6 +25,30 @@ public sealed class EntraSignInEndpointsTests
         HandleCookies = false,
     };
 
+    [Fact]
+    public async Task Authorize_WithoutConfiguredRedirectUri_ReturnsServiceUnavailable()
+    {
+        await using var factory = new EntraWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+
+        var response = await client.GetAsync("/auth/entra/authorize");
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("Auth:Entra:RedirectUri must be configured.");
+    }
+
+    [Fact]
+    public async Task Callback_WithoutConfiguredFrontendUrl_ReturnsServiceUnavailable()
+    {
+        await using var factory = new EntraWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+
+        var response = await client.GetAsync("/auth/entra/callback?error=access_denied");
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("Auth:Entra:FrontendUrl must be configured.");
+    }
+
     // -------------------------------------------------------------------------
     // /auth/entra/authorize (Entra mode) → 302 to Microsoft, arming the browser-bound
     // Secure/HttpOnly/SameSite=Lax state cookie whose value equals the `state` (double-submit),
