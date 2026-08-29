@@ -613,7 +613,9 @@ public sealed class SkillCatalogService
                 repo,
                 branch,
                 blobs,
-                submittingUser: ResolveGitHubPrincipal(caller, project),
+                // Auto-browse has no associated run or explicitly issued Copilot capability. It must
+                // remain on the deterministic SKILL.md/empty path rather than use caller identity.
+                capabilityRunId: null,
                 parseStrategy: parseStrategy,
                 cts.Token,
                 projectId: project.Id).ConfigureAwait(false);

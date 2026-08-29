@@ -20,8 +20,10 @@ public sealed class RunBoundCopilotClassifierTests
 
         (await model.CompleteAsync("prompt", context, CancellationToken.None)).Should().Be("""{"selected":"default"}""");
         model.CapabilityRunId.Should().Be("run-workflow");
+        model.ModelTurnCount.Should().Be(1);
 
         (await model.CompleteAsync("prompt", context with { RunId = null }, CancellationToken.None)).Should().BeNull();
+        model.ModelTurnCount.Should().Be(1, "an absent capability must never dispatch a model turn");
     }
 
     [Fact]
@@ -32,8 +34,10 @@ public sealed class RunBoundCopilotClassifierTests
 
         (await model.ClassifyAsync(context, CancellationToken.None)).Should().BeTrue();
         model.CapabilityRunId.Should().Be("run-assembly");
+        model.ModelTurnCount.Should().Be(1);
 
         (await model.ClassifyAsync(context with { RunId = "" }, CancellationToken.None)).Should().BeNull();
+        model.ModelTurnCount.Should().Be(1, "an absent capability must never dispatch a model turn");
     }
 
     [Fact]
@@ -44,8 +48,10 @@ public sealed class RunBoundCopilotClassifierTests
 
         (await model.ClassifyAsync(context, CancellationToken.None)).Should().Be(OutcomeSpecReplyKind.Confirm);
         model.CapabilityRunId.Should().Be("run-outcome");
+        model.ModelTurnCount.Should().Be(1);
 
         (await model.ClassifyAsync(context with { RunId = "" }, CancellationToken.None)).Should().BeNull();
+        model.ModelTurnCount.Should().Be(1, "an absent capability must never dispatch a model turn");
     }
 
     [Fact]
@@ -56,8 +62,10 @@ public sealed class RunBoundCopilotClassifierTests
 
         (await model.ClassifyApplicabilityAsync(context, CancellationToken.None)).Should().BeTrue();
         model.CapabilityRunId.Should().Be("run-preview");
+        model.ModelTurnCount.Should().Be(1);
 
         (await model.ClassifyApplicabilityAsync(context with { RunId = "" }, CancellationToken.None)).Should().BeNull();
+        model.ModelTurnCount.Should().Be(1, "an absent capability must never dispatch a model turn");
     }
 
     [Fact]
@@ -70,8 +78,10 @@ public sealed class RunBoundCopilotClassifierTests
 
         (await model.ClassifyAsync(context, CancellationToken.None))!.IsIndependentDeliverable.Should().BeTrue();
         model.CapabilityRunId.Should().Be("run-story");
+        model.ModelTurnCount.Should().Be(1);
 
         (await model.ClassifyAsync(context with { RunId = "" }, CancellationToken.None)).Should().BeNull();
+        model.ModelTurnCount.Should().Be(1, "an absent capability must never dispatch a model turn");
     }
 
     [Fact]
@@ -82,8 +92,10 @@ public sealed class RunBoundCopilotClassifierTests
 
         (await model.ProposeCommandAsync(context, CancellationToken.None))!.Previewable.Should().BeFalse();
         model.CapabilityRunId.Should().Be("run-command");
+        model.ModelTurnCount.Should().Be(1);
 
         (await model.ProposeCommandAsync(context with { RunId = "" }, CancellationToken.None)).Should().BeNull();
+        model.ModelTurnCount.Should().Be(1, "an absent capability must never dispatch a model turn");
     }
 
     [Fact]
@@ -95,17 +107,21 @@ public sealed class RunBoundCopilotClassifierTests
         (await model.ClassifyAsync("owner", "repo", "main", tree, "run-marketplace", CancellationToken.None))!
             .Should().ContainSingle().Which.Location.Should().Be("skills/example");
         model.CapabilityRunId.Should().Be("run-marketplace");
+        model.ModelTurnCount.Should().Be(1);
 
         (await model.ClassifyAsync("owner", "repo", "main", tree, null, CancellationToken.None)).Should().BeNull();
+        model.ModelTurnCount.Should().Be(1, "an absent capability must never dispatch a model turn");
     }
 
     private sealed class WorkflowModel : CopilotWorkflowSelectionModel
     {
         public string? CapabilityRunId { get; private set; }
+        public int ModelTurnCount { get; private set; }
         public WorkflowModel() : base(null!, NullLogger<CopilotWorkflowSelectionModel>.Instance, Configuration) { }
         protected override Task<string?> RunModelTurnAsync(string runId, string prompt, CancellationToken ct)
         {
             CapabilityRunId = runId;
+            ModelTurnCount++;
             return Task.FromResult<string?>("""{"selected":"default"}""");
         }
     }
@@ -113,10 +129,12 @@ public sealed class RunBoundCopilotClassifierTests
     private sealed class AssemblyModel : CopilotAssemblyGateCodeClassifier
     {
         public string? CapabilityRunId { get; private set; }
+        public int ModelTurnCount { get; private set; }
         public AssemblyModel() : base(null!, NullLogger<CopilotAssemblyGateCodeClassifier>.Instance, Configuration) { }
         protected override Task<string?> RunModelTurnAsync(string runId, string prompt, CancellationToken ct)
         {
             CapabilityRunId = runId;
+            ModelTurnCount++;
             return Task.FromResult<string?>("""{"produces_code":true}""");
         }
     }
@@ -124,10 +142,12 @@ public sealed class RunBoundCopilotClassifierTests
     private sealed class OutcomeModel : CopilotOutcomeSpecReplyClassifier
     {
         public string? CapabilityRunId { get; private set; }
+        public int ModelTurnCount { get; private set; }
         public OutcomeModel() : base(null!, NullLogger<CopilotOutcomeSpecReplyClassifier>.Instance, Configuration) { }
         protected override Task<string?> RunModelTurnAsync(string runId, string prompt, CancellationToken ct)
         {
             CapabilityRunId = runId;
+            ModelTurnCount++;
             return Task.FromResult<string?>("""{"decision":"confirm"}""");
         }
     }
@@ -135,10 +155,12 @@ public sealed class RunBoundCopilotClassifierTests
     private sealed class PreviewModel : CopilotPreviewClassifier
     {
         public string? CapabilityRunId { get; private set; }
+        public int ModelTurnCount { get; private set; }
         public PreviewModel() : base(null!, NullLogger<CopilotPreviewClassifier>.Instance, Configuration) { }
         protected override Task<string?> RunModelTurnAsync(string runId, string charter, string prompt, CancellationToken ct)
         {
             CapabilityRunId = runId;
+            ModelTurnCount++;
             return Task.FromResult<string?>("""{"preview_required":true}""");
         }
     }
@@ -146,10 +168,12 @@ public sealed class RunBoundCopilotClassifierTests
     private sealed class StoryModel : CopilotStoryIndependenceClassifier
     {
         public string? CapabilityRunId { get; private set; }
+        public int ModelTurnCount { get; private set; }
         public StoryModel() : base(null!, NullLogger<CopilotStoryIndependenceClassifier>.Instance, Configuration) { }
         protected override Task<string?> RunModelTurnAsync(string runId, string prompt, CancellationToken ct)
         {
             CapabilityRunId = runId;
+            ModelTurnCount++;
             return Task.FromResult<string?>("""{"is_independent_deliverable":true,"independence_rationale":"independent"}""");
         }
     }
@@ -157,10 +181,12 @@ public sealed class RunBoundCopilotClassifierTests
     private sealed class PreviewCommandModel : CopilotPreviewCommandModel
     {
         public string? CapabilityRunId { get; private set; }
+        public int ModelTurnCount { get; private set; }
         public PreviewCommandModel() : base(null!, NullLogger<CopilotPreviewCommandModel>.Instance, Configuration) { }
         protected override Task<string?> RunModelTurnAsync(string runId, string prompt, CancellationToken ct)
         {
             CapabilityRunId = runId;
+            ModelTurnCount++;
             return Task.FromResult<string?>("""{"previewable":false}""");
         }
     }
@@ -168,10 +194,12 @@ public sealed class RunBoundCopilotClassifierTests
     private sealed class MarketplaceModel : CopilotMarketplaceCatalogClassifier
     {
         public string? CapabilityRunId { get; private set; }
+        public int ModelTurnCount { get; private set; }
         public MarketplaceModel() : base(null!, NullLogger<CopilotMarketplaceCatalogClassifier>.Instance, Configuration) { }
         protected override Task<string?> RunModelTurnAsync(string runId, string prompt, CancellationToken ct)
         {
             CapabilityRunId = runId;
+            ModelTurnCount++;
             return Task.FromResult<string?>("""{"skills":[{"location":"skills/example","name":"example","description":"Example"}]}""");
         }
     }
