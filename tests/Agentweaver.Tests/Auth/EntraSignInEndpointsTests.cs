@@ -55,9 +55,22 @@ public sealed class EntraSignInEndpointsTests
     }
 
     [Fact]
+    public async Task Authorize_WithoutConfiguredFrontendUrl_ReturnsServiceUnavailableWithoutPersistingState()
+    {
+        await using var factory = new MissingFrontendUrlEntraWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+
+        var response = await client.GetAsync("/auth/entra/authorize");
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("Auth:Entra:FrontendUrl must be configured.");
+        (await factory.CountEntraOAuthStatesAsync()).Should().Be(0);
+    }
+
+    [Fact]
     public async Task Callback_WithoutConfiguredFrontendUrl_ReturnsServiceUnavailable()
     {
-        await using var factory = new EntraWebApplicationFactory();
+        await using var factory = new MissingFrontendUrlEntraWebApplicationFactory();
         var client = factory.CreateClient(NoRedirectNoCookies);
 
         var response = await client.GetAsync("/auth/entra/callback?error=access_denied");
@@ -241,6 +254,20 @@ public sealed class EntraSignInEndpointsTests
                 {
                     ["Auth:Entra:TenantId"] = string.Empty,
                     ["Auth:Entra:Authority"] = string.Empty,
+                }));
+        }
+    }
+
+    private sealed class MissingFrontendUrlEntraWebApplicationFactory : EntraWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Auth:Entra:RedirectUri"] = EntraSignInWebApplicationFactory.RedirectUriValue,
+                    ["Auth:Entra:FrontendUrl"] = string.Empty,
                 }));
         }
     }

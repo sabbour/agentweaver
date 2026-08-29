@@ -19,6 +19,7 @@ public sealed class EntraOAuthRedirectServicePostgresTests(PostgresFixture postg
         {
             CreateConfiguration(missingAuthority: true),
             CreateConfiguration(missingRedirectUri: true),
+            CreateConfiguration(missingFrontendUrl: true),
         })
         {
             using var services = CreateServices();
@@ -64,7 +65,8 @@ public sealed class EntraOAuthRedirectServicePostgresTests(PostgresFixture postg
 
     private static IConfiguration CreateConfiguration(
         bool missingAuthority = false,
-        bool missingRedirectUri = false)
+        bool missingRedirectUri = false,
+        bool missingFrontendUrl = false)
     {
         var settings = new Dictionary<string, string?>
         {
@@ -72,6 +74,7 @@ public sealed class EntraOAuthRedirectServicePostgresTests(PostgresFixture postg
             ["Auth:Entra:TenantId"] = "test-tenant",
             ["Auth:Entra:Authority"] = "https://login.microsoftonline.com/test-tenant/v2.0",
             ["Auth:Entra:RedirectUri"] = "https://agentweaver.example.test/auth/entra/callback",
+            ["Auth:Entra:FrontendUrl"] = "https://agentweaver.example.test",
         };
         if (missingAuthority)
         {
@@ -80,6 +83,8 @@ public sealed class EntraOAuthRedirectServicePostgresTests(PostgresFixture postg
         }
         if (missingRedirectUri)
             settings["Auth:Entra:RedirectUri"] = string.Empty;
+        if (missingFrontendUrl)
+            settings["Auth:Entra:FrontendUrl"] = string.Empty;
 
         return new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
     }

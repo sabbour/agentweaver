@@ -224,14 +224,19 @@ public static class AuthEndpoints
             string? error,
             EntraOAuthRedirectService entraOauthService,
             WebSessionExchangeService webSessionExchange,
-            IConfiguration configuration,
             CancellationToken ct) =>
         {
-            var frontendUrl = configuration["Auth:Entra:FrontendUrl"]?.TrimEnd('/');
-            if (string.IsNullOrWhiteSpace(frontendUrl))
-                return Results.Problem(
-                    "Auth:Entra:FrontendUrl must be configured.",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            EntraAuthorizationFlowConfiguration authorizationConfiguration;
+            try
+            {
+                authorizationConfiguration = entraOauthService.GetAuthorizationFlowConfiguration();
+            }
+            catch (EntraNotConfiguredException ex)
+            {
+                return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var frontendUrl = authorizationConfiguration.FrontendUrl;
 
             if (string.IsNullOrWhiteSpace(state))
                 return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
