@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.1
+
+### Patch Changes
+
+- 1531361: PostgreSQL migration containers now use their injected runtime database configuration instead of an image-embedded local database address.
+
 ## 0.21.0
 
 ### Minor Changes
