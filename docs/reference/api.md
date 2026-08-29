@@ -846,7 +846,7 @@ Returns a tree of all files in the run's worktree (folders + files). Files inclu
 
 ### GET /api/runs/{id}/files
 
-Flat list of changed files. Query param `filter`: `all` (committed + uncommitted), `committed`, `uncommitted`, `last-commit`. Returns `409` for non-terminal runs with no worktree.
+Flat list of changed files. Query param `filter`: `all` (committed + uncommitted), `committed`, `uncommitted`, `last-commit`. Returns an empty array while asynchronous worktree provisioning is incomplete. Coordinator runs always return an empty array here because they have no per-run worktree; use `GET /api/runs/{id}/assembly/files` for their collective output.
 
 ### GET /api/runs/{id}/files/{**path}
 
@@ -1610,7 +1610,7 @@ Confirming the outcome spec advances the coordinator run through Phase 2: **conf
 
 ### GET /api/runs/{coordinatorRunId}/work-plan
 
-Returns the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Owner-scoped. Returns `null` (or `404`) before the coordinator has drafted a plan.
+Returns the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Owner-scoped. Before asynchronous decomposition persists the plan, returns `404 Not Found` with `error: "work_plan_not_found"`; for an existing coordinator run, clients should treat this as a not-ready state and retry on their normal bounded refresh cadence.
 
 Response `200 OK`:
 
@@ -1783,7 +1783,7 @@ Response `200 OK`:
 
 ### GET /api/runs/{id}/assembly/files
 
-Lists files in the coordinator assembly workspace. Owner-scoped.
+Lists files in the coordinator assembly workspace. Owner-scoped. Returns an empty array before assembly creates the integration branch; this is a normal planning/dispatch state.
 
 ### GET /api/runs/{id}/assembly/files/{**path}
 

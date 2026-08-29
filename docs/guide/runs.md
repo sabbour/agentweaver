@@ -72,6 +72,13 @@ Once you confirm the spec, the coordinator:
 2. Assigns each subtask to the best-fit agent and selects a model — an explicit run `modelId` (or the project's GitHub Copilot default) pins every subtask; otherwise each subtask uses its role's default model
 3. Dispatches independent subtasks in parallel; dependent ones run in series
 
+There is a short transition while the WorkPlan and integration branch are being created. During
+that transition, the coordinator's ordinary changed-files endpoint returns an empty list, and
+the collective assembly-files endpoint also returns an empty list. `GET /api/runs/{id}/work-plan`
+returns the typed `404 work_plan_not_found` response until the plan is persisted; this means
+"not ready yet" for an existing coordinator run, not that the run itself is missing. Collective
+changed files appear through `GET /api/runs/{id}/assembly/files` once assembly has started.
+
 You see the **topology view** — a live graph of the entire orchestration.
 
 ![Run topology](/guide/images/run-topology.png)

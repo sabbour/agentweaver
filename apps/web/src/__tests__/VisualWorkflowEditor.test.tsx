@@ -1,7 +1,8 @@
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
 import { apiClient } from '../api/apiClient';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { parseWorkflowYaml } from '../utils/workflowYaml';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 /**
@@ -31,10 +32,21 @@ vi.mock('../api/apiClient', () => ({
 // implementation, so tests can assert *when* the editor re-fits the viewport
 // without losing real layout/rendering behavior.
 const fitViewSpy = vi.hoisted(() => vi.fn());
+const selectionChange = vi.hoisted(() => ({
+  current: undefined as undefined | ((params: unknown) => void),
+}));
+const edgesDelete = vi.hoisted(() => ({
+  current: undefined as undefined | ((edges: unknown[]) => void),
+}));
 vi.mock('@xyflow/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@xyflow/react')>();
   return {
     ...actual,
+    ReactFlow: (props: React.ComponentProps<typeof actual.ReactFlow>) => {
+      selectionChange.current = props.onSelectionChange as ((params: unknown) => void) | undefined;
+      edgesDelete.current = props.onEdgesDelete as ((edges: unknown[]) => void) | undefined;
+      return <actual.ReactFlow {...props} />;
+    },
     useReactFlow: () => {
       const real = actual.useReactFlow();
       return {
@@ -51,6 +63,8 @@ vi.mock('@xyflow/react', async (importOriginal) => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  selectionChange.current = undefined;
+  edgesDelete.current = undefined;
 });
 
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -87,6 +101,165 @@ nodes:
 edges:
   - from: implement
     to: rai-check
+  - from: rai-check
+    to: done
+    when: review
+`;
+
+const YAML_WITH_SELECTED_EDGE_REMOVED = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: implement
+    to: rai-check
+`;
+
+const YAML_WITH_REORDERED_SELECTED_EDGE = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: rai-check
+    to: done
+    when: review
+  - from: implement
+    to: rai-check
+`;
+
+const YAML_WITH_EDGE_INSERTED_BEFORE_SELECTED = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: implement
+    to: done
+    when: shortcut
+  - from: implement
+    to: rai-check
+  - from: rai-check
+    to: done
+    when: review
+`;
+
+const YAML_WITH_DUPLICATE_SELECTED_EDGES = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: implement
+    to: rai-check
+  - from: rai-check
+    to: done
+    when: review
+  - from: rai-check
+    to: done
+    when: review
+`;
+
+const YAML_WITH_EDGE_INSERTED_BEFORE_DUPLICATES = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: implement
+    to: done
+    when: shortcut
+  - from: implement
+    to: rai-check
+  - from: rai-check
+    to: done
+    when: review
   - from: rai-check
     to: done
     when: review
@@ -256,6 +429,181 @@ describe('VisualWorkflowEditor — viewport re-fit on add (#540)', () => {
       expect((labelInput as HTMLInputElement).value).toBe('Implement (renamed)');
     });
     expect(fitViewSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('VisualWorkflowEditor — selection persistence (#1007)', () => {
+  async function selectRaiCheck() {
+    fireEvent.click(await screen.findByText('RAI Check'));
+    return screen.findByRole('textbox', { name: 'Gate branches' });
+  }
+
+  it('keeps a selected node inspector open after editing workflow metadata', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectRaiCheck();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Renamed workflow' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Gate branches' })).toBeDefined();
+    });
+    expect(screen.queryByText('Select a node or edge')).toBeNull();
+  });
+
+  it('keeps a selected node inspector open after text and type edits', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectRaiCheck();
+
+    const label = screen.getByRole('textbox', { name: 'Label' });
+    fireEvent.change(label, { target: { value: 'Review gate' } });
+    fireEvent.blur(label);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Gate branches' })).toBeDefined();
+    });
+
+    await user.click(screen.getByRole('combobox', { name: 'Type' }));
+    await user.click(await screen.findByRole('option', { name: 'Prompt (agent turn)' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Prompt' })).toBeDefined();
+    });
+    expect(screen.queryByText('Select a node or edge')).toBeNull();
+  });
+
+  it('keeps a selected edge inspector open after editing its text', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await waitFor(() => expect(selectionChange.current).toBeDefined());
+    act(() => {
+      selectionChange.current?.({ nodes: [], edges: [{ data: { index: 1 } }] });
+    });
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'When' })).toBeDefined();
+    });
+    expect(screen.queryByText('Select a node or edge')).toBeNull();
+  });
+
+  it('clears the inspector when the selected node is deleted', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectRaiCheck();
+
+    await user.click(screen.getByRole('button', { name: 'Delete node' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Select a node or edge')).toBeDefined();
+    });
+  });
+});
+
+describe('VisualWorkflowEditor — semantic edge selection (#1015)', () => {
+  async function selectEdge(index: number) {
+    await waitFor(() => expect(selectionChange.current).toBeDefined());
+    act(() => {
+      selectionChange.current?.({ nodes: [], edges: [{ data: { index } }] });
+    });
+    return screen.findByRole('textbox', { name: 'When' });
+  }
+
+  async function replaceYaml(user: ReturnType<typeof userEvent.setup>, yaml: string) {
+    await user.click(screen.getByRole('button', { name: 'View YAML' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow YAML' }), { target: { value: yaml } });
+    await user.click(screen.getByRole('button', { name: 'Inspector' }));
+  }
+
+  it('clears edge selection when the selected YAML edge is deleted', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectEdge(1);
+
+    await replaceYaml(user, YAML_WITH_SELECTED_EDGE_REMOVED);
+
+    await waitFor(() => {
+      expect(screen.getByText('Select a node or edge')).toBeDefined();
+    });
+  });
+
+  it('preserves the selected edge through YAML reorder and insertion before it', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectEdge(1);
+
+    await replaceYaml(user, YAML_WITH_REORDERED_SELECTED_EDGE);
+    expect(await screen.findByText('rai-check → done')).toBeDefined();
+
+    await replaceYaml(user, YAML_WITH_EDGE_INSERTED_BEFORE_SELECTED);
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await user.click(screen.getByRole('button', { name: 'View YAML' }));
+    const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
+    expect(parsed.model?.edges).toEqual([
+      { from: 'implement', to: 'done', when: 'shortcut' },
+      { from: 'implement', to: 'rai-check', when: undefined },
+      { from: 'rai-check', to: 'done', when: 'approved' },
+    ]);
+  });
+
+  it('uses duplicate-edge occurrence to edit the same duplicate after YAML insertion', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_DUPLICATE_SELECTED_EDGES);
+    await selectEdge(2);
+
+    await replaceYaml(user, YAML_WITH_EDGE_INSERTED_BEFORE_DUPLICATES);
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await user.click(screen.getByRole('button', { name: 'View YAML' }));
+    const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
+    expect(parsed.model?.edges.filter((edge) => edge.from === 'rai-check' && edge.to === 'done'))
+      .toEqual([
+        { from: 'rai-check', to: 'done', when: 'review' },
+        { from: 'rai-check', to: 'done', when: 'approved' },
+      ]);
+  });
+
+  it('clears selection when canvas deletion removes the first selected duplicate', async () => {
+    renderEditor(YAML_WITH_DUPLICATE_SELECTED_EDGES);
+    await selectEdge(1);
+
+    await waitFor(() => expect(edgesDelete.current).toBeDefined());
+    act(() => {
+      edgesDelete.current?.([{ data: { index: 1 } }]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Select a node or edge')).toBeDefined();
+    });
+  });
+
+  it('preserves selection for a later duplicate when canvas deletion removes an earlier one', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_DUPLICATE_SELECTED_EDGES);
+    await selectEdge(2);
+
+    await waitFor(() => expect(edgesDelete.current).toBeDefined());
+    act(() => {
+      edgesDelete.current?.([{ data: { index: 1 } }]);
+    });
+
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await user.click(screen.getByRole('button', { name: 'View YAML' }));
+    const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
+    expect(parsed.model?.edges.filter((edge) => edge.from === 'rai-check' && edge.to === 'done'))
+      .toEqual([{ from: 'rai-check', to: 'done', when: 'approved' }]);
   });
 });
 

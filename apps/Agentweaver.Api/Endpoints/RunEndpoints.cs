@@ -2245,6 +2245,12 @@ app.MapGet("/api/runs/{id}/files", async (
     if (run.Status is RunStatus.Pending or RunStatus.Failed)
         return Results.Json(Array.Empty<WorkspaceFileEntry>());
 
+    // Coordinator runs never own a worktree. Their collective output is available through
+    // /assembly/files once assembly begins, so the ordinary per-run artifact collection is
+    // legitimately empty while outcome planning and dispatch are in progress.
+    if (run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+        return Results.Json(Array.Empty<WorkspaceFileEntry>());
+
     bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed or RunStatus.AssembleReady;
 
     if (isTerminal)
@@ -2253,26 +2259,63 @@ app.MapGet("/api/runs/{id}/files", async (
         return Results.Json(entries);
     }
 
-    if (string.IsNullOrEmpty(run.WorktreePath) || string.IsNullOrEmpty(run.WorktreeBranch))
-        return Results.Conflict(new { error = "Worktree not available." });
+    var hasWorktreePath = !string.IsNullOrEmpty(run.WorktreePath);
+    var hasWorktreeBranch = !string.IsNullOrEmpty(run.WorktreeBranch);
 
-    if (!Directory.Exists(run.WorktreePath))
-        return Results.Conflict(new { error = "Worktree not available." });
+    // Worktree provisioning is asynchronous. An active child can be visible before its sandbox
+    // has published either worktree field, which is a valid empty-artifact state.
+    if (!hasWorktreePath && !hasWorktreeBranch)
+        return Results.Json(Array.Empty<WorkspaceFileEntry>());
+
+    if (!hasWorktreePath || !hasWorktreeBranch)
+    {
+        logger.LogError("Run {RunId} has incomplete worktree metadata while retrieving file entries", runId);
+        return Results.Problem("Run worktree metadata is incomplete.", statusCode: StatusCodes.Status500InternalServerError);
+    }
+
+    if (!Directory.Exists(run.WorktreePath!))
+    {
+        logger.LogError(
+            "Persisted worktree directory is unavailable while retrieving file entries for run {RunId}",
+            runId);
+
+        // The committed branch remains durable after ephemeral worktree storage disappears.
+        // Uncommitted and last-commit views, however, require the physical worktree.
+        if (normalizedFilter is "uncommitted" or "last-commit")
+            return Results.Conflict(new { error = "Worktree is unavailable." });
+
+        try
+        {
+            var committedEntries = worktreeManager.GetCommittedFileEntries(
+                run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch!);
+            var committedCounts = worktreeManager.GetFileDiffLineCounts(
+                run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch!);
+            return Results.Json(ApplyLineCounts(
+                committedEntries,
+                committedCounts,
+                new Dictionary<string, (int Added, int Removed)>()));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to recover committed file entries for run {RunId}", runId);
+            return Results.Problem("Failed to compute file entries.", statusCode: 500);
+        }
+    }
 
     try
     {
         IReadOnlyList<WorkspaceFileEntry> result = normalizedFilter switch
         {
-            "committed"   => worktreeManager.GetCommittedFileEntries(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch),
+            "committed"   => worktreeManager.GetCommittedFileEntries(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch!),
             "uncommitted" => worktreeManager.GetUncommittedFileEntries(run.WorktreePath),
             "last-commit" => worktreeManager.GetLastCommitFileEntries(run.WorktreePath),
             _             => MergeFileEntries(
-                                 worktreeManager.GetCommittedFileEntries(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch),
+                                 worktreeManager.GetCommittedFileEntries(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch!),
                                  worktreeManager.GetUncommittedFileEntries(run.WorktreePath)),
         };
 
         // Populate per-file line counts with a single Patch comparison per scope.
-        var committedCounts   = worktreeManager.GetFileDiffLineCounts(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch);
+        var committedCounts   = worktreeManager.GetFileDiffLineCounts(run.RepositoryPath, run.OriginatingBranch, run.WorktreeBranch!);
         var uncommittedCounts = worktreeManager.GetUncommittedFileDiffLineCounts(run.WorktreePath);
         result = ApplyLineCounts(result, committedCounts, uncommittedCounts);
 
