@@ -213,7 +213,7 @@ internal sealed class GitHubCapabilityBroker(
         finally
         {
             await persistence.DeleteClaimedMarketplaceCopilotCapabilityAsync(
-                capabilityReference, projectId, entraObjectId, CancellationToken.None).ConfigureAwait(false);
+                capability, CancellationToken.None).ConfigureAwait(false);
         }
     }
 

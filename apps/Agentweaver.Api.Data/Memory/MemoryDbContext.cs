@@ -742,6 +742,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.IssuedAt).HasColumnName("issued_at");
             e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
             e.Property(x => x.ConsumedAt).HasColumnName("consumed_at");
+            e.Property(x => x.ClaimLeaseExpiresAt).HasColumnName("claim_lease_expires_at");
             e.HasIndex(x => new { x.ProjectId, x.EntraObjectId, x.ExpiresAt })
                 .HasDatabaseName("IX_marketplace_copilot_capabilities_expiry");
             e.HasIndex(x => x.ExpiresAt)

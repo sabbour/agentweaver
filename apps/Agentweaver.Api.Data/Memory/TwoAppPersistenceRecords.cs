@@ -222,6 +222,7 @@ public sealed class MarketplaceCopilotCapabilityRecord
     public DateTimeOffset IssuedAt { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }
     public DateTimeOffset? ConsumedAt { get; set; }
+    public DateTimeOffset? ClaimLeaseExpiresAt { get; set; }
 }
 
 public sealed class GitHubAuditRecord
