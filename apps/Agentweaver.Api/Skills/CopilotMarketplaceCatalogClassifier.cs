@@ -138,6 +138,12 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
         {
             throw;
         }
+        catch (GitHubCopilotUnauthorizedException)
+        {
+            // The caller must convert an unavailable explicit capability into its user-facing
+            // connect-GitHub requirement; swallowing it here would falsely look like no skills.
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
