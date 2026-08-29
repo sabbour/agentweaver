@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using LibGit2Sharp;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
@@ -55,13 +56,14 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
         string? diff = null,
         string? worktreePath = null,
         string? worktreeBranch = null,
-        string? agentName = null)
+        string? agentName = null,
+        string? repositoryPath = null)
     {
         var store = _factory.Services.GetRequiredService<SqliteRunStore>();
         var run = new Run
         {
             Id                = RunId.New(),
-            RepositoryPath    = "dummy-repo",
+            RepositoryPath    = repositoryPath ?? "dummy-repo",
             OriginatingBranch = "main",
             ModelSource       = ModelSource.GitHubCopilot,
             Task              = "artifact files test",
@@ -135,7 +137,7 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
     }
 
     [Fact]
-    public async Task InProgressRun_BeforeWorktreeProvisioning_Returns200WithEmptyArray()
+    public async Task InProgressRun_WithoutWorktreeMetadata_Returns200WithEmptyArray()
     {
         var runId = await InsertOwnerRunAsync(RunStatus.InProgress);
 
@@ -146,6 +148,85 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
         var files = await response.Content.ReadFromJsonAsync<JsonElement>();
         files.ValueKind.Should().Be(JsonValueKind.Array);
         files.GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task InProgressRun_WithIncompleteWorktreeMetadata_ReturnsServerError()
+    {
+        const string persistedPath = @"C:\worktrees\incomplete-run";
+        var runId = await InsertOwnerRunAsync(
+            RunStatus.InProgress,
+            worktreePath: persistedPath);
+
+        var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=all");
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError,
+            "a partially persisted worktree is corrupt metadata, not an unprovisioned run");
+        (await response.Content.ReadAsStringAsync()).Should().NotContain(persistedPath);
+    }
+
+    [Fact]
+    public async Task InProgressRun_WithMissingWorktree_ReturnsCommittedBranchFiles()
+    {
+        const string worktreeBranch = "agentweaver/artifact-files-fallback";
+        var repositoryPath = CreateRepositoryWithCommittedArtifact(worktreeBranch);
+
+        try
+        {
+            var missingWorktreePath = Path.Combine(AppContext.BaseDirectory, $"aw-missing-worktree-{Guid.NewGuid():N}");
+            var runId = await InsertOwnerRunAsync(
+                RunStatus.InProgress,
+                worktreePath: missingWorktreePath,
+                worktreeBranch: worktreeBranch,
+                repositoryPath: repositoryPath);
+
+            var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=all");
+
+            response.StatusCode.Should().Be(HttpStatusCode.OK,
+                "committed branch artifacts remain available after ephemeral worktree storage disappears");
+            var body = await response.Content.ReadAsStringAsync();
+            body.Should().NotContain(repositoryPath, "repository paths must not be exposed in API errors or results");
+            using var files = JsonDocument.Parse(body);
+            files.RootElement.GetArrayLength().Should().Be(1);
+            files.RootElement[0].GetProperty("path").GetString().Should().Be("artifact.txt");
+            files.RootElement[0].GetProperty("scope").GetString().Should().Be("committed");
+
+            var uncommittedResponse = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=uncommitted");
+            uncommittedResponse.StatusCode.Should().Be(HttpStatusCode.Conflict,
+                "uncommitted artifacts cannot be derived after the physical worktree is gone");
+            (await uncommittedResponse.Content.ReadAsStringAsync()).Should().NotContain(repositoryPath);
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryPath);
+        }
+    }
+
+    [Fact]
+    public async Task InProgressRun_WithValidWorktree_ReturnsCommittedBranchFiles()
+    {
+        const string worktreeBranch = "agentweaver/artifact-files-valid";
+        var repositoryPath = CreateRepositoryWithCommittedArtifact(worktreeBranch);
+
+        try
+        {
+            var runId = await InsertOwnerRunAsync(
+                RunStatus.InProgress,
+                worktreePath: repositoryPath,
+                worktreeBranch: worktreeBranch,
+                repositoryPath: repositoryPath);
+
+            var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=all");
+
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            using var files = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            files.RootElement.GetArrayLength().Should().Be(1);
+            files.RootElement[0].GetProperty("path").GetString().Should().Be("artifact.txt");
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryPath);
+        }
     }
 
     [Fact]
@@ -336,4 +417,34 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
         value.EnumerateRunes().Any(r =>
             (r.Value >= 0x1F300 && r.Value <= 0x1FAFF) ||
             (r.Value >= 0x2600  && r.Value <= 0x27BF));
+
+    private static string CreateRepositoryWithCommittedArtifact(string worktreeBranch)
+    {
+        var repositoryPath = Path.Combine(AppContext.BaseDirectory, $"aw-artifact-files-{Guid.NewGuid():N}");
+        Repository.Init(repositoryPath);
+
+        using var repository = new Repository(repositoryPath);
+        File.WriteAllText(Path.Combine(repositoryPath, "readme.txt"), "initial content\n");
+        Commands.Stage(repository, "*");
+        var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+        var initialCommit = repository.Commit("Initial commit", signature, signature);
+
+        if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+            repository.Branches.Rename(repository.Head, "main");
+
+        var artifactBranch = repository.CreateBranch(worktreeBranch, initialCommit);
+        Commands.Checkout(repository, artifactBranch);
+        File.WriteAllText(Path.Combine(repositoryPath, "artifact.txt"), "committed artifact\n");
+        Commands.Stage(repository, "artifact.txt");
+        repository.Commit("Add artifact", signature, signature);
+
+        return repositoryPath;
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try { Directory.Delete(path, recursive: true); }
+        catch (UnauthorizedAccessException) { }
+        catch (IOException) { }
+    }
 }
