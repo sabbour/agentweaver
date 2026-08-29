@@ -13,11 +13,12 @@ The warm AgentHost pool starts with no run identity or GitHub credential. The ex
 ## Classifier capability requirement
 
 Copilot-backed classifiers use the same explicit run-bound Copilot capability. A connected GitHub
-identity or installation scope is not classifier authorization. Classifiers with no associated,
-explicitly issued capability do not create an `unbound` run or consult ambient credentials: they
-return unavailable and their callers use the documented deterministic fallback. For example,
-marketplace auto-browse remains on SKILL.md discovery (or an empty catalog) unless a trusted caller
-supplies an explicit capability.
+identity or installation scope is not classifier authorization. A non-run classifier that needs model
+classification but lacks an explicitly issued capability does not create an `unbound` run, consult
+ambient credentials, call a model, choose a default, or silently degrade. It returns a clear
+connect-GitHub requirement instead. Marketplace auto-browse can still list a repository's directly
+discoverable `SKILL.md` files; when it requires model classification, it asks the user to connect a
+GitHub account with Copilot access.
 
 ## `/configure` request body
 
