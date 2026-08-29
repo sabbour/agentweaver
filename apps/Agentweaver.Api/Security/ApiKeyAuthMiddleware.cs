@@ -1,6 +1,7 @@
 namespace Agentweaver.Api.Security;
 
 using System.Security.Claims;
+using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Auth;
 
 /// <summary>Authenticated caller attached to the request after Microsoft Entra token validation.</summary>
@@ -121,6 +122,18 @@ public sealed class GitHubTokenAuthMiddleware
             return;
         }
 
+        if (IsRunCapabilityPolicyRead(context, token))
+        {
+            var capabilityCaller = new CallerContext
+            {
+                User = ProjectAuthorization.InternalServiceUser,
+                PlatformRoles = [],
+            };
+            SetCaller(context, capabilityCaller, BuildClaimsPrincipal(capabilityCaller, isInternal: true));
+            await _next(context).ConfigureAwait(false);
+            return;
+        }
+
         var internalKey = _configuration["Auth:ApiKey"];
         if (!string.IsNullOrEmpty(internalKey) && token == internalKey)
         {
@@ -202,6 +215,23 @@ public sealed class GitHubTokenAuthMiddleware
         string.IsNullOrWhiteSpace(configuredRoles)
             ? defaultRoles
             : configuredRoles.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static bool IsRunCapabilityPolicyRead(HttpContext context, string bearerToken)
+    {
+        if (!HttpMethods.IsGet(context.Request.Method) ||
+            string.IsNullOrWhiteSpace(bearerToken) ||
+            !string.Equals(
+                bearerToken,
+                context.Request.Headers[RunAuthorshipHeaders.RunToken].ToString(),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var segments = context.Request.Path.Value?
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return segments is ["api", "runs", _, "tool-approval-policies", _];
+    }
 
     private sealed record TestCaller(string User, IReadOnlyList<string> PlatformRoles);
 }
