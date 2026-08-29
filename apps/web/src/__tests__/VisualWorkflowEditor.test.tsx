@@ -1,7 +1,7 @@
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
 import { apiClient } from '../api/apiClient';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 /**
@@ -31,10 +31,17 @@ vi.mock('../api/apiClient', () => ({
 // implementation, so tests can assert *when* the editor re-fits the viewport
 // without losing real layout/rendering behavior.
 const fitViewSpy = vi.hoisted(() => vi.fn());
+const selectionChange = vi.hoisted(() => ({
+  current: undefined as undefined | ((params: unknown) => void),
+}));
 vi.mock('@xyflow/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@xyflow/react')>();
   return {
     ...actual,
+    ReactFlow: (props: React.ComponentProps<typeof actual.ReactFlow>) => {
+      selectionChange.current = props.onSelectionChange as ((params: unknown) => void) | undefined;
+      return <actual.ReactFlow {...props} />;
+    },
     useReactFlow: () => {
       const real = actual.useReactFlow();
       return {
@@ -51,6 +58,7 @@ vi.mock('@xyflow/react', async (importOriginal) => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  selectionChange.current = undefined;
 });
 
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -256,6 +264,78 @@ describe('VisualWorkflowEditor — viewport re-fit on add (#540)', () => {
       expect((labelInput as HTMLInputElement).value).toBe('Implement (renamed)');
     });
     expect(fitViewSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('VisualWorkflowEditor — selection persistence (#1007)', () => {
+  async function selectRaiCheck() {
+    fireEvent.click(await screen.findByText('RAI Check'));
+    return screen.findByRole('textbox', { name: 'Gate branches' });
+  }
+
+  it('keeps a selected node inspector open after editing workflow metadata', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectRaiCheck();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Renamed workflow' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Gate branches' })).toBeDefined();
+    });
+    expect(screen.queryByText('Select a node or edge')).toBeNull();
+  });
+
+  it('keeps a selected node inspector open after text and type edits', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectRaiCheck();
+
+    const label = screen.getByRole('textbox', { name: 'Label' });
+    fireEvent.change(label, { target: { value: 'Review gate' } });
+    fireEvent.blur(label);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Gate branches' })).toBeDefined();
+    });
+
+    await user.click(screen.getByRole('combobox', { name: 'Type' }));
+    await user.click(await screen.findByRole('option', { name: 'Prompt (agent turn)' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Prompt' })).toBeDefined();
+    });
+    expect(screen.queryByText('Select a node or edge')).toBeNull();
+  });
+
+  it('keeps a selected edge inspector open after editing its text', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await waitFor(() => expect(selectionChange.current).toBeDefined());
+    act(() => {
+      selectionChange.current?.({ nodes: [], edges: [{ data: { index: 1 } }] });
+    });
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'When' })).toBeDefined();
+    });
+    expect(screen.queryByText('Select a node or edge')).toBeNull();
+  });
+
+  it('clears the inspector when the selected node is deleted', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectRaiCheck();
+
+    await user.click(screen.getByRole('button', { name: 'Delete node' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Select a node or edge')).toBeDefined();
+    });
   });
 });
 
