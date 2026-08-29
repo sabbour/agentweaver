@@ -1,6 +1,7 @@
 using System.Net;
 using System.Reflection;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using k8s;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -128,7 +129,8 @@ public sealed class AgentHostReadinessProbeTests
     private static KubernetesSandboxExecutor NewExecutor(FakeKubeHandler handler, IAgentHostReadinessProbe probe) =>
         new(new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, handler),
             Options(), NullLogger<KubernetesSandboxExecutor>.Instance, podRegistry: null, readinessProbe: probe,
-            submittingUserResolver: new StubSubmittingUserResolver("sabbour"));
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
 
     private static void StubAgentHostBaseResources(FakeKubeHandler handler)
     {

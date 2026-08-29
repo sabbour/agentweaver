@@ -161,7 +161,8 @@ public sealed class RunRepositoryCredentialReconciliationServiceTests
             options,
             NullLogger<KubernetesSandboxExecutor>.Instance,
             submittingUserResolver: new RunStoreSubmittingUserResolver(runStore),
-            runStore: runStore);
+            runStore: runStore,
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
 
         var endpoint = await executor.LaunchAgentHostPodAsync(runId);
         endpoint.Should().Contain("10.0.5.9");
