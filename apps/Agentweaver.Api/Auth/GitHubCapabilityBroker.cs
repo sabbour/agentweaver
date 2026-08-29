@@ -195,7 +195,7 @@ internal sealed class GitHubCapabilityBroker(
 
     /// <summary>
     /// Redeems a single-use non-run capability only for its persisted project operation purpose.
-    /// The caller receives a credential solely through the broker-owned callback.
+    /// The caller receives a credential solely via the broker-owned callback.
     /// </summary>
     internal async Task<GitHubCapabilityBrokerOutcome> TryUseProjectCopilotCredentialAsync(
         SnapshotRef capabilityReference,
