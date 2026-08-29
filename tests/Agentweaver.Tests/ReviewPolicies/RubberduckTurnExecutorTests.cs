@@ -17,14 +17,11 @@ public sealed class RubberduckTurnExecutorTests
     {
         var config = new ConfigurationBuilder().Build();
         var copilotFactory = new GitHubCopilotClientFactory(
-            config,
-            new NullGitHubTokenStore(),
-            new FixedInstallationScopeStub());
+            config, new FixedGitHubCopilotCapabilityCredentialProvider());
         var runner = new TestFileEditAgentRunner();
 
         var executor = new RubberduckTurnExecutor(
             copilotFactory,
-            new FixedInstallationScopeStub(),
             new PassthroughExecutor("test"),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),

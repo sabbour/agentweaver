@@ -169,15 +169,12 @@ public sealed class PermissionDecisionRegressionTests : IDisposable
         List<string> errors)
     {
         var factory = new GitHubCopilotClientFactory(
-            new ConfigurationBuilder().Build(),
-            new NullGitHubTokenStore(),
-            new FixedInstallationScopeStub());
+            new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider());
 
         return implementation switch
         {
             "CopilotAIAgent" => new CopilotAIAgent(
                 factory,
-                new FixedInstallationScopeStub(),
                 SandboxExecutorFactory.CreatePassthrough(),
                 new StubPolicyStore(),
                 new InMemoryShellApprovalStore(),
@@ -188,7 +185,6 @@ public sealed class PermissionDecisionRegressionTests : IDisposable
                     (_, reason) => errors.Add(reason), (_, _) => { }, CancellationToken.None),
             "GitHubCopilotAgentRunner" => new GitHubCopilotAgentRunner(
                 factory,
-                new FixedInstallationScopeStub(),
                 SandboxExecutorFactory.CreatePassthrough(),
                 new StubPolicyStore(),
                 new InMemoryShellApprovalStore(),

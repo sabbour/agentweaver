@@ -49,9 +49,9 @@ public sealed class GlobGrepEscapeTests
             throw new InvalidOperationException("GitHub Copilot credentials not found.");
         }
 
-        var factory = new GitHubCopilotClientFactory(config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+        var factory = new GitHubCopilotClientFactory(config, new FixedGitHubCopilotCapabilityCredentialProvider());
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, new FixedInstallationScopeStub(), SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(), logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(), logger);
 
         // The sandbox is a child of parentDir, so glob("parentDir/*") would find the canary
         // if glob truly operates on absolute host paths.
@@ -230,9 +230,9 @@ public sealed class GlobGrepEscapeTests
             throw new InvalidOperationException("GitHub Copilot credentials not found.");
         }
 
-        var factory = new GitHubCopilotClientFactory(config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+        var factory = new GitHubCopilotClientFactory(config, new FixedGitHubCopilotCapabilityCredentialProvider());
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, new FixedInstallationScopeStub(), SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(), logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(), logger);
 
         // Parent with canary; sandbox is a child.
         var parentDir = Path.Combine(Path.GetTempPath(), $"agentweaver-relglob-{Guid.NewGuid():N}");

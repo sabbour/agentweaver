@@ -46,7 +46,6 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         "VERDICT: <GREEN|YELLOW|REVISE|RED>";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _sandboxExecutor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
@@ -62,7 +61,6 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
 
     public RaiTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor sandboxExecutor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -82,7 +80,6 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
         LogicalNodeId = logicalNodeId;
         DisplayLabel = displayLabel;
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _sandboxExecutor = sandboxExecutor;
         _sandboxPolicyStore = sandboxPolicyStore;
         _approvalStore = approvalStore;
@@ -161,7 +158,6 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
             agent = _agentFactory?.CreateRaiAgent()
                 ?? new RaiAIAgent(
                     _copilotClientFactory,
-                    _scopeProvider,
                     _sandboxExecutor,
                     _sandboxPolicyStore,
                     _approvalStore,

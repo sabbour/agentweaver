@@ -197,9 +197,9 @@ public sealed class NativeShellSandboxRoutingTests : IDisposable
     private CopilotAIAgent BuildAgent(ISandboxExecutor executor)
     {
         var factory = new GitHubCopilotClientFactory(
-            new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+            new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider());
         return new CopilotAIAgent(
-            factory, new FixedInstallationScopeStub(), executor,
+            factory, executor,
             new StubPolicyStore(), new InMemoryShellApprovalStore(),
             new InMemoryToolApprovalGate(), NullLogger<CopilotAIAgent>.Instance);
     }
@@ -207,9 +207,9 @@ public sealed class NativeShellSandboxRoutingTests : IDisposable
     private GitHubCopilotAgentRunner BuildRunner(ISandboxExecutor executor)
     {
         var factory = new GitHubCopilotClientFactory(
-            new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+            new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider());
         return new GitHubCopilotAgentRunner(
-            factory, new FixedInstallationScopeStub(), executor,
+            factory, executor,
             new StubPolicyStore(), new InMemoryShellApprovalStore(),
             new InMemoryToolApprovalGate(), NullLogger<GitHubCopilotAgentRunner>.Instance,
             questionGate: null, runOptions: new InMemoryRunOptionsStore());

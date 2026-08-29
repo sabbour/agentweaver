@@ -63,8 +63,7 @@ public sealed class BuildTestWorkflowTests
     {
         var runner = new TestFileEditAgentRunner();
         var executor = new BuildTestTurnExecutor(
-            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub()),
-            new FixedInstallationScopeStub(),
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider()),
             new PassthroughExecutor("test"),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),
@@ -98,8 +97,7 @@ public sealed class BuildTestWorkflowTests
     {
         var factory = new CapturingBuildTestAgentFactory();
         var executor = new BuildTestTurnExecutor(
-            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub()),
-            new FixedInstallationScopeStub(),
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider()),
             new PassthroughExecutor("test"),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),
@@ -141,8 +139,7 @@ public sealed class BuildTestWorkflowTests
     {
         var factory = new CapturingBuildTestAgentFactory();
         var executor = new BuildTestTurnExecutor(
-            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub()),
-            new FixedInstallationScopeStub(),
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider()),
             new PassthroughExecutor("test"),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),
@@ -173,8 +170,7 @@ public sealed class BuildTestWorkflowTests
     public async Task BuildTestExecutor_total_wall_clock_timeout_fails_instead_of_livelocking()
     {
         var executor = new BuildTestTurnExecutor(
-            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub()),
-            new FixedInstallationScopeStub(),
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider()),
             new PassthroughExecutor("test"),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),
