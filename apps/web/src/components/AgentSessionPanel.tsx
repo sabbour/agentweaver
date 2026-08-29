@@ -785,7 +785,7 @@ export interface AgentSessionPanelProps {
   };
   variant?: 'modal' | 'docked';
   composerFocusSignal?: number;
-  onOutcomePlanClarify?: () => void;
+  onOutcomePlanClarificationPendingChange?: (pending: boolean) => void;
   /** Points the shared artifact browser at the coordinator's collective assembly (integration
    *  branch) when a coordinator-aggregate node is selected. Per-subtask runs use the standard
    *  per-run endpoints (no adapter). */
@@ -1861,7 +1861,7 @@ export function AgentSessionPanel({
   automation,
   variant = 'modal',
   composerFocusSignal = 0,
-  onOutcomePlanClarify,
+  onOutcomePlanClarificationPendingChange,
   artifactAdapter,
   runChips,
   credits,
@@ -1888,6 +1888,7 @@ export function AgentSessionPanel({
   const [followUpBusy, setFollowUpBusy] = useState(false);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
   const [followUpNotice, setFollowUpNotice] = useState<string | null>(null);
+  const followUpInFlightRef = useRef(false);
   // Per-run cache of last-known merged events/runDetail (#287). Switching the selected
   // node used to synchronously blank seedEvents while useRunStream also reset its own
   // buffer, leaving a genuinely blank pane until fresh data arrived — even when we'd
@@ -2116,9 +2117,8 @@ export function AgentSessionPanel({
 
   const focusOutcomePlanClarification = useCallback(() => {
     setFollowUp((value) => value.trim() ? value : 'Clarify the outcome plan: ');
-    onOutcomePlanClarify?.();
     window.setTimeout(() => focusComposer(), 0);
-  }, [onOutcomePlanClarify, focusComposer]);
+  }, [focusComposer]);
 
   const jumpToLatestMessage = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
@@ -2208,10 +2208,12 @@ export function AgentSessionPanel({
   // drives the FileViewerModal below.
   const handleSendFollowUp = useCallback(async () => {
     const instruction = followUp.trim();
-    if (!instruction || followUpBusy) return;
+    if (!instruction || followUpInFlightRef.current) return;
+    const isOutcomePlanClarification = selectedItem?.nodeId === 'outcome-plan';
+    followUpInFlightRef.current = true;
     setFollowUpBusy(true);
     setFollowUpError(null);
-    setFollowUpNotice(null);
+    setFollowUpNotice(isOutcomePlanClarification ? 'Sending clarification to coordinator…' : null);
     try {
       await apiClient.steerCoordinator(coordinatorRunId, {
         kind: 'send',
@@ -2220,6 +2222,7 @@ export function AgentSessionPanel({
           ? { target_child_run_id: selectedItem.childRunId }
           : {}),
       });
+      if (isOutcomePlanClarification) onOutcomePlanClarificationPendingChange?.(true);
       try {
         const persisted = await apiClient.getRunEvents(selectedRunId || coordinatorRunId);
         setSeedEvents(persisted.map((event) => ({
@@ -2232,14 +2235,19 @@ export function AgentSessionPanel({
         // events endpoint is briefly unavailable.
       }
       setFollowUp('');
-      setFollowUpNotice('Message sent to coordinator.');
+      setFollowUpNotice(isOutcomePlanClarification
+        ? 'Clarification sent — the coordinator is revising the Outcome plan.'
+        : 'Message sent to coordinator.');
       onCoordinatorFollowUp?.();
     } catch (err: unknown) {
+      if (isOutcomePlanClarification) onOutcomePlanClarificationPendingChange?.(false);
+      setFollowUpNotice(null);
       setFollowUpError(formatApiErrorMessage(err, 'Could not send the coordinator message.'));
     } finally {
+      followUpInFlightRef.current = false;
       setFollowUpBusy(false);
     }
-  }, [coordinatorRunId, followUp, followUpBusy, onCoordinatorFollowUp, selectedItem, selectedRunId]);
+  }, [coordinatorRunId, followUp, onCoordinatorFollowUp, onOutcomePlanClarificationPendingChange, selectedItem, selectedRunId]);
 
   if (!selectedItem || !isVisible) return null;
 
@@ -2261,6 +2269,8 @@ export function AgentSessionPanel({
   const composerAvailabilityMessage = coordinatorActive
     ? null
     : 'Messaging is unavailable because this coordinator run is not active.';
+  const outcomePlanClarificationPending =
+    selectedItem.nodeId === 'outcome-plan' && selectedItem.status === 'revising';
   // Product decision: you can MESSAGE the Coordinator (root + work/outcome plan scopes),
   // but only VIEW other agents — steer them through the Coordinator.
   const isNonCoordinatorAgentScope = !selectedItem.isCoordinator
@@ -2447,7 +2457,7 @@ export function AgentSessionPanel({
                     runStatus={runDetail?.status ?? undefined}
                     onReconnect={onCoordinatorFollowUp}
                     onClarifyPlan={focusOutcomePlanClarification}
-                    clarificationSent={selectedItem.status === 'revising'}
+                    clarificationSent={outcomePlanClarificationPending}
                   />
                 ) : (
                   <>
@@ -2534,8 +2544,8 @@ export function AgentSessionPanel({
                   onSubmit={(_, data) => {
                     if (data.value.trim()) void handleSendFollowUp();
                   }}
-                  disabled={!coordinatorActive || followUpBusy}
-                  disableSend={!coordinatorActive || followUpBusy || !followUp.trim()}
+                  disabled={!coordinatorActive || followUpBusy || outcomePlanClarificationPending}
+                  disableSend={!coordinatorActive || followUpBusy || outcomePlanClarificationPending || !followUp.trim()}
                   contentBefore={null}
                   actions={credits ? (
                     <AiCredits

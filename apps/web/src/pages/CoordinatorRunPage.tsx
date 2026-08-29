@@ -3155,10 +3155,27 @@ export function CoordinatorRunPage() {
 
   const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
   const pendingApprovalCounts = useMemo(() => pendingApprovalsByRun(events, runId ?? ''), [events, runId]);
+  const latestOutcomePlanSequenceRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (latestOutcomePlanEvent) queueMicrotask(() => setOutcomePlanClarifying(false));
-  }, [latestOutcomePlanEvent]);
+    latestOutcomePlanSequenceRef.current = null;
+  }, [runId]);
+
+  useEffect(() => {
+    const sequence = latestOutcomePlanEvent?.sequence;
+    if (sequence == null) return;
+    const previousSequence = latestOutcomePlanSequenceRef.current;
+    latestOutcomePlanSequenceRef.current = sequence;
+    if (previousSequence != null && previousSequence !== sequence) {
+      queueMicrotask(() => setOutcomePlanClarifying(false));
+    }
+  }, [latestOutcomePlanEvent?.sequence]);
+
+  useEffect(() => {
+    if (!outcomePlanClarifying) return;
+    const timeoutId = window.setTimeout(() => setOutcomePlanClarifying(false), 30_000);
+    return () => window.clearTimeout(timeoutId);
+  }, [outcomePlanClarifying]);
 
   const { sessionTree, sessionNodeIds, defaultSessionNodeId } = useMemo<{
     sessionTree: RunSessionTree[];
@@ -4634,7 +4651,7 @@ export function CoordinatorRunPage() {
                   onCoordinatorFollowUp={reconnectStream}
                   coordinatorActive={coordActive}
                   composerFocusSignal={composerFocusSignal}
-                  onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
+                  onOutcomePlanClarificationPendingChange={setOutcomePlanClarifying}
                   artifactAdapter={coordAdapter}
                   runChips={runSummaryChips}
                   workPlanTopologyThumbnail={renderTopologyThumbnail('workplan')}

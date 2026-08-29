@@ -1086,6 +1086,44 @@ describe('CoordinatorRunPage operator console redesign', () => {
     expect(await screen.findByText('Message sent to coordinator.')).toBeTruthy();
   });
 
+  it('keeps an acknowledged outcome-plan clarification visibly revising until a newer plan event arrives', async () => {
+    const user = userEvent.setup();
+    const initialPlanEvent: RunStreamEvent = {
+      sequence: 10,
+      type: 'coordinator.outcome_spec',
+      payload: {
+        status: 'awaiting_confirmation',
+        goal: 'Ship the feature',
+        desiredOutcome: 'A working feature',
+        scope: 'Web only',
+      },
+    };
+    currentEvents = [initialPlanEvent];
+
+    const { rerender } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const outcomePlan = await screen.findByRole('treeitem', { name: /Select Outcome plan: Awaiting confirmation/i }, { timeout: 4000 });
+    fireEvent.click(outcomePlan);
+    const input = await screen.findByPlaceholderText('Message coordinator...');
+    await user.type(input, 'Clarify the outcome plan: support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
+    expect(await screen.findByRole('treeitem', { name: /Select Outcome plan: Changes requested — revising/i })).toBeTruthy();
+
+    currentEvents = [{
+      ...initialPlanEvent,
+      sequence: 11,
+      payload: {
+        ...initialPlanEvent.payload,
+        desiredOutcome: 'A working feature with a dry run',
+      },
+    }];
+    rerender(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    expect(await screen.findByRole('treeitem', { name: /Select Outcome plan: Awaiting confirmation/i })).toBeTruthy();
+  });
+
   it('surfaces automation toggle failures instead of silently rolling back', async () => {
     vi.mocked(apiClient.setAutopilot).mockRejectedValue(new ApiError(409, '{"message":"run is not active"}'));
 
