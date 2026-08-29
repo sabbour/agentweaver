@@ -35,12 +35,16 @@ const fitViewSpy = vi.hoisted(() => vi.fn());
 const selectionChange = vi.hoisted(() => ({
   current: undefined as undefined | ((params: unknown) => void),
 }));
+const edgesDelete = vi.hoisted(() => ({
+  current: undefined as undefined | ((edges: unknown[]) => void),
+}));
 vi.mock('@xyflow/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@xyflow/react')>();
   return {
     ...actual,
     ReactFlow: (props: React.ComponentProps<typeof actual.ReactFlow>) => {
       selectionChange.current = props.onSelectionChange as ((params: unknown) => void) | undefined;
+      edgesDelete.current = props.onEdgesDelete as ((edges: unknown[]) => void) | undefined;
       return <actual.ReactFlow {...props} />;
     },
     useReactFlow: () => {
@@ -60,6 +64,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   selectionChange.current = undefined;
+  edgesDelete.current = undefined;
 });
 
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -565,6 +570,40 @@ describe('VisualWorkflowEditor — semantic edge selection (#1015)', () => {
         { from: 'rai-check', to: 'done', when: 'review' },
         { from: 'rai-check', to: 'done', when: 'approved' },
       ]);
+  });
+
+  it('clears selection when canvas deletion removes the first selected duplicate', async () => {
+    renderEditor(YAML_WITH_DUPLICATE_SELECTED_EDGES);
+    await selectEdge(1);
+
+    await waitFor(() => expect(edgesDelete.current).toBeDefined());
+    act(() => {
+      edgesDelete.current?.([{ data: { index: 1 } }]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Select a node or edge')).toBeDefined();
+    });
+  });
+
+  it('preserves selection for a later duplicate when canvas deletion removes an earlier one', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_DUPLICATE_SELECTED_EDGES);
+    await selectEdge(2);
+
+    await waitFor(() => expect(edgesDelete.current).toBeDefined());
+    act(() => {
+      edgesDelete.current?.([{ data: { index: 1 } }]);
+    });
+
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await user.click(screen.getByRole('button', { name: 'View YAML' }));
+    const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
+    expect(parsed.model?.edges.filter((edge) => edge.from === 'rai-check' && edge.to === 'done'))
+      .toEqual([{ from: 'rai-check', to: 'done', when: 'approved' }]);
   });
 });
 

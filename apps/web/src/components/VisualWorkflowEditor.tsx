@@ -613,12 +613,35 @@ export function VisualWorkflowEditor({
   }, []);
 
   const onEdgesDelete = useCallback((deleted: Edge[]) => {
-    const indices = deleted
+    const indices = [...new Set(deleted
       .map((e) => (e.data as { index?: number } | undefined)?.index)
       .filter((i): i is number => typeof i === 'number')
-      .sort((a, b) => b - a);
+      .filter((i) => i >= 0 && i < (model?.edges.length ?? 0))
+    )].sort((a, b) => b - a);
+
+    const selection = selectedEdgeSelectionRef.current;
+    const selectedIndex = selection && model
+      ? edgeIndexForSelection(model.edges, selection)
+      : null;
+    if (selection && selectedIndex != null && indices.includes(selectedIndex)) {
+      selectedEdgeSelectionRef.current = null;
+      setSelectedEdgeSelection(null);
+    } else if (selection && selectedIndex != null && model) {
+      const removedEquivalentBeforeSelection = indices.filter(
+        (index) => index < selectedIndex && sameEdge(model.edges[index], selection),
+      ).length;
+      if (removedEquivalentBeforeSelection > 0) {
+        const adjustedSelection = {
+          ...selection,
+          occurrence: selection.occurrence - removedEquivalentBeforeSelection,
+        };
+        selectedEdgeSelectionRef.current = adjustedSelection;
+        setSelectedEdgeSelection(adjustedSelection);
+      }
+    }
+
     setYamlText((t) => indices.reduce((acc, i) => removeEdgeAt(acc, i), t));
-  }, []);
+  }, [model]);
 
   const onSelectionChange = useCallback((params: OnSelectionChangeParams) => {
     const nodeId = params.nodes[0]?.id ?? null;
