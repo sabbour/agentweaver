@@ -744,6 +744,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ConsumedAt).HasColumnName("consumed_at");
             e.HasIndex(x => new { x.ProjectId, x.EntraObjectId, x.ExpiresAt })
                 .HasDatabaseName("IX_marketplace_copilot_capabilities_expiry");
+            e.HasIndex(x => x.ExpiresAt)
+                .HasDatabaseName("IX_marketplace_copilot_capabilities_expiry_cleanup");
             ConfigureProjectForeignKey(e, "FK_marketplace_copilot_capabilities_projects_project_id");
         });
 

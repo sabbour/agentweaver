@@ -24,6 +24,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
@@ -375,6 +376,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogCache, A
 builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogClassifier, Agentweaver.Api.Skills.CopilotMarketplaceCatalogClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogIndexer, Agentweaver.Api.Skills.MarketplaceCatalogIndexer>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceCopilotCapabilityIssuer>();
+builder.Services.AddHostedService<MarketplaceCopilotCapabilityMaintenanceService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceSourceService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();

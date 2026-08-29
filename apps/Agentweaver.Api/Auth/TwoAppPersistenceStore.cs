@@ -971,8 +971,14 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             return null;
 
         var capability = await db.MarketplaceCopilotCapabilities.AsNoTracking()
-            .SingleAsync(x => x.CapabilityRef == capabilityReference.Value, ct)
+            .SingleOrDefaultAsync(x => x.CapabilityRef == capabilityReference.Value &&
+                                       x.ProjectId == projectId &&
+                                       x.EntraObjectId == entraObjectId &&
+                                       x.ConsumedAt != null, ct)
             .ConfigureAwait(false);
+        if (capability is null)
+            return null;
+
         return new(
             capabilityReference,
             projectId,
@@ -988,8 +994,8 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     }
 
     /// <summary>
-    /// Deletes a bounded set of expired marketplace capabilities. Claimed records are deleted by the
-    /// broker after their terminal outcome; excluding live claims prevents cleanup racing redemption.
+    /// Deletes a bounded set of expired, unclaimed marketplace capabilities. Claimed records are
+    /// owned by the broker until its terminal cleanup, so expiry maintenance cannot race redemption.
     /// </summary>
     internal async Task<int> PruneMarketplaceCopilotCapabilitiesAsync(
         DateTimeOffset now,
@@ -1003,7 +1009,8 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
              WHERE capability_ref IN (
                  SELECT capability_ref
                  FROM marketplace_copilot_capabilities
-                 WHERE expires_at <= {now}
+                 WHERE consumed_at IS NULL
+                   AND expires_at <= {now}
                  ORDER BY expires_at, capability_ref
                  LIMIT {MarketplaceCapabilityCleanupBatchSize}
              )
@@ -1028,14 +1035,19 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
                         x.ConsumedAt != null)
             .ExecuteDeleteAsync(ct);
 
-    internal Task<bool> IsClaimedMarketplaceCopilotCapabilityLiveAsync(
+    internal async Task<bool> IsClaimedMarketplaceCopilotCapabilityLiveAsync(
         FencedMarketplaceCopilotCapability capability,
         CancellationToken ct = default)
     {
-        if (capability.ExpiresAt <= DateTimeOffset.UtcNow)
-            return Task.FromResult(false);
+        if (capability.ExpiresAt <= DateTimeOffset.UtcNow ||
+            !await db.MarketplaceCopilotCapabilities.AsNoTracking().AnyAsync(record =>
+                record.CapabilityRef == capability.CapabilityReference.Value &&
+                record.ProjectId == capability.ProjectId &&
+                record.EntraObjectId == capability.EntraObjectId &&
+                record.ConsumedAt != null, ct).ConfigureAwait(false))
+            return false;
 
-        return db.ProjectCopilotBindings.AsNoTracking().AnyAsync(binding =>
+        return await db.ProjectCopilotBindings.AsNoTracking().AnyAsync(binding =>
             binding.Id == capability.SourceBindingId &&
             binding.ProjectId == capability.ProjectId &&
             binding.EntraObjectId == capability.EntraObjectId &&
@@ -1043,7 +1055,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             binding.CredentialVersion == capability.CredentialVersion &&
             binding.GrantDigest == capability.GrantDigest &&
             binding.Status == GitHubBindingStatus.Active &&
-            binding.DeactivatedAt == null, ct);
+            binding.DeactivatedAt == null, ct).ConfigureAwait(false);
     }
 
     internal Task<List<RunGitHubCapabilitySnapshotRecord>> GetCapabilitySnapshotsAsync(
