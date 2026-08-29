@@ -5,6 +5,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Tests.Helpers;
@@ -41,16 +42,16 @@ public sealed class EntraSignInEndpointsTests
     }
 
     [Fact]
-    public async Task Authorize_WithoutConfiguredAuthority_ReturnsServiceUnavailableWithoutPersistingState()
+    public async Task Authorize_WithoutTenantId_ReturnsServiceUnavailableWithoutPersistingState()
     {
-        await using var factory = new MissingAuthorityEntraWebApplicationFactory();
+        await using var factory = new MissingTenantEntraWebApplicationFactory();
         var client = factory.CreateClient(NoRedirectNoCookies);
 
         var response = await client.GetAsync("/auth/entra/authorize");
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
         (await response.Content.ReadAsStringAsync()).Should().Contain(
-            "Auth:Entra:TenantId or Auth:Entra:Authority must be configured.");
+            "Auth:Entra:TenantId must be configured as an Entra tenant (directory) ID.");
         (await factory.CountEntraOAuthStatesAsync()).Should().Be(0);
     }
 
@@ -71,8 +72,15 @@ public sealed class EntraSignInEndpointsTests
     public Task Authorize_WithMalformedAuthority_ReturnsServiceUnavailableWithoutPersistingState() =>
         AssertInvalidAuthorizeConfigurationAsync(
             "Auth:Entra:Authority",
-            "not-a-uri",
-            "Auth:Entra:Authority must be a permitted absolute Entra HTTPS endpoint or HTTP loopback endpoint.");
+            $"https://hostile.example.test/{EntraWebApplicationFactory.TenantId}/v2.0",
+            "Auth:Entra:Authority must be a permitted Entra endpoint for Auth:Entra:TenantId.");
+
+    [Fact]
+    public Task Authorize_WithMalformedTenantId_ReturnsServiceUnavailableWithoutPersistingState() =>
+        AssertInvalidAuthorizeConfigurationAsync(
+            "Auth:Entra:TenantId",
+            "../hostile-tenant",
+            "Auth:Entra:TenantId must be configured as an Entra tenant (directory) ID.");
 
     [Fact]
     public Task Authorize_WithMalformedRedirectUri_ReturnsServiceUnavailableWithoutPersistingState() =>
@@ -256,6 +264,26 @@ public sealed class EntraSignInEndpointsTests
         factory.LastTokenRequestForm.Should().NotContainKey("client_secret");
     }
 
+    [Fact]
+    public async Task Callback_WhenTokenRedemptionFails_RedactsProviderError()
+    {
+        await using var factory = new FailingTokenRedemptionEntraWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+
+        var authorizeResponse = await client.GetAsync("/auth/entra/authorize");
+        var state = EntraOAuthStateCookie.ExtractState(authorizeResponse.Headers.Location!.ToString());
+        var callbackRequest = new HttpRequestMessage(HttpMethod.Get,
+            $"/auth/entra/callback?code=test-authorization-code&state={Uri.EscapeDataString(state!)}");
+        callbackRequest.Headers.Add("Cookie", $"{EntraOAuthStateCookie.Name}={state}");
+
+        var callbackResponse = await client.SendAsync(callbackRequest);
+
+        callbackResponse.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        callbackResponse.Headers.Location!.ToString().Should()
+            .Contain("reason=sign_in_failed")
+            .And.NotContain("sensitive-provider-detail");
+    }
+
     private static string? ExtractQueryValue(string url, string key)
     {
         var query = new Uri(url).Query.TrimStart('?');
@@ -283,7 +311,7 @@ public sealed class EntraSignInEndpointsTests
         (await factory.CountEntraOAuthStatesAsync()).Should().Be(0);
     }
 
-    private sealed class MissingAuthorityEntraWebApplicationFactory : EntraWebApplicationFactory
+    private sealed class MissingTenantEntraWebApplicationFactory : EntraWebApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -292,7 +320,8 @@ public sealed class EntraSignInEndpointsTests
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Auth:Entra:TenantId"] = string.Empty,
-                    ["Auth:Entra:Authority"] = string.Empty,
+                    ["Auth:Entra:Authority"] =
+                        $"https://login.microsoftonline.com/{EntraWebApplicationFactory.TenantId}/v2.0",
                 }));
         }
     }
@@ -328,15 +357,46 @@ public sealed class EntraSignInEndpointsTests
         {
             base.ConfigureWebHost(builder);
             builder.ConfigureAppConfiguration((_, configuration) =>
+            {
+                var settings = new Dictionary<string, string?>
+                {
+                    ["Auth:Entra:RedirectUri"] = EntraSignInWebApplicationFactory.RedirectUriValue,
+                    ["Auth:Entra:FrontendUrl"] = EntraSignInWebApplicationFactory.FrontendUrlValue,
+                    ["Auth:Entra:TenantId"] = EntraWebApplicationFactory.TenantId,
+                };
+                settings[_configurationKey] = _configurationValue;
+                configuration.AddInMemoryCollection(settings);
+            });
+        }
+    }
+
+    private sealed class FailingTokenRedemptionEntraWebApplicationFactory : EntraWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.ConfigureAppConfiguration((_, configuration) =>
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["Auth:Entra:RedirectUri"] = EntraSignInWebApplicationFactory.RedirectUriValue,
                     ["Auth:Entra:FrontendUrl"] = EntraSignInWebApplicationFactory.FrontendUrlValue,
-                    [_configurationKey] = _configurationValue,
-                    ["Auth:Entra:TenantId"] = _configurationKey == "Auth:Entra:Authority"
-                        ? string.Empty
-                        : EntraWebApplicationFactory.TenantId,
                 }));
+            builder.ConfigureServices(services =>
+                services.AddHttpClient("entra-oidc")
+                    .ConfigurePrimaryHttpMessageHandler(() => new TokenRedemptionFailureHandler()));
+        }
+
+        private sealed class TokenRedemptionFailureHandler : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request, CancellationToken cancellationToken) =>
+                Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent(
+                        """{"error":"invalid_grant","error_description":"sensitive-provider-detail"}""",
+                        System.Text.Encoding.UTF8,
+                        "application/json"),
+                });
         }
     }
 }

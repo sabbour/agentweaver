@@ -71,8 +71,8 @@ public sealed class EntraOAuthRedirectServicePostgresTests(PostgresFixture postg
         var settings = new Dictionary<string, string?>
         {
             ["Auth:Entra:ClientId"] = "11111111-2222-3333-4444-555555555555",
-            ["Auth:Entra:TenantId"] = "test-tenant",
-            ["Auth:Entra:Authority"] = "https://login.microsoftonline.com/test-tenant/v2.0",
+            ["Auth:Entra:TenantId"] = "72f988bf-86f1-41af-91ab-2d7cd011db47",
+            ["Auth:Entra:Authority"] = "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0",
             ["Auth:Entra:RedirectUri"] = "https://agentweaver.example.test/auth/entra/callback",
             ["Auth:Entra:FrontendUrl"] = "https://agentweaver.example.test",
         };

@@ -256,9 +256,9 @@ public static class AuthEndpoints
                 var oneTimeCode = await webSessionExchange.IssueAsync(accessToken, claims.DisplayName, ct).ConfigureAwait(false);
                 return Results.Redirect($"{frontendUrl}/?auth=success&code={Uri.EscapeDataString(oneTimeCode)}");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(ex.Message)}");
+                return Results.Redirect($"{frontendUrl}/?auth=error&reason=sign_in_failed");
             }
         }).AllowAnonymous();
 

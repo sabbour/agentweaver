@@ -28,7 +28,6 @@ namespace Agentweaver.Api.Auth;
 public sealed class EntraOAuthRedirectService
 {
     private const string DefaultScopes = "openid profile email";
-    private const string EntraAuthorityHost = "login.microsoftonline.com";
     private const string EntraCallbackPath = "/auth/entra/callback";
     private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(10);
 
@@ -129,25 +128,21 @@ public sealed class EntraOAuthRedirectService
         return frontendUri.GetLeftPart(UriPartial.Authority);
     }
 
+    private string RequireTenantId() =>
+        _tokenValidator.TenantId
+        ?? throw new EntraNotConfiguredException(
+            "Auth:Entra:TenantId must be configured as an Entra tenant (directory) ID.");
+
     private string RequireAuthorityBase()
     {
         var authority = _tokenValidator.Authority
-            ?? throw new EntraNotConfiguredException("Auth:Entra:TenantId or Auth:Entra:Authority must be configured.");
-
-        if (!Uri.TryCreate(authority, UriKind.Absolute, out var authorityUri)
-            || !authorityUri.IsWellFormedOriginalString()
-            || !IsPermittedAuthorityOrigin(authorityUri)
-            || !IsTenantAuthorityPath(authorityUri))
-        {
-            throw new EntraNotConfiguredException(
-                "Auth:Entra:Authority must be a permitted absolute Entra HTTPS endpoint or HTTP loopback endpoint.");
-        }
+            ?? throw new EntraNotConfiguredException(
+                "Auth:Entra:Authority must be a permitted Entra endpoint for Auth:Entra:TenantId.");
 
         // Microsoft's v2.0 authorize/token endpoints hang off the tenant base, not the /v2.0 issuer
         // suffix that the discovery Authority carries. Strip the optional trailing /v2.0 so we can
         // append /oauth2/v2.0/{authorize,token} deterministically (no network round trip at /authorize).
-        var tenantSegment = authorityUri.Segments[1].TrimEnd('/');
-        return $"{authorityUri.GetLeftPart(UriPartial.Authority)}/{tenantSegment}";
+        return authority[..^"/v2.0".Length];
     }
 
     private static bool TryGetApplicationEndpoint(string configured, out Uri endpoint)
@@ -166,33 +161,6 @@ public sealed class EntraOAuthRedirectService
             || (endpoint.Scheme == Uri.UriSchemeHttp && endpoint.IsLoopback);
     }
 
-    private static bool IsPermittedAuthorityOrigin(Uri authorityUri) =>
-        string.IsNullOrEmpty(authorityUri.UserInfo)
-        && string.IsNullOrEmpty(authorityUri.Query)
-        && string.IsNullOrEmpty(authorityUri.Fragment)
-        && ((authorityUri.Scheme == Uri.UriSchemeHttps
-                && authorityUri.IsDefaultPort
-                && string.Equals(authorityUri.Host, EntraAuthorityHost, StringComparison.OrdinalIgnoreCase))
-            || (authorityUri.Scheme == Uri.UriSchemeHttp && authorityUri.IsLoopback));
-
-    private static bool IsTenantAuthorityPath(Uri authorityUri)
-    {
-        var segments = authorityUri.Segments;
-        if (segments.Length is not (2 or 3))
-            return false;
-
-        if (segments.Length == 3
-            && !string.Equals(segments[2].TrimEnd('/'), "v2.0", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        var tenant = Uri.UnescapeDataString(segments[1].TrimEnd('/'));
-        return !string.IsNullOrWhiteSpace(tenant)
-            && !tenant.Contains('/', StringComparison.Ordinal)
-            && !tenant.Contains('\\', StringComparison.Ordinal)
-            && !tenant.Contains('?', StringComparison.Ordinal)
-            && !tenant.Contains('#', StringComparison.Ordinal);
-    }
-
     /// <summary>
     /// Resolves the complete configuration required to safely start or complete the browser
     /// authorization flow. ClientSecret is optional because PKCE-only redemption is supported
@@ -201,9 +169,15 @@ public sealed class EntraOAuthRedirectService
     public EntraAuthorizationFlowConfiguration GetAuthorizationFlowConfiguration()
     {
         var clientId = RequireClientId();
+        _ = RequireTenantId();
+        var authorityBase = RequireAuthorityBase();
+        if (!_tokenValidator.IsConfigured)
+            throw new EntraNotConfiguredException(
+                "Auth:Entra:Issuer must match the configured Entra authority.");
+
         return new(
             clientId,
-            RequireAuthorityBase(),
+            authorityBase,
             RequireRedirectUri(),
             RequireFrontendUrl(),
             ResolveScopes(clientId));

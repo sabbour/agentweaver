@@ -33,22 +33,23 @@ public sealed class EntraAccessTokenValidator
     }
 
     public string? ClientId => _configuration["Auth:Entra:ClientId"];
-    public string? TenantId => _configuration["Auth:Entra:TenantId"];
+    public string? TenantId =>
+        EntraConfiguration.TryGetTenantId(_configuration["Auth:Entra:TenantId"], out var tenantId)
+            ? tenantId
+            : null;
 
     public string? Authority =>
-        FirstNonWhiteSpace(
-            _configuration["Auth:Entra:Authority"],
-            !string.IsNullOrWhiteSpace(TenantId)
-                ? $"https://login.microsoftonline.com/{TenantId}/v2.0"
-                : null);
+        EntraConfiguration.TryGetAuthority(_configuration["Auth:Entra:Authority"], TenantId, out var authority)
+            ? authority
+            : null;
 
     public string? Issuer =>
-        FirstNonWhiteSpace(
-            _configuration["Auth:Entra:Issuer"],
-            Authority);
+        EntraConfiguration.TryGetIssuer(_configuration["Auth:Entra:Issuer"], Authority, out var issuer)
+            ? issuer
+            : null;
 
     public bool IsConfigured =>
-        !string.IsNullOrWhiteSpace(ClientId)
+        Guid.TryParseExact(ClientId, "D", out _)
         && !string.IsNullOrWhiteSpace(TenantId)
         && !string.IsNullOrWhiteSpace(Issuer);
 
@@ -200,3 +201,95 @@ public sealed record EntraAccessTokenClaims(
     IReadOnlyList<string> RawRoles,
     string? PrimaryRole,
     DateTimeOffset ExpiresAt);
+
+internal static class EntraConfiguration
+{
+    private const string EntraAuthorityHost = "login.microsoftonline.com";
+
+    public static bool TryGetTenantId(string? configuredTenantId, out string tenantId)
+    {
+        if (Guid.TryParseExact(configuredTenantId, "D", out var parsedTenantId))
+        {
+            tenantId = parsedTenantId.ToString("D");
+            return true;
+        }
+
+        tenantId = string.Empty;
+        return false;
+    }
+
+    public static bool TryGetAuthority(string? configuredAuthority, string? tenantId, out string authority)
+    {
+        if (string.IsNullOrWhiteSpace(tenantId))
+        {
+            authority = string.Empty;
+            return false;
+        }
+
+        var candidate = string.IsNullOrWhiteSpace(configuredAuthority)
+            ? $"https://{EntraAuthorityHost}/{tenantId}/v2.0"
+            : configuredAuthority;
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri)
+            || !uri.IsWellFormedOriginalString()
+            || !IsPermittedAuthorityOrigin(uri)
+            || !HasMatchingTenantPath(uri, tenantId))
+        {
+            authority = string.Empty;
+            return false;
+        }
+
+        authority = $"{uri.GetLeftPart(UriPartial.Authority)}/{tenantId}/v2.0";
+        return true;
+    }
+
+    public static bool TryGetIssuer(string? configuredIssuer, string? authority, out string issuer)
+    {
+        if (string.IsNullOrWhiteSpace(authority))
+        {
+            issuer = string.Empty;
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(configuredIssuer))
+        {
+            issuer = authority;
+            return true;
+        }
+
+        if (Uri.TryCreate(configuredIssuer, UriKind.Absolute, out var uri)
+            && uri.IsWellFormedOriginalString()
+            && string.Equals(uri.AbsoluteUri.TrimEnd('/'), authority, StringComparison.OrdinalIgnoreCase))
+        {
+            issuer = authority;
+            return true;
+        }
+
+        issuer = string.Empty;
+        return false;
+    }
+
+    private static bool IsPermittedAuthorityOrigin(Uri authorityUri) =>
+        string.IsNullOrEmpty(authorityUri.UserInfo)
+        && string.IsNullOrEmpty(authorityUri.Query)
+        && string.IsNullOrEmpty(authorityUri.Fragment)
+        && ((authorityUri.Scheme == Uri.UriSchemeHttps
+                && authorityUri.IsDefaultPort
+                && string.Equals(authorityUri.Host, EntraAuthorityHost, StringComparison.OrdinalIgnoreCase))
+            || (authorityUri.Scheme == Uri.UriSchemeHttp && authorityUri.IsLoopback));
+
+    private static bool HasMatchingTenantPath(Uri authorityUri, string tenantId)
+    {
+        var segments = authorityUri.Segments;
+        if (segments.Length is not (2 or 3))
+            return false;
+
+        if (segments.Length == 3
+            && !string.Equals(segments[2].TrimEnd('/'), "v2.0", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return string.Equals(
+            Uri.UnescapeDataString(segments[1].TrimEnd('/')),
+            tenantId,
+            StringComparison.OrdinalIgnoreCase);
+    }
+}

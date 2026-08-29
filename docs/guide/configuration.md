@@ -144,16 +144,17 @@ public client flows and no client secret is configured).
 | --- | --- | --- |
 | `Auth:Entra:ClientId` | none | Entra app registration (client) ID — **required** for Entra sign-in |
 | `Auth:Entra:ClientSecret` | none | Optional Entra client secret for confidential-client token redemption. Omit it when the tenant blocks password credentials and the app registration has public client flows enabled (`isFallbackPublicClient: true`) |
-| `Auth:Entra:TenantId` | none | Entra tenant ID — **required** unless `Auth:Entra:Authority` is set |
-| `Auth:Entra:Authority` | none | Full authority URL (e.g. `https://login.microsoftonline.com/<tenant>/v2.0`); overrides `TenantId` for authority resolution |
+| `Auth:Entra:TenantId` | none | Entra tenant (directory) ID GUID — **required** for Entra sign-in and token validation |
+| `Auth:Entra:Authority` | none | Optional Entra authority URL (e.g. `https://login.microsoftonline.com/<tenant>/v2.0`); when set, it must name the configured tenant |
 | `Auth:Entra:RedirectUri` | none | Redirect URI registered on the Entra app; must exactly match the `/auth/entra/callback` URL |
 | `Auth:Entra:Scopes` | `openid profile email <ClientId>/.default` | Space-delimited scopes requested at authorize time. The `<ClientId>/.default` scope yields an access token whose `aud` is the app itself and carries the platform App Roles claim |
 | `Auth:Entra:FrontendUrl` | none | URL the API redirects to after a successful (or failed) Entra sign-in |
 
-Both URLs are required when Entra browser sign-in is enabled. `ClientId` must be the
-application (client) ID GUID issued by Entra. `Authority` must use the public
+Both URLs and `TenantId` are required when Entra browser sign-in is enabled. `ClientId` and
+`TenantId` must be the application (client) ID and tenant (directory) ID GUIDs issued by
+Entra. `Authority` is optional, but if supplied it must use the public
 `https://login.microsoftonline.com/<tenant>[/v2.0]` endpoint (or an HTTP loopback endpoint
-for local development), and `RedirectUri` must be an absolute callback URL ending in
+for local development) for that same tenant; it cannot replace `TenantId`. `RedirectUri` must be an absolute callback URL ending in
 `/auth/entra/callback`. HTTP is allowed only for loopback local-development URLs; production
 URLs must use HTTPS. The production Kustomize renderer derives the public callback and
 frontend origin from `HOST`; it never falls back to localhost and refuses to render when the
