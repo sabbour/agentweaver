@@ -265,8 +265,6 @@ export function buildRuntimeConfigLiterals(vars) {
     AGENTHOST_IDENTITY_CLIENT_ID: str(vars.AGENTHOST_IDENTITY_CLIENT_ID),
     KEYVAULT_NAME: str(vars.KEYVAULT_NAME),
     TENANT_ID: str(vars.TENANT_ID),
-    OAUTH_ISSUER: host ? `https://${host}` : "",
-    OAUTH_AUDIENCE: host ? `https://${host}/mcp` : "",
     // Auth:Mode / Auth:Entra:* deploy-time wiring (#653/#658).
     // ClientId/TenantId are required for every deployment.
     // ClientSecret is deliberately NOT wired here -- PKCE-only per #658; see api-deployment.yaml.

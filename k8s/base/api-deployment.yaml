@@ -58,18 +58,6 @@ spec:
               value: /tmp
             - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
               value: /tmp/.net
-            # EF design-time host build runs Program.Main, which trips OAuthConfigGuard.
-            # Pin Issuer/Audience here too so `efbundle` migrations pass the Production guard.
-            - name: Auth__OAuth__Issuer
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_ISSUER
-            - name: Auth__OAuth__Audience
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_AUDIENCE
             # spec-018 P2: run efbundle against Postgres.
             - name: Database__Provider
               value: "Postgres"
@@ -101,7 +89,6 @@ spec:
             - -c
             - |
               set -eu
-              export Auth__OAuth__SigningKey="$(cat /mnt/secrets-store/mcp-oauth-signing-key)"
               export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
               exec dotnet Agentweaver.Api.dll
           ports:
@@ -183,19 +170,6 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: ENTRA_REDIRECT_URI
-            # OAuth 2.1 Authorization Server config (RFC 8414 / RFC 9728)
-            # Issuer must match the public host so iss claim == AS metadata URL.
-            - name: Auth__OAuth__Issuer
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_ISSUER
-            # Audience bound to the MCP resource (RFC 8707); RS validates aud on every request.
-            - name: Auth__OAuth__Audience
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_AUDIENCE
             # Backward-compat: allow raw GitHub tokens while clients migrate to the new flow.
             # Flip to "false" once all MCP clients are using Agentweaver-minted tokens.
             - name: Auth__Mcp__AllowGitHubPassthrough

@@ -9,7 +9,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Generation;
-using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -35,7 +34,7 @@ public interface IAssemblyGateCodeClassifier
 /// Runs a small, constrained, tool-less Copilot completion for Build &amp; Test gate applicability,
 /// following the coordinator's existing binary-classification pattern.
 /// </summary>
-public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassifier
+public class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassifier
 {
     internal static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(30);
     internal const int MaxClassificationAttempts = 2;
@@ -50,19 +49,16 @@ public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassif
         "markdown: {\"produces_code\": true} or {\"produces_code\": false}.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ILogger<CopilotAssemblyGateCodeClassifier> _logger;
     private readonly string? _modelId;
 
     public CopilotAssemblyGateCodeClassifier(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ILogger<CopilotAssemblyGateCodeClassifier> logger,
         IConfiguration configuration,
         IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _logger = logger;
         _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveReplyClassificationModel();
@@ -74,16 +70,9 @@ public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassif
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(context.SubmittingUser))
+            if (string.IsNullOrWhiteSpace(context.RunId))
                 throw new InvalidOperationException(
-                    "Assembly-gate code classification requires a submitting user identity.");
-
-            var scope = await _scopeProvider
-                .ResolveAsync(context.SubmittingUser, context.ProjectId, ct)
-                .ConfigureAwait(false);
-            if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-                throw new InvalidOperationException(
-                    "Assembly-gate code classification requires a user Copilot token scope.");
+                    "Assembly-gate code classification requires a run-bound Copilot capability snapshot.");
 
             bool? result = null;
             for (var attempt = 1; attempt <= MaxClassificationAttempts; attempt++)
@@ -91,7 +80,7 @@ public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassif
                 try
                 {
                     result = await RunWithTimeoutAsync(
-                        token => RunModelTurnAsync(scope, BuildPrompt(context), token),
+                        token => RunModelTurnAsync(context.RunId, BuildPrompt(context), token),
                         ClassificationTimeout,
                         ct,
                         onTimeout: () => _logger.LogWarning(
@@ -153,8 +142,8 @@ public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassif
         }
     }
 
-    private async Task<string?> RunModelTurnAsync(
-        GitHubTokenScope scope,
+    protected virtual async Task<string?> RunModelTurnAsync(
+        string runId,
         string prompt,
         CancellationToken ct)
     {
@@ -162,7 +151,7 @@ public sealed class CopilotAssemblyGateCodeClassifier : IAssemblyGateCodeClassif
         AIAgent? agent = null;
         try
         {
-            client = await _copilotClientFactory.CreateClientAsync("unbound", _modelId, ct).ConfigureAwait(false);
+            client = await _copilotClientFactory.CreateClientAsync(runId, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 
             var sessionConfig = new SessionConfig

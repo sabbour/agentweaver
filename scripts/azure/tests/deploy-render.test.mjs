@@ -79,10 +79,8 @@ test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IM
   );
 });
 
-test("buildRuntimeConfigLiterals() composites full URLs from HOST and passes through the rest", () => {
+test("buildRuntimeConfigLiterals() passes through deployment values without retired OAuth metadata", () => {
   const literals = buildRuntimeConfigLiterals(VARS);
-  assert.equal(literals.OAUTH_ISSUER, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
-  assert.equal(literals.OAUTH_AUDIENCE, "https://agentweaver.abc123def456.westus2.staging.aksapp.io/mcp");
   assert.equal(literals.TOKEN_STORE_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net");
   assert.equal(literals.AGENTHOST_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net/");
   assert.equal(literals.IDENTITY_CLIENT_ID, "11111111-2222-3333-4444-555555555555");
@@ -187,6 +185,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.doesNotMatch(builtYaml, /name: Auth__Entra__ClientSecret/);
   assert.doesNotMatch(builtYaml, /changeme/);
   assert.doesNotMatch(builtYaml, /example\.com/);
+  assert.doesNotMatch(builtYaml, /mcp-oauth-signing-key|Auth__OAuth__|OAUTH_ISSUER|OAUTH_AUDIENCE/);
 
   const docs = parseBuiltDocs(builtYaml);
   // issue #471: the AgentHost ServiceAccount must be wired to the DEDICATED KV-less identity, while
@@ -290,6 +289,34 @@ test("manifestForFilename() throws a clear error for an unknown filename (fail-f
 test("manifestForFilename() throws when a resource is missing from the build (fail-fast)", () => {
   const docs = [{ kind: "Namespace", name: "wrong-name", text: "kind: Namespace\nmetadata:\n  name: wrong-name\n" }];
   assert.throws(() => manifestForFilename(docs, "namespace.yaml"), /did not produce Namespace\/agentweaver/);
+});
+
+test("active deployment sources contain no retired MCP OAuth signing artifacts", () => {
+  const retired = [
+    ["mcp", "oauth", "signing", "key"].join("-"),
+    ["Auth", "OAuth"].join("__") + "__",
+    ["OAUTH", "ISSUER"].join("_"),
+    ["OAUTH", "AUDIENCE"].join("_"),
+    ["16", "provision", "oauth", "signing", "key"].join("-"),
+  ];
+  const roots = [
+    path.join(DEFAULT_REPO_ROOT, "k8s", "base"),
+    path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production"),
+    path.join(DEFAULT_REPO_ROOT, "scripts", "azure"),
+  ];
+  const files = roots.flatMap(function collect(directory) {
+    return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? entry.name === "tests" || entry.name.startsWith(".") ? [] : collect(path.join(directory, entry.name))
+        : [path.join(directory, entry.name)]);
+  });
+
+  for (const file of files) {
+    const text = fs.readFileSync(file, "utf8");
+    for (const artifact of retired) {
+      assert.ok(!text.includes(artifact), `${path.relative(DEFAULT_REPO_ROOT, file)} must not contain retired artifact ${artifact}`);
+    }
+  }
 });
 
 // --- Postgres egress policy access-mode branching (bug found live in v0.16.0) ---

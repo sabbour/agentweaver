@@ -80,9 +80,7 @@ export const REDACTED_MARKER = REDACTED;
  * of passing a secret value as a CLI argument: argv is visible to any
  * co-resident process/user via `ps`/`/proc/<pid>/cmdline` for the whole
  * lifetime of the command, whereas a file path is not sensitive and the file
- * itself is removed as soon as the command that reads it exits. Mirrors the
- * pattern already used for the RSA signing key in
- * steps/16-provision-oauth-signing-key.mjs.
+ * itself is removed as soon as the command that reads it exits.
  *
  * @template T
  * @param {string} scratchDir
