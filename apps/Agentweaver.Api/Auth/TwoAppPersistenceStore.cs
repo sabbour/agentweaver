@@ -83,6 +83,8 @@ internal sealed record FencedMarketplaceCopilotCapability(
     string ProjectId,
     string EntraObjectId,
     DateTimeOffset ExpiresAt,
+    DateTimeOffset ConsumedAt,
+    DateTimeOffset ClaimLeaseExpiresAt,
     string SourceBindingId,
     string CredentialReference,
     string CredentialVersion,
@@ -158,6 +160,7 @@ internal sealed class RepoAppCredentialLease(
 public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? projectStore = null)
 {
     private const int MarketplaceCapabilityCleanupBatchSize = 100;
+    internal static readonly TimeSpan MarketplaceCapabilityClaimLease = TimeSpan.FromMinutes(5);
     private static readonly Regex CredentialPattern = new(
         @"(?:gh[ups]_|github_pat_|-----BEGIN [A-Z ]+-----|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1095,7 +1098,8 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
 
     /// <summary>
     /// Atomically consumes an unexpired caller- and project-bound marketplace capability. The
-    /// broker re-fences its exact Copilot binding after the vault read before exposing a credential.
+    /// broker receives a bounded lease and re-fences its exact Copilot binding after the vault read
+    /// before exposing a credential.
     /// </summary>
     internal async Task<FencedMarketplaceCopilotCapability?> TryClaimMarketplaceCopilotCapabilityAsync(
         SnapshotRef capabilityReference,
@@ -1109,10 +1113,12 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
 
         // ExecuteUpdate cannot translate DateTimeOffset updates for SQLite. Parameterized SQL keeps
         // the atomic compare-and-set predicate identical across SQLite and PostgreSQL.
+        var claimLeaseExpiresAt = now.Add(MarketplaceCapabilityClaimLease);
         var changed = await db.Database.ExecuteSqlInterpolatedAsync(
             $"""
              UPDATE marketplace_copilot_capabilities
-             SET consumed_at = {now}
+             SET consumed_at = {now},
+                 claim_lease_expires_at = {claimLeaseExpiresAt}
              WHERE capability_ref = {capabilityReference.Value}
                AND project_id = {projectId}
                AND entra_object_id = {entraObjectId}
@@ -1127,7 +1133,8 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             .SingleOrDefaultAsync(x => x.CapabilityRef == capabilityReference.Value &&
                                        x.ProjectId == projectId &&
                                        x.EntraObjectId == entraObjectId &&
-                                       x.ConsumedAt != null, ct)
+                                       x.ConsumedAt == now &&
+                                       x.ClaimLeaseExpiresAt == claimLeaseExpiresAt, ct)
             .ConfigureAwait(false);
         if (capability is null)
             return null;
@@ -1137,6 +1144,8 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             projectId,
             entraObjectId,
             capability.ExpiresAt,
+            capability.ConsumedAt!.Value,
+            capability.ClaimLeaseExpiresAt!.Value,
             capability.SourceBindingId,
             capability.CredentialReference,
             capability.CredentialVersion,
@@ -1147,8 +1156,8 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     }
 
     /// <summary>
-    /// Deletes a bounded set of expired, unclaimed marketplace capabilities. Claimed records are
-    /// owned by the broker until its terminal cleanup, so expiry maintenance cannot race redemption.
+    /// Deletes a bounded set of expired marketplace capabilities. Claimed records remain protected
+    /// through their lease, then an abandoned claim is reclaimed without allowing it to be replayed.
     /// </summary>
     internal async Task<int> PruneMarketplaceCopilotCapabilitiesAsync(
         DateTimeOffset now,
@@ -1162,8 +1171,12 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
              WHERE capability_ref IN (
                  SELECT capability_ref
                  FROM marketplace_copilot_capabilities
-                 WHERE consumed_at IS NULL
-                   AND expires_at <= {now}
+                 WHERE expires_at <= {now}
+                   AND (
+                       consumed_at IS NULL
+                       OR claim_lease_expires_at IS NULL
+                       OR claim_lease_expires_at <= {now}
+                   )
                  ORDER BY expires_at, capability_ref
                  LIMIT {MarketplaceCapabilityCleanupBatchSize}
              )
@@ -1173,31 +1186,33 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     }
 
     /// <summary>
-    /// Deletes a capability once its claim has reached a terminal broker outcome. The compare-and-delete
-    /// predicate preserves caller/project fencing and cannot remove an unclaimed live capability.
+    /// Deletes a capability once its exact claim has reached a terminal broker outcome. The
+    /// compare-and-delete predicate preserves caller/project and lease fencing.
     /// </summary>
     internal Task<int> DeleteClaimedMarketplaceCopilotCapabilityAsync(
-        SnapshotRef capabilityReference,
-        string projectId,
-        string entraObjectId,
+        FencedMarketplaceCopilotCapability capability,
         CancellationToken ct = default) =>
         db.MarketplaceCopilotCapabilities
-            .Where(x => x.CapabilityRef == capabilityReference.Value &&
-                        x.ProjectId == projectId &&
-                        x.EntraObjectId == entraObjectId &&
-                        x.ConsumedAt != null)
+            .Where(x => x.CapabilityRef == capability.CapabilityReference.Value &&
+                        x.ProjectId == capability.ProjectId &&
+                        x.EntraObjectId == capability.EntraObjectId &&
+                        x.ConsumedAt == capability.ConsumedAt &&
+                        x.ClaimLeaseExpiresAt == capability.ClaimLeaseExpiresAt)
             .ExecuteDeleteAsync(ct);
 
     internal async Task<bool> IsClaimedMarketplaceCopilotCapabilityLiveAsync(
         FencedMarketplaceCopilotCapability capability,
         CancellationToken ct = default)
     {
-        if (capability.ExpiresAt <= DateTimeOffset.UtcNow ||
+        var now = DateTimeOffset.UtcNow;
+        if (capability.ExpiresAt <= now ||
+            capability.ClaimLeaseExpiresAt <= now ||
             !await db.MarketplaceCopilotCapabilities.AsNoTracking().AnyAsync(record =>
                 record.CapabilityRef == capability.CapabilityReference.Value &&
                 record.ProjectId == capability.ProjectId &&
                 record.EntraObjectId == capability.EntraObjectId &&
-                record.ConsumedAt != null, ct).ConfigureAwait(false))
+                record.ConsumedAt == capability.ConsumedAt &&
+                record.ClaimLeaseExpiresAt == capability.ClaimLeaseExpiresAt, ct).ConfigureAwait(false))
             return false;
 
         return await db.ProjectCopilotBindings.AsNoTracking().AnyAsync(binding =>
