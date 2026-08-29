@@ -152,7 +152,7 @@ public sealed class CopilotPreviewClassifier : IPreviewClassifier
         AIAgent? agent = null;
         try
         {
-            client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
+            client = await _copilotClientFactory.CreateClientAsync("unbound", _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
             var sessionConfig = new SessionConfig
             {

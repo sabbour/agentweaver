@@ -196,7 +196,6 @@ public sealed class CoordinatorAutopilot : ICoordinatorAutopilot
 
             agent = new CopilotAIAgent(
                 _copilotClientFactory,
-                _scopeProvider,
                 _sandboxExecutor,
                 _sandboxPolicyStore,
                 _approvalStore,

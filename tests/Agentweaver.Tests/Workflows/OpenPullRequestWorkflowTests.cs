@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -219,8 +220,7 @@ public sealed class OpenPullRequestWorkflowTests
         var projectStore = new SingleProjectStore(MakeProject("acme/widgets", "main"));
         var executor = new OpenPullRequestTurnExecutor(
             prClient,
-            new FixedInstallationScopeStub(),
-            new FixedAccessTokenProvider("token-123"),
+            new FixedGitHubRepositoryCapabilityCredentialProvider("token-123"),
             NullLoggerFactory.Instance,
             projectStore: projectStore);
 
@@ -253,8 +253,7 @@ public sealed class OpenPullRequestWorkflowTests
         var projectStore = new SingleProjectStore(MakeProject("acme/widgets", "main"));
         var executor = new OpenPullRequestTurnExecutor(
             prClient,
-            new FixedInstallationScopeStub(),
-            new FixedAccessTokenProvider("token-123"),
+            new FixedGitHubRepositoryCapabilityCredentialProvider("token-123"),
             NullLoggerFactory.Instance,
             projectStore: projectStore,
             title: "Custom title {run_id}",
@@ -290,8 +289,7 @@ public sealed class OpenPullRequestWorkflowTests
         var prClient = new RecordingPullRequestClient(GitHubPullRequestResult.Ok(1, "https://github.com/acme/widgets/pull/1"));
         var executor = new OpenPullRequestTurnExecutor(
             prClient,
-            new FixedInstallationScopeStub(),
-            new FixedAccessTokenProvider("token-123"),
+            new FixedGitHubRepositoryCapabilityCredentialProvider("token-123"),
             NullLoggerFactory.Instance);
 
         var input = new AgentTurnOutput(
@@ -317,8 +315,7 @@ public sealed class OpenPullRequestWorkflowTests
         var prClient = new RecordingPullRequestClient(GitHubPullRequestResult.Ok(1, "https://github.com/acme/widgets/pull/1"));
         var executor = new OpenPullRequestTurnExecutor(
             prClient,
-            new FixedInstallationScopeStub(),
-            new FixedAccessTokenProvider("token-123"),
+            new FixedGitHubRepositoryCapabilityCredentialProvider("token-123"),
             NullLoggerFactory.Instance,
             projectStore: null);
 
@@ -346,8 +343,7 @@ public sealed class OpenPullRequestWorkflowTests
         var projectStore = new SingleProjectStore(MakeProject("acme/widgets", "main"));
         var executor = new OpenPullRequestTurnExecutor(
             prClient,
-            new FixedInstallationScopeStub(),
-            new FixedAccessTokenProvider(null),
+            new FixedGitHubRepositoryCapabilityCredentialProvider(null),
             NullLoggerFactory.Instance,
             projectStore: projectStore);
 
@@ -377,8 +373,7 @@ public sealed class OpenPullRequestWorkflowTests
         var projectStore = new SingleProjectStore(MakeProject("acme/widgets", "main"));
         var executor = new OpenPullRequestTurnExecutor(
             prClient,
-            new FixedInstallationScopeStub(),
-            new FixedAccessTokenProvider("token-123"),
+            new FixedGitHubRepositoryCapabilityCredentialProvider("token-123"),
             NullLoggerFactory.Instance,
             projectStore: projectStore);
 
@@ -407,8 +402,7 @@ public sealed class OpenPullRequestWorkflowTests
         var projectStore = new SingleProjectStore(MakeProject("acme/widgets", "develop"));
         var executor = new OpenPullRequestTurnExecutor(
             prClient,
-            new FixedInstallationScopeStub(),
-            new FixedAccessTokenProvider("token-123"),
+            new FixedGitHubRepositoryCapabilityCredentialProvider("token-123"),
             NullLoggerFactory.Instance,
             projectStore: projectStore);
 
@@ -481,10 +475,16 @@ public sealed class OpenPullRequestWorkflowTests
             Task.FromResult<GitHubPullRequestResult?>(null);
     }
 
-    private sealed class FixedAccessTokenProvider(string? token) : IGitHubAccessTokenProvider
+    private sealed class FixedGitHubRepositoryCapabilityCredentialProvider(string? token)
+        : IGitHubRepositoryCapabilityCredentialProvider
     {
-        public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult(token);
+        public Task<GitHubCapabilitySnapshotCredential?> GetCredentialAsync(
+            string runId,
+            CancellationToken ct = default) =>
+            Task.FromResult<GitHubCapabilitySnapshotCredential?>(
+                string.IsNullOrWhiteSpace(token)
+                    ? null
+                    : new("snapshot-test", token, DateTimeOffset.UtcNow.AddMinutes(5)));
     }
 
     private sealed class SingleProjectStore(Project project) : IProjectStore

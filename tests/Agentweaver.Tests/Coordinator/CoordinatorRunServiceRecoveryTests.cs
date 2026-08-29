@@ -481,11 +481,10 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         var registry = new RunWorkflowRegistry();
         var pendingStore = new PendingRequestStore(_scopeFactory);
         var copilotClientFactory = new Agentweaver.AgentRuntime.Providers.GitHubCopilotClientFactory(
-            config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+            config, new FixedGitHubCopilotCapabilityCredentialProvider());
 
         var agentFactory = new WorkflowAgentFactory(
             copilotClientFactory,
-            new FixedInstallationScopeStub(),
             new Agentweaver.SandboxExec.PassthroughExecutor("test"),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),
@@ -497,7 +496,6 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         var runWorkflowFactory = new RunWorkflowFactory(
             new TestFileEditAgentRunner(),
             copilotClientFactory,
-            new FixedInstallationScopeStub(),
             new Agentweaver.SandboxExec.PassthroughExecutor("test"),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),

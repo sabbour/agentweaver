@@ -18,7 +18,6 @@ isolation model — filesystem containment, governance, executor selection, and 
 | `Sandbox:AgentExecutionMode` | `in-api`, `pod-per-run` | `in-api` | `in-api` runs the agent turn in-process in the API/worker (today's behavior, the **rollback path**). `pod-per-run` relocates each run's agent turn into its own Kata-isolated sandbox pod via the A2A bridge. |
 | `Sandbox:ReleasePodOnSuspend` | `true`, `false` | `true` | When `pod-per-run` is active and the workflow graph suspends on an external gate (a HITL/review `RequestPort`, or the coordinator idling while it awaits child runs), `true` checkpoints the run and **releases** the pod back to the warm pool. `false` keeps the pod warm across the suspension for low-latency resume or debugging, at the cost of held capacity. |
 | `Sandbox:Kubernetes:AgentHostClaimCreationGraceSeconds` | Positive integer seconds | `300` | Minimum age before the orphan reaper may delete an AgentHost claim that is absent from the active-run map. The effective grace is the larger of this value and `Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds + 30` seconds. |
-| `AgentHost:KeyVaultUri` | URI | *(unset)* | Vault URI for the legacy runtime user-token fetch fallback. With the dedicated KV-less sandbox identity (issue #471) this fallback fails closed; the run owner's token is delivered via the brokered `gitHubAccessToken` in `/configure`. |
 | `AgentHost:ExecutionScratchRoot` | Absolute path | `/local-workspace` | Root of the disk-backed emptyDir used for pod-local execution workspaces and package caches. |
 | `AgentHost:ExecutionScratchMinimumFreeBytes` | Non-negative integer bytes | `8589934592` (8 GiB) | Minimum available scratch space required before AgentHost prepares a local workspace. Failure returns typed reason `insufficient_ephemeral_storage`. |
 | `Coordinator:AssemblyBuildTestTimeoutMinutes` | Positive number | `20` | Total assembly Build/Test wall-clock limit. Expiry cancels the gate and releases its retained AgentHost claim. |
@@ -37,7 +36,7 @@ isolation model — filesystem containment, governance, executor selection, and 
   `-preview` A2A transport — there is no alternate wire transport to deploy. See the
   [A2A reference](./a2a.md) for the transport's preview status and pinning.
 
-> AgentHost user-token delivery is selected by `AgentHost:KeyVaultUri` in AKS. File/CSI settings exist only for local compatibility; the warm-pool path receives the run owner's token brokered by the API in `/configure` (issue #471), since the sandbox identity has no Key Vault access.
+> AgentHost receives only a live, immutable capability credential redeemed for the configured run and purpose through `/configure`. It has no Key Vault, CSI, shared-filesystem, or ambient-token fallback.
 
 ## Pod identity and quota
 
@@ -68,82 +67,20 @@ An AgentHost claim missing from the active-run map is not reaped while its Kuber
 alive through the readiness wait (`AgentHostReadyTimeoutSeconds`, default `90` seconds); a missing or
 unparseable timestamp receives no grace and remains eligible for cleanup.
 
-## Run-scoped GitHub token delivery
+## Run-scoped GitHub capability delivery
 
-A pod-per-run sandbox acts **as the run's signed-in user** and needs a GitHub credential to clone/push the worktree and call GitHub API tools. In AKS, user tokens are stored in Azure Key Vault, resolved by the API, and delivered to the configured AgentHost pod in the one-time `/configure` call; they are not mounted via per-run CSI, and the sandbox identity itself has no Key Vault access (issue #471).
+A pod-per-run sandbox receives only capability credentials tied to the run's immutable snapshots. `RunGitHubCapabilitySnapshotLifecycle` captures snapshots before launch and gives retries/resumes fresh references to the inherited capability. The API's `GitHubCapabilityBroker` fences the selected `UnattendedCopilot` or `UnattendedRepository` snapshot before and after redemption, then bounds the credential expiry.
 
-### Sourcing
+`KubernetesSandboxExecutor` refuses to launch an AgentHost pod without a live Copilot credential for the exact run. It transfers that credential in-memory through the one-time `/configure` call. `AgentHostGitHubCapabilityCredentialProvider` rejects credentials for a different run or past expiry. AgentHost does not read Key Vault, CSI mounts, shared filesystem tokens, user token stores, or configuration credentials.
 
-- Each authenticated user's GitHub token is stored in Key Vault as `ghtok-user--{base32(userId)}`.
-- The executor resolves the run's submitting user, pre-resolves that user's GitHub token via the API-side token store, and passes it as `gitHubAccessToken` in `/configure`. If the user cannot be resolved or has no usable token, the launch fails before the first turn rather than falling back to another scope.
-- Installation scope remains for background/system work with no caller; user runs use the owning user's scope.
-
-### Delivery to the executing pod
-
-1. The shared AgentHost warm pool (`agentweaver-agent-host`, `replicas: 2`) keeps pods in standby with no `RunId`.
-2. The `SandboxClaim` binds one warm pod. Static config such as `AgentHost__KeyVaultUri` is already present because the pod needs the vault URI before configuration.
-3. `KubernetesSandboxExecutor` calls `POST /configure` with run identity, credentials, and the shared/local workspace descriptor.
-4. `AgentHostRuntimeState.TryConfigure(...)` stores those values once.
-5. `KeyVaultUserTokenProvider` prefers the pre-resolved `gitHubAccessToken` from `/configure` and serves it to the runtime, caching it in memory for the pod lifetime. The legacy `SecretClient` + `DefaultAzureCredential` fetch of `kvUserSecretName` remains only as a fallback and fails closed under the KV-less sandbox identity (issue #471).
-
-No per-run `SecretProviderClass`, cloned `SandboxTemplate`, CSI user-token volume, or per-run warm pool is created. The JSON secret value matches the old file-mounted format, so downstream consumers still see the same token-store contract.
-
-### `/configure` request body
-
-`POST /configure` is the one-time warm-pool configuration call from `KubernetesSandboxExecutor` to the bound AgentHost pod.
-
-| Field | Required | Meaning |
+| `/configure` field | Required | Meaning |
 |---|---|---|
-| `runId` | Yes | The Agentweaver run this pod executes. Missing or blank values return `400`. |
-| `userId` | No | Submitting user id for run-scoped GitHub token lookup. |
-| `turnBearerToken` | No | Per-run bearer token required by `POST /a2a/agent/v1/message:stream`. |
-| `kvUserSecretName` | No | Key Vault secret name for the submitting user's GitHub token. |
-| `gitHubAccessToken` | No | API-pre-resolved GitHub access token; when present, the pod skips the Key Vault fetch. |
-| `sharedWorkingDirectory` | No | API-visible run worktree (for example `/workspace/{worktree}`). Used directly in `Shared` mode and retained as the source-tree coordinate in local modes. |
-| `workingDirectory` | No | Backward-compatible alias for `sharedWorkingDirectory`. It never represents a pod-local path. |
-| `previewRunnerCredential` | No | Fresh per-run bearer for authenticated pod-root control calls, including tool-approval forwarding. It is persisted using `PreviewRunnerCredential.SecretKey(runId)`; inside the pod it is stored only in AgentHost memory. |
-| `autoApproveTools` | No | Seeds the pod-local run-options store; defaults to `false`. |
-| `purpose` | No | String enum: `Default`, `AssemblyBuildTest`, or `ImplementationTurn`. |
-| `workspaceMode` | No | String enum: `Shared` (default), `LocalReadOnly`, or `LocalWritable`. Assembly requires `LocalReadOnly`; implementation turns require `LocalWritable`. |
-| `sourceRepositoryPath` | Local modes | Shared repository path used as the git fetch remote. It is a source, never the execution cwd. |
-| `sourceRef` | Local modes | Branch/ref shallow-fetched from `sourceRepositoryPath`; assembly passes the integration ref. |
-| `baseCommitSha` | Local modes | Immutable commit SHA expected at `sourceRef` (40–64 hexadecimal characters). |
-| `expectedTreeHash` | Local modes | Immutable tree object expected for `baseCommitSha` (40–64 hexadecimal characters). |
-| `scratchRoot` | Local modes | Mounted execution-scratch root. AgentHost derives the local path inside the pod as `{scratchRoot}/{run-hash}/{tree-hash}`. |
+| `runId` | Yes | Configured run identity. |
+| `copilotCredential` | Yes | Opaque snapshot reference, credential, and bounded expiry for that run's unattended Copilot capability. |
+| `repositoryAccessToken` | No | Separately redeemed repository capability for narrowly-scoped Git/GitHub operations. |
+| `turnBearerToken` | No | A2A turn authorization token, distinct from the GitHub capability. |
 
-`IRunSubmittingUserResolver.GetWorkingDirectoryAsync(runId)` resolves the shared directory from the run row and strips coordinator suffixes such as `-coordinator-decompose`, so sibling child stages share the parent's worktree. Local execution sends the explicit source contract above. AgentHost verifies the fetched commit and tree before setup, derives the workspace path inside the pod, and exposes it as the runtime state's effective working directory. Preview resolves its command against the API-visible detached worktree and maps the relative cwd into this checkout.
-
-| `/configure` result | Meaning |
-|---|---|
-| `200` | Configuration and purpose-specific setup completed. |
-| `400` | Malformed JSON or missing `runId`. |
-| `409` | Pod was already configured, or local workspace preparation failed (including SHA/tree/scratch mismatch). |
-| `422` | Required local workspace fields or purpose/mode policy were missing or invalid. |
-| `507` | `execution-scratch` had less than `AgentHost:ExecutionScratchMinimumFreeBytes` available. |
-
-### Lifetime and cleanup
-
-- **Key Vault is the source of truth.** OAuth callbacks and refreshes write the per-user Key Vault secret.
-- **Pod cache is in-memory.** The configured token is cached only for that pod lifetime and disappears when the pod is released.
-- **No SPC cleanup.** The reaper no longer deletes per-run SPCs or per-run templates/warm pools for AgentHost because they are no longer created.
-
-### Security trade-off
-
-The previous CSI design isolated user tokens at the infrastructure layer: the pod filesystem contained only one projected file. The warm-pool design uses application-layer brokering: the API resolves the run owner's token and delivers it in the one-time `/configure` call, and the sandbox runs as a dedicated identity with **no Key Vault access** (issue #471), so it cannot read any vault secret. NetworkPolicy protects `/configure`, one-time configuration prevents retargeting, and `message:stream` still requires the per-run bearer token.
-
-```mermaid
-sequenceDiagram
-    participant Worker as Worker / API
-    participant Claim as SandboxClaim
-    participant Host as Warm AgentHost pod
-    participant State as AgentHostRuntimeState
-    Worker->>Claim: bind agentweaver-agent-host warm pool
-    Claim-->>Worker: pod IP
-    Worker->>Host: POST /configure(runId, userId, gitHubAccessToken, workingDirectory)
-    Host->>State: TryConfigure once (stores brokered token)
-    Host-->>Worker: /healthz ready
-    Worker->>Host: A2A message:stream (Bearer token)
-```
+Credentials are never logged or persisted. Missing, revoked, expired, or purpose-mismatched snapshots fail closed before the pod becomes ready.
 
 ## A2A turn bearer token
 

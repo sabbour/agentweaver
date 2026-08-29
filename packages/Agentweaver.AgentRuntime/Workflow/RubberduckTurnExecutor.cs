@@ -27,7 +27,6 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
         "missed edge cases, and obvious implementation mistakes. You may PASS or request a REVISE.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _sandboxExecutor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
@@ -43,7 +42,6 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
 
     public RubberduckTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor sandboxExecutor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -63,7 +61,6 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
         LogicalNodeId = logicalNodeId;
         DisplayLabel = displayLabel;
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _sandboxExecutor = sandboxExecutor;
         _sandboxPolicyStore = sandboxPolicyStore;
         _approvalStore = approvalStore;
@@ -128,7 +125,6 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
             agent = _agentFactory?.CreateRubberduckAgent()
                 ?? new CopilotAIAgent(
                     _copilotClientFactory,
-                    _scopeProvider,
                     _sandboxExecutor,
                     _sandboxPolicyStore,
                     _approvalStore,

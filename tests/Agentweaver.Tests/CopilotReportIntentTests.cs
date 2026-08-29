@@ -225,10 +225,9 @@ public sealed class CopilotReportIntentTests : IDisposable
     private GitHubCopilotAgentRunner BuildRunner()
     {
         var config = new ConfigurationBuilder().Build();
-        var factory = new GitHubCopilotClientFactory(config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+        var factory = new GitHubCopilotClientFactory(config, new FixedGitHubCopilotCapabilityCredentialProvider());
         return new GitHubCopilotAgentRunner(
             factory,
-            new FixedInstallationScopeStub(),
             SandboxExecutorFactory.CreatePassthrough(),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),

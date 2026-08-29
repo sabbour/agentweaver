@@ -1,4 +1,5 @@
 using Agentweaver.Domain;
+using Agentweaver.AgentRuntime;
 
 namespace Agentweaver.Tests.Helpers;
 
@@ -30,4 +31,30 @@ public sealed class NullGitHubTokenStore : IGitHubTokenStore
 public sealed class FixedInstallationScopeStub : IGitHubTokenScopeProvider
 {
     public GitHubTokenScope Resolve(string? userId) => GitHubTokenScope.Installation;
+}
+
+public sealed class FixedGitHubCopilotCapabilityCredentialProvider(
+    string accessToken = "test-capability-credential",
+    DateTimeOffset? expiresAt = null) : IGitHubCopilotCapabilityCredentialProvider
+{
+    public Task<GitHubCapabilitySnapshotCredential?> GetCredentialAsync(
+        string runId,
+        CancellationToken ct = default) =>
+        Task.FromResult<GitHubCapabilitySnapshotCredential?>(
+            string.IsNullOrWhiteSpace(runId)
+                ? null
+                : new("snapshot-test", accessToken, expiresAt ?? DateTimeOffset.UtcNow.AddHours(1)));
+}
+
+public sealed class FixedGitHubRepositoryCapabilityCredentialProvider(
+    string accessToken = "test-repository-capability-credential",
+    DateTimeOffset? expiresAt = null) : IGitHubRepositoryCapabilityCredentialProvider
+{
+    public Task<GitHubCapabilitySnapshotCredential?> GetCredentialAsync(
+        string runId,
+        CancellationToken ct = default) =>
+        Task.FromResult<GitHubCapabilitySnapshotCredential?>(
+            string.IsNullOrWhiteSpace(runId)
+                ? null
+                : new("snapshot-test", accessToken, expiresAt ?? DateTimeOffset.UtcNow.AddHours(1)));
 }

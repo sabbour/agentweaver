@@ -106,7 +106,6 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 
             agent = new CopilotAIAgent(
                 _copilotClientFactory,
-                _scopeProvider,
                 _sandboxExecutor,
                 _sandboxPolicyStore,
                 _approvalStore,

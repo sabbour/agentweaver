@@ -863,12 +863,9 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     private static CopilotAIAgent BuildAgent(ISandboxExecutor executor)
     {
         var factory = new GitHubCopilotClientFactory(
-            new ConfigurationBuilder().Build(),
-            new NullGitHubTokenStore(),
-            new FixedInstallationScopeStub());
+            new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider());
         return new CopilotAIAgent(
             factory,
-            new FixedInstallationScopeStub(),
             executor,
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),
