@@ -2327,6 +2327,8 @@ export function CoordinatorRunPage() {
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [retryStatus, setRetryStatus] = useState<string | null>(null);
+  const [retryRefreshNonce, setRetryRefreshNonce] = useState(0);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
   const [stopConfirmationOpen, setStopConfirmationOpen] = useState(false);
@@ -2516,7 +2518,7 @@ export function CoordinatorRunPage() {
 
     void tick();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [runId, setRunLevelStatus]);
+  }, [retryRefreshNonce, runId, setRunLevelStatus]);
 
   // Goal is carried by the coordinator.started event.
   const goal = useMemo<string | undefined>(() => {
@@ -3756,15 +3758,25 @@ export function CoordinatorRunPage() {
     if (!runId || !projectId || retrying) return;
     setRetrying(true);
     setRetryError(null);
+    setRetryStatus('Retry requested. Reconnecting to coordinator progress…');
     setStopError(null);
     try {
       const res = await apiClient.retryRun(runId);
+      if (res.resumed) {
+        setRunLevelStatus('in_progress');
+        setRetryStatus('Retry resumed from the last failure point. Coordinator progress is reconnecting.');
+        setRetrying(false);
+        setRetryRefreshNonce((value) => value + 1);
+        reconnectStream();
+        return;
+      }
       navigate(`/projects/${projectId}/orchestrations/${res.run_id}`);
     } catch (err) {
       setRetryError(formatApiErrorMessage(err, 'Could not retry this run.'));
       setRetrying(false);
+      setRetryStatus(null);
     }
-  }, [runId, projectId, retrying, navigate]);
+  }, [reconnectStream, runId, projectId, retrying, navigate, setRunLevelStatus]);
 
   const handleStopRun = useCallback(async () => {
     if (!runId || stopping) return;
@@ -4500,8 +4512,13 @@ export function CoordinatorRunPage() {
         <span>Orchestration {shortId}</span>
       </nav>
 
-      {(retryError || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
+      {(retryError || retryStatus || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
         <div className={styles.statusBannerStack} aria-live="polite">
+          {retryStatus && (
+            <MessageBar intent="info" data-testid="coordinator-retry-status">
+              <MessageBarBody>{retryStatus}</MessageBarBody>
+            </MessageBar>
+          )}
           {runLoadError && (restDescriptor || events.length > 0) && (
             <MessageBar intent="warning">
               <MessageBarBody>Run refresh failed: {runLoadError.message}{runLoadError.detail ? ` ${runLoadError.detail}` : ''}</MessageBarBody>
@@ -4620,7 +4637,7 @@ export function CoordinatorRunPage() {
                 <Button
                   appearance={isRetryable ? 'secondary' : 'subtle'}
                   size="small"
-                  icon={<ArrowRepeatAllRegular />}
+                  icon={retrying ? <Spinner size="extra-tiny" /> : <ArrowRepeatAllRegular />}
                   disabled={!isRetryable || retrying}
                   onClick={() => void handleRetry()}
                   data-testid="coordinator-retry-button"

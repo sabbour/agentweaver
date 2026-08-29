@@ -4,6 +4,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Configuration;
@@ -48,7 +49,8 @@ public sealed class RemoteOperatorAssistantAgent(
     IConfiguration configuration,
     IRunEventStream eventStream,
     ILogger<RemoteOperatorAssistantAgent> logger,
-    IAgentHostPodLifecycle? podLifecycle = null) : IOperatorAssistantAgent
+    IAgentHostPodLifecycle? podLifecycle = null,
+    IServiceScopeFactory? scopeFactory = null) : IOperatorAssistantAgent
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -77,6 +79,7 @@ public sealed class RemoteOperatorAssistantAgent(
 
         try
         {
+            await EnsureAgentHostCapabilityAsync(runId, scopeFactory, ct).ConfigureAwait(false);
             await podLifecycle.LaunchAgentHostPodAsync(
                 runId,
                 new AgentHostLaunchContext(
@@ -84,6 +87,10 @@ public sealed class RemoteOperatorAssistantAgent(
                     Purpose: AgentHostPurpose.OperatorAssistant,
                     CallerBearerToken: request.CallerBearerToken),
                 ct).ConfigureAwait(false);
+        }
+        catch (GitHubCopilotConnectionRequiredException)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -167,6 +174,29 @@ public sealed class RemoteOperatorAssistantAgent(
                     ex, "RemoteOperatorAssistantAgent: failed to release AgentHost pod for run {RunId} (best-effort).", runId);
             }
         }
+    }
+
+    private static async Task EnsureAgentHostCapabilityAsync(
+        string runId,
+        IServiceScopeFactory? scopeFactory,
+        CancellationToken ct)
+    {
+        // Unit seams may deliberately omit the production persistence services. In a production
+        // registration Program always supplies the scope factory, so pod creation cannot bypass
+        // this run/project/binding fence.
+        if (scopeFactory is null)
+            return;
+
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        var run = await runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Operator run '{runId}' was not found.");
+        if (run.ProjectId is not { } projectId)
+            throw new InvalidOperationException($"Operator run '{runId}' has no project capability binding.");
+
+        var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
+        if (!await lifecycle.PrepareForAgentHostLaunchAsync(run, ct).ConfigureAwait(false))
+            throw new GitHubCopilotConnectionRequiredException(projectId);
     }
 
     /// <summary>

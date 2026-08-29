@@ -1,4 +1,5 @@
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Security;
@@ -83,6 +84,10 @@ public static class AssistantEndpoints
             {
                 return Results.Json(new { error = ex.Error, message = ex.Message }, statusCode: ex.StatusCode);
             }
+            catch (GitHubCopilotConnectionRequiredException ex)
+            {
+                return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
+            }
             catch (AgentProviderException ex)
             {
                 return Results.Json(
@@ -156,6 +161,10 @@ public static class AssistantEndpoints
             catch (AssistantRunHttpException ex)
             {
                 return Results.Json(new { error = ex.Error, message = ex.Message }, statusCode: ex.StatusCode);
+            }
+            catch (GitHubCopilotConnectionRequiredException ex)
+            {
+                return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
             }
             catch (AgentProviderException ex)
             {

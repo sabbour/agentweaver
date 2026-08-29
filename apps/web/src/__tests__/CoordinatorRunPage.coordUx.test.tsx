@@ -142,6 +142,31 @@ describe('CoordinatorRunPage operator console redesign', () => {
     ],
   };
 
+  it('reports an in-place retry and restores the page to live coordinator state', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      status: 'failed',
+      coordinator_status: 'failed',
+    } as never);
+    vi.mocked(apiClient.retryRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      retried_from: null,
+      status: 'in_progress',
+      resumed: true,
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const retryButton = await screen.findByTestId('coordinator-retry-button', undefined, { timeout: 4000 });
+    await waitFor(() => expect((retryButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(retryButton);
+
+    await waitFor(() => expect(vi.mocked(apiClient.retryRun)).toHaveBeenCalledWith('coord-run-1'));
+    expect((await screen.findByTestId('coordinator-retry-status')).textContent).toContain(
+      'Retry resumed from the last failure point. Coordinator progress is reconnecting.',
+    );
+    expect((retryButton as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('surfaces a durable ready preview on Build & Test and human review', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));

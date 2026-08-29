@@ -22,6 +22,12 @@ Open **Sessions** in the left nav (it's a collapsible top-level section, next to
 
 The Assistant uses the same signed-in Agentweaver identity as the browser request. The current Entra bearer is validated by the MCP service and forwarded to the API; repository and Copilot capabilities use their respective GitHub App authorizations. You do not need to sign in again inside the conversation.
 
+When Agentweaver is configured to run assistant turns in an **AgentHost pod**, start the
+session from a project that has its GitHub Copilot App connected. The pod is created only after
+Agentweaver captures a short-lived capability bound to that project and session; it never falls
+back to a machine or ambient GitHub credential. If the connection is missing, the session stays
+unstarted and the app offers the project connection action instead.
+
 ## Resuming a session
 
 Sessions persist. Close the tab, come back a day later, or get routed to a different API replica behind the load balancer — reopening a session from the list picks the conversation back up with its full history intact.

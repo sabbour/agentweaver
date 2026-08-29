@@ -662,9 +662,20 @@ public sealed class RunOrchestrator
         if (lifecycle is null)
             return;
 
-        if (!await lifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+        var requiresAgentHost = string.Equals(
+            _configuration["Sandbox:AgentExecutionMode"],
+            "pod-per-run",
+            StringComparison.OrdinalIgnoreCase);
+        var prepared = requiresAgentHost
+            ? await lifecycle.PrepareForAgentHostLaunchAsync(run, ct).ConfigureAwait(false)
+            : await lifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false);
+        if (!prepared)
+        {
+            if (requiresAgentHost && run.ProjectId is { } projectId)
+                throw new GitHubCopilotConnectionRequiredException(projectId);
             throw new InvalidOperationException(
                 $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
+        }
     }
 
     private async Task<Microsoft.Agents.AI.Workflows.StreamingRun> StartWorkflowOrFailAsync(

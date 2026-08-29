@@ -1414,6 +1414,10 @@ app.MapPost("/api/runs/{id}/retry", async (
         logger.LogError(ex, "Failed to read dispatchable team roster while retrying source run {RunId}", runId);
         return Results.UnprocessableEntity(new { error = InvalidTeamException.ErrorCode, message = InvalidTeamException.DefaultMessage });
     }
+    catch (GitHubCopilotConnectionRequiredException ex)
+    {
+        return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
+    }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to start retry run for source run {RunId}", runId);

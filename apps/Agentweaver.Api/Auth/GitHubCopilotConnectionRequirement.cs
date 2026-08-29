@@ -27,6 +27,18 @@ public sealed record GitHubCopilotConnectionRequirement(
 }
 
 /// <summary>
+/// Raised before a run can enter an AgentHost launch path when its project has no redeemable,
+/// explicitly connected Copilot capability. Endpoint surfaces translate this to the single
+/// redacted connection-required response contract.
+/// </summary>
+public sealed class GitHubCopilotConnectionRequiredException(ProjectId projectId) : Exception(
+    GitHubCopilotConnectionRequirement.RequirementMessage)
+{
+    public GitHubCopilotConnectionRequirement Requirement { get; } =
+        GitHubCopilotConnectionRequirement.ForProject(projectId);
+}
+
+/// <summary>
 /// Typed action consumed by every UI surface that receives a
 /// <see cref="GitHubCopilotConnectionRequirement"/>. The client starts the established
 /// project Copilot App authorization endpoint, which creates the one-time browser handoff.
