@@ -28,6 +28,7 @@ namespace Agentweaver.Api.Auth;
 public sealed class EntraOAuthRedirectService
 {
     private const string DefaultScopes = "openid profile email";
+    private const string EntraCallbackPath = "/auth/entra/callback";
     private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(10);
 
     private readonly IConfiguration _configuration;
@@ -59,70 +60,147 @@ public sealed class EntraOAuthRedirectService
     private string? ClientId => _configuration["Auth:Entra:ClientId"];
     private string? ClientSecret => _configuration["Auth:Entra:ClientSecret"];
 
-    /// <summary>The redirect URI registered on the Entra app; defaults to a same-origin callback.</summary>
+    /// <summary>The redirect URI registered on the Entra app.</summary>
     private string? RedirectUri =>
-        _configuration["Auth:Entra:RedirectUri"] ?? "http://localhost:5000/auth/entra/callback";
+        _configuration["Auth:Entra:RedirectUri"];
 
     /// <summary>
     /// Scopes requested at /authorize. Defaults to the OIDC scopes plus this app's own resource via
     /// <c>{ClientId}/.default</c>, so the issued access token's audience is this app's ClientId (what
     /// <see cref="EntraAccessTokenValidator"/> validates) and carries the platform App Roles claim.
     /// </summary>
-    private string Scopes
+    private string ResolveScopes(string clientId)
     {
-        get
-        {
-            var configured = _configuration["Auth:Entra:Scopes"];
-            if (!string.IsNullOrWhiteSpace(configured))
-                return configured;
+        var configured = _configuration["Auth:Entra:Scopes"];
+        if (!string.IsNullOrWhiteSpace(configured))
+            return configured;
 
-            var clientId = ClientId;
-            return string.IsNullOrWhiteSpace(clientId)
-                ? DefaultScopes
-                : $"{DefaultScopes} {clientId}/.default";
-        }
+        return $"{DefaultScopes} {clientId}/.default";
     }
 
-    /// <summary>
-    /// True when everything required for the Entra browser sign-in redirect flow is present:
-    /// ClientId, a resolvable Authority (TenantId or explicit Authority), and a redirect URI.
-    /// ClientSecret is optional because PKCE-only redemption is supported when the Entra app allows
-    /// public client flows.
-    /// </summary>
-    public bool IsConfigured =>
-        !string.IsNullOrWhiteSpace(ClientId)
-        && !string.IsNullOrWhiteSpace(_tokenValidator.Authority)
-        && !string.IsNullOrWhiteSpace(RedirectUri);
+    private string RequireClientId()
+    {
+        var configured = ClientId;
+        if (string.IsNullOrWhiteSpace(configured))
+            throw new EntraNotConfiguredException("Auth:Entra:ClientId must be configured.");
 
-    private string RequireClientId() =>
-        !string.IsNullOrWhiteSpace(ClientId) ? ClientId!
-        : throw new EntraNotConfiguredException("Auth:Entra:ClientId must be configured.");
+        if (!Guid.TryParseExact(configured, "D", out _))
+            throw new EntraNotConfiguredException(
+                "Auth:Entra:ClientId must be an Entra application (client) ID.");
+
+        return configured;
+    }
 
     private ClientAuthenticationMode TokenClientAuthenticationMode =>
         string.IsNullOrWhiteSpace(ClientSecret)
             ? ClientAuthenticationMode.None
             : ClientAuthenticationMode.Secret;
 
-    private string RequireRedirectUri() =>
-        !string.IsNullOrWhiteSpace(RedirectUri) ? RedirectUri!
-        : throw new EntraNotConfiguredException("Auth:Entra:RedirectUri must be configured.");
+    private string RequireRedirectUri()
+    {
+        var configured = RedirectUri;
+        if (string.IsNullOrWhiteSpace(configured))
+            throw new EntraNotConfiguredException("Auth:Entra:RedirectUri must be configured.");
+
+        if (!TryGetApplicationEndpoint(configured, out var redirectUri)
+            || redirectUri.AbsolutePath != EntraCallbackPath)
+        {
+            throw new EntraNotConfiguredException(
+                "Auth:Entra:RedirectUri must be an absolute HTTPS callback URL or an HTTP loopback callback URL.");
+        }
+
+        return redirectUri.AbsoluteUri;
+    }
+
+    private string RequireFrontendUrl()
+    {
+        var configured = _configuration["Auth:Entra:FrontendUrl"];
+        if (string.IsNullOrWhiteSpace(configured))
+            throw new EntraNotConfiguredException("Auth:Entra:FrontendUrl must be configured.");
+
+        if (!TryGetApplicationEndpoint(configured, out var frontendUri)
+            || frontendUri.AbsolutePath != "/")
+        {
+            throw new EntraNotConfiguredException(
+                "Auth:Entra:FrontendUrl must be an absolute HTTPS origin or an HTTP loopback origin.");
+        }
+
+        return frontendUri.GetLeftPart(UriPartial.Authority);
+    }
+
+    private string RequireTenantId() =>
+        _tokenValidator.TenantId
+        ?? throw new EntraNotConfiguredException(
+            "Auth:Entra:TenantId must be configured as an Entra tenant (directory) ID.");
 
     private string RequireAuthorityBase()
     {
         var authority = _tokenValidator.Authority
-            ?? throw new EntraNotConfiguredException("Auth:Entra:TenantId or Auth:Entra:Authority must be configured.");
+            ?? throw new EntraNotConfiguredException(
+                "Auth:Entra:Authority must be a permitted Entra endpoint for Auth:Entra:TenantId.");
 
         // Microsoft's v2.0 authorize/token endpoints hang off the tenant base, not the /v2.0 issuer
-        // suffix that the discovery Authority carries. Strip a trailing /v2.0 so we can append the
-        // /oauth2/v2.0/{authorize,token} paths deterministically (no network round trip at /authorize).
-        var trimmed = authority.TrimEnd('/');
-        if (trimmed.EndsWith("/v2.0", StringComparison.OrdinalIgnoreCase))
-            trimmed = trimmed[..^"/v2.0".Length];
-        return trimmed;
+        // suffix that the discovery Authority carries. Strip the optional trailing /v2.0 so we can
+        // append /oauth2/v2.0/{authorize,token} deterministically (no network round trip at /authorize).
+        return authority[..^"/v2.0".Length];
     }
 
-    private string AuthorizeEndpoint => $"{RequireAuthorityBase()}/oauth2/v2.0/authorize";
-    private string TokenEndpoint => $"{RequireAuthorityBase()}/oauth2/v2.0/token";
+    private static bool TryGetApplicationEndpoint(string configured, out Uri endpoint)
+    {
+        if (!Uri.TryCreate(configured, UriKind.Absolute, out endpoint!)
+            || !endpoint.IsWellFormedOriginalString()
+            || !string.IsNullOrEmpty(endpoint.UserInfo)
+            || !string.IsNullOrEmpty(endpoint.Query)
+            || !string.IsNullOrEmpty(endpoint.Fragment))
+        {
+            endpoint = null!;
+            return false;
+        }
+
+        return endpoint.Scheme == Uri.UriSchemeHttps
+            || (endpoint.Scheme == Uri.UriSchemeHttp && endpoint.IsLoopback);
+    }
+
+    /// <summary>
+    /// Resolves the complete configuration required to safely start or complete the browser
+    /// authorization flow. ClientSecret is optional because PKCE-only redemption is supported
+    /// when the Entra app allows public client flows.
+    /// </summary>
+    public EntraAuthorizationFlowConfiguration GetAuthorizationFlowConfiguration()
+    {
+        var clientId = RequireClientId();
+        _ = RequireTenantId();
+        var authorityBase = RequireAuthorityBase();
+        if (!_tokenValidator.IsConfigured)
+            throw new EntraNotConfiguredException(
+                "Auth:Entra:Issuer must match the configured Entra authority.");
+
+        return new(
+            clientId,
+            authorityBase,
+            RequireRedirectUri(),
+            RequireFrontendUrl(),
+            ResolveScopes(clientId));
+    }
+
+    /// <summary>
+    /// True when every required Entra browser authorization-flow setting is present and valid.
+    /// </summary>
+    public bool IsConfigured
+    {
+        get
+        {
+            try
+            {
+                _ = GetAuthorizationFlowConfiguration();
+                return true;
+            }
+            catch (EntraNotConfiguredException)
+            {
+                return false;
+            }
+        }
+    }
 
     /// <summary>
     /// Begins a sign-in: mints a fresh CSRF <c>state</c> + PKCE pair, persists the code_verifier
@@ -131,6 +209,8 @@ public sealed class EntraOAuthRedirectService
     /// </summary>
     public async Task<string> BeginAuthorizationAsync(CancellationToken ct = default)
     {
+        var configuration = GetAuthorizationFlowConfiguration();
+
         var state = GenerateUrlSafeToken();
         var codeVerifier = GenerateUrlSafeToken();
         var codeChallenge = ComputeS256Challenge(codeVerifier);
@@ -147,16 +227,22 @@ public sealed class EntraOAuthRedirectService
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
         }
 
-        return CreateAuthorizationUrl(state, codeChallenge);
+        return CreateAuthorizationUrl(configuration, state, codeChallenge);
     }
 
     public string CreateAuthorizationUrl(string state, string codeChallenge) =>
-        $"{AuthorizeEndpoint}" +
-        $"?client_id={Uri.EscapeDataString(RequireClientId())}" +
+        CreateAuthorizationUrl(GetAuthorizationFlowConfiguration(), state, codeChallenge);
+
+    private static string CreateAuthorizationUrl(
+        EntraAuthorizationFlowConfiguration configuration,
+        string state,
+        string codeChallenge) =>
+        $"{configuration.AuthorityBase}/oauth2/v2.0/authorize" +
+        $"?client_id={Uri.EscapeDataString(configuration.ClientId)}" +
         $"&response_type=code" +
-        $"&redirect_uri={Uri.EscapeDataString(RequireRedirectUri())}" +
+        $"&redirect_uri={Uri.EscapeDataString(configuration.RedirectUri)}" +
         $"&response_mode=query" +
-        $"&scope={Uri.EscapeDataString(Scopes)}" +
+        $"&scope={Uri.EscapeDataString(configuration.Scopes)}" +
         $"&state={Uri.EscapeDataString(state)}" +
         $"&code_challenge={Uri.EscapeDataString(codeChallenge)}" +
         $"&code_challenge_method=S256";
@@ -170,6 +256,7 @@ public sealed class EntraOAuthRedirectService
     public async Task<(EntraAccessTokenClaims Claims, string AccessToken)> ExchangeCodeAsync(
         string code, string state, CancellationToken ct = default)
     {
+        var configuration = GetAuthorizationFlowConfiguration();
         var now = DateTimeOffset.UtcNow;
         string codeVerifier;
 
@@ -213,7 +300,8 @@ public sealed class EntraOAuthRedirectService
             }
         }
 
-        var accessToken = await RedeemCodeForAccessTokenAsync(code, codeVerifier, ct).ConfigureAwait(false);
+        var accessToken = await RedeemCodeForAccessTokenAsync(code, codeVerifier, configuration, ct)
+            .ConfigureAwait(false);
 
         // Validate the access token exactly as every API request does (issuer, audience=ClientId,
         // signature, tenant, lifetime) and extract oid/tid/roles/display name. Fail closed on any
@@ -226,22 +314,28 @@ public sealed class EntraOAuthRedirectService
         return (claims, accessToken);
     }
 
-    private async Task<string> RedeemCodeForAccessTokenAsync(string code, string codeVerifier, CancellationToken ct)
+    private async Task<string> RedeemCodeForAccessTokenAsync(
+        string code,
+        string codeVerifier,
+        EntraAuthorizationFlowConfiguration configuration,
+        CancellationToken ct)
     {
         var form = new Dictionary<string, string>
         {
             ["grant_type"] = "authorization_code",
-            ["client_id"] = RequireClientId(),
+            ["client_id"] = configuration.ClientId,
             ["code"] = code,
-            ["redirect_uri"] = RequireRedirectUri(),
+            ["redirect_uri"] = configuration.RedirectUri,
             ["code_verifier"] = codeVerifier,
-            ["scope"] = Scopes,
+            ["scope"] = configuration.Scopes,
         };
 
         if (TokenClientAuthenticationMode == ClientAuthenticationMode.Secret)
             form["client_secret"] = ClientSecret!;
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint)
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{configuration.AuthorityBase}/oauth2/v2.0/token")
         {
             Content = new FormUrlEncodedContent(form)
         };
@@ -290,3 +384,13 @@ public sealed class EntraNotConfiguredException : InvalidOperationException
 {
     public EntraNotConfiguredException(string message) : base(message) { }
 }
+
+/// <summary>
+/// The validated settings required by both halves of an Entra browser authorization flow.
+/// </summary>
+public sealed record EntraAuthorizationFlowConfiguration(
+    string ClientId,
+    string AuthorityBase,
+    string RedirectUri,
+    string FrontendUrl,
+    string Scopes);

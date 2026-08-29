@@ -183,6 +183,15 @@ Agentweaver uses **Microsoft Entra ID** for browser authentication. There are no
 4. Repository discovery and project creation use a distinct Repo App browser handoff with an opaque, short-lived selection code.
 5. Copilot-backed work uses a distinct project-scoped Copilot App browser handoff.
 
+For a production deployment, the deploy renderer derives both
+`Auth__Entra__RedirectUri` (`https://<host>/auth/entra/callback`) and
+`Auth__Entra__FrontendUrl` (`https://<host>`) from the public deployment host. Both
+values are required: the API does not fall back to localhost when either is absent.
+Register the public callback URI under the app's `publicClient` platform before enabling
+Entra sign-in; use `npm run azure:setup-entra-app -- --redirect-uri
+https://<host>/auth/entra/callback` to prepare a registration. Do not change an existing
+production app registration without the identity owner's approval.
+
 ### MCP authentication
 
 The MCP server (`agentweaver-mcp`) forwards the authenticated caller context to the API (`AGENTWEAVER_API_URL: http://agentweaver-api:8080`). Platform authorization is based on Entra identity; repository and Copilot capabilities continue through the Repo App and Copilot App handoffs. There is no static MCP bearer key.

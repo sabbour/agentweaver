@@ -33,6 +33,7 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 | `Auth:Entra:ClientId` | none | Entra application (client) ID |
 | `Auth:Entra:TenantId` | none | Entra tenant (directory) ID |
 | `Auth:Entra:RedirectUri` | none | Exact Entra application callback URL |
+| `Auth:Entra:FrontendUrl` | none | Exact browser origin for Entra callback completion |
 
 #### Repo App user authorization
 
@@ -143,11 +144,22 @@ public client flows and no client secret is configured).
 | --- | --- | --- |
 | `Auth:Entra:ClientId` | none | Entra app registration (client) ID — **required** for Entra sign-in |
 | `Auth:Entra:ClientSecret` | none | Optional Entra client secret for confidential-client token redemption. Omit it when the tenant blocks password credentials and the app registration has public client flows enabled (`isFallbackPublicClient: true`) |
-| `Auth:Entra:TenantId` | none | Entra tenant ID — **required** unless `Auth:Entra:Authority` is set |
-| `Auth:Entra:Authority` | none | Full authority URL (e.g. `https://login.microsoftonline.com/<tenant>/v2.0`); overrides `TenantId` for authority resolution |
-| `Auth:Entra:RedirectUri` | `http://localhost:5000/auth/entra/callback` | Redirect URI registered on the Entra app; must exactly match the `/auth/entra/callback` URL |
+| `Auth:Entra:TenantId` | none | Entra tenant (directory) ID GUID — **required** for Entra sign-in and token validation |
+| `Auth:Entra:Authority` | none | Optional Entra authority URL (e.g. `https://login.microsoftonline.com/<tenant>/v2.0`); when set, it must name the configured tenant |
+| `Auth:Entra:RedirectUri` | none | Redirect URI registered on the Entra app; must exactly match the `/auth/entra/callback` URL |
 | `Auth:Entra:Scopes` | `openid profile email <ClientId>/.default` | Space-delimited scopes requested at authorize time. The `<ClientId>/.default` scope yields an access token whose `aud` is the app itself and carries the platform App Roles claim |
-| `Auth:Entra:FrontendUrl` | falls back to `Auth:GitHub:FrontendUrl` then `http://localhost:5173` | URL the API redirects to after a successful (or failed) Entra sign-in |
+| `Auth:Entra:FrontendUrl` | none | URL the API redirects to after a successful (or failed) Entra sign-in |
+
+Both URLs and `TenantId` are required when Entra browser sign-in is enabled. `ClientId` and
+`TenantId` must be the application (client) ID and tenant (directory) ID GUIDs issued by
+Entra. `Authority` is optional, but if supplied it must use the public
+`https://login.microsoftonline.com/<tenant>[/v2.0]` endpoint (or an HTTP loopback endpoint
+for local development) for that same tenant; it cannot replace `TenantId`. `RedirectUri` must be an absolute callback URL ending in
+`/auth/entra/callback`. HTTP is allowed only for loopback local-development URLs; production
+URLs must use HTTPS. The production Kustomize renderer derives the public callback and
+frontend origin from `HOST`; it never falls back to localhost and refuses to render when the
+managed domain or resulting public hostname is absent or malformed. The Entra app registration
+must separately contain the same public callback URL.
 
 If your tenant allows password credentials and you want confidential-client redemption, set
 the Entra client secret locally with user-secrets:
@@ -162,9 +174,11 @@ redeem the authorization code with PKCE only, which works with Entra app registr
 allow public client flows.
 
 ::: tip AKS deploy pipeline wiring
-On the AKS deploy pipeline, `Auth:Mode`/`Auth:Entra:ClientId`/`Auth:Entra:TenantId`/
-`Auth:Entra:RedirectUri` are set from the deploy-time `AUTH_MODE`/`ENTRA_CLIENT_ID`/
-`ENTRA_TENANT_ID` environment variables — see `scripts/azure/variables.mjs` and
+On the AKS deploy pipeline, `Auth:Mode`/`Auth:Entra:ClientId`/`Auth:Entra:TenantId` are
+set from the deploy-time `AUTH_MODE`/`ENTRA_CLIENT_ID`/`ENTRA_TENANT_ID` environment
+variables. `Auth:Entra:RedirectUri` and `Auth:Entra:FrontendUrl` are derived from the
+public `HOST` as `https://<host>/auth/entra/callback` and `https://<host>`, respectively;
+see `scripts/azure/variables.mjs`, `scripts/azure/lib/kustomize.mjs`, and
 `k8s/base/api-deployment.yaml`. `Auth:Entra:ClientSecret` (`Auth__Entra__ClientSecret`) is
 deliberately **not** wired through the deploy pipeline: this environment is PKCE-only per the
 tenant policy noted above, so there is no deploy-time env var / ConfigMap key for it. If a

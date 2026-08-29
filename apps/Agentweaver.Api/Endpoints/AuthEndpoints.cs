@@ -224,10 +224,20 @@ public static class AuthEndpoints
             string? error,
             EntraOAuthRedirectService entraOauthService,
             WebSessionExchangeService webSessionExchange,
-            IConfiguration configuration,
             CancellationToken ct) =>
         {
-            var frontendUrl = (configuration["Auth:Entra:FrontendUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            EntraAuthorizationFlowConfiguration authorizationConfiguration;
+            try
+            {
+                authorizationConfiguration = entraOauthService.GetAuthorizationFlowConfiguration();
+            }
+            catch (EntraNotConfiguredException ex)
+            {
+                return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var frontendUrl = authorizationConfiguration.FrontendUrl;
+
             if (string.IsNullOrWhiteSpace(state))
                 return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
 
@@ -246,9 +256,9 @@ public static class AuthEndpoints
                 var oneTimeCode = await webSessionExchange.IssueAsync(accessToken, claims.DisplayName, ct).ConfigureAwait(false);
                 return Results.Redirect($"{frontendUrl}/?auth=success&code={Uri.EscapeDataString(oneTimeCode)}");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(ex.Message)}");
+                return Results.Redirect($"{frontendUrl}/?auth=error&reason=sign_in_failed");
             }
         }).AllowAnonymous();
 
