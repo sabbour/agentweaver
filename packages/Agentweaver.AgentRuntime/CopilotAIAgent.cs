@@ -66,7 +66,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         new(StringComparer.OrdinalIgnoreCase) { "report_intent", "report_outcome", "glob" };
 
     private readonly GitHubCopilotClientFactory _factory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _executor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
@@ -126,7 +125,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     // session (see BuildSessionConfigTools) — gates whether the prompt tells the agent about
     // them (#268: prompt/tool mismatch caused hallucinated tool calls).
     private bool _includeTeamCoordinationPrompt;
-    private GitHubTokenScope? _tokenScope;
     private SessionConfig? _sessionConfig;
     private ShellExecutionTracker? _shellExecutionTracker;
     // Whether this run uses the controlled Build/Test shell surface (purpose == AssemblyBuildTest).
@@ -256,7 +254,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     public CopilotAIAgent(
         GitHubCopilotClientFactory factory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor executor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -268,7 +265,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         ISandboxRepositoryCredentialProvider? repositoryCredentialProvider = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
-        _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
@@ -380,9 +376,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _activeExecutor = executor;
         _governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        var scope = await ResolveTokenScopeAsync(_userId, _projectId, ct).ConfigureAwait(false);
-        _tokenScope = scope;
-        _client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
+        _client = await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false);
         try
         {
             await _client.StartAsync(ct).ConfigureAwait(false);
@@ -728,9 +722,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     {
         if (_inner is null)
         {
-            var scope = await ResolveTokenScopeAsync(_userId, _projectId, cancellationToken).ConfigureAwait(false);
-            _tokenScope = scope;
-            _client ??= await _factory.CreateClientAsync(scope, _modelId, cancellationToken).ConfigureAwait(false);
+            _client ??= await _factory.CreateClientAsync(_runId, _modelId, cancellationToken).ConfigureAwait(false);
             try
             {
                 await _client.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -752,35 +744,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 ownsClient: false, id: null, name: null, description: null);
         }
         return await _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<GitHubTokenScope> ResolveTokenScopeAsync(
-        string? userId,
-        string? projectId,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(userId))
-            throw new AgentProviderException(
-                ModelSource.GitHubCopilot,
-                AgentProviderFailureKind.Authorization,
-                "github_copilot_auth_required",
-                $"Run {_runId} cannot start: no submitting user identity is available. " +
-                "Pass the authenticated user's ID to SetupAsync so the correct Copilot-entitled " +
-                "token is resolved. Using the installation token is not permitted.",
-                isRetryable: false);
-
-        var scope = await _scopeProvider.ResolveAsync(userId, projectId, ct).ConfigureAwait(false);
-        if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-            throw new AgentProviderException(
-                ModelSource.GitHubCopilot,
-                AgentProviderFailureKind.Authorization,
-                "github_copilot_auth_required",
-                $"Run {_runId} cannot start: the token scope provider resolved the installation " +
-                "scope for a Copilot model turn. GitHub App installation tokens are not Copilot " +
-                "model credentials; configure a user-token scope provider and pass the submitting user.",
-                isRetryable: false);
-
-        return scope;
     }
 
     /// <summary>
@@ -1249,10 +1212,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     private async Task<AgentSession> EnsureFreshClientForAiCallAsync(AgentSession session, CancellationToken ct)
     {
-        if (_tokenScope is null)
+        if (string.IsNullOrWhiteSpace(_runId))
             return session;
 
-        if (!await _factory.ShouldRefreshBeforeAiCallAsync(_tokenScope, ct).ConfigureAwait(false))
+        if (!await _factory.ShouldRefreshBeforeAiCallAsync(_runId, ct).ConfigureAwait(false))
             return session;
 
         _logger.LogInformation("GitHub Copilot token is expired or near expiry for run {RunId}; refreshing before streaming call", _runId);
@@ -1261,15 +1224,15 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     private async Task<AgentSession> RecreateInnerAgentSessionAsync(CancellationToken ct)
     {
-        if (_tokenScope is null)
-            throw new InvalidOperationException("GitHub token scope is unavailable; SetupAsync must be called first.");
+        if (string.IsNullOrWhiteSpace(_runId))
+            throw new InvalidOperationException("Run identifier is unavailable; SetupAsync must be called first.");
         if (_sessionConfig is null)
             throw new InvalidOperationException("SessionConfig is unavailable; SetupAsync must be called first.");
 
         if (_client is not null)
             await _client.DisposeAsync().ConfigureAwait(false);
 
-        _client = await _factory.CreateClientAsync(_tokenScope, _modelId, ct).ConfigureAwait(false);
+        _client = await _factory.CreateClientAsync(_runId, _modelId, ct).ConfigureAwait(false);
         try
         {
             await _client.StartAsync(ct).ConfigureAwait(false);

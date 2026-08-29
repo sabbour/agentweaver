@@ -154,6 +154,53 @@ public sealed class TwoAppCredentialArchitectureTests
     }
 
     [Fact]
+    public void RuntimeAndHost_HaveNoAmbientGitHubTokenDependencies()
+    {
+        var root = FindRepositoryRoot();
+        var sourceRoots = new[]
+        {
+            Path.Combine(root, "packages", "Agentweaver.AgentRuntime"),
+            Path.Combine(root, "apps", "Agentweaver.AgentHost"),
+        };
+        var forbidden = new[]
+        {
+            "IGitHubTokenStore",
+            "IGitHubTokenScopeProvider",
+            "IGitHubAccessTokenProvider",
+        };
+
+        var offenders = sourceRoots
+            .SelectMany(sourceRoot => Directory.EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}") &&
+                           !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+            .Where(path => forbidden.Any(token => File.ReadAllText(path).Contains(token, StringComparison.Ordinal)))
+            .Select(path => Path.GetRelativePath(root, path))
+            .ToArray();
+
+        offenders.Should().BeEmpty("runtime and host credentials must originate from capability snapshots");
+    }
+
+    [Fact]
+    public void AgentHostConfigure_RequiresLiveRunBoundCapabilityCredential()
+    {
+        var root = FindRepositoryRoot();
+        var hostProgram = File.ReadAllText(Path.Combine(
+            root, "apps", "Agentweaver.AgentHost", "Program.cs"));
+        var hostProvider = File.ReadAllText(Path.Combine(
+            root, "apps", "Agentweaver.AgentHost", "AgentHostGitHubCapabilityCredentialProvider.cs"));
+        var runtimeFactory = File.ReadAllText(Path.Combine(
+            root, "packages", "Agentweaver.AgentRuntime", "Providers", "GitHubCopilotClientFactory.cs"));
+
+        hostProgram.Should().Contain("A live run-bound Copilot capability credential is required");
+        hostProvider.Should().Contain("runtimeState.RunId, runId")
+            .And.Contain("credential.ExpiresAt > DateTimeOffset.UtcNow");
+        runtimeFactory.Should().Contain("IGitHubCopilotCapabilityCredentialProvider")
+            .And.Contain("live run-bound capability snapshot")
+            .And.NotContain("GetValue<string>(\"GitHubToken\")")
+            .And.NotContain("GetValue<string>(\"ApiKey\")");
+    }
+
+    [Fact]
     public void BrowseAuthorityPersistenceRemainsOwnedByProjectCreationFlow()
     {
         var root = FindRepositoryRoot();

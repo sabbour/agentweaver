@@ -543,10 +543,9 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         var registry = new RunWorkflowRegistry();
         var pendingStore = new PendingRequestStore(scopeFactory);
         var copilotClientFactory = new Agentweaver.AgentRuntime.Providers.GitHubCopilotClientFactory(
-            config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+            config, new FixedGitHubCopilotCapabilityCredentialProvider());
         var agentFactory = new Agentweaver.AgentRuntime.Workflow.WorkflowAgentFactory(
             copilotClientFactory,
-            new FixedInstallationScopeStub(),
             new Agentweaver.SandboxExec.PassthroughExecutor("test"),
             new StubPolicyStore(),
             new Agentweaver.AgentRuntime.InMemoryShellApprovalStore(),
@@ -557,7 +556,6 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         var factory = new RunWorkflowFactory(
             new TestFileEditAgentRunner(),
             copilotClientFactory,
-            new FixedInstallationScopeStub(),
             new Agentweaver.SandboxExec.PassthroughExecutor("test"),
             new StubPolicyStore(),
             new Agentweaver.AgentRuntime.InMemoryShellApprovalStore(),

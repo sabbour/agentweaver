@@ -63,7 +63,7 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
         // so its eventual (expected) SetupAsync failure never surfaces as an unobserved exception.
         var task = service.ConfigureAsync(
             runId, userId: "sabbour", turnBearerToken: "tok",
-            kvUserSecretName: null, gitHubAccessToken: null, workingDirectory: null,
+            copilotCredential: null, workingDirectory: null,
             autoApproveTools: true, ct: new CancellationToken(canceled: true));
         _ = task.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
 
@@ -86,7 +86,7 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
 
         var task = service.ConfigureAsync(
             runId, userId: "sabbour", turnBearerToken: "tok",
-            kvUserSecretName: null, gitHubAccessToken: null, workingDirectory: null,
+            copilotCredential: null, workingDirectory: null,
             autoApproveTools: false, ct: new CancellationToken(canceled: true));
         _ = task.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
 
@@ -195,8 +195,7 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
                     runId,
                     UserId: "sabbour",
                     TurnBearerToken: "tok",
-                    KvUserSecretName: null,
-                    GitHubAccessToken: null,
+            CopilotCredential: null,
                     PreviewRunnerCredential: null,
                     SharedWorkingDirectory: null),
                 autoApproveTools: false,
@@ -254,8 +253,7 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
             runId,
             userId: "sabbour",
             turnBearerToken: "tok",
-            kvUserSecretName: null,
-            gitHubAccessToken: null,
+            copilotCredential: null,
             workingDirectory: workspace,
             autoApproveTools: false,
             ct: new CancellationToken(canceled: true));
@@ -308,10 +306,9 @@ public sealed class AgentHostStartupServiceConfigureTests : IDisposable
     {
         var config = new ConfigurationBuilder().Build();
         var factory = new GitHubCopilotClientFactory(
-            config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+            config, new FixedGitHubCopilotCapabilityCredentialProvider());
         return new CopilotAIAgent(
             factory,
-            new FixedInstallationScopeStub(),
             sandboxExecutor ?? SandboxExecutorFactory.CreatePassthrough(),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),

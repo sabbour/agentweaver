@@ -77,7 +77,7 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
                 throw new InvalidOperationException(
                     "Workflow selection requires a user Copilot token scope; installation-scope Copilot auth is not permitted.");
 
-            client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
+            client = await _copilotClientFactory.CreateClientAsync("unbound", _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 
             // Minimal, tool-less session. SECURITY (XPIA): the model consumes user-controlled text

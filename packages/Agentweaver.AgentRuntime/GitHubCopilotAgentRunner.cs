@@ -53,7 +53,6 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     internal TimeSpan ApprovalHeartbeatInterval { get; set; } = TimeSpan.FromSeconds(20);
 
     private readonly GitHubCopilotClientFactory _factory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _executor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
@@ -64,7 +63,6 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
 
     public GitHubCopilotAgentRunner(
         GitHubCopilotClientFactory factory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor executor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -74,7 +72,6 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         IRunOptionsStore? runOptions = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
-        _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
@@ -133,18 +130,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             : _executor;
         using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        var scope = await _scopeProvider.ResolveAsync(userId, projectId, ct).ConfigureAwait(false);
-        if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-            throw new AgentProviderException(
-                ModelSource.GitHubCopilot,
-                AgentProviderFailureKind.Authorization,
-                "github_copilot_auth_required",
-                $"Run {runId} cannot use the GitHub Copilot model with the installation token scope. " +
-                "GitHub App installation tokens are not Copilot model credentials; configure a " +
-                "user-token scope provider and pass the submitting user.",
-                isRetryable: false);
-
-        await using var client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
+        await using var client = await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false);
         try
         {
             await client.StartAsync(ct).ConfigureAwait(false);

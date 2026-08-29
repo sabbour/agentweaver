@@ -415,10 +415,9 @@ public sealed class A2ATurnBridgeAgentTests
     {
         var config = new ConfigurationBuilder().Build();
         var factory = new GitHubCopilotClientFactory(
-            config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+            config, new FixedGitHubCopilotCapabilityCredentialProvider());
         return new CopilotAIAgent(
             factory,
-            new FixedInstallationScopeStub(),
             SandboxExecutorFactory.CreatePassthrough(),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),
@@ -451,8 +450,7 @@ public sealed class A2ATurnBridgeAgentTests
             RunId: "run-operator-session-bypass",
             UserId: "user-1",
             TurnBearerToken: "turn-token",
-            KvUserSecretName: null,
-            GitHubAccessToken: "gh-oauth-token-abc",
+            CopilotCredential: null,
             PreviewRunnerCredential: null,
             SharedWorkingDirectory: null,
             Purpose: AgentHostPurpose.OperatorAssistant,
@@ -485,8 +483,7 @@ public sealed class A2ATurnBridgeAgentTests
             RunId: "run-coordinator-1",
             UserId: "user-1",
             TurnBearerToken: "turn-token",
-            KvUserSecretName: null,
-            GitHubAccessToken: "gh-oauth-token-abc",
+            CopilotCredential: null,
             PreviewRunnerCredential: null,
             SharedWorkingDirectory: null,
             Purpose: AgentHostPurpose.Default,

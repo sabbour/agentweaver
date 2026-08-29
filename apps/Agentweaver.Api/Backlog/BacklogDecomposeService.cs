@@ -98,7 +98,6 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
         {
             agent = new CopilotAIAgent(
                 _copilotClientFactory,
-                _scopeProvider,
                 _sandboxExecutor,
                 _sandboxPolicyStore,
                 _approvalStore,

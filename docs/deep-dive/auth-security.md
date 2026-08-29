@@ -589,17 +589,17 @@ sequenceDiagram
     API->>Claim: bind shared agentweaver-agent-host warm pool
     Claim-->>API: pod IP
     API->>KV: resolve run owner's token (API identity)
-    API->>Pod: POST /configure(runId, userId, turnBearerToken, gitHubAccessToken, kvUserSecretName, workingDirectory)
+    API->>Pod: POST /configure(runId, turnBearerToken, copilotCredential, workingDirectory)
     Pod->>Pod: AgentHostRuntimeState.TryConfigure once
     Pod->>Agent: SetupAsync after configure
-    Note over Pod,KV: Sandbox identity has NO KV roles; it uses the brokered gitHubAccessToken (no vault call)
+    Note over API,Pod: Broker fences the run snapshot before and after credential redemption
     API->>Pod: POST /a2a/agent/v1/message:stream
     Note over API,Pod: Authorization: Bearer {turnBearerToken}
 ```
 
 `AgentHostRuntimeState` is the mutable singleton that bridges warm-pool startup and per-run configuration. If a pod starts without `RunId`, `AgentHostStartupService` enters standby and logs that it is waiting for `/configure`. If a pod is launched with env vars for backward compatibility, `InitializeFromOptions` seeds the same runtime state and SetupAsync runs immediately.
 
-`POST /configure` accepts `{ runId, userId, turnBearerToken, gitHubAccessToken?, kvUserSecretName?, workingDirectory? }`. `gitHubAccessToken` is the run owner's token pre-resolved by the API (issue #471) — the primary, sandbox-vault-free delivery path; `kvUserSecretName` remains a defense-in-depth fallback that no longer succeeds because the sandbox identity has no Key Vault roles. `workingDirectory` is the run's `WorktreePath`; when present, AgentHost passes it to `SetupAsync` so file tools use the same shared worktree named by the run's system prompt. The endpoint returns `400` when `runId` is missing and `409` when the pod was already configured. It is excluded from the readiness gate so standby pods can receive configuration before they are A2A-ready.
+`POST /configure` accepts `{ runId, turnBearerToken, copilotCredential, workingDirectory? }`. `copilotCredential` contains an opaque snapshot reference plus the bounded credential redeemed by `GitHubCapabilityBroker` for the run's unattended Copilot purpose. AgentHost rejects absent, expired, and run-mismatched credentials and has no Key Vault, mounted-file, shared-store, or ambient-token fallback. `workingDirectory` is the run's `WorktreePath`; when present, AgentHost passes it to `SetupAsync` so file tools use the same shared worktree named by the run's system prompt. The endpoint returns `400` when `runId` or the credential is missing and `409` when the pod was already configured. It is excluded from the readiness gate so standby pods can receive configuration before they are A2A-ready.
 
 ### Security model
 
@@ -611,7 +611,7 @@ sequenceDiagram
 
 ### Configuration
 
-`AgentHost:KeyVaultUri` names the vault for the legacy runtime-fetch fallback path; with the dedicated KV-less sandbox identity (issue #471) that fallback fails closed, and the run owner's token is delivered via the brokered `gitHubAccessToken` in `/configure` instead. `AgentHost:KvTokenMountPath` and `AgentHost:UseSharedTokenStore` remain local compatibility paths, not the AKS production path.
+`GitHubCapabilityBroker` redeems only immutable, purpose-bound run snapshots. AgentHost receives the bounded Copilot credential in its one-time `/configure` request and rejects missing, expired, or run-mismatched credentials. It has no Key Vault, CSI, shared-filesystem, configuration-token, or ambient-token compatibility path.
 
 > **Full deep-dive:** [Agent-host token delivery](./agent-token-delivery.md) covers `AgentHostRuntimeState`, `KeyVaultUserTokenProvider`, the configure endpoint, and the security trade-off.
 

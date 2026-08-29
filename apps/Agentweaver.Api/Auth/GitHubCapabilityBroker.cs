@@ -130,6 +130,48 @@ internal sealed class GitHubCapabilityBroker(
         return GitHubCapabilityBrokerOutcome.Issued;
     }
 
+    /// <summary>
+    /// Reads one short-lived Copilot credential only after fencing the immutable unattended
+    /// Copilot snapshot before and after the vault read. The credential is exposed solely to the
+    /// supplied in-process callback; callers must not persist or log it.
+    /// </summary>
+    internal async Task<GitHubCapabilityBrokerOutcome> TryUseCopilotCredentialAsync(
+        SnapshotRef snapshotRef,
+        DateTimeOffset now,
+        Func<string, DateTimeOffset, Task> useCredential,
+        CancellationToken ct)
+    {
+        var fenced = await persistence.TryFenceLiveSnapshotAsync(
+            GitHubCapabilityPurpose.UnattendedCopilot,
+            snapshotRef,
+            now,
+            ct).ConfigureAwait(false);
+        if (fenced is null)
+            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+
+        var secret = await vault.ReadCurrentAsync(fenced.CredentialLocator!, ct).ConfigureAwait(false);
+        if (!secret.Found || !TryGetUsableAccessToken(secret.Value, now, out var token, out var expiresAt) ||
+            expiresAt <= now)
+        {
+            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+        }
+        var maximumExpiresAt = now.Add(MaximumCapabilityLifetime);
+        if (expiresAt > maximumExpiresAt)
+            expiresAt = maximumExpiresAt;
+
+        if (await persistence.TryFenceLiveSnapshotAsync(
+                GitHubCapabilityPurpose.UnattendedCopilot,
+                snapshotRef,
+                now,
+                ct).ConfigureAwait(false) is null)
+        {
+            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+        }
+
+        await useCredential(token, expiresAt).ConfigureAwait(false);
+        return GitHubCapabilityBrokerOutcome.Issued;
+    }
+
     internal static bool IsOperationAllowed(
         GitHubCapabilityPurpose purpose,
         GitHubCapabilityOperation operation) =>
@@ -159,6 +201,43 @@ internal sealed class GitHubCapabilityBroker(
                 expiry.ValueKind == JsonValueKind.String &&
                 DateTimeOffset.TryParse(expiry.GetString(), out var parsed))
                 expiresAt = parsed;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetUsableAccessToken(
+        string? value,
+        DateTimeOffset now,
+        out string accessToken,
+        out DateTimeOffset expiresAt)
+    {
+        accessToken = string.Empty;
+        expiresAt = now.Add(MaximumCapabilityLifetime);
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            if (!document.RootElement.TryGetProperty("status", out var status) ||
+                !string.Equals(status.GetString(), "signed-in", StringComparison.Ordinal) ||
+                !document.RootElement.TryGetProperty("accessToken", out var token) ||
+                string.IsNullOrWhiteSpace(token.GetString()))
+            {
+                return false;
+            }
+
+            if (document.RootElement.TryGetProperty("expiresAt", out var expiry) &&
+                (expiry.ValueKind != JsonValueKind.String ||
+                 !DateTimeOffset.TryParse(expiry.GetString(), out expiresAt)))
+            {
+                return false;
+            }
+
+            accessToken = token.GetString()!;
             return true;
         }
         catch (JsonException)

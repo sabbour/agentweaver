@@ -103,7 +103,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             return new CollectiveRaiResult(SafetyFlagged: false);
 
         var rai = new RaiTurnExecutor(
-            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory,
             _workflowFactory.GetRecordingWriter,
             name: "assembly-rai",
@@ -140,7 +140,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             return new CollectiveGateDecision(Approved: true, RequestChanges: false, Feedback: null);
 
         var rubberduck = new RubberduckTurnExecutor(
-            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory,
             _workflowFactory.GetRecordingWriter,
             name: "assembly-rubberduck",
@@ -288,7 +288,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             }
 
             var buildTest = new BuildTestTurnExecutor(
-                _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+                _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
                 _approvalStore, _toolApprovalGate, _loggerFactory,
                 _workflowFactory.GetRecordingWriter,
                 name: "assembly-build-test",
@@ -467,7 +467,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
     public async Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct)
     {
         var scribe = new ScribeTurnExecutor(
-            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory,
             _workflowFactory.GetRecordingWriter,
             name: "assembly-scribe",
