@@ -1,6 +1,11 @@
 import type { RunStreamEvent } from '../api/sse';
 import { deriveHumanTitle, extractCallId, stripPathPrefix } from './reducer';
-import { isSerializedWorkPlan, parseOutcomeSpecMessage, formatOutcomeSpecMessage } from './coordinatorPlanFilter';
+import {
+  formatOutcomeSpecMessage,
+  isOutcomeSpecMessagePrefix,
+  isSerializedWorkPlan,
+  parseOutcomeSpecMessage,
+} from './coordinatorPlanFilter';
 
 /**
  * Count the subtask drafts inside the decompose agent's serialized work-plan JSON array, so the
@@ -879,7 +884,11 @@ export function buildRunTimeline(
   for (const step of collapsedSteps) {
     for (const msg of step.messages) {
       const outcomeSpec = parseOutcomeSpecMessage(msg.text);
-      if (outcomeSpec) msg.text = formatOutcomeSpecMessage(outcomeSpec);
+      if (outcomeSpec) {
+        msg.text = formatOutcomeSpecMessage(outcomeSpec);
+      } else if (msg.streaming && isOutcomeSpecMessagePrefix(msg.text)) {
+        msg.text = 'Drafting outcome plan…';
+      }
     }
   }
 
