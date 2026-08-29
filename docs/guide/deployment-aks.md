@@ -28,31 +28,10 @@ Required local tools:
 | Node.js 20+ with `npm` or `pnpm` | run the deployment commands |
 | `gh` CLI, authenticated (`gh auth status`) | release publication and published-release validation |
 
-Create a GitHub OAuth App, then either export the credentials as environment
-variables or supply them as flags/params-file values (see below):
-
-> **Callback URL nuance:** the OAuth App's **Authorization callback URL**
-> must match where Agentweaver is actually reachable — `localhost` for local
-> dev, but the AKS Gateway's public host for an Azure deployment
-> (`https://<gateway-host>/auth/github/callback`). The gateway host isn't
-> known until *after* your first deploy provisions the AKS App Routing
-> managed certificate — once it finishes, the deploy's outputs summary
-> prints the exact value to use as **GitHub OAuth callback URL**. So: deploy
-> first with a placeholder callback URL, then come back and paste in the
-> printed one. GitHub OAuth Apps only support one callback URL each, so if
-> you also run this locally, use a second OAuth App for `localhost`.
-
-```bash
-export GITHUB_CLIENT_ID=<oauth-app-client-id>
-export GITHUB_CLIENT_SECRET=<oauth-app-client-secret>
-```
-
-In PowerShell:
-
-```powershell
-$env:GITHUB_CLIENT_ID = '<oauth-app-client-id>'
-$env:GITHUB_CLIENT_SECRET = '<oauth-app-client-secret>'
-```
+Configure a Microsoft Entra application with the deployed
+`https://<gateway-host>/auth/entra/callback` redirect URI. Provide its application
+and tenant IDs through the params file or the `--entra-client-id` and
+`--entra-tenant-id` flags.
 
 ## Commands
 
@@ -67,7 +46,7 @@ npm run azure:provision-infra
 
 With no arguments (and a TTY), this launches an interactive installer that
 prompts for the Azure subscription, resource group (existing or new),
-location, cluster/ACR/Key Vault names, and GitHub OAuth client ID/secret, then
+location, cluster/ACR/Key Vault names, and Entra application/tenant IDs, then
 provisions the cluster, identity, monitoring, the OAuth signing key,
 PostgreSQL, builds and pushes images, verifies provenance, deploys, and
 verifies the result — printing an outputs summary at the end (never secrets).
@@ -84,20 +63,13 @@ or
 ```bash
 npm run azure:provision-infra -- --resource-group agentweaver-rg --cluster-name agentweaver-aks \
   --acr-name agentweaverregistry --location westus2 --node-vm-size Standard_D4s_v6 --keyvault-name agentweaver-kv \
-  --github-client-id "$GITHUB_CLIENT_ID" --github-client-secret "$GITHUB_CLIENT_SECRET"
+  --entra-client-id "$ENTRA_CLIENT_ID" --entra-tenant-id "$ENTRA_TENANT_ID"
 ```
 
 Config precedence: flags > env > params file > detected defaults > prompt.
 Optional flags: `--skip-postgres`, `--skip-oauth-key`, `--image-tag <tag>`, `--node-vm-size <sku>`.
 
 `NODE_VM_SIZE` (or `--node-vm-size`) controls the AKS system/app/kata pool SKU for new clusters. The default is `Standard_D4s_v6`; existing clusters are unaffected because the installer only uses the value when it needs to run `az aks create` or `az aks nodepool add`.
-
-### GitHub organization allowlist
-
-`GITHUB_ALLOWED_ORG` accepts comma- or semicolon-separated rules: `*` (all
-organizations), `org`, `org/*`, or `org/team-slug`. Use `*` only for a trusted
-internal deployment where unrestricted GitHub organization membership is the
-intended sign-in policy.
 
 ### Image-build progress and optional Azure CLI limits
 
@@ -196,6 +168,6 @@ described above.
 |---|---|
 | Gateway not programmed | `kubectl describe gateway agentweaver-gateway -n agentweaver` |
 | ImagePullBackOff | confirm ACR attach and the selected deployment command pushed the image tag |
-| API/MCP auth failures | confirm Key Vault has `github-client-id`, `github-client-secret`, `mcp-oauth-signing-key` |
+| API/MCP auth failures | confirm the Entra client and tenant configuration plus `mcp-api-key` are present |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |

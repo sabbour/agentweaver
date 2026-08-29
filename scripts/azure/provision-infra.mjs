@@ -17,7 +17,6 @@
 //              10-create-cluster
 //              -> 15-setup-identity
 //              -> 15-provision-monitoring
-//              -> 16-provision-oauth-signing-key (unless --skip-oauth-key)
 //              -> 17-provision-postgres          (unless --skip-postgres)
 //              -> 20-build-push-images
 //              -> 25-verify-image-provenance
@@ -36,10 +35,7 @@
 // first), resource group (existing list, or "Create new..."), location
 // (region list, smart default from variables.mjs's DEFAULTS.LOCATION),
 // cluster/ACR/Key Vault names (prefilled with variables.mjs defaults,
-// editable), GitHub OAuth client id + secret (secret prompt, no echo,
-// preceded by step-by-step GitHub OAuth App creation guidance), and the
-// GitHub org(s) allowed to sign in (GITHUB_ALLOWED_ORG, comma-separated,
-// validated/reprompted on invalid input). The collected answers are injected as the HIGHEST-precedence config
+// editable), and Entra application/tenant IDs. The collected answers are injected as the HIGHEST-precedence config
 // source (same bucket as CLI flags) before lib/config.mjs's resolveConfig()
 // runs, so resolveConfig's own generic per-field prompt fallback never
 // re-prompts for anything the guided flow already collected.
@@ -50,16 +46,10 @@
 // resolveConfig() surfaces a clear, actionable error naming the missing
 // field(s) instead of hanging.
 //
-// SECRET HANDLING: GITHUB_CLIENT_SECRET is registered with lib/secret.mjs's
-// redaction registry the instant it is known (both in the guided-prompt path
-// and via config.mjs's `secret: true` field spec) and is NEVER printed,
-// logged, or included in the OUTPUTS SUMMARY.
-
 import * as execDefault from "./lib/exec.mjs";
 import * as logDefault from "./lib/log.mjs";
 import * as azDefault from "./lib/az.mjs";
 import * as promptDefault from "./lib/prompt.mjs";
-import { registerSecret } from "./lib/secret.mjs";
 import { resolveGitHubRepository } from "./lib/github.mjs";
 import { resolveConfig, loadParamsFile } from "./lib/config.mjs";
 import { resolveVariables, DEFAULTS, DEFAULT_REPO_ROOT, validateQualifiedImageReference } from "./variables.mjs";
@@ -67,7 +57,6 @@ import { resolveVariables, DEFAULTS, DEFAULT_REPO_ROOT, validateQualifiedImageRe
 import * as createClusterDefault from "./steps/10-create-cluster.mjs";
 import * as setupIdentityDefault from "./steps/15-setup-identity.mjs";
 import * as provisionMonitoringDefault from "./steps/15-provision-monitoring.mjs";
-import * as oauthSigningKeyDefault from "./steps/16-provision-oauth-signing-key.mjs";
 import * as provisionPostgresDefault from "./steps/17-provision-postgres.mjs";
 import * as buildImagesDefault from "./steps/20-build-push-images.mjs";
 import * as verifyProvenanceDefault from "./steps/25-verify-image-provenance.mjs";
@@ -86,13 +75,13 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
 
 /**
  * Parses `provision-infra` subcommand argv into a flags object plus a paramsFile path.
- * Recognizes: --skip-postgres, --skip-oauth-key, --force,
+ * Recognizes: --skip-postgres, --force,
  * --image-tag <tag>, --image-source <acr-build|ghcr|custom>, --ghcr-ref <ref>,
  * --ghcr-token <token>, --image-api <ref>, --image-frontend <ref>,
  * --image-mcp <ref>, --image-agent-host <ref> (or =value forms),
  * --params-file/--config <path>, --resource-group, --cluster-name,
  * --acr-name, --location, --monitoring-location, --node-vm-size, --keyvault-name, --postgres-server-name, --postgres-location, --postgres-ha-mode, --postgres-access-mode, --namespace,
- * --github-client-id, --github-client-secret, -h/--help.
+ * --entra-client-id, --entra-tenant-id, -h/--help.
  */
 export function parseArgs(argv = []) {
   const flags = {};
@@ -112,8 +101,6 @@ export function parseArgs(argv = []) {
     const arg = argv[i];
     if (arg === "--skip-postgres") {
       flags.SKIP_POSTGRES = true;
-    } else if (arg === "--skip-oauth-key") {
-      flags.SKIP_OAUTH_KEY = true;
     } else if (arg === "--force") {
       flags.FORCE = true;
     } else if (arg === "-h" || arg === "--help") {
@@ -202,22 +189,6 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--namespace");
       flags.NAMESPACE = value;
       i += consumed;
-    } else if (arg === "--github-client-id" || arg.startsWith("--github-client-id=")) {
-      const { value, consumed } = takeValue(i, "--github-client-id");
-      flags.GITHUB_CLIENT_ID = value;
-      i += consumed;
-    } else if (arg === "--github-client-secret" || arg.startsWith("--github-client-secret=")) {
-      const { value, consumed } = takeValue(i, "--github-client-secret");
-      flags.GITHUB_CLIENT_SECRET = value;
-      i += consumed;
-    } else if (arg === "--github-allowed-org" || arg.startsWith("--github-allowed-org=")) {
-      const { value, consumed } = takeValue(i, "--github-allowed-org");
-      flags.GITHUB_ALLOWED_ORG = value;
-      i += consumed;
-    } else if (arg === "--auth-mode" || arg.startsWith("--auth-mode=")) {
-      const { value, consumed } = takeValue(i, "--auth-mode");
-      flags.AUTH_MODE = value;
-      i += consumed;
     } else if (arg === "--entra-client-id" || arg.startsWith("--entra-client-id=")) {
       const { value, consumed } = takeValue(i, "--entra-client-id");
       flags.ENTRA_CLIENT_ID = value;
@@ -245,7 +216,6 @@ Local dev environment setup (no Azure) lives under 'dev --setup' instead:
 
 Flags:
   --skip-postgres             Skip Postgres provisioning (17-provision-postgres).
-  --skip-oauth-key            Skip MCP OAuth signing key provisioning (16-provision-oauth-signing-key).
   --force                     Allow GHCR/custom import to overwrite an existing target ACR tag if the digest differs.
   --image-tag <tag>           Use this image tag instead of the derived default.
   --image-source <source>     Image source: 'ghcr' (default), 'acr-build', or 'custom'.
@@ -269,27 +239,17 @@ Flags:
   --postgres-ha-mode <mode>
   --postgres-access-mode <private|public>
   --namespace <name>
-  --github-client-id <id>
-  --github-client-secret <secret>   NEVER echoed/logged; prefer env/params-file/prompt instead.
-  --github-allowed-org <orgs>  Comma-separated GitHub org login(s) allowed to sign in (default: microsoft).
-  --auth-mode <mode>           Sign-in mode: 'GitHubLegacy' (default) or 'Entra' (Microsoft Entra ID).
-  --entra-client-id <id>        Required when --auth-mode=Entra; Entra app registration client (application) ID.
-  --entra-tenant-id <id>        Required when --auth-mode=Entra; Entra tenant (directory) ID.
+  --entra-client-id <id>       Required Entra app registration client (application) ID.
+  --entra-tenant-id <id>       Required Entra tenant (directory) ID.
   -h, --help                  Show this help.
-
-Need a GitHub OAuth App? Create one at https://github.com/settings/applications/new -- the
-interactive installer walks you through this (name, homepage, callback URL) before prompting
-for the client ID/secret.
 
 Config precedence: flags > env > params-file > detected defaults > prompt.
 Non-interactive (no TTY) never prompts -- missing required fields fail with a clear error.
 `;
 
 const IMAGE_SOURCE_VALUES = Object.freeze(["acr-build", "ghcr", "custom"]);
-// Must match apps/Agentweaver.Api/Auth/AuthMode.cs's AuthModeResolver.Parse() contract exactly:
-// case-insensitive "GitHubLegacy" or "Entra" are the only two valid values (any other string
-// there silently resolves to Entra, so we validate here rather than let a typo slip through).
-const AUTH_MODE_VALUES = Object.freeze(["GitHubLegacy", "Entra"]);
+// Fleet deployments always use Entra browser sign-in.
+const AUTH_MODE_VALUES = Object.freeze(["Entra"]);
 const POSTGRES_HA_MODE_VALUES = Object.freeze(["ZoneRedundant", "Disabled"]);
 const POSTGRES_ACCESS_MODE_VALUES = Object.freeze(["private", "public"]);
 const POSTGRES_SERVER_NAME_RE = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
@@ -531,28 +491,6 @@ function buildSchema({ prompt, az }) {
     IMAGE_AGENT_HOST: {
       validate: (value, config) => validateCustomImageField("IMAGE_AGENT_HOST", value, config),
     },
-    GITHUB_CLIENT_ID: {
-      required: true,
-      prompt: () => prompt.text("GitHub OAuth client ID"),
-    },
-    GITHUB_CLIENT_SECRET: {
-      required: true,
-      secret: true,
-      prompt: () => prompt.secret("GitHub OAuth client secret"),
-    },
-    GITHUB_ALLOWED_ORG: {
-      default: DEFAULTS.GITHUB_ALLOWED_ORG,
-      parse: normalizeGithubOrgList,
-      validate: (value) => {
-        const result = validateGithubOrgList(value);
-        return result === true ? undefined : result;
-      },
-      prompt: () =>
-        prompt.text("GitHub org(s) allowed to sign in (comma-separated)", {
-          default: DEFAULTS.GITHUB_ALLOWED_ORG,
-          validate: validateGithubOrgList,
-        }),
-    },
     AUTH_MODE: {
       default: DEFAULTS.AUTH_MODE,
       validate: (value) => {
@@ -560,14 +498,14 @@ function buildSchema({ prompt, az }) {
         return result === true ? undefined : result;
       },
     },
-    ENTRA_CLIENT_ID: {},
-    ENTRA_TENANT_ID: {},
+    ENTRA_CLIENT_ID: { required: true, prompt: () => prompt.text("Microsoft Entra application (client) ID") },
+    ENTRA_TENANT_ID: { required: true, prompt: () => prompt.text("Microsoft Entra tenant (directory) ID") },
   };
 }
 
 /**
  * Runs the guided interactive installer flow: subscription, resource group
- * (existing/new), location, resource names, GitHub OAuth credentials.
+ * (existing/new), location, resource names, and Entra configuration.
  * Returns a flags-shaped object suitable for feeding into resolveConfig() as
  * the highest-precedence source. Every collaborator is injectable for tests.
  */
@@ -662,41 +600,12 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
     validate: validatePostgresAccessMode,
   });
 
-  // --- GitHub OAuth credentials ---------------------------------------------
+  // --- Entra browser sign-in --------------------------------------------------
   log.info("");
-  log.section("Create a GitHub OAuth App");
-  log.info("You need a GitHub OAuth App's client ID and secret. GitHub requires a callback URL up front,");
-  log.info("but this deployment's Gateway host does not exist yet -- so create the app now with a temporary");
-  log.info("placeholder callback URL, then update it once the real URL is printed at the end of this deploy.");
-  log.info("");
-  log.info("  1. Open https://github.com/settings/applications/new");
-  log.info("  2. Application name: e.g. 'Agentweaver' (or 'Agentweaver (staging)')");
-  log.info("  3. Homepage URL: any placeholder for now (e.g. https://example.com) -- update it after deploy.");
-  log.info("  4. Authorization callback URL:");
-  log.info("       - Local dev: use the real value now -- http://localhost:5000/auth/github/callback");
-  log.info("       - Azure: GitHub won't accept an empty field, so enter a placeholder for now, e.g.");
-  log.info("         https://placeholder.invalid/auth/github/callback -- you'll replace it after deploy.");
-  log.info("  5. Click 'Register application'. Copy the Client ID, then click 'Generate a new client secret'");
-  log.info("     and copy it immediately -- GitHub only shows the secret once.");
-  log.info("");
-  log.info("After this deploy finishes, the real callback URL is printed as 'GitHub OAuth callback URL' in the");
-  log.info("OUTPUTS SUMMARY. Go back to the OAuth App at https://github.com/settings/developers and set both the");
-  log.info("Homepage URL and the Authorization callback URL to that value -- sign-in will not work until you do.");
-  log.info("");
-  log.info("Note: sign-in is further restricted to members of the GitHub org(s) you allowlist next -- org SSO");
-  log.info("authorization may need to be granted on the OAuth App for private membership to be visible.");
-  log.info("");
-  collected.GITHUB_CLIENT_ID = await prompt.text("GitHub OAuth client ID");
-  const clientSecret = await prompt.secret("GitHub OAuth client secret");
-  registerSecret(clientSecret, "GITHUB_CLIENT_SECRET"); // redact immediately, before it is stored anywhere
-  collected.GITHUB_CLIENT_SECRET = clientSecret;
-
-  // --- GitHub org allowlist ---------------------------------------------------
-  const allowedOrgs = await prompt.text("GitHub org(s) allowed to sign in (comma-separated)", {
-    default: DEFAULTS.GITHUB_ALLOWED_ORG,
-    validate: validateGithubOrgList,
-  });
-  collected.GITHUB_ALLOWED_ORG = normalizeGithubOrgList(allowedOrgs);
+  log.section("Configure Microsoft Entra browser sign-in");
+  collected.AUTH_MODE = "Entra";
+  collected.ENTRA_CLIENT_ID = await prompt.text("Microsoft Entra application (client) ID");
+  collected.ENTRA_TENANT_ID = await prompt.text("Microsoft Entra tenant (directory) ID");
 
   return collected;
 }
@@ -718,7 +627,7 @@ export function shouldRunInteractiveInstaller(argv, { prompt = promptDefault } =
  * @param {typeof execDefault} [opts.exec]
  * @param {typeof logDefault} [opts.log]
  * @param {typeof resolveVariables} [opts.resolveVariables]
- * @param {object} [opts.steps] Injectable step modules for testing (createCluster, setupIdentity, provisionMonitoring, oauthSigningKey, provisionPostgres, buildImages, verifyProvenance, genA2aMtlsCerts, deployStep, verifyStep).
+ * @param {object} [opts.steps] Injectable step modules for testing (createCluster, setupIdentity, provisionMonitoring, provisionPostgres, buildImages, verifyProvenance, genA2aMtlsCerts, deployStep, verifyStep).
  */
 export async function run(opts = {}) {
   const {
@@ -736,7 +645,6 @@ export async function run(opts = {}) {
   const createCluster = steps.createCluster ?? createClusterDefault;
   const setupIdentity = steps.setupIdentity ?? setupIdentityDefault;
   const provisionMonitoring = steps.provisionMonitoring ?? provisionMonitoringDefault;
-  const oauthSigningKey = steps.oauthSigningKey ?? oauthSigningKeyDefault;
   const provisionPostgres = steps.provisionPostgres ?? provisionPostgresDefault;
   const buildImages = steps.buildImages ?? buildImagesDefault;
   const verifyProvenance = steps.verifyProvenance ?? verifyProvenanceDefault;
@@ -794,8 +702,6 @@ export async function run(opts = {}) {
       log.field(`${imageName} source`, config[field]);
     }
   }
-  log.field("GitHub OAuth client ID", config.GITHUB_CLIENT_ID);
-  log.field("Allowed GitHub org(s)", config.GITHUB_ALLOWED_ORG);
   log.field("Auth mode", config.AUTH_MODE);
   if (String(config.AUTH_MODE).toLowerCase() === "entra") {
     log.field("Entra client ID", config.ENTRA_CLIENT_ID);
@@ -815,7 +721,6 @@ export async function run(opts = {}) {
     PG_HA_MODE: config.PG_HA_MODE,
     PG_ACCESS_MODE: config.PG_ACCESS_MODE,
     NAMESPACE: config.NAMESPACE,
-    GITHUB_ALLOWED_ORG: config.GITHUB_ALLOWED_ORG,
     AUTH_MODE: config.AUTH_MODE,
     ENTRA_CLIENT_ID: config.ENTRA_CLIENT_ID,
     ENTRA_TENANT_ID: config.ENTRA_TENANT_ID,
@@ -843,15 +748,13 @@ export async function run(opts = {}) {
     IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
     MONITORING_LOCATION: config.MONITORING_LOCATION,
     FORCE: Boolean(flags.FORCE),
-    GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
-    GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
     repoRoot,
   };
 
-  log.step(1, 10, "Creating cluster (ACR + AKS)");
+  log.step(1, 9, "Creating cluster (ACR + AKS)");
   await createCluster.run(cfg, { exec, log });
 
-  log.step(2, 10, "Setting up identity");
+  log.step(2, 9, "Setting up identity");
   await setupIdentity.run(cfg, { exec, log, az, prompt });
 
   // Re-resolve variables so IDENTITY_CLIENT_ID (populated live by az after
@@ -872,29 +775,20 @@ export async function run(opts = {}) {
     IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
     MONITORING_LOCATION: config.MONITORING_LOCATION,
     FORCE: Boolean(flags.FORCE),
-    GITHUB_CLIENT_ID: config.GITHUB_CLIENT_ID,
-    GITHUB_CLIENT_SECRET: config.GITHUB_CLIENT_SECRET,
     repoRoot,
   };
 
-  log.step(3, 10, "Provisioning monitoring");
+  log.step(3, 9, "Provisioning monitoring");
   await provisionMonitoring.run(cfg, { exec, log });
 
-  if (!flags.SKIP_OAUTH_KEY) {
-    log.step(4, 10, "Provisioning MCP OAuth signing key");
-    await oauthSigningKey.run(cfg, { exec, log, repoRoot });
-  } else {
-    log.skip("Skipping 16-provision-oauth-signing-key (--skip-oauth-key)");
-  }
-
   if (!flags.SKIP_POSTGRES) {
-    log.step(5, 10, "Provisioning Postgres");
+    log.step(4, 9, "Provisioning Postgres");
     await provisionPostgres.run(cfg, { exec, log, repoRoot });
   } else {
     log.skip("Skipping 17-provision-postgres (--skip-postgres)");
   }
 
-  log.step(6, 10, "Building and pushing images");
+  log.step(5, 9, "Building and pushing images");
   const buildResult = await buildImages.run(cfg, { exec });
   cfg = {
     ...cfg,
@@ -902,10 +796,10 @@ export async function run(opts = {}) {
     IMPORTED_IMAGE_SOURCES: buildResult.importedImageSources ?? undefined,
   };
 
-  log.step(7, 10, "Ensuring A2A mTLS certificates");
+  log.step(6, 9, "Ensuring A2A mTLS certificates");
   await genA2aMtlsCerts.run(cfg, { exec, log, repoRoot });
 
-  log.step(8, 10, "Deploying manifests");
+  log.step(7, 9, "Deploying manifests");
   const deployResult = await deployStep.run(cfg, { run: exec.run, capture: exec.capture, log, repoRoot });
 
   // Provenance verification is a POST-DEPLOY safety net: it inspects the image
@@ -914,10 +808,10 @@ export async function run(opts = {}) {
   // provision, non-existent) pods -- the latter fails hard with "could not
   // determine desired replica count". This mirrors deploy-from-local's
   // build -> deploy -> verify-provenance order.
-  log.step(9, 10, "Verifying image provenance");
+  log.step(8, 9, "Verifying image provenance");
   const provenanceResult = await verifyProvenance.run(cfg, { exec });
 
-  log.step(10, 10, "Verifying deployment");
+  log.step(9, 9, "Verifying deployment");
   const verifyResult = await verifyStep.run(cfg, { exec, log });
 
   log.info("");
@@ -942,20 +836,9 @@ export async function run(opts = {}) {
       log.field(`${imageName} source`, cfg[field]);
     }
   }
-  log.field("Allowed GitHub org(s)", cfg.GITHUB_ALLOWED_ORG);
   log.field("Gateway host", deployResult?.HOST ?? "<unknown>");
   log.field("Gateway IP", deployResult?.GATEWAY_IP ?? "<unknown>");
-  log.field(
-    "GitHub OAuth callback URL",
-    deployResult?.HOST ? `https://${deployResult.HOST}/auth/github/callback` : "<unknown -- see Gateway host above>",
-  );
-  if (deployResult?.HOST) {
-    log.info(
-      `  -> Update the GitHub OAuth App's Homepage URL and Authorization callback URL to the value above at https://github.com/settings/developers`,
-    );
-  }
   log.field("Verification", `${verifyResult.pass}/${verifyResult.pass + verifyResult.fail} checks passed`);
-  // NEVER print GITHUB_CLIENT_SECRET or any credential value here.
 
   log.info("");
   if (verifyResult.ok) {

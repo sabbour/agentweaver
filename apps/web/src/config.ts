@@ -12,7 +12,7 @@ const runtimeConfig = typeof window !== 'undefined' ? window.__AGENTWEAVER_CONFI
 
 // API_URL is the API ORIGIN only (no `/api` suffix). The API client (client.ts request())
 // and the raw fetch call sites own the single `/api` prefix for XHR endpoints, while the
-// browser-redirect endpoints (`/auth/github/*`) live at the origin root.
+// Browser-redirect endpoints (`/auth/entra/*`) live at the origin root.
 //
 // A runtime-config value of "" is VALID and means "same origin as the served app" (used on
 // the deployed gateway where the frontend and API share a host). Because "" is falsy, we
@@ -33,7 +33,6 @@ export function resolvePublicApiOrigin(apiUrl = API_URL): string {
 }
 
 export const MCP_URL = `${resolvePublicApiOrigin()}/mcp`;
-export const GITHUB_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/github/authorize`;
 export const ENTRA_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/entra/authorize`;
 
 export const SESSION_TOKEN_STORAGE_KEY = 'agentweaver.sessionToken';

@@ -237,6 +237,27 @@ public sealed class RunGitHubCapabilitySnapshotRecord
     public DateTimeOffset? SnapshotExpiresAt { get; set; }
 }
 
+/// <summary>
+/// A short-lived, single-use, purpose-bound Copilot capability for a project operation that is
+/// deliberately not a run. The opaque reference is server-side only; credential material never
+/// leaves the broker.
+/// </summary>
+public sealed class MarketplaceCopilotCapabilityRecord
+{
+    public string CapabilityRef { get; set; } = "";
+    public int Purpose { get; set; }
+    public string ProjectId { get; set; } = "";
+    public string EntraObjectId { get; set; } = "";
+    public string SourceBindingId { get; set; } = "";
+    public string CredentialReference { get; set; } = "";
+    public string CredentialVersion { get; set; } = "";
+    public string GrantDigest { get; set; } = "";
+    public DateTimeOffset IssuedAt { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? ConsumedAt { get; set; }
+    public DateTimeOffset? ClaimLeaseExpiresAt { get; set; }
+}
+
 public sealed class GitHubAuditRecord
 {
     public long Id { get; set; }

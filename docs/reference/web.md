@@ -4,7 +4,7 @@ The Agentweaver web UI is a TypeScript React 19 SPA built with Vite. It uses Rea
 
 ## Configuration
 
-The web UI authenticates users through GitHub OAuth and sends the resulting session token automatically — no static API key is required in the browser. Copy `.env.example` to `.env` in `apps/web`, then set the Vite variables:
+The web UI authenticates users through Microsoft Entra ID and sends the resulting session token automatically — no static API key is required in the browser. Copy `.env.example` to `.env` in `apps/web`, then set the Vite variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

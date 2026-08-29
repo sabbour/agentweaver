@@ -891,6 +891,75 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("IntegrationBuildLocks");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.MarketplaceCopilotCapabilityRecord", b =>
+                {
+                    b.Property<string>("CapabilityRef")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("capability_ref");
+
+                    b.Property<DateTimeOffset?>("ClaimLeaseExpiresAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("claim_lease_expires_at");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("consumed_at");
+
+                    b.Property<string>("CredentialReference")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("credential_reference");
+
+                    b.Property<string>("CredentialVersion")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("credential_version");
+
+                    b.Property<string>("EntraObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("entra_object_id");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("GrantDigest")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("grant_digest");
+
+                    b.Property<DateTimeOffset>("IssuedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("issued_at");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("project_id");
+
+                    b.Property<int>("Purpose")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0)
+                        .HasColumnName("purpose");
+
+                    b.Property<string>("SourceBindingId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("source_binding_id");
+
+                    b.HasKey("CapabilityRef");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("IX_marketplace_copilot_capabilities_expiry_cleanup");
+
+                    b.HasIndex("ProjectId", "EntraObjectId", "ExpiresAt")
+                        .HasDatabaseName("IX_marketplace_copilot_capabilities_expiry");
+
+                    b.ToTable("marketplace_copilot_capabilities", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.OutcomeSpec", b =>
                 {
                     b.Property<int>("Id")
@@ -1756,6 +1825,16 @@ namespace Agentweaver.Api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("FK_github_repository_grants_projects_project_id");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.MarketplaceCopilotCapabilityRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_marketplace_copilot_capabilities_projects_project_id");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.ProjectCopilotBindingRecord", b =>

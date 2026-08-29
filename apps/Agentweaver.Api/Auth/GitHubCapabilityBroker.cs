@@ -1,5 +1,6 @@
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Webhooks;
+using Agentweaver.Domain;
 using System.Text.Json;
 
 namespace Agentweaver.Api.Auth;
@@ -170,6 +171,72 @@ internal sealed class GitHubCapabilityBroker(
 
         await useCredential(token, expiresAt).ConfigureAwait(false);
         return GitHubCapabilityBrokerOutcome.Issued;
+    }
+
+    /// <summary>
+    /// Redeems one single-use marketplace capability. The capability is claimed before the vault
+    /// read and re-fenced afterwards, preventing replay and binding replacement races.
+    /// </summary>
+    internal async Task<GitHubCapabilityBrokerOutcome> TryUseMarketplaceCopilotCredentialAsync(
+        SnapshotRef capabilityReference,
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        Func<string, DateTimeOffset, Task> useCredential,
+        CancellationToken ct) =>
+        await TryUseProjectCopilotCredentialAsync(
+            capabilityReference,
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            projectId,
+            entraObjectId,
+            now,
+            useCredential,
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Redeems a single-use non-run capability only for its persisted project operation purpose.
+    /// The caller receives a credential solely via the broker-owned callback.
+    /// </summary>
+    internal async Task<GitHubCapabilityBrokerOutcome> TryUseProjectCopilotCredentialAsync(
+        SnapshotRef capabilityReference,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        Func<string, DateTimeOffset, Task> useCredential,
+        CancellationToken ct)
+    {
+        var capability = await persistence.TryClaimProjectCopilotCapabilityAsync(
+            capabilityReference, purpose, projectId, entraObjectId, now, ct).ConfigureAwait(false);
+        if (capability is null)
+            return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+
+        try
+        {
+            var secret = await vault.ReadCurrentAsync(capability.CredentialLocator!, ct).ConfigureAwait(false);
+            if (!secret.Found || !TryGetUsableAccessToken(secret.Value, now, out var token, out var expiresAt) ||
+                expiresAt <= now)
+                return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+
+            if (!await persistence.IsClaimedMarketplaceCopilotCapabilityLiveAsync(capability, ct).ConfigureAwait(false))
+                return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+
+            var maximumExpiresAt = now.Add(MaximumCapabilityLifetime);
+            if (expiresAt > maximumExpiresAt)
+                expiresAt = maximumExpiresAt;
+            if (expiresAt > capability.ExpiresAt)
+                expiresAt = capability.ExpiresAt;
+            if (expiresAt <= now)
+                return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+
+            await useCredential(token, expiresAt).ConfigureAwait(false);
+            return GitHubCapabilityBrokerOutcome.Issued;
+        }
+        finally
+        {
+            await persistence.DeleteClaimedMarketplaceCopilotCapabilityAsync(
+                capability, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     internal static bool IsOperationAllowed(

@@ -1,6 +1,7 @@
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
+using Agentweaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Sandbox;
@@ -22,6 +23,57 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
         string runId,
         CancellationToken ct) =>
         GetCredentialAsync(runId, GitHubCapabilityPurpose.UnattendedRepository, ct);
+
+    async Task<GitHubCapabilitySnapshotCredential?> IGitHubCopilotCapabilityCredentialProvider.GetMarketplaceCredentialAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        CancellationToken ct) =>
+        await GetProjectOperationCredentialAsync(
+            capabilityReference,
+            projectId,
+            entraObjectId,
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            ct).ConfigureAwait(false);
+
+    async Task<GitHubCapabilitySnapshotCredential?> IGitHubCopilotCapabilityCredentialProvider.GetProjectOperationCredentialAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        CancellationToken ct) =>
+        await GetProjectOperationCredentialAsync(capabilityReference, projectId, entraObjectId, purpose, ct)
+            .ConfigureAwait(false);
+
+    private async Task<GitHubCapabilitySnapshotCredential?> GetProjectOperationCredentialAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(capabilityReference) ||
+            string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId))
+            return null;
+
+        GitHubCapabilitySnapshotCredential? credential = null;
+        using var scope = scopeFactory.CreateScope();
+        var broker = scope.ServiceProvider.GetRequiredService<GitHubCapabilityBroker>();
+        var outcome = await broker.TryUseProjectCopilotCredentialAsync(
+            new SnapshotRef(capabilityReference),
+            purpose,
+            projectId,
+            entraObjectId,
+            DateTimeOffset.UtcNow,
+            (token, expiresAt) =>
+            {
+                credential = new GitHubCapabilitySnapshotCredential(capabilityReference, token, expiresAt);
+                return Task.CompletedTask;
+            },
+            ct).ConfigureAwait(false);
+        return outcome == GitHubCapabilityBrokerOutcome.Issued ? credential : null;
+    }
 
     private async Task<GitHubCapabilitySnapshotCredential?> GetCredentialAsync(
         string runId,

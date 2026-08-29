@@ -3,6 +3,7 @@ using Agentweaver.Api.Git;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Agentweaver.Tests.Helpers;
@@ -35,7 +36,7 @@ public sealed class SkillMarketplaceCatalogTests
         };
         var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache());
 
-        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, submittingUser: null, parseStrategy: null, CancellationToken.None);
+        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, capabilityRunId: null, parseStrategy: null, CancellationToken.None);
 
         index.Strategy.Should().Be("skillmd");
         index.Entries.Select(e => e.Location).Should().BeEquivalentTo(
@@ -73,13 +74,11 @@ public sealed class SkillMarketplaceCatalogTests
     }
 
     [Fact]
-    public async Task Indexer_falls_back_to_llm_only_when_no_skillmd_and_validates_locations()
+    public async Task Indexer_without_explicit_capability_skips_llm_and_requires_a_github_connection()
     {
-        // No SKILL.md anywhere → heuristic is empty → the LLM classifier runs. In step-1 a catalog entry
-        // is only usable if its location contains a SKILL.md (import understands only that layout), so the
-        // indexer validates every LLM proposal against the real tree and drops those without a SKILL.md.
-        // Here the tree has none, so the classifier is invoked but all proposals are validated out —
-        // fail-closed to an empty catalog (which surfaces upstream as the existing 422), never a crash.
+        // No SKILL.md and no explicit capability means the classifier cannot run. A caller identity
+        // is not a Copilot capability, so the indexer must return a connect-GitHub requirement instead
+        // of silently treating the source as an empty catalog.
         var blobs = new List<GitHubTreeBlob>
         {
             new("catalog/plans/plan-a/plan.md", 40),
@@ -92,15 +91,16 @@ public sealed class SkillMarketplaceCatalogTests
         });
         var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
 
-        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, submittingUser: "owner-1", parseStrategy: null, CancellationToken.None);
+        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, capabilityRunId: null, parseStrategy: null, CancellationToken.None);
 
-        classifier.Invocations.Should().Be(1);
-        index.Strategy.Should().Be("llm");
+        classifier.Invocations.Should().Be(0);
+        index.Strategy.Should().Be("capability-required");
+        index.RequiresGitHubConnection.Should().BeTrue();
         index.Entries.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task Indexer_keeps_llm_locations_that_contain_a_skillmd()
+    public async Task Indexer_uses_llm_only_when_an_explicit_capability_is_supplied()
     {
         // When a proposed location DOES contain a SKILL.md in the tree it is importable and kept (with
         // the classifier's description); a hallucinated location without a SKILL.md is dropped. This
@@ -117,12 +117,29 @@ public sealed class SkillMarketplaceCatalogTests
         });
         var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
 
-        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, submittingUser: "owner-1", parseStrategy: "llm", CancellationToken.None);
+        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, capabilityRunId: "run-marketplace", parseStrategy: "llm", CancellationToken.None);
 
         classifier.Invocations.Should().Be(1);
+        classifier.CapabilityRunIds.Should().Equal("run-marketplace");
         index.Strategy.Should().Be("llm");
         index.Entries.Select(e => e.Location).Should().Equal("catalog/plan-a");
         index.Entries[0].Description.Should().Be("A planning skill.");
+    }
+
+    [Fact]
+    public async Task Indexer_requires_a_github_connection_when_the_explicit_capability_cannot_be_redeemed()
+    {
+        var blobs = new List<GitHubTreeBlob> { new("catalog/plan-a/SKILL.md", 40) };
+        var indexer = new MarketplaceCatalogIndexer(
+            new MarketplaceCatalogCache(),
+            new UnavailableCapabilityClassifier());
+
+        var index = await indexer.GetOrBuildAsync(
+            "acme", "repo", "main", blobs, capabilityRunId: "expired-run", parseStrategy: "llm", CancellationToken.None);
+
+        index.Strategy.Should().Be("capability-required");
+        index.RequiresGitHubConnection.Should().BeTrue();
+        index.Entries.Should().BeEmpty();
     }
 
     [Fact]
@@ -132,10 +149,131 @@ public sealed class SkillMarketplaceCatalogTests
         var classifier = new FakeClassifier(Array.Empty<MarketplaceCatalogEntry>());
         var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
 
-        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, "owner-1", null, CancellationToken.None);
+        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, "run-marketplace", null, CancellationToken.None);
 
         classifier.Invocations.Should().Be(0);
         index.Strategy.Should().Be("skillmd");
+    }
+
+    [Fact]
+    public async Task Indexer_issues_a_capability_only_for_an_uncached_llm_classification()
+    {
+        var classifier = new FakeClassifier(
+            [new MarketplaceCatalogEntry("skills/a", "a", "A skill.")]);
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
+        var issues = 0;
+        Task<string?> IssueAsync(CancellationToken _)
+        {
+            issues++;
+            return Task.FromResult<string?>("capability-reference");
+        }
+
+        var heuristic = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
+            "acme", "repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: null, parseStrategy: "auto", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller, issueCapabilityAsync: IssueAsync,
+            hasCapabilityAsync: _ => Task.FromResult(true));
+
+        heuristic.Strategy.Should().Be("skillmd");
+        issues.Should().Be(0, "deterministic browsing must not create a durable capability");
+
+        var classified = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
+            "acme", "classified-repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: null, parseStrategy: "llm", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller, issueCapabilityAsync: IssueAsync,
+            hasCapabilityAsync: _ => Task.FromResult(true));
+        var cached = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
+            "acme", "classified-repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: null, parseStrategy: "llm", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller, issueCapabilityAsync: IssueAsync,
+            hasCapabilityAsync: _ => Task.FromResult(true));
+
+        classified.Strategy.Should().Be("llm");
+        cached.Should().BeSameAs(classified);
+        classifier.Invocations.Should().Be(1);
+        issues.Should().Be(1, "the one model call receives the only issued capability; cache hits issue none");
+    }
+
+    [Fact]
+    public async Task Indexer_does_not_issue_a_capability_for_an_empty_tree()
+    {
+        var indexer = new MarketplaceCatalogIndexer(
+            new MarketplaceCatalogCache(), new FakeClassifier(Array.Empty<MarketplaceCatalogEntry>()));
+
+        var index = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
+            "acme", "empty-repo", "main", Array.Empty<GitHubTreeBlob>(),
+            capabilityReference: null, parseStrategy: "llm", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller,
+            issueCapabilityAsync: _ => throw new InvalidOperationException("an empty tree has no model call"));
+
+        index.RequiresGitHubConnection.Should().BeFalse();
+        index.Entries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Indexer_reuses_an_llm_cache_for_its_legacy_explicit_capability_path()
+    {
+        var classifier = new FakeClassifier(
+            [new MarketplaceCatalogEntry("skills/a", "a", "A skill.")]);
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
+        var blobs = new[] { new GitHubTreeBlob("skills/a/SKILL.md", 40) };
+
+        var first = await indexer.GetOrBuildForProjectAsync(
+            "acme", "legacy-repo", "main", blobs, "legacy-capability", "llm", CancellationToken.None,
+            ProjectRef.Id, Caller);
+        var cached = await indexer.GetOrBuildForProjectAsync(
+            "acme", "legacy-repo", "main", blobs, "legacy-capability", "llm", CancellationToken.None,
+            ProjectRef.Id, Caller);
+
+        cached.Should().BeSameAs(first);
+        classifier.Invocations.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Indexer_requires_connection_for_an_llm_cache_hit_without_an_active_binding()
+    {
+        var classifier = new FakeClassifier(
+            [new MarketplaceCatalogEntry("skills/a", "a", "A skill.")]);
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
+
+        _ = await indexer.GetOrBuildForProjectAsync(
+            "acme", "repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: "capability-reference", parseStrategy: "llm", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller);
+        var automaticBrowse = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
+            "acme", "repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: null, parseStrategy: "auto", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller);
+        var cachedForDisconnectedCaller = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
+            "acme", "repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: "unvalidated-capability-reference", parseStrategy: "llm", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller,
+            issueCapabilityAsync: _ => throw new InvalidOperationException("cache hits must not issue"),
+            hasCapabilityAsync: _ => Task.FromResult(false));
+
+        automaticBrowse.Strategy.Should().Be("skillmd");
+        automaticBrowse.RequiresGitHubConnection.Should().BeFalse();
+        cachedForDisconnectedCaller.RequiresGitHubConnection.Should().BeTrue();
+        cachedForDisconnectedCaller.Entries.Should().BeEmpty();
+        classifier.Invocations.Should().Be(1, "the cached catalog must not dispatch another model turn");
+    }
+
+    [Fact]
+    public async Task BrowseAuto_requires_a_github_connection_when_classification_has_no_explicit_capability()
+    {
+        var classifier = new FakeClassifier(Array.Empty<MarketplaceCatalogEntry>());
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
+        var svc = CreateService(
+            new RecordingTreeClient([new GitHubTreeBlob("catalog/plan.md", 40)], _ => null),
+            indexer);
+
+        var (outcome, error, page) = await svc.BrowseMarketplaceAutoAsync(
+            ProjectRef.Id, "github", "marketplace", "main", query: null, page: 1, pageSize: 25, Caller, CancellationToken.None);
+
+        outcome.Should().Be(SkillOutcome.GitHubConnectionRequired);
+        error.Should().Be(GitHubCopilotConnectionRequirement.RequirementMessage);
+        page.Should().BeNull();
+        classifier.Invocations.Should().Be(0, "no capability must never dispatch a model turn");
     }
 
     // ── Classifier: JSON parsing + fail-closed ─────────────────────────────────────────
@@ -378,7 +516,9 @@ public sealed class SkillMarketplaceCatalogTests
 
     private static readonly CallerContext Caller = new() { User = "owner-1" };
 
-    private static SkillCatalogService CreateService(IGitHubSkillTreeClient treeClient) => new(
+    private static SkillCatalogService CreateService(
+        IGitHubSkillTreeClient treeClient,
+        IMarketplaceCatalogIndexer? catalogIndexer = null) => new(
         new UnusedSkillStore(),
         new SingleProjectStore(ProjectRef),
         new ProjectGitInitializer(NullLogger<ProjectGitInitializer>.Instance),
@@ -388,7 +528,7 @@ public sealed class SkillMarketplaceCatalogTests
         NullLogger<SkillCatalogService>.Instance,
         accessTokenProvider: null,
         treeClient: treeClient,
-        catalogIndexer: new MarketplaceCatalogIndexer(new MarketplaceCatalogCache()),
+        catalogIndexer: catalogIndexer ?? new MarketplaceCatalogIndexer(new MarketplaceCatalogCache()),
         projectRoles: new AllowAllProjectRoles(),
         configuration: new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
 
@@ -397,11 +537,21 @@ public sealed class SkillMarketplaceCatalogTests
         public int Invocations { get; private set; }
 
         public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
-            string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? submittingUser, CancellationToken ct)
+            string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? capabilityRunId, CancellationToken ct)
         {
             Invocations++;
+            CapabilityRunIds.Add(capabilityRunId);
             return Task.FromResult<IReadOnlyList<MarketplaceCatalogEntry>?>(result);
         }
+
+        public List<string?> CapabilityRunIds { get; } = [];
+    }
+
+    private sealed class UnavailableCapabilityClassifier : IMarketplaceCatalogClassifier
+    {
+        public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
+            string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? capabilityRunId, CancellationToken ct) =>
+            throw new GitHubCopilotUnauthorizedException("Connect a GitHub account with GitHub Copilot access.");
     }
 
     private sealed class RecordingTreeClient(IReadOnlyList<GitHubTreeBlob> blobs, Func<string, string?> content) : IGitHubSkillTreeClient

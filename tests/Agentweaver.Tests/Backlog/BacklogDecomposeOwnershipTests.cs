@@ -2,9 +2,11 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Backlog;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -134,13 +136,42 @@ public sealed class BacklogDecomposeOwnershipTests : IClassFixture<CoordinatorWe
         targetTasks.Should().BeEmpty();
     }
 
-    private WebApplicationFactory<Program> CreateApp() =>
+    [Fact]
+    public async Task OutcomeSpecDecompose_WithoutCopilotConnection_ReturnsSharedConnectAction()
+    {
+        using var app = CreateApp(useFakeDecomposeService: false);
+        using var owner = CreateClientWithKey(app, CoordinatorWebApplicationFactory.OwnerApiKey);
+        var projectId = await CreateProjectAsync(owner);
+        var sourceRunId = await InsertConfirmedOutcomeSpecAsync(
+            app.Services, projectId, CoordinatorWebApplicationFactory.OwnerUser);
+
+        var response = await owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/backlog/decompose",
+            new { run_id = sourceRunId, confirm = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        var requirement = await response.Content.ReadFromJsonAsync<GitHubCopilotConnectionRequirement>();
+        requirement.Should().NotBeNull();
+        requirement!.Code.Should().Be(GitHubCopilotConnectionRequirement.RequirementCode);
+        requirement.Message.Should().Be(GitHubCopilotConnectionRequirement.RequirementMessage);
+        requirement.Action.Type.Should().Be(GitHubCopilotConnectionAction.ConnectProjectCopilotApp);
+        requirement.Action.ProjectId.Should().Be(projectId);
+
+        var tasks = await app.Services.GetRequiredService<IBacklogTaskStore>()
+            .ListByProjectAsync(ProjectId.Parse(projectId));
+        tasks.Should().BeEmpty();
+    }
+
+    private WebApplicationFactory<Program> CreateApp(bool useFakeDecomposeService = true) =>
         _factory.WithWebHostBuilder(builder =>
         {
             builder.ConfigureServices(services =>
             {
-                services.RemoveAll<IBacklogDecomposeService>();
-                services.AddSingleton<IBacklogDecomposeService, FakeBacklogDecomposeService>();
+                if (useFakeDecomposeService)
+                {
+                    services.RemoveAll<IBacklogDecomposeService>();
+                    services.AddSingleton<IBacklogDecomposeService, FakeBacklogDecomposeService>();
+                }
             });
         });
 
@@ -266,7 +297,7 @@ public sealed class BacklogDecomposeOwnershipTests : IClassFixture<CoordinatorWe
         public Task<DecomposeAgentResult> DecomposeAsync(
             Project project,
             string fileContent,
-            string submittingUser,
+            CallerContext caller,
             CancellationToken ct) =>
             Task.FromResult(new DecomposeAgentResult(
                 new[] { new ProposedItem("Implement ownership propagation", "Keep generated runs owner-scoped.") },

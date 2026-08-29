@@ -1,11 +1,16 @@
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Security;
+using Agentweaver.Api.Skills;
 using Agentweaver.Api.Webhooks;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
 
 namespace Agentweaver.Tests.Auth;
@@ -738,6 +743,469 @@ public sealed class TwoAppPersistenceStoreTests
             CancellationToken.None)).Outcome.Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
     }
 
+    [Fact]
+    public async Task MarketplaceCapability_ConnectIssueClassifyAndRetry_IsBoundShortLivedAndSingleUse()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var projectId = ProjectId.New();
+        var now = DateTimeOffset.UtcNow;
+        await using var db = new MemoryDbContext(options);
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        var persistence = new TwoAppPersistenceStore(db);
+        // Before the connect action has completed its durable binding, no capability is issued.
+        (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+            projectId.ToString(), "entra", now, now.AddMinutes(2))).Should().BeNull();
+
+        db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+        {
+            Id = "marketplace-binding",
+            ProjectId = projectId.ToString(),
+            EntraObjectId = "entra",
+            CredentialReference = "copilot-app-project-marketplace",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = now,
+        });
+        await db.SaveChangesAsync();
+
+        // A binding belonging to another human subject cannot grant this caller a capability.
+        (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+            projectId.ToString(), "other-entra", now, now.AddMinutes(2))).Should().BeNull();
+
+        var capability = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+            projectId.ToString(), "entra", now, now.AddMinutes(2)))!;
+        var secrets = new InMemorySecretStore();
+        var vault = new TwoAppCredentialVault(secrets);
+        await vault.WriteAsync(
+            TwoAppCredentialLocator.ForCopilotProject("copilot-app-project-marketplace"),
+            """{"status":"signed-in","accessToken":"marketplace-test-token","expiresAt":"2099-01-01T00:00:00Z"}""");
+        var broker = new GitHubCapabilityBroker(
+            persistence,
+            vault,
+            new RepoAppInstallationTokenService(
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                db,
+                secrets,
+                new NullHttpClientFactory()));
+
+        // Invalid caller/project attempts do not redeem or consume the bound capability.
+        (await broker.TryUseMarketplaceCopilotCredentialAsync(
+            capability, projectId.ToString(), "wrong-entra", now, (_, _) => Task.CompletedTask, CancellationToken.None))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        (await broker.TryUseMarketplaceCopilotCredentialAsync(
+            capability, ProjectId.New().ToString(), "entra", now, (_, _) => Task.CompletedTask, CancellationToken.None))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        (await db.MarketplaceCopilotCapabilities.CountAsync(x => x.CapabilityRef == capability.Value)).Should().Be(1,
+            "wrong caller and project attempts must not consume or delete the fenced capability");
+
+        // The post-connect retry reaches classification only after the broker redeems the explicit
+        // capability; the classifier receives no token and cannot use an ambient identity.
+        var classifier = new MarketplaceCapabilityClassifier(broker);
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
+        var index = await indexer.GetOrBuildForProjectAsync(
+            "owner",
+            "repo",
+            "main",
+            [new GitHubTreeBlob("skills/example/SKILL.md", 40)],
+            capability.Value,
+            "llm",
+            CancellationToken.None,
+            projectId,
+            new CallerContext { User = "marketplace-owner", EntraObjectId = "entra" });
+        index.Strategy.Should().Be("llm");
+        index.Entries.Should().ContainSingle(entry => entry.Location == "skills/example");
+        classifier.Redemptions.Should().Be(1);
+        (await db.MarketplaceCopilotCapabilities.CountAsync(x => x.CapabilityRef == capability.Value)).Should().Be(0,
+            "a classified capability is terminal and must not be retained");
+
+        // Replays and independently expired capabilities fail closed without a model turn.
+        (await broker.TryUseMarketplaceCopilotCredentialAsync(
+            capability, projectId.ToString(), "entra", now, (_, _) => Task.CompletedTask, CancellationToken.None))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        var expired = SnapshotRef.Create();
+        db.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+        {
+            CapabilityRef = expired.Value,
+            ProjectId = projectId.ToString(),
+            EntraObjectId = "entra",
+            SourceBindingId = "marketplace-binding",
+            CredentialReference = "copilot-app-project-marketplace",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            IssuedAt = now.AddMinutes(-3),
+            ExpiresAt = now.AddMinutes(-1),
+        });
+        await db.SaveChangesAsync();
+        (await broker.TryUseMarketplaceCopilotCredentialAsync(
+            expired, projectId.ToString(), "entra", now, (_, _) => Task.CompletedTask, CancellationToken.None))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        (await persistence.PruneMarketplaceCopilotCapabilitiesAsync(now)).Should().BeGreaterThan(0);
+        (await db.MarketplaceCopilotCapabilities.CountAsync(x => x.CapabilityRef == expired.Value)).Should().Be(0,
+            "expired unused capabilities are reclaimed by bounded cleanup");
+
+        var failed = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+            projectId.ToString(), "entra", now, now.AddMinutes(2)))!;
+        Func<Task> failedClassification = async () => await broker.TryUseMarketplaceCopilotCredentialAsync(
+            failed, projectId.ToString(), "entra", now,
+            (_, _) => throw new InvalidOperationException("classification failed"), CancellationToken.None);
+        await failedClassification.Should().ThrowAsync<InvalidOperationException>();
+        (await db.MarketplaceCopilotCapabilities.CountAsync(x => x.CapabilityRef == failed.Value)).Should().Be(0,
+            "a claimed capability is deleted even when classification fails");
+
+        var binding = await db.ProjectCopilotBindings.SingleAsync(x => x.Id == "marketplace-binding");
+        binding.Status = GitHubBindingStatus.Inactive;
+        binding.DeactivatedAt = now;
+        await db.SaveChangesAsync();
+        (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+            projectId.ToString(), "entra", now, now.AddMinutes(2))).Should().BeNull(
+            "an inactive or revoked connection cannot issue a marketplace capability");
+        classifier.Redemptions.Should().Be(1, "reused and expired capabilities must not dispatch another model turn");
+    }
+
+    [Fact]
+    public async Task BacklogDecompositionCapability_IsPurposeCallerProjectBoundAndSingleUse()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var now = DateTimeOffset.UtcNow;
+        db.ProjectCopilotBindings.Add(MarketplaceBinding("backlog-binding"));
+        await db.SaveChangesAsync();
+        var persistence = new TwoAppPersistenceStore(db);
+        var capability = (await persistence.TryIssueProjectCopilotCapabilityAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            "project",
+            "entra",
+            now,
+            now.AddMinutes(2)))!;
+        var secrets = new InMemorySecretStore();
+        var vault = new TwoAppCredentialVault(secrets);
+        await vault.WriteAsync(
+            TwoAppCredentialLocator.ForCopilotProject("copilot-app-project-marketplace"),
+            """{"status":"signed-in","accessToken":"backlog-test-token","expiresAt":"2099-01-01T00:00:00Z"}""");
+        var broker = new GitHubCapabilityBroker(
+            persistence,
+            vault,
+            new RepoAppInstallationTokenService(
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                db,
+                secrets,
+                new NullHttpClientFactory()));
+        var modelTurns = 0;
+
+        async Task<GitHubCapabilityBrokerOutcome> RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose purpose,
+            string projectId,
+            string entraObjectId) =>
+            await broker.TryUseProjectCopilotCredentialAsync(
+                capability,
+                purpose,
+                projectId,
+                entraObjectId,
+                now,
+                (_, _) =>
+                {
+                    modelTurns++;
+                    return Task.CompletedTask;
+                },
+                CancellationToken.None);
+
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification, "project", "entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "other-project", "entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "project", "other-entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        modelTurns.Should().Be(0, "no model turn can occur before the exact capability is redeemed");
+
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "project", "entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.Issued);
+        modelTurns.Should().Be(1);
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "project", "entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+
+        var expired = SnapshotRef.Create();
+        db.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+        {
+            CapabilityRef = expired.Value,
+            Purpose = (int)GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            ProjectId = "project",
+            EntraObjectId = "entra",
+            SourceBindingId = "backlog-binding",
+            CredentialReference = "copilot-app-project-marketplace",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            IssuedAt = now.AddMinutes(-3),
+            ExpiresAt = now.AddMinutes(-1),
+        });
+        await db.SaveChangesAsync();
+
+        (await broker.TryUseProjectCopilotCredentialAsync(
+            expired,
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            "project",
+            "entra",
+            now,
+            (_, _) =>
+            {
+                modelTurns++;
+                return Task.CompletedTask;
+            },
+            CancellationToken.None)).Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        modelTurns.Should().Be(1, "expired and replayed capability references cannot reach a model turn");
+    }
+
+    [Fact]
+    public async Task MarketplaceCapabilityCleanup_IsBoundedToTerminalRecords()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var now = DateTimeOffset.UtcNow;
+        db.MarketplaceCopilotCapabilities.AddRange(Enumerable.Range(0, 101).Select(index =>
+            new MarketplaceCopilotCapabilityRecord
+            {
+                CapabilityRef = SnapshotRef.Create().Value,
+                ProjectId = "project",
+                EntraObjectId = "entra",
+                SourceBindingId = "binding",
+                CredentialReference = "credential",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                IssuedAt = now.AddMinutes(-3),
+                ExpiresAt = now.AddMinutes(-1),
+            }));
+        await db.SaveChangesAsync();
+
+        var removed = await new TwoAppPersistenceStore(db).PruneMarketplaceCopilotCapabilitiesAsync(now);
+
+        removed.Should().Be(100);
+        (await db.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MarketplaceCapabilityCleanup_DoesNotDeleteALiveClaim()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var now = DateTimeOffset.UtcNow;
+        db.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+        {
+            CapabilityRef = SnapshotRef.Create().Value,
+            ProjectId = "project",
+            EntraObjectId = "entra",
+            SourceBindingId = "binding",
+            CredentialReference = "credential",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            IssuedAt = now,
+            ExpiresAt = now.AddMinutes(2),
+            ConsumedAt = now,
+        });
+        await db.SaveChangesAsync();
+
+        (await new TwoAppPersistenceStore(db).PruneMarketplaceCopilotCapabilitiesAsync(now)).Should().Be(0);
+        (await db.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MarketplaceCapabilityCleanup_ReclaimsExpiredAbandonedClaimOnlyAfterItsLease()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var now = DateTimeOffset.UtcNow;
+        db.ProjectCopilotBindings.Add(MarketplaceBinding("marketplace-binding"));
+        await db.SaveChangesAsync();
+        var persistence = new TwoAppPersistenceStore(db);
+        var capability = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+            "project", "entra", now, now.AddMinutes(1)))!;
+
+        // Simulate process death after the atomic claim and before the broker finally block.
+        (await persistence.TryClaimMarketplaceCopilotCapabilityAsync(
+            capability, "project", "entra", now)).Should().NotBeNull();
+
+        (await persistence.PruneMarketplaceCopilotCapabilitiesAsync(now.AddMinutes(2))).Should().Be(0,
+            "an active broker claim must remain protected after capability expiry until its lease ends");
+        (await db.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(1);
+        (await persistence.TryClaimMarketplaceCopilotCapabilityAsync(
+            capability, "project", "entra", now.AddMinutes(2))).Should().BeNull(
+            "maintenance protection does not make a claimed capability redeemable again");
+
+        (await persistence.PruneMarketplaceCopilotCapabilitiesAsync(
+            now.Add(TwoAppPersistenceStore.MarketplaceCapabilityClaimLease).AddSeconds(1))).Should().Be(1);
+        (await db.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(0,
+            "maintenance must eventually reclaim a crash-abandoned claim without another browse request");
+    }
+
+    [Fact]
+    public async Task MarketplaceCapabilityMaintenance_ReclaimsExpiredUnconsumedCapabilityAfterCanceledOrCrashedBrowseWithoutAnotherBrowse()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var now = DateTimeOffset.UtcNow;
+        await using (var setup = new MemoryDbContext(options))
+        {
+            setup.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+            {
+                CapabilityRef = SnapshotRef.Create().Value,
+                ProjectId = "project",
+                EntraObjectId = "entra",
+                SourceBindingId = "binding",
+                CredentialReference = "credential",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                IssuedAt = now.AddMinutes(-3),
+                ExpiresAt = now.AddMinutes(-1),
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        using var services = new ServiceCollection()
+            .AddScoped<MemoryDbContext>(_ => new MemoryDbContext(options))
+            .AddScoped<TwoAppPersistenceStore>()
+            .BuildServiceProvider();
+        var maintenance = new MarketplaceCopilotCapabilityMaintenanceService(
+            services.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<MarketplaceCopilotCapabilityMaintenanceService>.Instance);
+
+        (await maintenance.SweepOnceAsync()).Should().Be(1);
+        await using var verification = new MemoryDbContext(options);
+        (await verification.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(0,
+            "the independent sweep must reclaim a capability left unconsumed when a browse is canceled or crashes");
+    }
+
+    [Fact]
+    public async Task MarketplaceCapabilityCleanup_DoesNotRaceAClaimedCapabilityDuringRedemption()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var now = DateTimeOffset.UtcNow;
+        await using var db = new MemoryDbContext(options);
+        db.ProjectCopilotBindings.Add(MarketplaceBinding("marketplace-binding"));
+        await db.SaveChangesAsync();
+        var persistence = new TwoAppPersistenceStore(db);
+        var capability = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+            "project", "entra", now, now.AddMinutes(1)))!;
+        var vault = new PruningCredentialVault(
+            () => persistence.PruneMarketplaceCopilotCapabilitiesAsync(
+                now.Add(TwoAppPersistenceStore.MarketplaceCapabilityClaimLease).AddSeconds(-1)),
+            """{"status":"signed-in","accessToken":"marketplace-test-token","expiresAt":"2099-01-01T00:00:00Z"}""");
+        var broker = new GitHubCapabilityBroker(
+            persistence,
+            vault,
+            new RepoAppInstallationTokenService(
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                db,
+                new InMemorySecretStore(),
+                new NullHttpClientFactory()));
+
+        var outcome = await broker.TryUseMarketplaceCopilotCredentialAsync(
+            capability, "project", "entra", now, (_, _) => Task.CompletedTask, CancellationToken.None);
+
+        outcome.Should().Be(GitHubCapabilityBrokerOutcome.Issued);
+        vault.PrunedRecords.Should().Be(0,
+            "generic expiry maintenance must never delete a capability after it has been claimed");
+        (await db.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(0,
+            "the broker owns terminal deletion after a successful redemption");
+    }
+
+    [Fact]
+    public async Task MarketplaceCapabilityBroker_FailsClosedWhenMaintenanceReapsItsExpiredClaimDuringVaultRead()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var now = DateTimeOffset.UtcNow;
+        db.ProjectCopilotBindings.Add(MarketplaceBinding("marketplace-binding"));
+        await db.SaveChangesAsync();
+        var persistence = new TwoAppPersistenceStore(db);
+        var capability = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+            "project", "entra", now, now.AddMinutes(1)))!;
+        var vault = new PruningCredentialVault(
+            () => persistence.PruneMarketplaceCopilotCapabilitiesAsync(
+                now.Add(TwoAppPersistenceStore.MarketplaceCapabilityClaimLease).AddSeconds(1)),
+            """{"status":"signed-in","accessToken":"marketplace-test-token","expiresAt":"2099-01-01T00:00:00Z"}""");
+        var broker = new GitHubCapabilityBroker(
+            persistence,
+            vault,
+            new RepoAppInstallationTokenService(
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                db,
+                new InMemorySecretStore(),
+                new NullHttpClientFactory()));
+        var cached = false;
+
+        var outcome = await broker.TryUseMarketplaceCopilotCredentialAsync(
+            capability, "project", "entra", now, (_, _) =>
+            {
+                cached = true;
+                return Task.CompletedTask;
+            }, CancellationToken.None);
+
+        outcome.Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        cached.Should().BeFalse("the post-vault lease fence must prevent a late broker from caching a credential result");
+        vault.PrunedRecords.Should().Be(1);
+        (await db.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExpiredMarketplaceCapability_RedemptionRequiresConnectionAndDoesNotCacheAnEmptyClassification()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var now = DateTimeOffset.UtcNow;
+        await using var db = new MemoryDbContext(options);
+        var projectId = ProjectId.New();
+        var binding = MarketplaceBinding("marketplace-binding");
+        binding.ProjectId = projectId.ToString();
+        db.Projects.Add(Project(projectId.ToString()));
+        db.ProjectCopilotBindings.Add(binding);
+        var expired = SnapshotRef.Create();
+        db.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+        {
+            CapabilityRef = expired.Value,
+            ProjectId = projectId.ToString(),
+            EntraObjectId = "entra",
+            SourceBindingId = "marketplace-binding",
+            CredentialReference = "copilot-app-project-marketplace",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            IssuedAt = now.AddMinutes(-3),
+            ExpiresAt = now.AddMinutes(-1),
+        });
+        await db.SaveChangesAsync();
+        var secrets = new InMemorySecretStore();
+        var broker = new GitHubCapabilityBroker(
+            new TwoAppPersistenceStore(db),
+            new TwoAppCredentialVault(secrets),
+            new RepoAppInstallationTokenService(
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                db,
+                secrets,
+                new NullHttpClientFactory()));
+        var classifier = new MarketplaceCapabilityClassifier(broker);
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var result = await indexer.GetOrBuildForProjectAsync(
+                "owner", "repo", "main", [new GitHubTreeBlob("skills/example/SKILL.md", 40)],
+                expired.Value, "llm", CancellationToken.None, projectId,
+                new CallerContext { User = "marketplace-owner", EntraObjectId = "entra" });
+            result.RequiresGitHubConnection.Should().BeTrue();
+            result.Entries.Should().BeEmpty();
+        }
+
+        classifier.Attempts.Should().Be(2,
+            "an expired claim must fail closed as a connection requirement instead of caching an empty LLM result");
+        classifier.Redemptions.Should().Be(0);
+    }
+
     private static async Task<SqliteConnection> OpenDatabaseAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");
@@ -758,6 +1226,18 @@ public sealed class TwoAppPersistenceStoreTests
         ProjectId = "project",
         EntraObjectId = "entra",
         CredentialReference = "kv-copilot-project",
+        CredentialVersion = "version",
+        GrantDigest = "digest",
+        Status = GitHubBindingStatus.Active,
+        BoundAt = DateTimeOffset.UtcNow,
+    };
+
+    private static ProjectCopilotBindingRecord MarketplaceBinding(string id) => new()
+    {
+        Id = id,
+        ProjectId = "project",
+        EntraObjectId = "entra",
+        CredentialReference = "copilot-app-project-marketplace",
         CredentialVersion = "version",
         GrantDigest = "digest",
         Status = GitHubBindingStatus.Active,
@@ -992,6 +1472,71 @@ public sealed class TwoAppPersistenceStoreTests
             },
             _ => throw new ArgumentOutOfRangeException(nameof(purpose)),
         };
+
+    private sealed class MarketplaceCapabilityClassifier(GitHubCapabilityBroker broker) : IMarketplaceCatalogClassifier
+    {
+        public int Redemptions { get; private set; }
+        public int Attempts { get; private set; }
+
+        public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
+            string owner,
+            string repo,
+            string branch,
+            IReadOnlyList<string> treePaths,
+            string? capabilityRunId,
+            CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<MarketplaceCatalogEntry>?>(null);
+
+        public async Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyForProjectAsync(
+            string owner,
+            string repo,
+            string branch,
+            IReadOnlyList<string> treePaths,
+            string? capabilityReference,
+            CancellationToken ct,
+            ProjectId? projectId = null,
+            CallerContext? caller = null)
+        {
+            Attempts++;
+            if (string.IsNullOrWhiteSpace(capabilityReference) || projectId is null ||
+                string.IsNullOrWhiteSpace(caller?.EntraObjectId))
+                throw new GitHubCopilotUnauthorizedException("Marketplace capability unavailable.");
+
+            var redeemed = await broker.TryUseMarketplaceCopilotCredentialAsync(
+                new SnapshotRef(capabilityReference),
+                projectId.Value.ToString(),
+                caller.EntraObjectId,
+                DateTimeOffset.UtcNow,
+                (_, _) => Task.CompletedTask,
+                ct);
+            if (redeemed != GitHubCapabilityBrokerOutcome.Issued)
+                throw new GitHubCopilotUnauthorizedException("Marketplace capability unavailable.");
+
+            Redemptions++;
+            return [new MarketplaceCatalogEntry("skills/example", "example", "Example")];
+        }
+    }
+
+    private sealed class PruningCredentialVault(
+        Func<Task<int>> pruneAsync,
+        string credential) : ITwoAppCredentialVault
+    {
+        public int PrunedRecords { get; private set; }
+
+        public async Task<SecretGetResult> ReadCurrentAsync(
+            TwoAppCredentialLocator locator,
+            CancellationToken ct = default)
+        {
+            PrunedRecords = await pruneAsync().ConfigureAwait(false);
+            return new SecretGetResult(credential, ETag: null, Found: true);
+        }
+
+        public Task WriteAsync(TwoAppCredentialLocator locator, string value, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task TombstoneAndDeleteAsync(TwoAppCredentialLocator locator, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
 
     private static Run RunForSnapshotLifecycle(ProjectId? projectId = null) => new()
     {

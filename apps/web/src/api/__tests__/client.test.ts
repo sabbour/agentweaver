@@ -1,4 +1,8 @@
 import { AgentweaverApiClient, ApiError } from '../client';
+import {
+  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+  GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
+} from '../githubConnectionRequirement';
 import type { SkillProvenance } from '../types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -118,49 +122,44 @@ describe('AgentweaverApiClient keepalive', () => {
 
     expect(error.payload).toEqual(payload);
   });
-});
 
-describe('AgentweaverApiClient project GitHub identity', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('uses the project GitHub identity endpoint when switching linked accounts', async () => {
+  it('broadcasts the shared Copilot connection action for every typed requirement response', async () => {
+    const requirement = {
+      code: 'github_copilot_connection_required',
+      message: GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
+      action: { type: 'connect_project_copilot_app', project_id: 'project-1' },
+    };
+    const received = vi.fn();
+    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
     const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 204,
-      text: async () => '',
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify(requirement),
     });
     vi.stubGlobal('fetch', fetchMock);
     const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
 
-    await client.setProjectGitHubIdentityOverride('project/1', 'altcat');
+    await expect(client.getProject('project-1')).rejects.toMatchObject({ status: 401, payload: requirement });
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://api.example.test/api/projects/project%2F1/github-identity');
-    expect(init.method).toBe('PUT');
-    expect(init.body).toBe('{"github_login":"altcat"}');
+    expect(received).toHaveBeenCalledTimes(1);
+    expect((received.mock.calls[0]![0] as CustomEvent).detail).toEqual(requirement);
+    window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
   });
 
-  it('uses the project GitHub identity endpoint when refreshing the selected account', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({
-        project_id: 'project/1',
-        project_override_login: 'altcat',
-        effective_login: 'altcat',
-        resolution_source: 'project_override',
-      }),
-    });
-    vi.stubGlobal('fetch', fetchMock);
+  it('does not broadcast a connection action for an untyped 401 response', async () => {
+    const received = vi.fn();
+    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify({ error: 'Unauthorized.' }),
+    }));
     const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
 
-    const identity = await client.getProjectGitHubIdentity('project/1');
+    await expect(client.getProject('project-1')).rejects.toMatchObject({ status: 401 });
 
-    expect(fetchMock.mock.calls[0][0]).toBe('https://api.example.test/api/projects/project%2F1/github-identity');
-    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
-    expect(identity.effective_login).toBe('altcat');
+    expect(received).not.toHaveBeenCalled();
+    window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
   });
 });
 

@@ -75,6 +75,26 @@ public sealed record FencedGitHubCapabilitySnapshot(
 }
 
 /// <summary>
+/// Broker-only metadata recovered from a claimed marketplace capability. It deliberately excludes
+/// the caller-visible opaque reference and all credential material.
+/// </summary>
+internal sealed record FencedMarketplaceCopilotCapability(
+    SnapshotRef CapabilityReference,
+    GitHubProjectCopilotCapabilityPurpose Purpose,
+    string ProjectId,
+    string EntraObjectId,
+    DateTimeOffset ExpiresAt,
+    DateTimeOffset ConsumedAt,
+    DateTimeOffset ClaimLeaseExpiresAt,
+    string SourceBindingId,
+    string CredentialReference,
+    string CredentialVersion,
+    string GrantDigest)
+{
+    internal TwoAppCredentialLocator? CredentialLocator { get; init; }
+}
+
+/// <summary>
 /// Server-only repository scope recovered by atomically consuming a selection code.
 /// It deliberately excludes the code, credential reference, and display metadata.
 /// </summary>
@@ -140,6 +160,8 @@ internal sealed class RepoAppCredentialLease(
 /// </remarks>
 public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? projectStore = null)
 {
+    private const int MarketplaceCapabilityCleanupBatchSize = 100;
+    internal static readonly TimeSpan MarketplaceCapabilityClaimLease = TimeSpan.FromMinutes(5);
     private static readonly Regex CredentialPattern = new(
         @"(?:gh[ups]_|github_pat_|-----BEGIN [A-Z ]+-----|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1014,6 +1036,243 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
                     _ => null,
                 },
             };
+    }
+
+    /// <summary>
+    /// Issues a new capability only for the active Copilot binding owned by the current human
+    /// subject. This is intentionally a project operation, not a synthetic run snapshot.
+    /// </summary>
+    internal async Task<SnapshotRef?> TryIssueMarketplaceCopilotCapabilityAsync(
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        DateTimeOffset expiresAt,
+        CancellationToken ct = default) =>
+        await TryIssueProjectCopilotCapabilityAsync(
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            projectId,
+            entraObjectId,
+            now,
+            expiresAt,
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Issues one short-lived, caller- and project-bound capability for the supplied non-run
+    /// operation. The capability's purpose is persisted and must match when the broker redeems it.
+    /// </summary>
+    internal async Task<SnapshotRef?> TryIssueProjectCopilotCapabilityAsync(
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        DateTimeOffset expiresAt,
+        CancellationToken ct = default)
+    {
+        if (!Enum.IsDefined(purpose) ||
+            string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId) ||
+            expiresAt <= now)
+            return null;
+
+        var binding = await db.ProjectCopilotBindings.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.ProjectId == projectId &&
+                                       x.EntraObjectId == entraObjectId &&
+                                       x.Status == GitHubBindingStatus.Active &&
+                                       x.DeactivatedAt == null, ct)
+            .ConfigureAwait(false);
+        if (binding is null)
+            return null;
+
+        var capability = SnapshotRef.Create();
+        var record = new MarketplaceCopilotCapabilityRecord
+        {
+            CapabilityRef = capability.Value,
+            Purpose = (int)purpose,
+            ProjectId = projectId,
+            EntraObjectId = entraObjectId,
+            SourceBindingId = binding.Id,
+            CredentialReference = binding.CredentialReference,
+            CredentialVersion = binding.CredentialVersion,
+            GrantDigest = binding.GrantDigest,
+            IssuedAt = now,
+            ExpiresAt = expiresAt,
+        };
+        EnsureSafe(record);
+        db.MarketplaceCopilotCapabilities.Add(record);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return capability;
+    }
+
+    internal Task<bool> HasActiveMarketplaceCopilotBindingAsync(
+        string projectId,
+        string entraObjectId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId))
+            return Task.FromResult(false);
+
+        return db.ProjectCopilotBindings.AsNoTracking().AnyAsync(x =>
+            x.ProjectId == projectId &&
+            x.EntraObjectId == entraObjectId &&
+            x.Status == GitHubBindingStatus.Active &&
+            x.DeactivatedAt == null, ct);
+    }
+
+    /// <summary>
+    /// Atomically consumes an unexpired caller- and project-bound marketplace capability. The
+    /// broker receives a bounded lease and re-fences its exact Copilot binding after the vault read
+    /// before exposing a credential.
+    /// </summary>
+    internal async Task<FencedMarketplaceCopilotCapability?> TryClaimMarketplaceCopilotCapabilityAsync(
+        SnapshotRef capabilityReference,
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        CancellationToken ct = default) =>
+        await TryClaimProjectCopilotCapabilityAsync(
+            capabilityReference,
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            projectId,
+            entraObjectId,
+            now,
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Atomically consumes one unexpired capability only when its operation purpose, caller, and
+    /// project all match the authority issued by the server.
+    /// </summary>
+    internal async Task<FencedMarketplaceCopilotCapability?> TryClaimProjectCopilotCapabilityAsync(
+        SnapshotRef capabilityReference,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        CancellationToken ct = default)
+    {
+        if (!Enum.IsDefined(purpose) ||
+            string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId))
+            return null;
+
+        // ExecuteUpdate cannot translate DateTimeOffset updates for SQLite. Parameterized SQL keeps
+        // the atomic compare-and-set predicate identical across SQLite and PostgreSQL.
+        var claimLeaseExpiresAt = now.Add(MarketplaceCapabilityClaimLease);
+        var changed = await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+             UPDATE marketplace_copilot_capabilities
+             SET consumed_at = {now},
+                 claim_lease_expires_at = {claimLeaseExpiresAt}
+             WHERE capability_ref = {capabilityReference.Value}
+               AND purpose = {(int)purpose}
+               AND project_id = {projectId}
+               AND entra_object_id = {entraObjectId}
+               AND consumed_at IS NULL
+               AND expires_at > {now}
+             """,
+            ct).ConfigureAwait(false);
+        if (changed != 1)
+            return null;
+
+        var capability = await db.MarketplaceCopilotCapabilities.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.CapabilityRef == capabilityReference.Value &&
+                                       x.Purpose == (int)purpose &&
+                                       x.ProjectId == projectId &&
+                                       x.EntraObjectId == entraObjectId &&
+                                       x.ConsumedAt == now &&
+                                       x.ClaimLeaseExpiresAt == claimLeaseExpiresAt, ct)
+            .ConfigureAwait(false);
+        if (capability is null)
+            return null;
+
+        return new(
+            capabilityReference,
+            purpose,
+            projectId,
+            entraObjectId,
+            capability.ExpiresAt,
+            capability.ConsumedAt!.Value,
+            capability.ClaimLeaseExpiresAt!.Value,
+            capability.SourceBindingId,
+            capability.CredentialReference,
+            capability.CredentialVersion,
+            capability.GrantDigest)
+        {
+            CredentialLocator = TwoAppCredentialLocator.ForCopilotProject(capability.CredentialReference),
+        };
+    }
+
+    /// <summary>
+    /// Deletes a bounded set of expired marketplace capabilities. Claimed records remain protected
+    /// through their lease, then an abandoned claim is reclaimed without allowing it to be replayed.
+    /// </summary>
+    internal async Task<int> PruneMarketplaceCopilotCapabilitiesAsync(
+        DateTimeOffset now,
+        CancellationToken ct = default)
+    {
+        // DateTimeOffset comparisons are not translatable by the SQLite provider. The parameterized
+        // statement below is portable to SQLite and PostgreSQL and limits every maintenance pass.
+        return await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+             DELETE FROM marketplace_copilot_capabilities
+             WHERE capability_ref IN (
+                 SELECT capability_ref
+                 FROM marketplace_copilot_capabilities
+                 WHERE expires_at <= {now}
+                   AND (
+                       consumed_at IS NULL
+                       OR claim_lease_expires_at IS NULL
+                       OR claim_lease_expires_at <= {now}
+                   )
+                 ORDER BY expires_at, capability_ref
+                 LIMIT {MarketplaceCapabilityCleanupBatchSize}
+             )
+             """,
+            ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes a capability once its exact claim has reached a terminal broker outcome. The
+    /// compare-and-delete predicate preserves caller/project and lease fencing.
+    /// </summary>
+    internal Task<int> DeleteClaimedMarketplaceCopilotCapabilityAsync(
+        FencedMarketplaceCopilotCapability capability,
+        CancellationToken ct = default) =>
+        db.MarketplaceCopilotCapabilities
+            .Where(x => x.CapabilityRef == capability.CapabilityReference.Value &&
+                        x.Purpose == (int)capability.Purpose &&
+                        x.ProjectId == capability.ProjectId &&
+                        x.EntraObjectId == capability.EntraObjectId &&
+                        x.ConsumedAt == capability.ConsumedAt &&
+                        x.ClaimLeaseExpiresAt == capability.ClaimLeaseExpiresAt)
+            .ExecuteDeleteAsync(ct);
+
+    internal async Task<bool> IsClaimedMarketplaceCopilotCapabilityLiveAsync(
+        FencedMarketplaceCopilotCapability capability,
+        CancellationToken ct = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (capability.ExpiresAt <= now ||
+            capability.ClaimLeaseExpiresAt <= now ||
+            !await db.MarketplaceCopilotCapabilities.AsNoTracking().AnyAsync(record =>
+                record.CapabilityRef == capability.CapabilityReference.Value &&
+                record.Purpose == (int)capability.Purpose &&
+                record.ProjectId == capability.ProjectId &&
+                record.EntraObjectId == capability.EntraObjectId &&
+                record.ConsumedAt == capability.ConsumedAt &&
+                record.ClaimLeaseExpiresAt == capability.ClaimLeaseExpiresAt, ct).ConfigureAwait(false))
+            return false;
+
+        return await db.ProjectCopilotBindings.AsNoTracking().AnyAsync(binding =>
+            binding.Id == capability.SourceBindingId &&
+            binding.ProjectId == capability.ProjectId &&
+            binding.EntraObjectId == capability.EntraObjectId &&
+            binding.CredentialReference == capability.CredentialReference &&
+            binding.CredentialVersion == capability.CredentialVersion &&
+            binding.GrantDigest == capability.GrantDigest &&
+            binding.Status == GitHubBindingStatus.Active &&
+            binding.DeactivatedAt == null, ct).ConfigureAwait(false);
     }
 
     internal Task<List<RunGitHubCapabilitySnapshotRecord>> GetCapabilitySnapshotsAsync(

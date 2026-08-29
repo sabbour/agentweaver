@@ -3,10 +3,6 @@ import { describe, expect, it } from 'vitest';
 import type {
   CreateProjectRequest,
   CreateProjectRunRequest,
-  GitHubAuthStatus,
-  GitHubAuthStatusResponse,
-  GitHubDeviceFlow,
-  GitHubPollResult,
   Project,
   ProjectOrigin,
   ProjectRunSummary,
@@ -129,48 +125,6 @@ describe('Project type shapes', () => {
   });
 });
 
-describe('GitHub auth type shapes', () => {
-  it('GitHubAuthStatus accepts all valid values', () => {
-    const signedIn: GitHubAuthStatus = 'signed_in';
-    const signedOut: GitHubAuthStatus = 'signed_out';
-    const neverSignedIn: GitHubAuthStatus = 'never_signed_in';
-    expect(signedIn).toBe('signed_in');
-    expect(signedOut).toBe('signed_out');
-    expect(neverSignedIn).toBe('never_signed_in');
-  });
-
-  it('GitHubDeviceFlow has required fields', () => {
-    const flow: GitHubDeviceFlow = {
-      user_code: 'ABCD-1234',
-      verification_uri: 'https://github.com/login/device',
-      expires_in: 900,
-      interval: 5,
-    };
-    expect(flow.user_code).toBe('ABCD-1234');
-    expect(flow.verification_uri).toContain('github.com');
-  });
-
-  it('GitHubPollResult status accepts all expected values', () => {
-    const pending: GitHubPollResult = { status: 'pending', login: null };
-    const success: GitHubPollResult = { status: 'success', login: 'myuser' };
-    const expired: GitHubPollResult = { status: 'expired', login: null };
-    const denied: GitHubPollResult = { status: 'denied', login: null };
-    expect(pending.status).toBe('pending');
-    expect(success.login).toBe('myuser');
-    expect(expired.status).toBe('expired');
-    expect(denied.status).toBe('denied');
-  });
-
-  it('GitHubAuthStatusResponse has status and login', () => {
-    const resp: GitHubAuthStatusResponse = {
-      status: 'signed_in',
-      login: 'mylogin',
-    };
-    expect(resp.status).toBe('signed_in');
-    expect(resp.login).toBe('mylogin');
-  });
-});
-
 describe('AgentweaverApiClient project methods', () => {
   it('client has listProjects method', () => {
     const client = new AgentweaverApiClient('http://localhost:5000', 'key');
@@ -210,27 +164,5 @@ describe('AgentweaverApiClient project methods', () => {
   it('client has listProjectRuns method', () => {
     const client = new AgentweaverApiClient('http://localhost:5000', 'key');
     expect(typeof client.listProjectRuns).toBe('function');
-  });
-});
-
-describe('AgentweaverApiClient GitHub auth methods', () => {
-  it('client has startGitHubDeviceFlow method', () => {
-    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
-    expect(typeof client.startGitHubDeviceFlow).toBe('function');
-  });
-
-  it('client has pollGitHubAuth method', () => {
-    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
-    expect(typeof client.pollGitHubAuth).toBe('function');
-  });
-
-  it('client has getGitHubAuthStatus method', () => {
-    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
-    expect(typeof client.getGitHubAuthStatus).toBe('function');
-  });
-
-  it('client has signOutGitHub method', () => {
-    const client = new AgentweaverApiClient('http://localhost:5000', 'key');
-    expect(typeof client.signOutGitHub).toBe('function');
   });
 });

@@ -874,22 +874,18 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 catch (Exception ex) when (IsMissingCopilotAuth(ex))
                 {
                     // Deliverable: replace the opaque SDK "Session was not created with authentication
-                    // info or custom provider" with a clear, actionable failure. This happens when the
-                    // pod resolved a non-Copilot token (typically the installation fallback because no
-                    // submitting user / AgentHost__UserId was available).
+                    // info or custom provider" with a clear, actionable failure.
                     _logger.LogError(
                         ex,
-                        "Run {RunId} could not authenticate to GitHub Copilot: the resolved GitHub token " +
-                        "is not Copilot-entitled (likely the installation fallback). Ensure the submitting " +
-                        "user is signed in and AgentHost__UserId is injected into the pod.",
+                        "Run {RunId} could not authenticate to GitHub Copilot: its run-bound Copilot " +
+                        "capability credential is unavailable or no longer Copilot-entitled.",
                         _runId);
                     var failure = new AgentProviderException(
                         ModelSource.GitHubCopilot,
                         AgentProviderFailureKind.Authorization,
                         "github_copilot_auth_required",
-                        $"Run {_runId} has no Copilot-entitled credentials: the resolved GitHub token is not " +
-                        "authorized for GitHub Copilot. Ensure the submitting user is signed in and " +
-                        "AgentHost__UserId is injected into the pod.",
+                        $"Run {_runId} has no live, run-bound Copilot capability credential authorized " +
+                        "for GitHub Copilot.",
                         isRetryable: false,
                         ex);
                     EmitProviderFailure(failure);

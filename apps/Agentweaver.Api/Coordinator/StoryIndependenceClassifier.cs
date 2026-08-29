@@ -8,7 +8,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Generation;
-using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -39,7 +38,7 @@ public interface IStoryIndependenceClassifier
         CancellationToken ct);
 }
 
-public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClassifier
+public class CopilotStoryIndependenceClassifier : IStoryIndependenceClassifier
 {
     // Keep the outer classifier deadline aligned with AgentRuntime's established 30-second
     // default operation window instead of pre-empting otherwise healthy Copilot turns at 8 seconds.
@@ -58,19 +57,16 @@ public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClass
         "\"short explanation\"}. If unsure, choose false.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ILogger<CopilotStoryIndependenceClassifier> _logger;
     private readonly string? _modelId;
 
     public CopilotStoryIndependenceClassifier(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ILogger<CopilotStoryIndependenceClassifier> logger,
         IConfiguration configuration,
         IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _logger = logger;
         _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveReplyClassificationModel();
@@ -80,21 +76,14 @@ public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClass
         StoryIndependenceClassificationContext context,
         CancellationToken ct)
     {
-        if (context.ComponentStories.Count == 0 || string.IsNullOrWhiteSpace(context.SubmittingUser))
+        if (context.ComponentStories.Count == 0 || string.IsNullOrWhiteSpace(context.RunId))
             return null;
 
         try
         {
-            var scope = await _scopeProvider
-                .ResolveAsync(context.SubmittingUser, context.ProjectId, ct)
-                .ConfigureAwait(false);
-            if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-                throw new InvalidOperationException(
-                    "Story-independence classification requires a user Copilot token scope; installation scope is not permitted.");
-
             var prompt = BuildPrompt(context);
             var result = await RunWithRetryAsync(
-                token => RunModelTurnAsync(scope, prompt, token),
+                token => RunModelTurnAsync(context.RunId, prompt, token),
                 ClassificationTimeout,
                 MaxClassificationAttempts,
                 ct,
@@ -195,8 +184,8 @@ public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClass
         return null;
     }
 
-    private async Task<string?> RunModelTurnAsync(
-        GitHubTokenScope scope,
+    protected virtual async Task<string?> RunModelTurnAsync(
+        string runId,
         string prompt,
         CancellationToken ct)
     {
@@ -204,7 +193,7 @@ public sealed class CopilotStoryIndependenceClassifier : IStoryIndependenceClass
         AIAgent? agent = null;
         try
         {
-            client = await _copilotClientFactory.CreateClientAsync("unbound", _modelId, ct).ConfigureAwait(false);
+            client = await _copilotClientFactory.CreateClientAsync(runId, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 
             var sessionConfig = new SessionConfig

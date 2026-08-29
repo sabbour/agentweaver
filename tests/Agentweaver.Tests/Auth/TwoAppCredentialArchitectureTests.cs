@@ -88,6 +88,24 @@ public sealed class TwoAppCredentialArchitectureTests
         authorize.GetParameters().Should().NotContain(parameter => parameter.IsOptional);
     }
 
+    [Fact]
+    public void ProjectOperationCredentialBroker_RequiresPurposeAndBoundOpaqueInputs()
+    {
+        var credential = typeof(GitHubCapabilityBroker).GetMethod(
+            "TryUseProjectCopilotCredentialAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+
+        credential.Should().NotBeNull();
+        credential!.GetParameters().Take(5).Select(parameter => parameter.ParameterType.FullName)
+            .Should().Equal(
+                typeof(SnapshotRef).FullName,
+                "Agentweaver.Domain.GitHubProjectCopilotCapabilityPurpose",
+                typeof(string).FullName,
+                typeof(string).FullName,
+                typeof(DateTimeOffset).FullName);
+        credential.GetParameters().Should().NotContain(parameter => parameter.IsOptional);
+    }
+
     [Theory]
     [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.RepositoryRead, true)]
     [InlineData(GitHubCapabilityPurpose.InteractiveRepository, GitHubCapabilityOperation.RepositoryWrite, true)]

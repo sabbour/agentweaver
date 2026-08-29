@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Skills;
@@ -17,14 +19,17 @@ public sealed record MarketplaceCatalogEntry(string Location, string Name, strin
 /// The parsed catalog for one marketplace repo revision. <see cref="Fingerprint"/> is a content hash of
 /// the repo tree (equivalent to the tree SHA) so the cache invalidates automatically when the tree
 /// changes. <see cref="Strategy"/> records how the catalog was derived (<c>skillmd</c> heuristic or
-/// <c>llm</c>).
+/// <c>llm</c>). <see cref="RequiresGitHubConnection"/> signals that an LLM classification was
+/// requested without a redeemable explicit capability, so the caller can present a connect-GitHub
+/// requirement rather than treating the absence as an empty catalog.
 /// </summary>
 public sealed record MarketplaceCatalogIndex(
     string Repository,
     string Branch,
     string Fingerprint,
     string Strategy,
-    IReadOnlyList<MarketplaceCatalogEntry> Entries);
+    IReadOnlyList<MarketplaceCatalogEntry> Entries,
+    bool RequiresGitHubConnection = false);
 
 /// <summary>
 /// Cache of parsed catalog indexes keyed by <c>owner/repo@branch#fingerprint</c>. Because the fingerprint
@@ -64,9 +69,11 @@ public sealed class MarketplaceCatalogCache : IMarketplaceCatalogCache
 }
 
 /// <summary>
-/// Resolves a marketplace repo tree into a parsed catalog index. Fallback ladder (per revision, cached):
-/// heuristic SKILL.md discovery (free, deterministic) → bounded, fail-closed LLM classifier (only when the
-/// heuristic finds nothing and the caller has a Copilot-entitled user token) → empty. Never a hard gate.
+/// Resolves a marketplace repo tree into a parsed catalog index. It first performs free, deterministic
+/// SKILL.md discovery, then uses the bounded LLM classifier only when that discovery finds nothing and the
+/// caller explicitly supplies a Copilot capability. When model classification is needed but that capability
+/// cannot be supplied, it reports a GitHub connection requirement rather than silently returning an empty
+/// catalog.
 /// </summary>
 public interface IMarketplaceCatalogIndexer
 {
@@ -75,7 +82,7 @@ public interface IMarketplaceCatalogIndexer
         string repo,
         string branch,
         IReadOnlyList<GitHubTreeBlob> blobs,
-        string? submittingUser,
+        string? capabilityRunId,
         string? parseStrategy,
         CancellationToken ct);
 
@@ -84,11 +91,26 @@ public interface IMarketplaceCatalogIndexer
         string repo,
         string branch,
         IReadOnlyList<GitHubTreeBlob> blobs,
-        string? submittingUser,
+        string? capabilityReference,
         string? parseStrategy,
         CancellationToken ct,
-        ProjectId? projectId = null) =>
-        GetOrBuildAsync(owner, repo, branch, blobs, submittingUser, parseStrategy, ct);
+        ProjectId? projectId = null,
+        CallerContext? caller = null) =>
+        GetOrBuildAsync(owner, repo, branch, blobs, capabilityReference, parseStrategy, ct);
+
+    Task<MarketplaceCatalogIndex> GetOrBuildForProjectWithCapabilityIssuerAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<GitHubTreeBlob> blobs,
+        string? capabilityReference,
+        string? parseStrategy,
+        CancellationToken ct,
+        ProjectId? projectId = null,
+        CallerContext? caller = null,
+        Func<CancellationToken, Task<string?>>? issueCapabilityAsync = null,
+        Func<CancellationToken, Task<bool>>? hasCapabilityAsync = null) =>
+        GetOrBuildForProjectAsync(owner, repo, branch, blobs, capabilityReference, parseStrategy, ct, projectId, caller);
 }
 
 /// <summary>
@@ -96,9 +118,13 @@ public interface IMarketplaceCatalogIndexer
 /// tree metadata (every <c>SKILL.md</c> at any depth → its containing directory), so it handles both flat
 /// (<c>github/awesome-copilot</c>: <c>skills/&lt;name&gt;/SKILL.md</c>) and nested
 /// (<c>microsoft/skills</c>: <c>.github/plugins/&lt;plugin&gt;/skills/&lt;name&gt;/SKILL.md</c>) layouts
-/// with zero blob downloads. The LLM classifier is a bounded, fail-closed fallback used only when no
+/// with zero blob downloads. The LLM classifier is used only when no
 /// <c>SKILL.md</c> exists anywhere in the tree; its proposed locations are validated against the real tree
-/// (and, for step-1 import compatibility, must contain a <c>SKILL.md</c>) before being cached.
+/// (and, for step-1 import compatibility, must contain a <c>SKILL.md</c>) before being cached. A caller
+/// must provide the capability explicitly or through a trusted server-side issuer callback; the indexer
+/// never treats a submitting user or an ambient GitHub installation scope as model authorization. If an LLM
+/// classification is needed but that capability is absent or cannot be redeemed, it returns
+/// <see cref="MarketplaceCatalogIndex.RequiresGitHubConnection"/> instead of a silent empty result.
 /// </summary>
 public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
 {
@@ -118,29 +144,56 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         string repo,
         string branch,
         IReadOnlyList<GitHubTreeBlob> blobs,
-        string? submittingUser,
+        string? capabilityRunId,
         string? parseStrategy,
         CancellationToken ct) =>
         GetOrBuildForProjectAsync(
-            owner, repo, branch, blobs, submittingUser, parseStrategy, ct, projectId: null);
+            owner, repo, branch, blobs, capabilityRunId, parseStrategy, ct, projectId: null);
 
-    public async Task<MarketplaceCatalogIndex> GetOrBuildForProjectAsync(
+    public Task<MarketplaceCatalogIndex> GetOrBuildForProjectAsync(
         string owner,
         string repo,
         string branch,
         IReadOnlyList<GitHubTreeBlob> blobs,
-        string? submittingUser,
+        string? capabilityReference,
         string? parseStrategy,
         CancellationToken ct,
-        ProjectId? projectId = null)
+        ProjectId? projectId = null,
+        CallerContext? caller = null) =>
+        GetOrBuildForProjectWithCapabilityIssuerAsync(
+            owner, repo, branch, blobs, capabilityReference, parseStrategy, ct, projectId, caller);
+
+    public async Task<MarketplaceCatalogIndex> GetOrBuildForProjectWithCapabilityIssuerAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<GitHubTreeBlob> blobs,
+        string? capabilityReference,
+        string? parseStrategy,
+        CancellationToken ct,
+        ProjectId? projectId = null,
+        CallerContext? caller = null,
+        Func<CancellationToken, Task<string?>>? issueCapabilityAsync = null,
+        Func<CancellationToken, Task<bool>>? hasCapabilityAsync = null)
     {
         var repository = $"{owner}/{repo}";
         var fingerprint = ComputeFingerprint(blobs);
-        var key = $"{repository}@{branch}#{fingerprint}";
-        if (_cache.TryGet(key, out var cached))
-            return cached;
-
         var strategy = string.IsNullOrWhiteSpace(parseStrategy) ? "auto" : parseStrategy.Trim().ToLowerInvariant();
+        var classifierRequested = strategy is "auto" or "llm" && _classifier is not null;
+        var key = $"{repository}@{branch}#{fingerprint}#strategy={strategy}#classifier={classifierRequested}";
+        if (_cache.TryGet(key, out var cached))
+        {
+            // A cached LLM result still requires the caller's active binding. Validate it without
+            // creating a capability record; heuristic indexes remain freely cacheable.
+            if (cached.Strategy != "llm" ||
+                (hasCapabilityAsync is null && !string.IsNullOrWhiteSpace(capabilityReference)) ||
+                (hasCapabilityAsync is not null && await hasCapabilityAsync(ct).ConfigureAwait(false)))
+                return cached;
+
+            return new MarketplaceCatalogIndex(
+                repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
+                RequiresGitHubConnection: true);
+        }
 
         MarketplaceCatalogIndex index;
         var heuristic = strategy is "auto" or "skillmd" ? BuildHeuristic(repository, branch, fingerprint, blobs) : null;
@@ -148,11 +201,39 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         {
             index = heuristic;
         }
-        else if (strategy is "auto" or "llm" && _classifier is not null)
+        else if (blobs.Count == 0)
         {
-            var llmEntries = await BuildWithLlmAsync(
-                owner, repo, branch, blobs, submittingUser, ct, projectId).ConfigureAwait(false);
-            index = new MarketplaceCatalogIndex(repository, branch, fingerprint, "llm", llmEntries);
+            // The classifier rejects an empty tree without opening a model client. Return its
+            // deterministic empty result before issuing a capability that could never be redeemed.
+            index = new MarketplaceCatalogIndex(
+                repository, branch, fingerprint, "skillmd", Array.Empty<MarketplaceCatalogEntry>());
+        }
+        else if (classifierRequested)
+        {
+            // Issue only after every cache and deterministic path has returned, immediately before the
+            // one uncached model call. The callback keeps the capability server-side and avoids durable
+            // unused records for heuristic and cache-hit browses.
+            if (string.IsNullOrWhiteSpace(capabilityReference) && issueCapabilityAsync is not null)
+                capabilityReference = await issueCapabilityAsync(ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(capabilityReference))
+            {
+                return new MarketplaceCatalogIndex(
+                    repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
+                    RequiresGitHubConnection: true);
+            }
+
+            try
+            {
+                var llmEntries = await BuildWithLlmAsync(
+                    owner, repo, branch, blobs, capabilityReference!, ct, projectId, caller).ConfigureAwait(false);
+                index = new MarketplaceCatalogIndex(repository, branch, fingerprint, "llm", llmEntries);
+            }
+            catch (GitHubCopilotUnauthorizedException)
+            {
+                return new MarketplaceCatalogIndex(
+                    repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
+                    RequiresGitHubConnection: true);
+            }
         }
         else
         {
@@ -189,13 +270,17 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         string repo,
         string branch,
         IReadOnlyList<GitHubTreeBlob> blobs,
-        string? submittingUser,
+        string capabilityReference,
         CancellationToken ct,
-        ProjectId? projectId)
+        ProjectId? projectId,
+        CallerContext? caller)
     {
         var treePaths = blobs.Select(b => b.Path).ToList();
         var proposed = await _classifier!
-            .ClassifyForProjectAsync(owner, repo, branch, treePaths, submittingUser, ct, projectId)
+            // A capability is supplied by a trusted caller only. Never reinterpret the caller identity
+            // as authorization: the no-run browse path remains deterministic heuristic/empty.
+            .ClassifyForProjectAsync(
+                owner, repo, branch, treePaths, capabilityReference, ct: ct, projectId: projectId, caller: caller)
             .ConfigureAwait(false);
         if (proposed is null || proposed.Count == 0)
             return Array.Empty<MarketplaceCatalogEntry>();
