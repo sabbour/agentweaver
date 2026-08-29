@@ -621,7 +621,10 @@ public sealed class CoordinatorSteeringService
     /// </para>
     /// </summary>
     public async Task<bool> TryResumeFailedCoordinatorRunForRetryAsync(
-        string coordinatorRunId, string createdBy, CancellationToken ct)
+        string coordinatorRunId,
+        string createdBy,
+        CancellationToken ct,
+        Func<Run, CancellationToken, Task>? beforeResume = null)
     {
         const string kind = SteeringKind.Redirect;
         const string instruction =
@@ -655,7 +658,7 @@ public sealed class CoordinatorSteeringService
         try
         {
             resumed = await TryResumeParkedCoordinatorAsync(
-                coordinatorRunId, directiveId, kind, instruction, createdBy, createdAt, ct)
+                coordinatorRunId, directiveId, kind, instruction, createdBy, createdAt, ct, beforeResume)
                 .ConfigureAwait(false);
         }
         catch
@@ -1399,7 +1402,8 @@ public sealed class CoordinatorSteeringService
     /// <exception cref="SteeringRecoveryExhaustedException">Every affected subtask is over the attempt cap.</exception>
     private async Task<SteeringDirectiveView?> TryResumeParkedCoordinatorAsync(
         string coordinatorRunId, int directiveId, string kind, string instruction,
-        string createdBy, DateTimeOffset createdAt, CancellationToken ct)
+        string createdBy, DateTimeOffset createdAt, CancellationToken ct,
+        Func<Run, CancellationToken, Task>? beforeResume = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;
@@ -1460,6 +1464,11 @@ public sealed class CoordinatorSteeringService
         // subtask rows (it is the sole writer while alive).
         if (dispatch.IsDispatchActive(coordinatorRunId))
             return null;
+
+        // An endpoint-supplied fence must complete before recovery changes this run's state or
+        // re-arms child dispatch. Other steering paths deliberately do not use this retry-only hook.
+        if (beforeResume is not null)
+            await beforeResume(run, ct).ConfigureAwait(false);
 
         var subtasks = await db.Subtasks
             .Where(s => s.WorkPlanId == plan.Id)

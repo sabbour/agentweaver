@@ -1247,6 +1247,7 @@ app.MapPost("/api/runs/{id}/retry", async (
     IRunStore runStore,
     CoordinatorRunService coordinator,
     CoordinatorSteeringService steering,
+    RunGitHubCapabilitySnapshotLifecycle capabilitySnapshots,
     IRunOptionsStore runOptions,
     RunOrchestrator orchestrator,
     IProjectStore projectStore,
@@ -1316,8 +1317,20 @@ app.MapPost("/api/runs/{id}/retry", async (
         try
         {
             resumed = await steering
-                .TryResumeFailedCoordinatorRunForRetryAsync(run.Id.ToString(), run.SubmittingUser, ct)
+                .TryResumeFailedCoordinatorRunForRetryAsync(
+                    run.Id.ToString(),
+                    run.SubmittingUser,
+                    ct,
+                    async (candidate, fenceCt) =>
+                    {
+                        if (!await capabilitySnapshots.PrepareForAgentHostLaunchAsync(candidate, fenceCt).ConfigureAwait(false))
+                            throw new GitHubCopilotConnectionRequiredException(candidate.ProjectId!.Value);
+                    })
                 .ConfigureAwait(false);
+        }
+        catch (GitHubCopilotConnectionRequiredException ex)
+        {
+            return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
         }
         catch (SteeringRecoveryExhaustedException ex)
         {
