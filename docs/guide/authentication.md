@@ -27,7 +27,10 @@ again server-side before creating the project.
 
 When a project requires Copilot, authorize the Copilot App from its project-scoped
 handoff. The browser handoff binds to your Entra session and returns only safe
-completion status to the application.
+completion status to the application. In **Project Settings → Unattended**, use
+**Manage GitHub account** to see the connected GitHub login, connect an account, or
+switch it. Account selection happens in GitHub's secure browser page; Agentweaver
+never displays or stores credentials in the browser.
 
 Project roles in Agentweaver do not translate to GitHub permissions. Repository and
 Copilot capabilities are granted only through their respective GitHub Apps.

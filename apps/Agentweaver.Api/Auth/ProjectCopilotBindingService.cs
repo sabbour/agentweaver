@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
@@ -30,6 +31,15 @@ public sealed record CopilotBindingBeginResult(
 }
 
 public sealed record CopilotBindingPollResult(CopilotBindingOutcome Outcome, string? Status);
+
+/// <summary>
+/// Redacted connection state for an authorized project owner. It never contains a credential,
+/// transaction identifier, grant metadata, or provider permissions.
+/// </summary>
+public sealed record CopilotBindingConnectionResult(
+    CopilotBindingOutcome Outcome,
+    bool Connected,
+    string? GitHubLogin);
 
 public sealed record McpCopilotBrowserHandoffResult(
     CopilotBindingOutcome Outcome,
@@ -252,6 +262,34 @@ public sealed class ProjectCopilotBindingService(
             : new(CopilotBindingOutcome.Success, ToPublicStatus(transaction.Status));
     }
 
+    public async Task<CopilotBindingConnectionResult> GetConnectionAsync(
+        CallerContext caller,
+        ClaimsPrincipal principal,
+        ProjectId projectId,
+        CancellationToken ct = default)
+    {
+        if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
+            return new(CopilotBindingOutcome.HumanEntraSubjectRequired, false, null);
+        if (!await IsExplicitOwnerAsync(projectId, caller.EntraObjectId!, ct).ConfigureAwait(false))
+            return new(CopilotBindingOutcome.ProjectOwnerRequired, false, null);
+
+        var binding = await persistence.GetActiveCopilotBindingAsync(projectId.ToString(), ct).ConfigureAwait(false);
+        if (binding is null)
+            return new(CopilotBindingOutcome.Success, false, null);
+
+        var secret = await secretStore.GetSecretAsync(binding.CredentialReference, ct).ConfigureAwait(false);
+        var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
+        if (credential is null || !string.Equals(credential.Status, "signed-in", StringComparison.Ordinal))
+            return new(CopilotBindingOutcome.GitHubBindingUnavailable, false, null);
+
+        var login = IsGitHubLogin(credential.GitHubLogin)
+            ? credential.GitHubLogin
+            : !string.IsNullOrWhiteSpace(credential.AccessToken)
+                ? await GetGitHubLoginAsync(credential.AccessToken, ct).ConfigureAwait(false)
+                : null;
+        return new(CopilotBindingOutcome.Success, true, login);
+    }
+
     public async Task<CopilotBindingOutcome> DisconnectAsync(
         CallerContext caller,
         ClaimsPrincipal principal,
@@ -293,9 +331,21 @@ public sealed class ProjectCopilotBindingService(
         return CopilotBindingOutcome.Success;
     }
 
-    public string GetCallbackRedirect(CopilotBindingOutcome outcome)
+    public async Task<string> GetCallbackRedirectAsync(
+        CopilotBindingOutcome outcome,
+        string? state,
+        CancellationToken ct = default)
     {
         var frontend = (configuration["Auth:CopilotApp:FrontendUrl"] ?? "http://localhost:5173").TrimEnd('/');
+        if (outcome == CopilotBindingOutcome.Success && !string.IsNullOrWhiteSpace(state))
+        {
+            var transaction = await persistence.GetCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
+            if (transaction is not null && ProjectId.TryParse(transaction.ProjectId, out var projectId))
+            {
+                return $"{frontend}/projects/{Uri.EscapeDataString(projectId.ToString())}/settings" +
+                    "?section=unattended&copilot_app_auth=success";
+            }
+        }
         return $"{frontend}{ReturnRoutes["projects"]}?copilot_app_auth={ToStateCode(outcome)}";
     }
 
@@ -373,7 +423,7 @@ public sealed class ProjectCopilotBindingService(
                 throw new InvalidOperationException();
             var credential = await ExchangeCodeAsync(code, verifier.Value, ct).ConfigureAwait(false);
             await WriteTombstoneAsync(transaction.PkceVerifierProtected, ct).ConfigureAwait(false);
-            if (credential is null)
+            if (credential is null || string.IsNullOrWhiteSpace(credential.GitHubLogin))
                 throw new InvalidOperationException();
 
             var version = CreateRandomValue();
@@ -476,9 +526,37 @@ public sealed class ProjectCopilotBindingService(
                 return null;
             var body = await ReadBoundedAsync(response.Content, timeout.Token).ConfigureAwait(false);
             var provider = JsonSerializer.Deserialize<ProviderTokenResponse>(body);
-            return provider is { Error: null, AccessToken: not null } && !string.IsNullOrWhiteSpace(provider.AccessToken)
-                ? new("signed-in", provider.AccessToken, provider.RefreshToken)
-                : null;
+            if (provider is not { Error: null, AccessToken: not null } ||
+                string.IsNullOrWhiteSpace(provider.AccessToken))
+                return null;
+
+            var login = await GetGitHubLoginAsync(provider.AccessToken, timeout.Token).ConfigureAwait(false);
+            return login is null ? null : new("signed-in", provider.AccessToken, provider.RefreshToken, login);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException ||
+                                   (ex is OperationCanceledException && !ct.IsCancellationRequested))
+        {
+            return null;
+        }
+    }
+
+    private async Task<string?> GetGitHubLoginAsync(string accessToken, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(ProviderTimeout);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.UserAgent.ParseAdd("Agentweaver");
+        request.Headers.Accept.ParseAdd("application/vnd.github+json");
+        try
+        {
+            using var response = await httpClientFactory.CreateClient("github-authz")
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+            if (response.StatusCode != HttpStatusCode.OK || response.Content.Headers.ContentLength is > 64 * 1024)
+                return null;
+            var body = await ReadBoundedAsync(response.Content, timeout.Token).ConfigureAwait(false);
+            var provider = JsonSerializer.Deserialize<ProviderUserResponse>(body);
+            return provider is not null && IsGitHubLogin(provider.Login) ? provider.Login : null;
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException ||
                                    (ex is OperationCanceledException && !ct.IsCancellationRequested))
@@ -557,11 +635,24 @@ public sealed class ProjectCopilotBindingService(
             buffer.Write(chunk, 0, read);
         }
     }
-    private sealed record CopilotCredential(string? Status, string? AccessToken, string? RefreshToken);
+    private static bool IsGitHubLogin(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= 39 &&
+        Regex.IsMatch(value, "^[A-Za-z\\d](?:[A-Za-z\\d-]{0,37}[A-Za-z\\d])?$");
+
+    private sealed record CopilotCredential(
+        string? Status,
+        string? AccessToken,
+        string? RefreshToken,
+        string? GitHubLogin = null);
     private sealed class ProviderTokenResponse
     {
         [System.Text.Json.Serialization.JsonPropertyName("access_token")] public string? AccessToken { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("refresh_token")] public string? RefreshToken { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("error")] public string? Error { get; init; }
+    }
+    private sealed class ProviderUserResponse
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("login")] public string? Login { get; init; }
     }
 }

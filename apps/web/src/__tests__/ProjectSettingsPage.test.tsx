@@ -25,6 +25,7 @@ vi.mock('../api/apiClient', () => ({
     updateSandboxPolicy: vi.fn(),
     getUnattendedReadiness: vi.fn(),
     beginProjectCopilotAuthorization: vi.fn(),
+    getProjectCopilotConnection: vi.fn(),
   },
 }));
 
@@ -104,6 +105,10 @@ beforeEach(() => {
     message: 'Connect a project Copilot App identity before unattended work can run.',
     repo_app_installation_connected: false,
   } as never);
+  vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
+    status: 'not_connected',
+    github_login: null,
+  });
 });
 
 afterEach(() => {
@@ -142,7 +147,7 @@ describe('ProjectSettingsPage', () => {
 
     expect(await screen.findByText('Automation readiness')).toBeDefined();
     expect(screen.getByText('copilot_binding_required')).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Connect Copilot App' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Manage GitHub account' })).toBeDefined();
     expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
   });
 

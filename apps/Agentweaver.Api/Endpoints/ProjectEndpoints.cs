@@ -162,7 +162,7 @@ app.MapGet("/auth/github/copilot-app/callback", async (
         browserSession?.Id,
         browserSession?.EntraObjectId,
         state, string.IsNullOrWhiteSpace(error) ? code : null, cookie, ct).ConfigureAwait(false);
-    return Results.Redirect(service.GetCallbackRedirect(outcome));
+    return Results.Redirect(await service.GetCallbackRedirectAsync(outcome, state, ct).ConfigureAwait(false));
 }).AllowAnonymous();
 
 // GET /api/projects/{id}/github/copilot/authorizations/{transactionId} — initiating-human-only poll.
@@ -190,6 +190,44 @@ app.MapGet("/api/projects/{id}/github/copilot/authorizations/{transactionId}", a
 })
     .WithName("PollProjectCopilotAuthorization")
     .WithTags("Projects", "GitHub Copilot");
+
+// GET /api/projects/{id}/github/copilot/connection — Owner-only, redacted binding state.
+app.MapGet("/api/projects/{id}/github/copilot/connection", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    if (await projectStore.GetAsync(projectId, ct).ConfigureAwait(false) is null)
+        return Results.NotFound();
+
+    var service = new ProjectCopilotBindingService(
+        httpContext.RequestServices.GetRequiredService<IConfiguration>(),
+        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+    var result = await service.GetConnectionAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+    return result.Outcome == CopilotBindingOutcome.Success
+        ? Results.Ok(new
+        {
+            status = result.Connected ? "connected" : "not_connected",
+            github_login = result.GitHubLogin,
+        })
+        : CopilotBindingFailure(result.Outcome);
+})
+    .WithName("GetProjectCopilotConnection")
+    .WithTags("Projects", "GitHub Copilot")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description = "Returns an Owner-only, redacted project Copilot App connection state and verified GitHub login. It never returns credentials, transactions, grants, or provider permissions.";
+        return Task.CompletedTask;
+    });
 
 // DELETE /api/projects/{id}/github/copilot/binding — Owner or human platform-admin de-privileging path.
 app.MapDelete("/api/projects/{id}/github/copilot/binding", async (

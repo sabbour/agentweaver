@@ -1,5 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { GitHubCopilotConnectionPicker } from '../components/GitHubCopilotConnectionPicker';
+import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import {
   Badge,
@@ -295,6 +297,12 @@ export function ProjectSettingsPage() {
     next.set('section', id);
     setSearchParams(next, { replace: true });
   };
+  const copilotAuthorizationResult = searchParams.get('copilot_app_auth');
+  const dismissCopilotAuthorizationResult = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('copilot_app_auth');
+    setSearchParams(next, { replace: true });
+  };
 
   const [connectRepoOpen, setConnectRepoOpen] = useState(false);
 
@@ -350,7 +358,6 @@ export function ProjectSettingsPage() {
   const [unattendedReadiness, setUnattendedReadiness] = useState<UnattendedReadiness | null>(null);
   const [unattendedLoading, setUnattendedLoading] = useState(true);
   const [unattendedError, setUnattendedError] = useState<string | null>(null);
-  const [connectingCopilot, setConnectingCopilot] = useState(false);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -632,19 +639,6 @@ export function ProjectSettingsPage() {
     }
   };
 
-  const handleConnectCopilot = async () => {
-    if (!projectId) return;
-    setConnectingCopilot(true);
-    setUnattendedError(null);
-    try {
-      const result = await apiClient.beginProjectCopilotAuthorization(projectId);
-      window.location.assign(result.authorization_url);
-    } catch {
-      setUnattendedError('The Copilot App connection could not be started. Review the readiness status and try again.');
-      setConnectingCopilot(false);
-    }
-  };
-
   if (!projectId) return null;
 
   const visibleSections = SECTIONS.filter((s) => s.id !== 'repository' || project?.origin === 'blank');
@@ -678,6 +672,10 @@ export function ProjectSettingsPage() {
           <MessageBarBody>{loadError}</MessageBarBody>
         </MessageBar>
       )}
+      <CopilotAuthorizationResultNotice
+        code={copilotAuthorizationResult}
+        onDismiss={dismissCopilotAuthorizationResult}
+      />
 
       {project && (
         <div className={styles.layout}>
@@ -985,6 +983,11 @@ export function ProjectSettingsPage() {
                     This read-only status reports the server-verified prerequisites for unattended work.
                     This page does not enable or activate automation.
                   </Body>
+                  <TitleText>GitHub Copilot account</TitleText>
+                  <Body as="p" tone="muted">
+                    Connect or switch the project-scoped GitHub account used for Copilot capabilities.
+                  </Body>
+                  <GitHubCopilotConnectionPicker projectId={projectId} showConnectionStatus />
                   {unattendedLoading && <Spinner label="Checking automation readiness" size="extra-tiny" />}
                   {unattendedReadiness && (
                     <>
@@ -995,15 +998,6 @@ export function ProjectSettingsPage() {
                       <MessageBar intent={unattendedReadiness.status === 'ready' ? 'success' : 'warning'}>
                         <MessageBarBody>{unattendedReadiness.message}</MessageBarBody>
                       </MessageBar>
-                      {unattendedReadiness.reason_code === 'copilot_binding_required' && (
-                        <Button
-                          appearance="primary"
-                          disabled={connectingCopilot}
-                          onClick={() => void handleConnectCopilot()}
-                        >
-                          {connectingCopilot ? 'Opening GitHub' : 'Connect Copilot App'}
-                        </Button>
-                      )}
                     </>
                   )}
                   <div className={styles.formActions}>
