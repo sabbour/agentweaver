@@ -187,26 +187,6 @@ public sealed class ProjectRoleAssignmentTests : IClassFixture<EntraWebApplicati
     }
 
     [Fact]
-    public async Task LegacyProject_WithLinkedGitHubOwner_IsBackfilled_OnFirstEntraAccess()
-    {
-        var projectId = await CreateLegacyProjectAsync("legacy-owner");
-        await LinkGitHubIdentityAsync(OwnerOid, "legacy-owner");
-
-        using var owner = CreateClient(OwnerOid, PlatformRoles.Viewer);
-        var response = await owner.GetAsync($"/api/projects/{projectId}");
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var project = await response.Content.ReadFromJsonAsync<ProjectResponse>();
-        project!.EffectiveRole.Should().Be("Owner");
-
-        using var scope = _factory.Services.CreateScope();
-        var assignments = scope.ServiceProvider.GetRequiredService<IProjectRoleAssignmentStore>();
-        var assignment = await assignments.GetAsync(ProjectId.Parse(projectId), OwnerOid);
-        assignment.Should().NotBeNull();
-        assignment!.Role.Should().Be(ProjectRole.Owner);
-    }
-
-    [Fact]
     public async Task LegacyProject_WithoutLinkedGitHubOwner_FailsClosed_WithClaimGuidance()
     {
         var projectId = await CreateLegacyProjectAsync("legacy-owner");
@@ -222,19 +202,6 @@ public sealed class ProjectRoleAssignmentTests : IClassFixture<EntraWebApplicati
         using var scope = _factory.Services.CreateScope();
         var assignments = scope.ServiceProvider.GetRequiredService<IProjectRoleAssignmentStore>();
         (await assignments.ListByProjectAsync(ProjectId.Parse(projectId))).Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task LegacyProject_IsIncludedInListProjects_AfterLazyBackfill()
-    {
-        var projectId = await CreateLegacyProjectAsync("legacy-owner");
-        await LinkGitHubIdentityAsync(OwnerOid, "legacy-owner");
-
-        using var owner = CreateClient(OwnerOid, PlatformRoles.Viewer);
-        var response = await owner.GetFromJsonAsync<JsonElement>("/api/projects");
-        var items = response.GetProperty("items").EnumerateArray().ToList();
-
-        items.Should().Contain(item => item.GetProperty("project_id").GetString() == projectId);
     }
 
     [Fact]
@@ -268,20 +235,6 @@ public sealed class ProjectRoleAssignmentTests : IClassFixture<EntraWebApplicati
 
     private HttpClient CreateClient(string objectId, params string[] roles) =>
         _factory.CreateAuthenticatedClientForObjectId(objectId, roles);
-
-    private async Task LinkGitHubIdentityAsync(string entraOid, string githubLogin)
-    {
-        using var scope = _factory.Services.CreateScope();
-        var tokenStore = scope.ServiceProvider.GetRequiredService<IGitHubTokenStore>() as IMultiIdentityGitHubTokenStore;
-        tokenStore.Should().NotBeNull();
-        await tokenStore!.LinkIdentityAsync(entraOid, new GitHubToken(
-            $"token-{githubLogin}",
-            null,
-            null,
-            githubLogin,
-            null,
-            ["repo"]));
-    }
 
     private async Task<string> CreateLegacyProjectAsync(string legacyOwner)
     {

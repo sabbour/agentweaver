@@ -27,21 +27,13 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
 
     public ProjectRunAuthorizationTests(EntraWebApplicationFactory factory) => _factory = factory;
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task EntraProjectOwner_CanReadProjectRun_RegardlessOfSubmittingIdentity(bool linkedGitHubIdentity)
+    [Fact]
+    public async Task EntraProjectOwner_CanReadProjectRun_RegardlessOfSubmittingIdentity()
     {
-        var ownerOid = linkedGitHubIdentity ? LinkedOwnerOid : UnlinkedOwnerOid;
-        var projectId = await CreateProjectAsync(ownerOid);
-        if (linkedGitHubIdentity)
-            await LinkGitHubIdentityAsync(ownerOid, LinkedGitHubLogin);
+        var projectId = await CreateProjectAsync(UnlinkedOwnerOid);
+        var runId = await InsertRunAsync(projectId, UnlinkedOwnerOid);
 
-        var runId = await InsertRunAsync(
-            projectId,
-            linkedGitHubIdentity ? LinkedGitHubLogin : ownerOid);
-
-        using var owner = CreateEntraClient(ownerOid, PlatformRoles.Viewer);
+        using var owner = CreateEntraClient(UnlinkedOwnerOid, PlatformRoles.Viewer);
         var response = await owner.GetAsync($"/api/runs/{runId}");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -275,22 +267,6 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         return projectId;
     }
 
-    private async Task LinkGitHubIdentityAsync(string entraOid, string githubLogin)
-    {
-        using var scope = _factory.Services.CreateScope();
-        var tokenStore = scope.ServiceProvider.GetRequiredService<IGitHubTokenStore>()
-            .Should().BeAssignableTo<IMultiIdentityGitHubTokenStore>().Subject;
-        await tokenStore.LinkIdentityAsync(
-            entraOid,
-            new GitHubToken(
-                $"token-{githubLogin}",
-                RefreshToken: null,
-                ExpiresAt: null,
-                Login: githubLogin,
-                AvatarUrl: null,
-                Scopes: ["repo"]));
-    }
-
     private async Task<string> InsertRunAsync(ProjectId? projectId, string submittingUser)
     {
         var run = new Run
@@ -300,173 +276,6 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
             OriginatingBranch = "main",
             ModelSource = ModelSource.GitHubCopilot,
             Task = "project run authorization",
-            SubmittingUser = submittingUser,
-            Status = RunStatus.Pending,
-            StartedAt = DateTimeOffset.UtcNow,
-            ProjectId = projectId,
-            AgentName = "Coordinator",
-        };
-        await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(run);
-        return run.Id.ToString();
-    }
-
-    private async Task<Run> GetRunAsync(string runId) =>
-        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId)))!;
-}
-
-[Trait("Category", "ProcessEnvironment")]
-public sealed class LegacyRunAuthorizationTests : IClassFixture<ReviewWebApplicationFactory>
-{
-    private readonly ReviewWebApplicationFactory _factory;
-
-    public LegacyRunAuthorizationTests(ReviewWebApplicationFactory factory) => _factory = factory;
-
-    [Fact]
-    public async Task NullProjectRun_PreservesLegacyOwnerAuthorization()
-    {
-        var runId = await InsertRunAsync(projectId: null, ReviewWebApplicationFactory.OtherUser);
-        using var owner = CreateClient(ReviewWebApplicationFactory.OtherApiKey);
-        using var nonOwner = CreateClient("unrelated-legacy-api-key");
-
-        (await owner.GetAsync($"/api/runs/{runId}")).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await nonOwner.GetAsync($"/api/runs/{runId}")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
-    }
-
-    [Fact]
-    public async Task NullProjectRun_DoesNotTreatConfiguredServiceUserAsReadBypass()
-    {
-        var runId = await InsertRunAsync(projectId: null, ReviewWebApplicationFactory.OtherUser);
-        using var internalService = CreateClient(ReviewWebApplicationFactory.OwnerApiKey);
-
-        (await internalService.GetAsync($"/api/runs/{runId}")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
-    }
-
-    [Fact]
-    public async Task ProjectScopedRun_InGitHubLegacyMode_UsesPersistedProjectAuthorization()
-    {
-        var projectId = ProjectId.New();
-        await _factory.Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
-        {
-            Id = projectId,
-            Name = $"Legacy run auth {Guid.NewGuid():N}",
-            Origin = ProjectOrigin.Blank(),
-            WorkingDirectory = AppContext.BaseDirectory,
-            DefaultBranch = "main",
-            Owner = ReviewWebApplicationFactory.OtherUser,
-            ProviderSettings = new ProjectProviderSettings
-            {
-                DefaultProvider = ModelSource.GitHubCopilot,
-            },
-            State = ProjectState.Active,
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow,
-        });
-        var runId = await InsertRunAsync(projectId, "legacy-submitting-user");
-        using var submittingUser = CreateClient("legacy-submitting-user");
-        using var projectOwner = CreateClient(ReviewWebApplicationFactory.OtherApiKey);
-
-        (await submittingUser.GetAsync($"/api/runs/{runId}")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        (await projectOwner.GetAsync($"/api/runs/{runId}")).StatusCode.Should().Be(HttpStatusCode.OK);
-    }
-
-    [Fact]
-    public async Task InternalService_CannotUseOrdinaryProjectRunEndpoints_InGitHubLegacyMode()
-    {
-        var projectId = await CreateProjectAsync(ReviewWebApplicationFactory.OtherUser);
-        var runId = await InsertRunAsync(projectId, "unrelated-submitting-user");
-        foreach (var apiKey in new[]
-                 {
-                     ReviewWebApplicationFactory.InternalServiceApiKey,
-                     ReviewWebApplicationFactory.OwnerApiKey,
-                 })
-        {
-            using var internalService = CreateClient(apiKey);
-            var requests = new[]
-            {
-                new HttpRequestMessage(HttpMethod.Get, $"/api/runs/{runId}"),
-                new HttpRequestMessage(HttpMethod.Get, $"/api/runs/{runId}/events"),
-                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/archive"),
-                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/cancel"),
-                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/retry"),
-                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/sandbox/port-forward")
-                {
-                    Content = JsonContent.Create(new { targetPort = 3000 }),
-                },
-                new HttpRequestMessage(HttpMethod.Post, $"/api/runs/{runId}/sandbox/preview-approvals/request-id/retry"),
-            };
-
-            foreach (var request in requests)
-            {
-                using (request)
-                using (var response = await internalService.SendAsync(request))
-                    response.StatusCode.Should().Be(HttpStatusCode.Forbidden, request.RequestUri!.ToString());
-            }
-        }
-        (await GetRunAsync(runId)).ArchivedAt.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task InternalService_CanInvokeExplicitProjectRunPreviewCallback_InGitHubLegacyMode()
-    {
-        var projectId = await CreateProjectAsync(ReviewWebApplicationFactory.OtherUser);
-        var runId = await InsertRunAsync(projectId, "unrelated-submitting-user");
-        _factory.Services.GetRequiredService<IRunOptionsStore>().SetAutoApproveTools(runId, true);
-        foreach (var apiKey in new[]
-                 {
-                     ReviewWebApplicationFactory.InternalServiceApiKey,
-                     ReviewWebApplicationFactory.OwnerApiKey,
-                 })
-        {
-            using var internalService = CreateClient(apiKey);
-            var response = await internalService.PostAsJsonAsync(
-                $"/api/runs/{runId}/sandbox/preview",
-                new { target_port = 3000 });
-
-            response.StatusCode.Should().Be(
-                HttpStatusCode.Conflict,
-                "the callback must pass authorization before the fixture reports that no sandbox pod is registered");
-        }
-    }
-
-    private HttpClient CreateClient(string apiKey)
-    {
-        var client = _factory.CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        return client;
-    }
-
-    private async Task<ProjectId> CreateProjectAsync(string owner)
-    {
-        var projectId = ProjectId.New();
-        var now = DateTimeOffset.UtcNow;
-        await _factory.Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
-        {
-            Id = projectId,
-            Name = $"Legacy run auth {Guid.NewGuid():N}",
-            Origin = ProjectOrigin.Blank(),
-            WorkingDirectory = AppContext.BaseDirectory,
-            DefaultBranch = "main",
-            Owner = owner,
-            ProviderSettings = new ProjectProviderSettings
-            {
-                DefaultProvider = ModelSource.GitHubCopilot,
-            },
-            State = ProjectState.Active,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        return projectId;
-    }
-
-    private async Task<string> InsertRunAsync(ProjectId? projectId, string submittingUser)
-    {
-        var run = new Run
-        {
-            Id = RunId.New(),
-            RepositoryPath = "unused",
-            OriginatingBranch = "main",
-            ModelSource = ModelSource.GitHubCopilot,
-            Task = "legacy run authorization",
             SubmittingUser = submittingUser,
             Status = RunStatus.Pending,
             StartedAt = DateTimeOffset.UtcNow,

@@ -38,7 +38,7 @@ public sealed class GitHubTokenAuthMiddleware
     private readonly EntraAccessTokenValidator _entraTokenValidator;
     private readonly ILogger<GitHubTokenAuthMiddleware> _logger;
     private readonly bool _bypassForTests;
-    private readonly Dictionary<string, string> _testApiKeyMap;
+    private readonly Dictionary<string, TestCaller> _testApiKeyMap;
 
     public GitHubTokenAuthMiddleware(
         RequestDelegate next,
@@ -65,14 +65,18 @@ public sealed class GitHubTokenAuthMiddleware
             var singleKey = configuration["Auth:ApiKey"];
             var singleUser = configuration["Auth:User"];
             if (!string.IsNullOrWhiteSpace(singleKey) && !string.IsNullOrWhiteSpace(singleUser))
-                _testApiKeyMap[singleKey] = singleUser;
+                _testApiKeyMap[singleKey] = new TestCaller(
+                    singleUser,
+                    ReadTestPlatformRoles(configuration["Auth:PlatformRoles"], [PlatformRoles.PlatformAdmin]));
 
             foreach (var entry in configuration.GetSection("Auth:Keys").GetChildren())
             {
                 var token = entry["Token"];
                 var user = entry["User"];
                 if (!string.IsNullOrWhiteSpace(token) && !string.IsNullOrWhiteSpace(user))
-                    _testApiKeyMap[token] = user;
+                    _testApiKeyMap[token] = new TestCaller(
+                        user,
+                        ReadTestPlatformRoles(entry["PlatformRoles"], [PlatformRoles.PlatformAdmin]));
             }
         }
     }
@@ -102,13 +106,15 @@ public sealed class GitHubTokenAuthMiddleware
         var token = header[SchemePrefix.Length..].Trim();
         if (_bypassForTests)
         {
-            var resolvedUser = _testApiKeyMap.TryGetValue(token, out var user) ? user : token;
+            var testCaller = _testApiKeyMap.TryGetValue(token, out var configuredCaller)
+                ? configuredCaller
+                : new TestCaller(token, []);
             var bypassCaller = new CallerContext
             {
-                User = resolvedUser,
-                EntraObjectId = resolvedUser,
-                PlatformRoles = [PlatformRoles.PlatformAdmin],
-                PrimaryPlatformRole = PlatformRoles.PlatformAdmin,
+                User = testCaller.User,
+                EntraObjectId = testCaller.User,
+                PlatformRoles = testCaller.PlatformRoles,
+                PrimaryPlatformRole = testCaller.PlatformRoles.FirstOrDefault(),
             };
             SetCaller(context, bypassCaller, BuildClaimsPrincipal(bypassCaller));
             await _next(context).ConfigureAwait(false);
@@ -189,6 +195,15 @@ public sealed class GitHubTokenAuthMiddleware
 
         return new ClaimsPrincipal(new ClaimsIdentity(claims, "Agentweaver"));
     }
+
+    private static IReadOnlyList<string> ReadTestPlatformRoles(
+        string? configuredRoles,
+        IReadOnlyList<string> defaultRoles) =>
+        string.IsNullOrWhiteSpace(configuredRoles)
+            ? defaultRoles
+            : configuredRoles.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private sealed record TestCaller(string User, IReadOnlyList<string> PlatformRoles);
 }
 
 public static class ApiKeyAuthMiddleware
