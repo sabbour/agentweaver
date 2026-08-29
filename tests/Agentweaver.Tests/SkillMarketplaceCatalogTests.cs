@@ -35,7 +35,7 @@ public sealed class SkillMarketplaceCatalogTests
         };
         var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache());
 
-        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, submittingUser: null, parseStrategy: null, CancellationToken.None);
+        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, capabilityRunId: null, parseStrategy: null, CancellationToken.None);
 
         index.Strategy.Should().Be("skillmd");
         index.Entries.Select(e => e.Location).Should().BeEquivalentTo(
@@ -73,13 +73,10 @@ public sealed class SkillMarketplaceCatalogTests
     }
 
     [Fact]
-    public async Task Indexer_falls_back_to_llm_only_when_no_skillmd_and_validates_locations()
+    public async Task Indexer_without_explicit_capability_skips_llm_and_returns_empty()
     {
-        // No SKILL.md anywhere → heuristic is empty → the LLM classifier runs. In step-1 a catalog entry
-        // is only usable if its location contains a SKILL.md (import understands only that layout), so the
-        // indexer validates every LLM proposal against the real tree and drops those without a SKILL.md.
-        // Here the tree has none, so the classifier is invoked but all proposals are validated out —
-        // fail-closed to an empty catalog (which surfaces upstream as the existing 422), never a crash.
+        // No SKILL.md and no explicit capability means auto-browse must stay on its deterministic
+        // fallback. A caller identity is not a Copilot capability and cannot authorize an LLM turn.
         var blobs = new List<GitHubTreeBlob>
         {
             new("catalog/plans/plan-a/plan.md", 40),
@@ -92,15 +89,15 @@ public sealed class SkillMarketplaceCatalogTests
         });
         var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
 
-        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, submittingUser: "owner-1", parseStrategy: null, CancellationToken.None);
+        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, capabilityRunId: null, parseStrategy: null, CancellationToken.None);
 
-        classifier.Invocations.Should().Be(1);
-        index.Strategy.Should().Be("llm");
+        classifier.Invocations.Should().Be(0);
+        index.Strategy.Should().Be("skillmd");
         index.Entries.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task Indexer_keeps_llm_locations_that_contain_a_skillmd()
+    public async Task Indexer_uses_llm_only_when_an_explicit_capability_is_supplied()
     {
         // When a proposed location DOES contain a SKILL.md in the tree it is importable and kept (with
         // the classifier's description); a hallucinated location without a SKILL.md is dropped. This
@@ -117,9 +114,10 @@ public sealed class SkillMarketplaceCatalogTests
         });
         var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
 
-        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, submittingUser: "owner-1", parseStrategy: "llm", CancellationToken.None);
+        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, capabilityRunId: "run-marketplace", parseStrategy: "llm", CancellationToken.None);
 
         classifier.Invocations.Should().Be(1);
+        classifier.CapabilityRunIds.Should().Equal("run-marketplace");
         index.Strategy.Should().Be("llm");
         index.Entries.Select(e => e.Location).Should().Equal("catalog/plan-a");
         index.Entries[0].Description.Should().Be("A planning skill.");
@@ -132,7 +130,7 @@ public sealed class SkillMarketplaceCatalogTests
         var classifier = new FakeClassifier(Array.Empty<MarketplaceCatalogEntry>());
         var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
 
-        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, "owner-1", null, CancellationToken.None);
+        var index = await indexer.GetOrBuildAsync("acme", "repo", "main", blobs, "run-marketplace", null, CancellationToken.None);
 
         classifier.Invocations.Should().Be(0);
         index.Strategy.Should().Be("skillmd");
@@ -397,11 +395,14 @@ public sealed class SkillMarketplaceCatalogTests
         public int Invocations { get; private set; }
 
         public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
-            string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? submittingUser, CancellationToken ct)
+            string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? capabilityRunId, CancellationToken ct)
         {
             Invocations++;
+            CapabilityRunIds.Add(capabilityRunId);
             return Task.FromResult<IReadOnlyList<MarketplaceCatalogEntry>?>(result);
         }
+
+        public List<string?> CapabilityRunIds { get; } = [];
     }
 
     private sealed class RecordingTreeClient(IReadOnlyList<GitHubTreeBlob> blobs, Func<string, string?> content) : IGitHubSkillTreeClient
