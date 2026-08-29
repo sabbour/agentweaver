@@ -48,6 +48,8 @@ spec:
           command:
             - /app/efbundle
             - --verbose
+            - --
+            - --postgres-migrations
           env:
             - name: ASPNETCORE_ENVIRONMENT
               value: Production
