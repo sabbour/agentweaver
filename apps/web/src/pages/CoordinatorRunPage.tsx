@@ -283,6 +283,18 @@ const ASSEMBLY_EVENT_PHASE: Record<string, { phase: OrchPhase; priority?: number
   'coordinator.assembly_declined': { phase: 'declined', priority: 3 },
 };
 
+function planningPhaseForEvent(type: string): OrchPhase | undefined {
+  switch (type) {
+    case 'coordinator.outcome_spec.confirmed':
+    case 'coordinator.work_plan':
+    case 'subtask.dispatched':
+    case 'subtask.running':
+      return 'dispatching';
+    default:
+      return undefined;
+  }
+}
+
 function normalizePhase(raw: string | undefined | null): OrchPhase {
   if (!raw) return 'unknown';
   const k = raw.toLowerCase().replace(/[^a-z]/g, '');
@@ -583,6 +595,7 @@ function deriveOrchState(
   let latestOutcomeDrafting: RunStreamEvent | undefined;
   let latestOutcomeSupersedingSeq = -1;
   let latestAssemblyGateLabel = gateLabelForKind(undefined);
+  let latestPlanningTransition: { phase: OrchPhase; payload: Record<string, unknown>; type: string; sequence: number } | undefined;
   for (const evt of events) {
     if (evt.type === 'coordinator.outcome_spec.drafting') {
       if (!latestOutcomeDrafting || evt.sequence >= latestOutcomeDrafting.sequence) latestOutcomeDrafting = evt;
@@ -597,6 +610,15 @@ function deriveOrchState(
     }
     if (evt.type === 'coordinator.assembly_review_requested') {
       latestAssemblyGateLabel = gateLabelForKind(readGateKind(evt.payload));
+    }
+    const planningPhase = planningPhaseForEvent(evt.type);
+    if (planningPhase && (!latestPlanningTransition || evt.sequence >= latestPlanningTransition.sequence)) {
+      latestPlanningTransition = {
+        phase: planningPhase,
+        payload: evt.payload,
+        type: evt.type,
+        sequence: evt.sequence,
+      };
     }
     const mapped = ASSEMBLY_EVENT_PHASE[evt.type as string];
     if (!mapped) continue;
@@ -642,6 +664,14 @@ function deriveOrchState(
       ineligibleSubtasks: ineligibleSubtasks.length > 0 ? ineligibleSubtasks : undefined,
       sourceLabel: `${winner.type} event #${winner.sequence}`,
       updatedAt: readEventTimestamp(winner.payload),
+    };
+  }
+  if (latestPlanningTransition) {
+    return {
+      phase: latestPlanningTransition.phase,
+      reason: readStr(latestPlanningTransition.payload, ['message', 'reason', 'detail']),
+      sourceLabel: `${latestPlanningTransition.type} event #${latestPlanningTransition.sequence}`,
+      updatedAt: readEventTimestamp(latestPlanningTransition.payload),
     };
   }
   if (latestOutcomeDrafting && (latestOutcomeDrafting.sequence ?? -1) > latestOutcomeSupersedingSeq) {
@@ -2208,8 +2238,9 @@ export function CoordinatorRunPage() {
     droppedEventCount,
     status: streamStatus,
     error: streamError,
+    seedError,
     reconnect: reconnectStream,
-  } = useSeededRunStream(runId ?? '', runLevelStatus);
+  } = useSeededRunStream(runId ?? '');
   const artifactsLiveUpdateKey = liveEvents[liveEvents.length - 1]?.sequence ?? liveEvents.length;
 
   // Topology graph orientation (dagre rank direction). LR = horizontal (default), TB = vertical.
@@ -2317,37 +2348,6 @@ export function CoordinatorRunPage() {
         if (cancelled) return;
         setGraphError(formatApiError(err, 'The saved run graph could not be loaded.'));
       });
-
-    // Fetch work plan + children for topology status seed. Skip for child runs —
-    // work-plan is a coordinator-only artifact and child runs will never have one.
-    void (async () => {
-      const runDetail = await apiClient.getRun(runId).catch((err) => {
-        if (!cancelled) setRunLoadError(formatApiError(err, 'The run could not be loaded.'));
-        return null;
-      });
-      if (cancelled) return;
-      if (runDetail) setRunLoadError(null);
-      if (runDetail?.parent_run_id != null) {
-        setIsChildRun(true);
-        return;
-      }
-      const [workPlan, children] = await Promise.all([
-        apiClient.getWorkPlan(runId).catch((err) => {
-          if (!(err instanceof ApiError && err.status === 404) && !cancelled) {
-            setWorkPlanError(formatApiError(err, 'The work plan could not be loaded.'));
-          }
-          return null;
-        }),
-        apiClient.getCoordinatorChildren(runId).catch(() => null),
-      ]);
-      if (cancelled) return;
-      if (workPlan) {
-        setWorkPlanError(null);
-        setNoWorkPlan(false);
-        setTopoSeed(seedTopologyFromWorkPlan(workPlan, children));
-        setWorkPlanData(workPlan);
-      }
-    })();
 
     return () => { cancelled = true; };
   }, [runId]);
@@ -4388,7 +4388,7 @@ export function CoordinatorRunPage() {
         <span>Orchestration {shortId}</span>
       </nav>
 
-      {(retryError || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || streamError || droppedEventCount > 0 || streamStatus === 'error') && (
+      {(retryError || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
         <div className={styles.statusBannerStack} aria-live="polite">
           {runLoadError && (restDescriptor || events.length > 0) && (
             <MessageBar intent="warning">
@@ -4406,10 +4406,19 @@ export function CoordinatorRunPage() {
               </MessageBarActions>
             </MessageBar>
           )}
-          {(streamError || streamStatus === 'error' || droppedEventCount > 0) && (
+          {seedError && (
+            <MessageBar intent="warning" data-testid="coordinator-history-health">
+              <MessageBarBody>Saved event history refresh failed: {seedError}. Live updates remain active when connected.</MessageBarBody>
+            </MessageBar>
+          )}
+          {(streamError || streamStatus === 'connecting' || streamStatus === 'error' || droppedEventCount > 0) && (
             <MessageBar intent="warning" data-testid="coordinator-stream-health">
               <MessageBarBody>
-                {streamError ? `Live stream issue: ${streamError}` : streamStatus === 'error' ? 'Live stream disconnected.' : 'Live stream dropped older events.'}
+                {streamStatus === 'connecting' && !streamError
+                  ? 'Connecting to live updates. Displayed run state may be briefly behind.'
+                  : streamError ? `Live stream issue: ${streamError}`
+                    : streamStatus === 'error' ? 'Live stream disconnected.'
+                      : 'Live stream dropped older events.'}
                 {droppedEventCount > 0 ? ` ${droppedEventCount} event${droppedEventCount === 1 ? '' : 's'} were dropped from the in-memory buffer; refresh for a complete replay.` : ' Refresh or reconnect if the graph looks stale.'}
               </MessageBarBody>
               <MessageBarActions>

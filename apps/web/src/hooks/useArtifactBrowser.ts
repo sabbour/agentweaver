@@ -13,6 +13,7 @@ import type {
   WorkspaceNode,
 } from '../api/types';
 const POLL_INTERVAL_MS = 3000;
+const RETRY_POLL_INTERVAL_MS = 15000;
 
 export const FILTERS = [
   { label: 'All', value: 'all' },
@@ -163,10 +164,17 @@ export function useArtifactBrowser(
   // Loading/error state is reset in event handlers to avoid synchronous setState in effect body.
   useEffect(() => {
     let active = true;
-    // eslint-disable-next-line prefer-const
     let intervalId: ReturnType<typeof setInterval> | undefined;
+    let requestInFlight = false;
+
+    const startPolling = (intervalMs: number) => {
+      if (intervalId !== undefined) clearInterval(intervalId);
+      intervalId = setInterval(doFetch, intervalMs);
+    };
 
     const doFetch = () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
       (adapter?.getFiles ?? apiClient.getRunFiles.bind(apiClient))(runId, activeFilter)
         .then((data) => {
           if (active) {
@@ -186,9 +194,13 @@ export function useArtifactBrowser(
             } else {
               setFilesError(extractErrorMessage(err));
               setFilesLoading(false);
+              // Keep the error visible, but do not hammer a failing server every three seconds.
+              // A new live event/filter change restarts this effect and retries immediately.
+              if (err instanceof ApiError && err.status >= 500) startPolling(RETRY_POLL_INTERVAL_MS);
             }
           }
-        });
+        })
+        .finally(() => { requestInFlight = false; });
     };
 
     const startFilesFetch = async () => {
@@ -206,7 +218,7 @@ export function useArtifactBrowser(
       };
     }
 
-    intervalId = setInterval(doFetch, POLL_INTERVAL_MS);
+    startPolling(POLL_INTERVAL_MS);
     return () => {
       active = false;
       clearInterval(intervalId);
@@ -219,8 +231,16 @@ export function useArtifactBrowser(
   useEffect(() => {
     let active = true;
     let workspaceIntervalId: ReturnType<typeof setInterval> | undefined;
+    let requestInFlight = false;
+
+    const startPolling = (intervalMs: number) => {
+      if (workspaceIntervalId !== undefined) clearInterval(workspaceIntervalId);
+      workspaceIntervalId = setInterval(doFetch, intervalMs);
+    };
 
     const doFetch = () => {
+      if (requestInFlight) return;
+      requestInFlight = true;
       (adapter?.getWorkspace ?? apiClient.getRunWorkspace.bind(apiClient))(runId)
         .then((data) => {
           if (active) {
@@ -233,8 +253,10 @@ export function useArtifactBrowser(
           if (active) {
             setWorkspaceError(extractErrorMessage(err));
             setWorkspaceLoading(false);
+            if (err instanceof ApiError && err.status >= 500) startPolling(RETRY_POLL_INTERVAL_MS);
           }
-        });
+        })
+        .finally(() => { requestInFlight = false; });
     };
 
     const startWorkspaceFetch = async () => {
@@ -255,8 +277,7 @@ export function useArtifactBrowser(
       };
     }
 
-    // eslint-disable-next-line prefer-const
-    workspaceIntervalId = setInterval(doFetch, POLL_INTERVAL_MS);
+    startPolling(POLL_INTERVAL_MS);
     return () => {
       active = false;
       clearInterval(workspaceIntervalId);

@@ -12,6 +12,8 @@ export interface SeededRunStream {
   seedEvents: RunStreamEvent[];
   status: StreamStatus;
   error: string | null;
+  /** Failure loading the durable event history; live SSE events remain available. */
+  seedError: string | null;
   /** Count of events evicted from the live buffer — forward to useTimelineItems. */
   droppedEventCount: number;
   reconnect: () => void;
@@ -27,11 +29,8 @@ export interface SeededRunStream {
  * the browser console TUI needs the exact same behaviour, so it lives here once.
  *
  * @param runId the run to bind to ('' disables the stream).
- * @param status the run's lifecycle status; terminal/parked states still rely on
- *   the same durable events endpoint, and active runs also seed once so durable
- *   events emitted before the SSE subscription are visible.
  */
-export function useSeededRunStream(runId: string, status?: string): SeededRunStream {
+export function useSeededRunStream(runId: string): SeededRunStream {
   const {
     events: liveEvents,
     droppedEventCount,
@@ -41,10 +40,22 @@ export function useSeededRunStream(runId: string, status?: string): SeededRunStr
   } = useRunStream(runId);
 
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
+  const [seedError, setSeedError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!runId) { setSeedEvents([]); return; } // eslint-disable-line react-hooks/set-state-in-effect
     let cancelled = false;
+    if (!runId) {
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setSeedEvents([]);
+          setSeedError(null);
+        }
+      });
+      return () => { cancelled = true; };
+    }
+    queueMicrotask(() => {
+      if (!cancelled) setSeedError(null);
+    });
     apiClient.getRunEvents(runId)
       .then((persisted) => {
         if (cancelled) return;
@@ -54,14 +65,18 @@ export function useSeededRunStream(runId: string, status?: string): SeededRunStr
           payload: e.payload,
         })));
       })
-      .catch(() => { /* durable log may 404 — fall back to the live stream */ });
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setSeedError(err instanceof Error ? err.message : 'The saved event history could not be loaded.');
+        }
+      });
     return () => { cancelled = true; };
-  }, [runId, status]);
+  }, [runId]);
 
   const events = useMemo<RunStreamEvent[]>(
     () => mergeRunEvents(seedEvents, liveEvents),
     [seedEvents, liveEvents],
   );
 
-  return { events, liveEvents, seedEvents, status: streamStatus, error, droppedEventCount, reconnect };
+  return { events, liveEvents, seedEvents, status: streamStatus, error, seedError, droppedEventCount, reconnect };
 }
