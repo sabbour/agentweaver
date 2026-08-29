@@ -13,6 +13,24 @@ export interface OutcomeSpecMessage {
   scope?: string;
 }
 
+const OUTCOME_SPEC_FIRST_KEYS = ['"desired_outcome"', '"desiredOutcome"'];
+
+/**
+ * True while a streamed message is still spelling the outcome spec's first JSON key.
+ * This deliberately only recognizes the canonical key at the beginning of an object,
+ * leaving ordinary natural-language streams untouched.
+ */
+export function isOutcomeSpecMessagePrefix(content: string): boolean {
+  const trimmed = content.trimStart();
+  if (!trimmed.startsWith('{')) return false;
+
+  const firstProperty = trimmed.slice(1).trimStart();
+  if (!firstProperty) return false;
+  return OUTCOME_SPEC_FIRST_KEYS.some(
+    (key) => key.startsWith(firstProperty) || firstProperty.startsWith(key),
+  );
+}
+
 function readOutcomeField(payload: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = payload[key];

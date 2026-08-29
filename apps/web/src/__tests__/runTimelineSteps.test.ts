@@ -108,6 +108,26 @@ describe('buildRunTimeline', () => {
     expect(model.steps[0].messages[0].streaming).toBe(false);
   });
 
+  it('replaces partial outcome-spec JSON with drafting status without changing ordinary streamed text', () => {
+    const planning = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Drafting outcome plan' }),
+      evt(2, 'agent.message.delta', { messageId: 'm1', delta: '{"desired_out' }),
+    ]);
+    const prose = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Explaining the work' }),
+      evt(2, 'agent.message.delta', { messageId: 'm1', delta: 'I am checking the requirements.' }),
+    ]);
+
+    expect(planning.steps[0].messages[0]).toMatchObject({
+      text: 'Drafting outcome plan…',
+      streaming: true,
+    });
+    expect(prose.steps[0].messages[0]).toMatchObject({
+      text: 'I am checking the requirements.',
+      streaming: true,
+    });
+  });
+
   it('stores a message timestamp for relative-time rendering', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-14T12:45:00.000Z'));

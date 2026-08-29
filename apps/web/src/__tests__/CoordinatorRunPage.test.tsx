@@ -289,6 +289,49 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(document.body.textContent).toContain('2 events');
   });
 
+  it('reconciles confirmed planning events into the header and run tree without waiting for REST polling', async () => {
+    mockRunStreamState.current = {
+      events: [
+        { sequence: 10, type: 'coordinator.outcome_spec.confirmed', payload: { confirmedBy: 'operator' } },
+        { sequence: 11, type: 'coordinator.work_plan', payload: {} },
+        { sequence: 12, type: 'subtask.dispatched', payload: { subtaskId: '1' } },
+      ],
+      droppedEventCount: 0,
+      status: 'streaming',
+      error: null,
+      reconnect: vi.fn(),
+    };
+    // The persisted run detail has not caught up yet. SSE must still move the visible state out
+    // of Pending/Awaiting confirmation immediately.
+    vi.mocked(apiClient.getRun).mockResolvedValue({ run_id: 'coord-run-1', status: 'pending' } as never);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await screen.findByRole('treeitem', { name: /Select Outcome plan: Confirmed/i }, { timeout: 4000 });
+    expect(screen.getByRole('treeitem', { name: /Select Work plan: Completed/i })).toBeTruthy();
+    expect(screen.getByRole('treeitem', { name: /Select Coordinator: Running/i })).toBeTruthy();
+    expect(document.body.textContent).toContain('Dispatching');
+    expect(screen.queryByRole('treeitem', { name: /Select Outcome plan: Awaiting confirmation/i })).toBeNull();
+  });
+
+  it('shows reconnecting stream state without repeatedly forcing another reconnect', async () => {
+    const reconnect = vi.fn();
+    mockRunStreamState.current = {
+      events: [],
+      droppedEventCount: 0,
+      status: 'connecting',
+      error: 'Stream disconnected; reconnecting in 1s.',
+      reconnect,
+    };
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const health = await screen.findByTestId('coordinator-stream-health', undefined, { timeout: 4000 });
+    expect(health.textContent).toContain('reconnecting in 1s');
+    expect(health.textContent).toContain('Refresh or reconnect if the graph looks stale');
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
   it('stops polling token breakdown after repeated failures', async () => {
     vi.useFakeTimers();
     vi.mocked(apiClient.getRunTokenBreakdown).mockRejectedValue(new Error('token breakdown failed'));

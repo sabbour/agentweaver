@@ -15,7 +15,7 @@ import {
 import type { RunStreamEvent } from '../api/sse';
 import type { RunDetail } from '../api/types';
 import type { RunSessionTree } from '../components/AgentSessionPanel';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 let currentEvents: RunStreamEvent[] = [];
 
 vi.mock('../api/apiClient', () => ({
@@ -81,6 +81,36 @@ const tree: RunSessionTree[] = [
     ],
   },
 ];
+
+function outcomePlanTree(revising: boolean): RunSessionTree[] {
+  return [{
+    ...tree[0],
+    children: [{
+      nodeId: 'outcome-plan',
+      label: 'Outcome plan',
+      status: revising ? 'revising' : 'awaiting_confirmation',
+      depth: 1,
+      children: [],
+    }],
+  }];
+}
+
+function OutcomePlanClarificationHarness() {
+  const [clarificationPending, setClarificationPending] = useState(false);
+  return (
+    <AgentSessionPanel
+      open
+      onClose={vi.fn()}
+      tree={outcomePlanTree(clarificationPending)}
+      selectedNodeId="outcome-plan"
+      onSelectNode={vi.fn()}
+      coordinatorRunId="coord-run-1"
+      projectId="p1"
+      coordinatorActive
+      onOutcomePlanClarificationPendingChange={setClarificationPending}
+    />
+  );
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -1495,6 +1525,42 @@ describe('AgentSessionPanel', () => {
 
     expect(await screen.findByText('Messaging is unavailable because this coordinator run is not active.')).toBeDefined();
     expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
+  });
+
+  it('shows immediate sending feedback then marks an acknowledged outcome-plan clarification as processing', async () => {
+    const user = userEvent.setup();
+    let resolveSteer: (value: { status: string }) => void = () => {};
+    vi.mocked(apiClient.steerCoordinator).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveSteer = resolve; }),
+    );
+
+    render(<Wrapper><OutcomePlanClarificationHarness /></Wrapper>);
+
+    const input = await screen.findByPlaceholderText('Message coordinator...', undefined, { timeout: 4000 });
+    await user.type(input, 'Clarify the outcome plan: support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Sending clarification to coordinator…')).toBeDefined();
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+
+    resolveSteer({ status: 'applied' });
+
+    expect((await screen.findAllByText('Clarification sent — the coordinator is revising the Outcome plan.')).length).toBeGreaterThan(0);
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('allows another clarification attempt when submission fails before acknowledgement', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.steerCoordinator).mockRejectedValueOnce(new Error('message bus unavailable'));
+
+    render(<Wrapper><OutcomePlanClarificationHarness /></Wrapper>);
+
+    const input = await screen.findByPlaceholderText('Message coordinator...', undefined, { timeout: 4000 });
+    await user.type(input, 'Clarify the outcome plan: support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/message bus unavailable/i)).toBeDefined();
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('seeds and refreshes persisted coordinator steering messages for active runs', async () => {
