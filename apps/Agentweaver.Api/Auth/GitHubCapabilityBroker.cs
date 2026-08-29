@@ -1,5 +1,6 @@
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Webhooks;
+using Agentweaver.Domain;
 using System.Text.Json;
 
 namespace Agentweaver.Api.Auth;
@@ -182,10 +183,31 @@ internal sealed class GitHubCapabilityBroker(
         string entraObjectId,
         DateTimeOffset now,
         Func<string, DateTimeOffset, Task> useCredential,
+        CancellationToken ct) =>
+        await TryUseProjectCopilotCredentialAsync(
+            capabilityReference,
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            projectId,
+            entraObjectId,
+            now,
+            useCredential,
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Redeems a single-use non-run capability only for its persisted project operation purpose.
+    /// The caller receives a credential solely through the broker-owned callback.
+    /// </summary>
+    internal async Task<GitHubCapabilityBrokerOutcome> TryUseProjectCopilotCredentialAsync(
+        SnapshotRef capabilityReference,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        Func<string, DateTimeOffset, Task> useCredential,
         CancellationToken ct)
     {
-        var capability = await persistence.TryClaimMarketplaceCopilotCapabilityAsync(
-            capabilityReference, projectId, entraObjectId, now, ct).ConfigureAwait(false);
+        var capability = await persistence.TryClaimProjectCopilotCapabilityAsync(
+            capabilityReference, purpose, projectId, entraObjectId, now, ct).ConfigureAwait(false);
         if (capability is null)
             return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
 

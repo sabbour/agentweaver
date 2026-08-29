@@ -1,6 +1,7 @@
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
+using Agentweaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Sandbox;
@@ -27,6 +28,28 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
         string capabilityReference,
         string projectId,
         string entraObjectId,
+        CancellationToken ct) =>
+        await GetProjectOperationCredentialAsync(
+            capabilityReference,
+            projectId,
+            entraObjectId,
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            ct).ConfigureAwait(false);
+
+    async Task<GitHubCapabilitySnapshotCredential?> IGitHubCopilotCapabilityCredentialProvider.GetProjectOperationCredentialAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        CancellationToken ct) =>
+        await GetProjectOperationCredentialAsync(capabilityReference, projectId, entraObjectId, purpose, ct)
+            .ConfigureAwait(false);
+
+    private async Task<GitHubCapabilitySnapshotCredential?> GetProjectOperationCredentialAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        GitHubProjectCopilotCapabilityPurpose purpose,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(capabilityReference) ||
@@ -37,8 +60,9 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
         GitHubCapabilitySnapshotCredential? credential = null;
         using var scope = scopeFactory.CreateScope();
         var broker = scope.ServiceProvider.GetRequiredService<GitHubCapabilityBroker>();
-        var outcome = await broker.TryUseMarketplaceCopilotCredentialAsync(
+        var outcome = await broker.TryUseProjectCopilotCredentialAsync(
             new SnapshotRef(capabilityReference),
+            purpose,
             projectId,
             entraObjectId,
             DateTimeOffset.UtcNow,

@@ -238,12 +238,14 @@ public sealed class RunGitHubCapabilitySnapshotRecord
 }
 
 /// <summary>
-/// A short-lived, single-use Copilot capability for a project operation that is deliberately not a
-/// run. The opaque reference is server-side only; credential material never leaves the broker.
+/// A short-lived, single-use, purpose-bound Copilot capability for a project operation that is
+/// deliberately not a run. The opaque reference is server-side only; credential material never
+/// leaves the broker.
 /// </summary>
 public sealed class MarketplaceCopilotCapabilityRecord
 {
     public string CapabilityRef { get; set; } = "";
+    public int Purpose { get; set; }
     public string ProjectId { get; set; } = "";
     public string EntraObjectId { get; set; } = "";
     public string SourceBindingId { get; set; } = "";

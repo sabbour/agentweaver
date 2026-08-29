@@ -74,23 +74,44 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
         string projectId,
         string entraObjectId,
         string? modelId,
+        CancellationToken ct) =>
+        await CreateProjectOperationClientAsync(
+            capabilityReference,
+            projectId,
+            entraObjectId,
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            modelId,
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Resolves one explicit, purpose-bound non-run capability. This deliberately does not accept
+    /// a run id and cannot fall back to an ambient or installation-scoped credential.
+    /// </summary>
+    public async Task<CopilotClient> CreateProjectOperationClientAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        string? modelId,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(capabilityReference) ||
+        if (!Enum.IsDefined(purpose) ||
+            string.IsNullOrWhiteSpace(capabilityReference) ||
             string.IsNullOrWhiteSpace(projectId) ||
             string.IsNullOrWhiteSpace(entraObjectId))
             throw new GitHubCopilotUnauthorizedException(
-                "GitHub Copilot requires a live project-bound marketplace capability.");
+                "GitHub Copilot requires a live project-bound capability.");
 
         var options = new CopilotClientOptions();
         ApplyRuntimeConnection(options);
         var credential = await _credentialProvider
-            .GetMarketplaceCredentialAsync(capabilityReference, projectId, entraObjectId, ct)
+            .GetProjectOperationCredentialAsync(
+                capabilityReference, projectId, entraObjectId, purpose, ct)
             .ConfigureAwait(false);
         if (credential is null || string.IsNullOrWhiteSpace(credential.AccessToken) ||
             credential.ExpiresAt <= DateTimeOffset.UtcNow)
             throw new GitHubCopilotUnauthorizedException(
-                "GitHub Copilot requires a live project-bound marketplace capability.");
+                "GitHub Copilot requires a live project-bound capability.");
         options.GitHubToken = credential.AccessToken;
         return new CopilotClient(options);
     }

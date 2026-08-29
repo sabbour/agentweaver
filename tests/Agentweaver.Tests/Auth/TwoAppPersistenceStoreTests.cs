@@ -866,6 +866,103 @@ public sealed class TwoAppPersistenceStoreTests
     }
 
     [Fact]
+    public async Task BacklogDecompositionCapability_IsPurposeCallerProjectBoundAndSingleUse()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var now = DateTimeOffset.UtcNow;
+        db.ProjectCopilotBindings.Add(MarketplaceBinding("backlog-binding"));
+        await db.SaveChangesAsync();
+        var persistence = new TwoAppPersistenceStore(db);
+        var capability = (await persistence.TryIssueProjectCopilotCapabilityAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            "project",
+            "entra",
+            now,
+            now.AddMinutes(2)))!;
+        var secrets = new InMemorySecretStore();
+        var vault = new TwoAppCredentialVault(secrets);
+        await vault.WriteAsync(
+            TwoAppCredentialLocator.ForCopilotProject("copilot-app-project-marketplace"),
+            """{"status":"signed-in","accessToken":"backlog-test-token","expiresAt":"2099-01-01T00:00:00Z"}""");
+        var broker = new GitHubCapabilityBroker(
+            persistence,
+            vault,
+            new RepoAppInstallationTokenService(
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                db,
+                secrets,
+                new NullHttpClientFactory()));
+        var modelTurns = 0;
+
+        async Task<GitHubCapabilityBrokerOutcome> RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose purpose,
+            string projectId,
+            string entraObjectId) =>
+            await broker.TryUseProjectCopilotCredentialAsync(
+                capability,
+                purpose,
+                projectId,
+                entraObjectId,
+                now,
+                (_, _) =>
+                {
+                    modelTurns++;
+                    return Task.CompletedTask;
+                },
+                CancellationToken.None);
+
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification, "project", "entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "other-project", "entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "project", "other-entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        modelTurns.Should().Be(0, "no model turn can occur before the exact capability is redeemed");
+
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "project", "entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.Issued);
+        modelTurns.Should().Be(1);
+        (await RedeemAsync(
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "project", "entra"))
+            .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+
+        var expired = SnapshotRef.Create();
+        db.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+        {
+            CapabilityRef = expired.Value,
+            Purpose = (int)GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            ProjectId = "project",
+            EntraObjectId = "entra",
+            SourceBindingId = "backlog-binding",
+            CredentialReference = "copilot-app-project-marketplace",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            IssuedAt = now.AddMinutes(-3),
+            ExpiresAt = now.AddMinutes(-1),
+        });
+        await db.SaveChangesAsync();
+
+        (await broker.TryUseProjectCopilotCredentialAsync(
+            expired,
+            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            "project",
+            "entra",
+            now,
+            (_, _) =>
+            {
+                modelTurns++;
+                return Task.CompletedTask;
+            },
+            CancellationToken.None)).Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        modelTurns.Should().Be(1, "expired and replayed capability references cannot reach a model turn");
+    }
+
+    [Fact]
     public async Task MarketplaceCapabilityCleanup_IsBoundedToTerminalRecords()
     {
         await using var connection = await OpenDatabaseAsync();

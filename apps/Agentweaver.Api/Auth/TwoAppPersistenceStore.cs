@@ -80,6 +80,7 @@ public sealed record FencedGitHubCapabilitySnapshot(
 /// </summary>
 internal sealed record FencedMarketplaceCopilotCapability(
     SnapshotRef CapabilityReference,
+    GitHubProjectCopilotCapabilityPurpose Purpose,
     string ProjectId,
     string EntraObjectId,
     DateTimeOffset ExpiresAt,
@@ -1046,9 +1047,29 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         string entraObjectId,
         DateTimeOffset now,
         DateTimeOffset expiresAt,
+        CancellationToken ct = default) =>
+        await TryIssueProjectCopilotCapabilityAsync(
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            projectId,
+            entraObjectId,
+            now,
+            expiresAt,
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Issues one short-lived, caller- and project-bound capability for the supplied non-run
+    /// operation. The capability's purpose is persisted and must match when the broker redeems it.
+    /// </summary>
+    internal async Task<SnapshotRef?> TryIssueProjectCopilotCapabilityAsync(
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        DateTimeOffset expiresAt,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(projectId) ||
+        if (!Enum.IsDefined(purpose) ||
+            string.IsNullOrWhiteSpace(projectId) ||
             string.IsNullOrWhiteSpace(entraObjectId) ||
             expiresAt <= now)
             return null;
@@ -1066,6 +1087,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         var record = new MarketplaceCopilotCapabilityRecord
         {
             CapabilityRef = capability.Value,
+            Purpose = (int)purpose,
             ProjectId = projectId,
             EntraObjectId = entraObjectId,
             SourceBindingId = binding.Id,
@@ -1086,7 +1108,8 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         string entraObjectId,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(entraObjectId))
+        if (string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId))
             return Task.FromResult(false);
 
         return db.ProjectCopilotBindings.AsNoTracking().AnyAsync(x =>
@@ -1106,9 +1129,30 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         string projectId,
         string entraObjectId,
         DateTimeOffset now,
+        CancellationToken ct = default) =>
+        await TryClaimProjectCopilotCapabilityAsync(
+            capabilityReference,
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            projectId,
+            entraObjectId,
+            now,
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Atomically consumes one unexpired capability only when its operation purpose, caller, and
+    /// project all match the authority issued by the server.
+    /// </summary>
+    internal async Task<FencedMarketplaceCopilotCapability?> TryClaimProjectCopilotCapabilityAsync(
+        SnapshotRef capabilityReference,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(entraObjectId))
+        if (!Enum.IsDefined(purpose) ||
+            string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId))
             return null;
 
         // ExecuteUpdate cannot translate DateTimeOffset updates for SQLite. Parameterized SQL keeps
@@ -1120,6 +1164,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
              SET consumed_at = {now},
                  claim_lease_expires_at = {claimLeaseExpiresAt}
              WHERE capability_ref = {capabilityReference.Value}
+               AND purpose = {(int)purpose}
                AND project_id = {projectId}
                AND entra_object_id = {entraObjectId}
                AND consumed_at IS NULL
@@ -1131,6 +1176,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
 
         var capability = await db.MarketplaceCopilotCapabilities.AsNoTracking()
             .SingleOrDefaultAsync(x => x.CapabilityRef == capabilityReference.Value &&
+                                       x.Purpose == (int)purpose &&
                                        x.ProjectId == projectId &&
                                        x.EntraObjectId == entraObjectId &&
                                        x.ConsumedAt == now &&
@@ -1141,6 +1187,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
 
         return new(
             capabilityReference,
+            purpose,
             projectId,
             entraObjectId,
             capability.ExpiresAt,
@@ -1194,6 +1241,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         CancellationToken ct = default) =>
         db.MarketplaceCopilotCapabilities
             .Where(x => x.CapabilityRef == capability.CapabilityReference.Value &&
+                        x.Purpose == (int)capability.Purpose &&
                         x.ProjectId == capability.ProjectId &&
                         x.EntraObjectId == capability.EntraObjectId &&
                         x.ConsumedAt == capability.ConsumedAt &&
@@ -1209,6 +1257,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             capability.ClaimLeaseExpiresAt <= now ||
             !await db.MarketplaceCopilotCapabilities.AsNoTracking().AnyAsync(record =>
                 record.CapabilityRef == capability.CapabilityReference.Value &&
+                record.Purpose == (int)capability.Purpose &&
                 record.ProjectId == capability.ProjectId &&
                 record.EntraObjectId == capability.EntraObjectId &&
                 record.ConsumedAt == capability.ConsumedAt &&
