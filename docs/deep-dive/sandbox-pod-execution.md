@@ -244,6 +244,38 @@ supervised by a relay child of AgentHost that holds the connection: if the relay
 the sidecar sees the disconnect and terminates the sandboxed process group, preserving
 die-with-parent semantics across the container boundary.
 
+##### The IPC volume must be a guest-owned tmpfs (#1008)
+
+That `emptyDir` carries `medium: Memory`. It was a default `emptyDir` from the sidecar's
+introduction until **2026-08-27T17:41:48Z**, when the AKS `katapool` node image was upgraded
+(`AKSAzureLinux-V3katagen2-202608.14.0`) and brought **Kata Containers 3.32.0**. Upstream had
+flipped `disable_guest_empty_dir` from `false` to `true`, so a default `emptyDir` stopped being a
+directory the guest agent creates and became a host directory re-exported over virtio-fs with a
+**per-container** share path. Measured on the node:
+
+```
+shared_fs = "virtio-fs"
+disable_guest_empty_dir = true
+emptydir_mode = "shared-fs"
+```
+
+A pathname `AF_UNIX` socket is matched by inode identity in the connecting task's own kernel, so the
+AgentHost container saw the socket file with `S_ISSOCK` set and got `ECONNREFUSED` on every
+connect — and failed closed with `AgentHost Kata filesystem isolation is unavailable; refusing to
+start`. Nothing in the application changed: the `v0.20.0..v0.21.2` diff of this template touches only
+resource requests, limits, and comments.
+
+`medium: Memory` restores the previous behaviour for this one volume. Kata takes the
+`IsTmpFSEmptyDir` branch *before* and independently of `disable_guest_empty_dir` and
+`emptydir_mode`, creating one guest tmpfs at `/run/kata-containers/sandbox/ephemeral/<volume>` and
+bind-mounting it into every container of the sandbox — a single real inode, so the rendezvous works.
+It also survives the knob's removal, which upstream has already done for the Rust runtime. Measured
+on the same pod, same node: default medium `errno=111 Connection refused`; `medium: Memory`
+`CONNECT-OK`.
+
+The sidecar reads `/proc/self/mountinfo` at startup and refuses to bind on a shared filesystem, so a
+future node-image change that reintroduces this names itself instead of crash-looping silently.
+
 `ShellCommandValidator` and `SharedWorkspacePathGuard` remain compounding controls, but the security
 claim for #476 no longer depends on command text.
 
