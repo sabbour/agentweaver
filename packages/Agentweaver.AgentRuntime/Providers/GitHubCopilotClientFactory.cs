@@ -65,6 +65,37 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
     }
 
     /// <summary>
+    /// Resolves a caller- and project-bound marketplace-classification capability. This path is
+    /// intentionally separate from run snapshot redemption so a non-run request cannot fabricate
+    /// a run identifier or borrow an ambient credential scope.
+    /// </summary>
+    public async Task<CopilotClient> CreateMarketplaceClientAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        string? modelId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(capabilityReference) ||
+            string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId))
+            throw new GitHubCopilotUnauthorizedException(
+                "GitHub Copilot requires a live project-bound marketplace capability.");
+
+        var options = new CopilotClientOptions();
+        ApplyRuntimeConnection(options);
+        var credential = await _credentialProvider
+            .GetMarketplaceCredentialAsync(capabilityReference, projectId, entraObjectId, ct)
+            .ConfigureAwait(false);
+        if (credential is null || string.IsNullOrWhiteSpace(credential.AccessToken) ||
+            credential.ExpiresAt <= DateTimeOffset.UtcNow)
+            throw new GitHubCopilotUnauthorizedException(
+                "GitHub Copilot requires a live project-bound marketplace capability.");
+        options.GitHubToken = credential.AccessToken;
+        return new CopilotClient(options);
+    }
+
+    /// <summary>
     /// Applies an explicit Copilot runtime CLI path when one is configured, overriding the SDK's
     /// default resolution (which probes <c>bin/.../runtimes/&lt;rid&gt;/native/copilot</c> relative to
     /// the output directory). This is the escape hatch for hosts whose RID was never provisioned

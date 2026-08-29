@@ -52,8 +52,8 @@ public sealed class DiagnosticsService
     private const string SandboxClaimQuotaKey =
         "count/" + SandboxClaimConventions.ClaimPlural + "." + SandboxClaimConventions.ApiGroup;
 
-    /// <summary>Key Vault secret probed by the detailed Key Vault health check.</summary>
-    private const string KeyVaultProbeSecretName = "mcp-oauth-signing-key";
+    /// <summary>Key Vault CSI secret required for API authentication and worker loopback calls.</summary>
+    private const string KeyVaultProbeSecretName = "mcp-api-key";
 
     /// <summary>Name prefix of warm-pool sandbox pods (<c>agentweaver-sandbox-*</c>).</summary>
     private const string WarmPoolPodPrefix = "agentweaver-sandbox-";
@@ -439,16 +439,16 @@ public sealed class DiagnosticsService
         }
     }
 
-    /// <summary>Key Vault: verifies the CSI-mounted <c>mcp-oauth-signing-key</c> secret was loaded
-    /// into configuration (Auth:OAuth:SigningKey). Uses IConfiguration — ISecretStore applies
-    /// a "ghtok-" prefix intended for GitHub token storage, not raw KV secret probes.</summary>
+    /// <summary>Key Vault: verifies the CSI-mounted <c>mcp-api-key</c> secret was loaded into
+    /// <c>Auth:ApiKey</c>. This remains required after the retired OAuth signing key is removed:
+    /// API authentication and worker loopback calls cannot function without it.</summary>
     private Task<DetailedHealthCheckDto> CheckKeyVaultAsync(CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        var signingKey = _configuration["Auth:OAuth:SigningKey"];
+        var apiKey = _configuration["Auth:ApiKey"];
         sw.Stop();
         var ms = sw.Elapsed.TotalMilliseconds;
-        return Task.FromResult(!string.IsNullOrWhiteSpace(signingKey)
+        return Task.FromResult(!string.IsNullOrWhiteSpace(apiKey)
             ? Detailed("key_vault", "healthy", $"secret '{KeyVaultProbeSecretName}' resolved", ms)
             : Detailed("key_vault", "critical", $"secret '{KeyVaultProbeSecretName}' not found", ms));
     }

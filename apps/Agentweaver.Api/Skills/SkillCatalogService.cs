@@ -188,6 +188,7 @@ public sealed class SkillCatalogService
     private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
     private readonly IGitHubSkillTreeClient? _treeClient;
     private readonly IMarketplaceCatalogIndexer? _catalogIndexer;
+    private readonly MarketplaceCopilotCapabilityIssuer? _marketplaceCapabilityIssuer;
     private readonly ILogger<SkillCatalogService> _logger;
     private readonly ConcurrentDictionary<string, PreviewCloneCacheEntry> _previewCloneCache = new(StringComparer.Ordinal);
 
@@ -203,7 +204,8 @@ public sealed class SkillCatalogService
         IGitHubSkillTreeClient? treeClient = null,
         IMarketplaceCatalogIndexer? catalogIndexer = null,
         IProjectRoleAuthorizationService? projectRoles = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        MarketplaceCopilotCapabilityIssuer? marketplaceCapabilityIssuer = null)
     {
         _skills = skills;
         _projects = projects;
@@ -215,6 +217,7 @@ public sealed class SkillCatalogService
         _accessTokenProvider = accessTokenProvider;
         _treeClient = treeClient;
         _catalogIndexer = catalogIndexer;
+        _marketplaceCapabilityIssuer = marketplaceCapabilityIssuer;
         _logger = logger;
     }
 
@@ -230,7 +233,8 @@ public sealed class SkillCatalogService
         ILogger<SkillCatalogService> logger,
         IGitHubAccessTokenProvider? accessTokenProvider = null,
         IGitHubSkillTreeClient? treeClient = null,
-        IMarketplaceCatalogIndexer? catalogIndexer = null)
+        IMarketplaceCatalogIndexer? catalogIndexer = null,
+        MarketplaceCopilotCapabilityIssuer? marketplaceCapabilityIssuer = null)
         : this(
             skills,
             projects,
@@ -243,7 +247,8 @@ public sealed class SkillCatalogService
             treeClient,
             catalogIndexer,
             projectRoles,
-            configuration)
+            configuration,
+            marketplaceCapabilityIssuer)
     {
     }
 
@@ -609,18 +614,22 @@ public sealed class SkillCatalogService
             // Anonymous-first, full recursive tree (subpath ""), no placeholder scratch files: candidates
             // are derived in-memory from the tree by the indexer, so browse never touches the filesystem.
             var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath: string.Empty, token: null, cts.Token).ConfigureAwait(false);
+            // A non-run classification can only use a new, caller- and project-bound capability
+            // issued from the active Copilot App binding. No caller identity is ever reinterpreted
+            // as a credential, and the capability never crosses the HTTP boundary.
+            var capabilityReference = _marketplaceCapabilityIssuer is null
+                ? null
+                : await _marketplaceCapabilityIssuer.TryIssueAsync(project.Id, caller, cts.Token).ConfigureAwait(false);
             var index = await _catalogIndexer.GetOrBuildForProjectAsync(
                 owner,
                 repo,
                 branch,
                 blobs,
-                // Auto-browse has no associated run or explicitly issued Copilot capability. It must
-                // not use caller identity; if model classification is needed, the indexer returns a
-                // user-facing connection requirement.
-                capabilityRunId: null,
+                capabilityReference,
                 parseStrategy: parseStrategy,
                 cts.Token,
-                projectId: project.Id).ConfigureAwait(false);
+                projectId: project.Id,
+                caller: caller).ConfigureAwait(false);
 
             if (index.RequiresGitHubConnection)
                 return (SkillOutcome.GitHubConnectionRequired, GitHubCopilotConnectionRequirement.RequirementMessage, null);

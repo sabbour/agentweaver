@@ -473,7 +473,7 @@ Five component health checks run **concurrently** with a 5-second individual tim
 | Check name | What it tests |
 | --- | --- |
 | `postgresql` | Postgres connectivity |
-| `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means the signing-key step in `npm run azure:provision-infra` was skipped. |
+| `key_vault` | Azure Key Vault CSI delivery of the required `mcp-api-key`. `critical: secret 'mcp-api-key' not found` means API authentication and worker loopback calls cannot run. |
 | `agent_pod_quota` | Effective admission headroom in the sandbox namespace, computed from the tighter of the `pods` and SandboxClaim object quotas. |
 | `warm_pool` | Warm-pool agent-sandbox availability |
 | `kubernetes_api` | Kubernetes API server reachability |

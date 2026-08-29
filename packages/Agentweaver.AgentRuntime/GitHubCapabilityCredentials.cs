@@ -18,6 +18,17 @@ public interface IGitHubCopilotCapabilityCredentialProvider
     Task<GitHubCapabilitySnapshotCredential?> GetCredentialAsync(
         string runId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Redeems a purpose-bound, project-bound non-run Copilot capability. Implementations must
+    /// fail closed for an absent, expired, consumed, wrong-project, or wrong-caller capability.
+    /// </summary>
+    Task<GitHubCapabilitySnapshotCredential?> GetMarketplaceCredentialAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        CancellationToken ct = default) =>
+        Task.FromResult<GitHubCapabilitySnapshotCredential?>(null);
 }
 
 /// <summary>

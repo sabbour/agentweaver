@@ -377,6 +377,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillMarketplaceRegistry>()
 builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogCache, Agentweaver.Api.Skills.MarketplaceCatalogCache>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogClassifier, Agentweaver.Api.Skills.CopilotMarketplaceCatalogClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogIndexer, Agentweaver.Api.Skills.MarketplaceCatalogIndexer>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceCopilotCapabilityIssuer>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceSourceService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();

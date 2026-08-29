@@ -44,7 +44,7 @@ Cluster checks run concurrently each time the page loads:
 | Check | What it tests | Typical failure cause |
 |---|---|---|
 | **Postgres** | Connectivity to the Postgres database | Network policy, password rotation |
-| **Azure Key Vault** | Key Vault reachability and required `mcp-oauth-signing-key` lookup | Managed identity misconfiguration, network policy, or skipped `npm run azure:provision-infra` |
+| **Azure Key Vault** | CSI delivery of the required `mcp-api-key` | Managed identity misconfiguration, network policy, or a missing API authentication secret |
 | **Agent pod quota** | Effective admission headroom from the enforced `pods` and SandboxClaim object quotas. Healthy means plenty of room remains, warning means only a handful of starts remain, and critical means no new AgentHost can be admitted. | Namespace object-quota exhaustion |
 | **Warm pool** | Warm-pool agent-sandbox availability for generic sandboxes (`replicas: 3`) and AgentHost (`replicas: 2`) | Warm-pool replica count below target, SandboxTemplate CRD issue |
 | **Kubernetes API** | Kubernetes API server reachability | In-cluster network policy, apiserver overload |
@@ -57,10 +57,9 @@ Each check shows:
 
 All five checks have a **5-second individual timeout**. A timed-out check appears as `fail` with the detail `"timed out"`.
 
-If the Key Vault row shows `critical: secret 'mcp-oauth-signing-key' not found`,
-the required OAuth signing-key provisioning step was skipped. Run `npm run azure:provision-infra`
-before redeploying; do not use the installer
-`--skip-oauth-key` flag for a production first deploy.
+If the Key Vault row shows `critical: secret 'mcp-api-key' not found`,
+restore the required API authentication secret with `npm run azure:provision-infra`
+before redeploying.
 
 ## Active agent pods table
 
