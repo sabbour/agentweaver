@@ -152,8 +152,9 @@ public client flows and no client secret is configured).
 
 Both URLs are required when Entra browser sign-in is enabled. Configure localhost URLs
 explicitly for local development only. The production Kustomize renderer derives the public
-callback and frontend origin from `HOST`; it never falls back to localhost. The Entra app
-registration must separately contain the same public callback URL.
+callback and frontend origin from `HOST`; it never falls back to localhost and refuses to
+render when the managed domain or resulting public hostname is absent or malformed. The Entra
+app registration must separately contain the same public callback URL.
 
 If your tenant allows password credentials and you want confidential-client redemption, set
 the Entra client secret locally with user-secrets:

@@ -29,6 +29,7 @@
 //      migration and is out of scope to redesign here.
 
 import fs from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 
 export const OVERLAY_NAME = "production";
@@ -169,6 +170,40 @@ export function isPublicPostgresAccess(vars = {}) {
 }
 
 /**
+ * Returns the canonical HTTPS origin for a public DNS hostname.
+ *
+ * Entra only accepts web redirect origins, so accepting a URL, a path, a
+ * port, an IP address, or a local-development hostname here would produce a
+ * configuration that cannot safely be registered or used in production.
+ */
+export function publicHttpsOrigin(host) {
+  const candidate = String(host ?? "").trim().toLowerCase();
+  const labels = candidate.split(".");
+  const validLabel = (label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label);
+
+  if (
+    !candidate ||
+    candidate.length > 253 ||
+    labels.length < 2 ||
+    labels.some((label) => !validLabel(label)) ||
+    !/[a-z]/i.test(labels.at(-1)) ||
+    isIP(candidate) !== 0 ||
+    candidate === "localhost" ||
+    candidate.endsWith(".localhost") ||
+    candidate.endsWith(".local")
+  ) {
+    throw new Error("HOST must be a public DNS hostname (for example, agentweaver.example.com).");
+  }
+
+  const origin = new URL(`https://${candidate}`);
+  if (origin.protocol !== "https:" || origin.hostname !== candidate || origin.port || origin.origin !== `https://${candidate}`) {
+    throw new Error("HOST must be a bare public DNS hostname, not a URL, path, or port.");
+  }
+
+  return origin.origin;
+}
+
+/**
  * Public-access Postgres FQDN for the configured server, matching the FQDN
  * steps/17-provision-postgres.mjs derives (`<server>.postgres.database.azure.com`).
  * @param {Record<string, unknown>} vars
@@ -250,6 +285,7 @@ export function buildRuntimeConfigLiterals(vars) {
   const host = str(vars.HOST);
   const authMode = str(vars.AUTH_MODE) || "Entra";
   const isEntra = authMode.toLowerCase() === "entra";
+  let entraOrigin = "";
 
   // Guard: refuse to render a broken Entra config that would make browser sign-in unavailable.
   if (isEntra && (!str(vars.ENTRA_CLIENT_ID) || !str(vars.ENTRA_TENANT_ID))) {
@@ -258,10 +294,15 @@ export function buildRuntimeConfigLiterals(vars) {
       'Pass --params-file scripts/azure/params.<username>.json or set these values before deploying.',
     );
   }
-  if (isEntra && (!host || /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?$/i.test(host))) {
-    throw new Error(
-      'AUTH_MODE is "Entra" requires a non-loopback public HOST so Entra redirects never target localhost.',
-    );
+  if (isEntra) {
+    try {
+      entraOrigin = publicHttpsOrigin(host);
+    } catch (error) {
+      throw new Error(
+        'AUTH_MODE is "Entra" requires a structurally valid public HOST so Entra redirects never target localhost. ' +
+          error.message,
+      );
+    }
   }
 
   return {
@@ -277,8 +318,8 @@ export function buildRuntimeConfigLiterals(vars) {
     AUTH_MODE: authMode,
     ENTRA_CLIENT_ID: str(vars.ENTRA_CLIENT_ID),
     ENTRA_TENANT_ID: str(vars.ENTRA_TENANT_ID),
-    ENTRA_REDIRECT_URI: host ? `https://${host}/auth/entra/callback` : "",
-    ENTRA_FRONTEND_URL: host ? `https://${host}` : "",
+    ENTRA_REDIRECT_URI: isEntra ? `${entraOrigin}/auth/entra/callback` : host ? `https://${host}/auth/entra/callback` : "",
+    ENTRA_FRONTEND_URL: isEntra ? entraOrigin : host ? `https://${host}` : "",
     TOKEN_STORE_KEYVAULT_URI: vars.KEYVAULT_NAME ? `https://${vars.KEYVAULT_NAME}.vault.azure.net` : "",
     AGENTHOST_KEYVAULT_URI: str(vars.AGENTHOST_KEYVAULT_URI),
     APPINSIGHTS_WORKSPACE_ID: str(vars.APPINSIGHTS_WORKSPACE_ID),

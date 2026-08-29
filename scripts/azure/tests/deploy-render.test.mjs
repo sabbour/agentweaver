@@ -134,15 +134,20 @@ test("buildRuntimeConfigLiterals() requires Entra configuration", () => {
   );
 });
 
-test("buildRuntimeConfigLiterals() rejects absent or loopback HOST for Entra", () => {
-  assert.throws(
-    () => buildRuntimeConfigLiterals({ ...VARS, HOST: "" }),
-    /requires a non-loopback public HOST/,
-  );
-  assert.throws(
-    () => buildRuntimeConfigLiterals({ ...VARS, HOST: "localhost:5000" }),
-    /requires a non-loopback public HOST/,
-  );
+test("buildRuntimeConfigLiterals() requires a structurally valid public HOST for Entra", () => {
+  for (const host of ["", "localhost:5000", "agentweaver.", "https://agentweaver.example.com", "agentweaver.example.com/path", "127.0.0.1"]) {
+    assert.throws(
+      () => buildRuntimeConfigLiterals({ ...VARS, HOST: host }),
+      /requires a structurally valid public HOST/,
+      `${host || "(empty)"} must not be used as an Entra origin`,
+    );
+  }
+});
+
+test("buildRuntimeConfigLiterals() preserves explicit local GitHubLegacy development configuration", () => {
+  const literals = buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "GitHubLegacy", HOST: "localhost:5000" });
+  assert.equal(literals.ENTRA_REDIRECT_URI, "https://localhost:5000/auth/entra/callback");
+  assert.equal(literals.ENTRA_FRONTEND_URL, "https://localhost:5000");
 });
 
 test("rewriteOverlayKustomization() rewrites every images: entry and configMapGenerator literal, leaving structure intact", () => {
