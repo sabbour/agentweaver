@@ -255,6 +255,14 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("automation_key");
 
+                    b.Property<string>("CopilotBindingGrantDigest")
+                        .HasColumnType("text")
+                        .HasColumnName("copilot_binding_grant_digest");
+
+                    b.Property<string>("CopilotBindingId")
+                        .HasColumnType("text")
+                        .HasColumnName("copilot_binding_id");
+
                     b.Property<long>("InstallationId")
                         .HasColumnType("bigint")
                         .HasColumnName("installation_id");
@@ -268,6 +276,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("project_id");
 
+                    b.Property<string>("RepositoryGrantDigest")
+                        .HasColumnType("text")
+                        .HasColumnName("repository_grant_digest");
+
                     b.Property<long>("RepositoryId")
                         .HasColumnType("bigint")
                         .HasColumnName("repository_id");
@@ -278,10 +290,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("InstallationId", "RepositoryId");
+                    b.HasIndex("ProjectId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_automation_activations_active_project")
+                        .HasFilter("status = 0");
 
-                    b.HasIndex("ProjectId", "InstallationId", "RepositoryId", "AutomationKey")
-                        .IsUnique();
+                    b.HasIndex("InstallationId", "RepositoryId");
 
                     b.ToTable("automation_activations", (string)null);
                 });
@@ -296,6 +310,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("activation_id");
+
+                    b.Property<string>("BacklogTaskId")
+                        .HasColumnType("text")
+                        .HasColumnName("backlog_task_id");
 
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
@@ -322,6 +340,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("outcome");
 
+                    b.Property<string>("PendingBacklogTaskId")
+                        .HasColumnType("text")
+                        .HasColumnName("pending_backlog_task_id");
+
                     b.Property<string>("ProjectId")
                         .IsRequired()
                         .HasColumnType("text")
@@ -337,10 +359,20 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BacklogTaskId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_automation_invocations_backlog_task_id")
+                        .HasFilter("backlog_task_id IS NOT NULL");
+
                     b.HasIndex("DeliveryId")
                         .IsUnique()
                         .HasDatabaseName("UX_automation_invocations_delivery_id")
                         .HasFilter("delivery_id IS NOT NULL");
+
+                    b.HasIndex("PendingBacklogTaskId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_automation_invocations_pending_backlog_task_id")
+                        .HasFilter("pending_backlog_task_id IS NOT NULL");
 
                     b.HasIndex("ProjectId");
 
@@ -414,6 +446,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("text")
                         .HasColumnName("description");
+
+                    b.Property<bool>("IsAutomationInvocationPending")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("automation_invocation_pending");
 
                     b.Property<string>("OrderKey")
                         .IsRequired()
