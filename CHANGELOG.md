@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.21.0
+
+### Minor Changes
+
+- 15ef610: Add immutable, purpose-specific GitHub identity snapshots and fail-closed credential fencing for brokered capabilities.
+- 97027a3: Preserve fenced automation activation snapshots so repository automation safely resumes after restarts without replaying stale activation work.
+- 0a972d4: Add an authenticated GitHub repository browse handoff that issues short-lived, single-use selection codes for safe project creation.
+- daf7152: Add explicit Repo App and project Copilot App browser handoffs to MCP, with redacted capability readiness and subject-bound authorization status polling.
+- 7e3d446: Add project-scoped GitHub Copilot App bindings with Owner authorization, safe reconnect state, and a separate disconnect path.
+- b7df33f: Add purpose-bound GitHub capability fencing with immutable run snapshots for root, child, retry, and recovery launches. Root snapshots are now selected and captured directly from live authorization, repository grant, and Copilot binding sources at launch; the finite v1 legacy table is migration-only and is never consulted for new runs. Only a project whose persisted origin is explicitly blank may launch with zero snapshots; a GitHub-origin project that currently resolves none of the four purposes is denied rather than silently launched without capability protection. GitHub App history rows (installations, grants, bindings) are no longer used as the blank-project signal, since a GitHub-origin project can legitimately have none of those rows yet.
+- 7bbe99c: Browser sign-in now uses Microsoft Entra ID only. Repository selection and Copilot access continue through their separate Repo App and Copilot App authorization handoffs, and Azure deployment setup no longer provisions legacy browser OAuth credentials.
+- 08e02f8: Add Repo App installation-token downscoping and a bounded, replay-safe App webhook receiver for repository automation.
+- 9431463: Add explicit, Entra-user-bound GitHub Repo App authorization with PKCE, safe callback handling, refresh, and revocation.
+- c014960: Retire legacy GitHub OAuth, device-flow, account-link, and MCP OAuth-server paths. Agentweaver now requires Microsoft Entra sign-in and server-side two-App GitHub capabilities.
+- 2c55e89: Show a safe Project Gallery confirmation after connecting a project's Copilot App capability.
+- 217577d: Add durable, redacted identity, authorization, repository-grant, automation, run-snapshot, and audit records for the two-GitHub-App model.
+- 44e0fc8: Add a redacted unattended automation readiness view to Project Settings. The view verifies the
+  live Copilot App registration, uses fixed remediation codes, and avoids exposing GitHub
+  credentials or provider details. Remove legacy per-project GitHub identity, webhook provisioning,
+  and webhook-secret settings controls in favor of the Repo App's App-level webhook.
+
+### Patch Changes
+
+- f0a6139: Safely recover abandoned GitHub App webhook deliveries without allowing concurrent retries to process one delivery twice.
+- 7bbe99c: Restore secure GitHub Copilot-backed backlog decomposition and show the project connection action when Copilot must be connected.
+- cccfa29: Prevent workflow schedule and event activations from being claimed before their trusted authorization binding is durable, while allowing a safely failed publication to retry.
+- b7df33f: Fix an authorization bypass in the GitHub capability snapshot lifecycle: a missing/unparseable
+  `Run.ProjectId` could previously let root, child, retry, and resume launches succeed with zero
+  GitHub capability snapshots, since only an explicitly blank-origin project may skip capture. Root
+  construction and inherited child/retry snapshots now both fail closed (`github_capability_unavailable`)
+  whenever the project id is missing, instead of treating an absent project id as an automatic pass.
+- 5074e00: Fix demo capture UX: SlidePanel sticky footer, OutcomePlanPanel footer hoist, CoordinatorRunPage wiring, TeamPage Promise.all cold-start race. Capture plan: beat 1.3 heading wait + 60s timeout, beat 2.2 plan panel open via chip click + 120s Confirm timeout, beat 2.5 followNewPage 60s timeout.
+- cccfa29: Prevent contributor backlog promotion from publishing a workflow trigger task before its trusted invocation binding completes.
+- 12bda78: Keep Foundry sandbox commands observable and safely bounded while Kata virtual machines finish terminating timed-out processes.
+- 5915f62: Harden two-GitHub-App persistence with externally safe authorization handles and durable webhook replay claims.
+- cccfa29: Recover interrupted schedule and event trigger tasks after upgrades without publishing duplicate runs or exposing provisional tasks to contributors.
+- 7bbe99c: Let connected project owners retry marketplace classification with a short-lived, single-use Copilot capability, reclaim unused capability records, and report the currently required API Key Vault secret in cluster diagnostics.
+- 41d9322: Gate `gen_ai.tool.call.result` OTel span tag on JSON-shaped output to prevent plain-text file contents and shell output from leaking into App Insights traces. JSON objects and arrays are tagged (and redacted via the existing `RedactJsonStringIfApplicable` pipeline); all other result formats are silently omitted.
+- c1d55a2: Remove static project-level GitHub identity override from CallerTokenScopeProvider. All agent runs now use the submitting user's own linked GitHub identity, eliminating agenthost Copilot auth failures caused by stale or missing project-level tokens.
+- 9b9ee1c: Keep 'Allow for session' approvals within the current orchestration, and keep eligible 'Always
+  allow' approvals for future runs in the same project without applying them to other projects.
+- 7bbe99c: Reclaim expired marketplace Copilot capabilities whose broker request was interrupted after claiming them, while keeping active redemptions lease-fenced and fail-closed.
+- 7bbe99c: Copilot-backed classification now redeems only the active run's purpose-bound capability, and AKS deployments no longer provision or export retired MCP OAuth signing configuration.
+- 7db37f1: Derive Repo App repository permissions and display metadata from GitHub before unattended automation is configured.
+- e9fe264: Route AgentRuntime and AgentHost GitHub credentials exclusively through immutable, run-bound capability snapshots, removing ambient Host token-store fallbacks.
+- 70b653f: Raise agentweaver-exec container memory limit from 2Gi to 4Gi (request from 1Gi to 2Gi) to prevent kernel OOM kills when an agent runs a preview server alongside its own process. Scheduling density is unchanged — CPU (1000m/pod) remains the binding constraint at ~3 pods/node; only the per-container memory limit (a cgroup ceiling, not a scheduling input) was raised.
+- 4cc0cc3: Harden sandbox repository credential delivery by starting validated GitHub CLI commands directly and retrying failed credential revocation during run cleanup.
+- 3c59232: Stop terminal coordinator runs from being repeatedly recovered after a service restart.
+- 4a1daf9: Ensure approval notifications open the run that is waiting for review.
+
 ## 0.20.0
 
 ### Minor Changes
