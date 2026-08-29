@@ -38,12 +38,54 @@ public sealed class ClusterDiagnosticsServiceTests
     public async Task GetClusterDiagnosticsAsync_OmitsInstallationTokenCheck()
     {
         var service = NewClusterService(
-            BuildConfiguration(),
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:Kubernetes:Namespace"] = "agentweaver",
+                })
+                .Build(),
             ClientFor(QuotaHandler(150, 200, 150, 200)));
 
         var dto = await service.GetClusterDiagnosticsAsync();
 
         dto.Checks.Select(c => c.Name).Should().NotContain("github_installation_token");
+    }
+
+    [Fact]
+    public async Task GetClusterDiagnosticsAsync_UsesCurrentApiKeyInsteadOfRetiredOAuthSigningKey()
+    {
+        var service = NewClusterService(
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:Kubernetes:Namespace"] = "agentweaver",
+                    ["Auth:ApiKey"] = "current-csi-secret",
+                })
+                .Build(),
+            ClientFor(QuotaHandler(150, 200, 150, 200)));
+
+        var keyVault = (await service.GetClusterDiagnosticsAsync()).Checks.Single(c => c.Name == "key_vault");
+
+        keyVault.Status.Should().Be("healthy");
+        keyVault.Message.Should().Contain("mcp-api-key").And.NotContain("mcp-oauth-signing-key");
+    }
+
+    [Fact]
+    public async Task GetClusterDiagnosticsAsync_ReportsMissingCurrentApiKeyAsCritical()
+    {
+        var service = NewClusterService(
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:Kubernetes:Namespace"] = "agentweaver",
+                })
+                .Build(),
+            ClientFor(QuotaHandler(150, 200, 150, 200)));
+
+        var keyVault = (await service.GetClusterDiagnosticsAsync()).Checks.Single(c => c.Name == "key_vault");
+
+        keyVault.Status.Should().Be("critical");
+        keyVault.Message.Should().Contain("mcp-api-key");
     }
 
     [Fact]
@@ -121,6 +163,7 @@ public sealed class ClusterDiagnosticsServiceTests
             {
                 ["Database:Path"] = dbPath,
                 ["Sandbox:Kubernetes:Namespace"] = "agentweaver",
+                ["Auth:ApiKey"] = "current-csi-secret",
             })
             .Build();
 

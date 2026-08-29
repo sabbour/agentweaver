@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Skills;
@@ -90,11 +91,12 @@ public interface IMarketplaceCatalogIndexer
         string repo,
         string branch,
         IReadOnlyList<GitHubTreeBlob> blobs,
-        string? capabilityRunId,
+        string? capabilityReference,
         string? parseStrategy,
         CancellationToken ct,
-        ProjectId? projectId = null) =>
-        GetOrBuildAsync(owner, repo, branch, blobs, capabilityRunId, parseStrategy, ct);
+        ProjectId? projectId = null,
+        CallerContext? caller = null) =>
+        GetOrBuildAsync(owner, repo, branch, blobs, capabilityReference, parseStrategy, ct);
 }
 
 /// <summary>
@@ -139,16 +141,17 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         string repo,
         string branch,
         IReadOnlyList<GitHubTreeBlob> blobs,
-        string? capabilityRunId,
+        string? capabilityReference,
         string? parseStrategy,
         CancellationToken ct,
-        ProjectId? projectId = null)
+        ProjectId? projectId = null,
+        CallerContext? caller = null)
     {
         var repository = $"{owner}/{repo}";
         var fingerprint = ComputeFingerprint(blobs);
         var strategy = string.IsNullOrWhiteSpace(parseStrategy) ? "auto" : parseStrategy.Trim().ToLowerInvariant();
         var classifierRequested = strategy is "auto" or "llm" && _classifier is not null;
-        var hasExplicitCapability = !string.IsNullOrWhiteSpace(capabilityRunId);
+        var hasExplicitCapability = !string.IsNullOrWhiteSpace(capabilityReference);
         // A catalog built while a Copilot capability is available must never be served to a no-capability
         // request, which instead has to surface the explicit connection requirement.
         var key = $"{repository}@{branch}#{fingerprint}#classifier={classifierRequested && hasExplicitCapability}";
@@ -175,7 +178,7 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
             try
             {
                 var llmEntries = await BuildWithLlmAsync(
-                    owner, repo, branch, blobs, capabilityRunId!, ct, projectId).ConfigureAwait(false);
+                    owner, repo, branch, blobs, capabilityReference!, ct, projectId, caller).ConfigureAwait(false);
                 index = new MarketplaceCatalogIndex(repository, branch, fingerprint, "llm", llmEntries);
             }
             catch (GitHubCopilotUnauthorizedException)
@@ -220,16 +223,17 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         string repo,
         string branch,
         IReadOnlyList<GitHubTreeBlob> blobs,
-        string capabilityRunId,
+        string capabilityReference,
         CancellationToken ct,
-        ProjectId? projectId)
+        ProjectId? projectId,
+        CallerContext? caller)
     {
         var treePaths = blobs.Select(b => b.Path).ToList();
         var proposed = await _classifier!
             // A capability is supplied by a trusted caller only. Never reinterpret the caller identity
             // as authorization: the no-run browse path remains deterministic heuristic/empty.
             .ClassifyForProjectAsync(
-                owner, repo, branch, treePaths, capabilityRunId, ct: ct, projectId: projectId)
+                owner, repo, branch, treePaths, capabilityReference, ct: ct, projectId: projectId, caller: caller)
             .ConfigureAwait(false);
         if (proposed is null || proposed.Count == 0)
             return Array.Empty<MarketplaceCatalogEntry>();
