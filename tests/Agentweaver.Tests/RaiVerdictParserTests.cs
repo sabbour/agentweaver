@@ -442,8 +442,7 @@ public sealed class RaiVerdictParserTests
         Channel<RunEvent> sub,
         IWorkflowAgentFactory agentFactory) =>
         new(
-            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub()),
-            new FixedInstallationScopeStub(),
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider()),
             new PassthroughExecutor("test"),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),

@@ -129,42 +129,4 @@ public sealed class AgentHostOptions
     /// <summary>Optional system prompt context injected by the workflow graph.</summary>
     public string? SystemPromptContext { get; init; }
 
-    // ── Token store selection ─────────────────────────────────────────────────
-
-    /// <summary>
-    /// When <see langword="true"/>, the agent-host reads GitHub tokens from the shared RWX
-    /// filesystem store written by the API/worker tier (spec-018 P1.5). See
-    /// <see cref="SharedTokenStorePath"/>. Takes effect only when
-    /// <see cref="KvTokenMountPath"/> is not set.
-    /// Config key: <c>AgentHost:UseSharedTokenStore</c>.
-    /// </summary>
-    public bool UseSharedTokenStore { get; init; }
-
-    /// <summary>
-    /// Root path of the shared RWX auth directory, used with <see cref="UseSharedTokenStore"/>.
-    /// Passed to <see cref="SharedTokenStorePaths.ResolveAuthDir"/>.
-    /// Config key: <c>AgentHost:SharedTokenStorePath</c>.
-    /// </summary>
-    public string? SharedTokenStorePath { get; init; }
-
-    /// <summary>
-    /// When set, GitHub user tokens are read from CSI-mounted files at this path (Option B).
-    /// The CSI driver mounts per-user token files from Key Vault as
-    /// <c>{KvTokenMountPath}/user_{userId}.json</c>.
-    /// Config key: <c>AgentHost:KvTokenMountPath</c>.
-    /// When set, takes precedence over <see cref="UseSharedTokenStore"/>.
-    /// </summary>
-    public string? KvTokenMountPath { get; init; }
-
-    /// <summary>Azure Key Vault URI for runtime token fetch (Option C warm-pool path).
-    /// When set, overrides KvTokenMountPath — token is fetched via workload identity at configure-time.
-    /// Config key: AgentHost:KeyVaultUri
-    /// </summary>
-    public string? KeyVaultUri { get; init; }
-
-    /// <summary>Key Vault secret name for the run owner's GitHub token.
-    /// Passed in the /configure call. Format: ghtok-user--{base32(userId)}.
-    /// Config key: AgentHost:KvUserSecretName
-    /// </summary>
-    public string? KvUserSecretName { get; init; }
 }

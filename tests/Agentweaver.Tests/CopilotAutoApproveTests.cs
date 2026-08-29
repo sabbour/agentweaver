@@ -149,10 +149,9 @@ public sealed class CopilotAutoApproveTests : IDisposable
     private GitHubCopilotAgentRunner BuildRunner(IRunOptionsStore options)
     {
         var config = new ConfigurationBuilder().Build();
-        var factory = new GitHubCopilotClientFactory(config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+        var factory = new GitHubCopilotClientFactory(config, new FixedGitHubCopilotCapabilityCredentialProvider());
         return new GitHubCopilotAgentRunner(
             factory,
-            new FixedInstallationScopeStub(),
             SandboxExecutorFactory.CreatePassthrough(),
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),

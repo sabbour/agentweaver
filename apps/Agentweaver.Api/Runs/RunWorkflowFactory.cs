@@ -25,7 +25,6 @@ namespace Agentweaver.Api.Runs;
 public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisionCheckpointIndex
 {
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _sandboxExecutor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
@@ -42,7 +41,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     private readonly WorkflowRegistry? _workflowRegistry;
     private readonly IBacklogTaskStore? _backlogTaskStore;
     private readonly IGitHubPullRequestClient? _prClient;
-    private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
+    private readonly IGitHubRepositoryCapabilityCredentialProvider? _repositoryCapabilityCredentials;
     private readonly CheckpointManager _checkpointManager;
     private readonly JsonCheckpointStore _runsCheckpointStore;
     private readonly Func<IRevisionEffectConfirmer?>? _revisionEffectConfirmerAccessor;
@@ -80,7 +79,6 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     public RunWorkflowFactory(
         IAgentRunner agentRunner,
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor sandboxExecutor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -98,7 +96,6 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         : this(
             agentRunner,
             copilotClientFactory,
-            scopeProvider,
             sandboxExecutor,
             sandboxPolicyStore,
             approvalStore,
@@ -121,7 +118,6 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     public RunWorkflowFactory(
         IAgentRunner agentRunner,
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor sandboxExecutor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -141,12 +137,11 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         ICheckpointStoreFactory? checkpointStoreFactory = null,
         Func<IRevisionEffectConfirmer?>? revisionEffectConfirmerAccessor = null,
         IGitHubPullRequestClient? prClient = null,
-        IGitHubAccessTokenProvider? accessTokenProvider = null,
-        WorkflowWorktreeMaterializer? workflowWorktreeMaterializer = null)
+        WorkflowWorktreeMaterializer? workflowWorktreeMaterializer = null,
+        IGitHubRepositoryCapabilityCredentialProvider? repositoryCapabilityCredentials = null)
     {
         _ = agentRunner; // retained for DI/test compatibility; agents now come from IWorkflowAgentFactory
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _sandboxExecutor = sandboxExecutor;
         _sandboxPolicyStore = sandboxPolicyStore;
         _approvalStore = approvalStore;
@@ -163,7 +158,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         _workflowRegistry = workflowRegistry;
         _backlogTaskStore = backlogTaskStore;
         _prClient = prClient;
-        _accessTokenProvider = accessTokenProvider;
+        _repositoryCapabilityCredentials = repositoryCapabilityCredentials;
         _workflowWorktreeMaterializer = workflowWorktreeMaterializer;
 
         // Checkpoint directory: configurable via Checkpoints:Path; defaults to
@@ -562,12 +557,12 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         // Two separate ScribeTurnExecutor instances to avoid single-node-multiple-inputs
         // ambiguity in MAF's graph builder. Each creates its own ephemeral ScribeAIAgent.
         var scribeMergeExec = new ScribeTurnExecutor(
-            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge",
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
             apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory);
         var scribeNoChangesExec = new ScribeTurnExecutor(
-            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-no-changes",
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
             apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory);
@@ -578,7 +573,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         // fork. A RED verdict flips ContentSafetyFlagged so the workflow routes to the
         // safety terminal. Ephemeral RaiAIAgent per execution.
         var raiTurnExec = new RaiTurnExecutor(
-            _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+            _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "rai-turn",
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
             agentFactory: _agentFactory);
@@ -966,7 +961,6 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             {
                 ExecutorBinding buildTest = new BuildTestTurnExecutor(
                     _factory._copilotClientFactory,
-                    _factory._scopeProvider,
                     _factory._sandboxExecutor,
                     _factory._sandboxPolicyStore,
                     _factory._approvalStore,
@@ -991,7 +985,6 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             // REVISE→request-changes) — exactly the peer_review contract.
             ExecutorBinding binding = new RubberduckTurnExecutor(
                 _factory._copilotClientFactory,
-                _factory._scopeProvider,
                 _factory._sandboxExecutor,
                 _factory._sandboxPolicyStore,
                 _factory._approvalStore,
@@ -1015,17 +1008,16 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             if (_openPrNodes.TryGetValue(node.Id, out var existing))
                 return existing;
 
-            if (_factory._prClient is null || _factory._accessTokenProvider is null)
+            if (_factory._prClient is null || _factory._repositoryCapabilityCredentials is null)
             {
                 throw new WorkflowBindException(
                     $"Cannot bind node '{node.Id}' (type='open_pull_request'): no IGitHubPullRequestClient/" +
-                    "IGitHubAccessTokenProvider was supplied to RunWorkflowFactory.", node.Id);
+                    "IGitHubRepositoryCapabilityCredentialProvider was supplied to RunWorkflowFactory.", node.Id);
             }
 
             ExecutorBinding binding = new OpenPullRequestTurnExecutor(
                 _factory._prClient,
-                _factory._scopeProvider,
-                _factory._accessTokenProvider,
+                _factory._repositoryCapabilityCredentials,
                 _factory._loggerFactory,
                 _factory.GetRecordingWriter,
                 projectStore: _factory._projectStore,
@@ -1239,7 +1231,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         private ScribeSubPath BuildScribePath(WorkflowEdge edge, ExecutorBinding input)
         {
             ExecutorBinding scribe = new ScribeTurnExecutor(
-                _factory._copilotClientFactory, _factory._scopeProvider, _factory._sandboxExecutor,
+                _factory._copilotClientFactory, _factory._sandboxExecutor,
                 _factory._sandboxPolicyStore, _factory._approvalStore, _factory._toolApprovalGate,
                 _factory._loggerFactory, _factory.GetRecordingWriter,
                 name: $"scribe-turn-{edge.From}-{edge.To}",
@@ -1317,7 +1309,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             bindings[node.Id] = gateKind switch
             {
                 "rai" => new RaiTurnExecutor(
-                    _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+                    _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
                     _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter,
                     name: $"{node.Id}-turn",
                     createSubStream: CreateSubStreamWriter,
@@ -1328,7 +1320,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     subStreamSuffix: "rai"),
 
                 "rubberduck" => new RubberduckTurnExecutor(
-                    _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+                    _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
                     _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter,
                     name: $"{node.Id}-turn",
                     logicalNodeId: node.Id,

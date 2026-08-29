@@ -380,9 +380,9 @@ public sealed class TraceInstrumentationTests
     private static CopilotAIAgent BuildAgent()
     {
         var factory = new GitHubCopilotClientFactory(
-            new ConfigurationBuilder().Build(), new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+            new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider());
         return new CopilotAIAgent(
-            factory, new FixedInstallationScopeStub(), SandboxExecutorFactory.CreatePassthrough(),
+            factory, SandboxExecutorFactory.CreatePassthrough(),
             new StubPolicyStore(), new InMemoryShellApprovalStore(),
             new InMemoryToolApprovalGate(), NullLogger<CopilotAIAgent>.Instance);
     }

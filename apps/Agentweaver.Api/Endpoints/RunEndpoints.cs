@@ -667,7 +667,7 @@ app.MapGet("/api/runs/{id}/history", async (
     // Resume the session in read-only mode (DisableResume=true suppresses the resume event)
     // to retrieve persisted events without re-executing.
     var sessionId = $"agentweaver-run-{runId}";
-    await using var client = copilotClientFactory.CreateClient();
+    await using var client = await copilotClientFactory.CreateClientAsync(run.Id.ToString(), modelId: null, ct).ConfigureAwait(false);
     await client.StartAsync(ct);
 
     GitHub.Copilot.CopilotSession? session = null;

@@ -6,8 +6,6 @@ using Agentweaver.AgentTools;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
 using Agentweaver.SandboxExec.PodExec;
-using Azure.Identity;
-using Azure.Security.KeyVault.Secrets;
 using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Hosting.A2A;
 using Microsoft.AspNetCore.Builder;
@@ -56,78 +54,13 @@ builder.Configuration.AddJsonFile("/app/config/appsettings.k8s.json", optional: 
 builder.WebHost.ConfigureKestrel(kestrel =>
     AgentHostKestrelConfigurator.Configure(kestrel, builder.Configuration));
 
-// ── GitHub credential chain ────────────────────────────────────────────────────
-// Three paths, selected in priority order:
-//
-//  (A) CSI-mounted Key Vault token files (Option B, KvTokenMountPath set):
-//      A per-run SecretProviderClass mounts only the run owner's token file from Key Vault at
-//      /mnt/user-tokens/user_{userId}.json — same StoredCredential JSON as the shared store.
-//      CsiMountedGitHubTokenStore adds cold-start retry (6×5s) in case the CSI driver hasn't
-//      written the file yet at pod startup. Takes precedence over UseSharedTokenStore.
-//
-//  (B) Shared file store (spec-018 P1.5 live PoC): the cluster mounts the agentweaver-workspace
-//      RWX volume at /workspace with HOME=/workspace/.home, and the API persists the user's GitHub
-//      token to {HOME}/.local/share/agentweaver/auth/user_<id>.json. When UseSharedTokenStore=true
-//      the pod READS that same shared store directly — the token never moves, no secret is created.
-//      Pairs with a per-user scope provider so the correct user_<id>.json is read.
-//
-//  (C) Default: PodGitHubTokenStore (NeverSignedIn) + installation scope. The factory then falls
-//      back to Providers:GitHubCopilot:GitHubToken from config (e.g. an injected env/secret).
-//
-// No IGitHubAccessTokenProvider is wired (token is static at pod lifetime; the shared store already
-// holds a freshly-issued user token).
-var kvUri = builder.Configuration["AgentHost:KeyVaultUri"];
-var kvMountPath = builder.Configuration["AgentHost:KvTokenMountPath"];
-// Guard: reject empty, whitespace, or unsubstituted envsubst placeholders (e.g. "${AGENTHOST_KEYVAULT_URI}")
-Uri? kvUriParsed = null;
-var kvUriValid = !string.IsNullOrWhiteSpace(kvUri)
-    && Uri.TryCreate(kvUri, UriKind.Absolute, out kvUriParsed)
-    && (kvUriParsed.Scheme == "https" || kvUriParsed.Scheme == "http");
-if (kvUriValid)
-{
-    // Option C (warm pool): fetch the run owner's token from Key Vault at /configure-time via the
-    // pod's workload identity (DefaultAzureCredential). No CSI volume, no per-run SPC — the secret
-    // name (ghtok-user--{base32(userId)}) arrives in the /configure call and lands on
-    // AgentHostRuntimeState.KvUserSecretName. KeyVaultUserTokenProvider fetches ONLY that one secret
-    // and caches it for the pod lifetime. Takes precedence over the file-mount paths.
-    builder.Services.AddSingleton(new SecretClient(kvUriParsed!, new DefaultAzureCredential()));
-    builder.Services.AddSingleton<KeyVaultUserTokenProvider>();
-    builder.Services.AddSingleton<IGitHubTokenStore>(sp =>
-        new KeyVaultGitHubTokenStore(sp.GetRequiredService<KeyVaultUserTokenProvider>()));
-    builder.Services.AddSingleton<IGitHubTokenScopeProvider>(sp =>
-        new RuntimeUserScopeProvider(sp.GetRequiredService<AgentHostRuntimeState>()));
-}
-else if (!string.IsNullOrWhiteSpace(kvMountPath))
-{
-    // Option A: CSI-mounted Key Vault token files.
-    // File per user: {kvMountPath}/user_{sanitizedUserId}.json — same StoredCredential JSON.
-    var configuredUserId = builder.Configuration["AgentHost:UserId"];
-    builder.Services.AddSingleton<IGitHubTokenStore>(
-        new CsiMountedGitHubTokenStore(kvMountPath));
-    builder.Services.AddSingleton<IGitHubTokenScopeProvider>(sp =>
-        new SharedUserScopeProvider(
-            kvMountPath,
-            configuredUserId,
-            sp.GetRequiredService<ILogger<SharedUserScopeProvider>>()));
-}
-else if (builder.Configuration.GetValue("AgentHost:UseSharedTokenStore", false))
-{
-    var authDir = SharedTokenStorePaths.ResolveAuthDir(
-        builder.Configuration["AgentHost:SharedTokenStorePath"]);
-    var configuredUserId = builder.Configuration["AgentHost:UserId"];
-    builder.Services.AddSingleton<IGitHubTokenStore>(new SharedHomeGitHubTokenStore(authDir));
-    builder.Services.AddSingleton<IGitHubTokenScopeProvider>(sp =>
-        new SharedUserScopeProvider(
-            authDir,
-            configuredUserId,
-            sp.GetRequiredService<ILogger<SharedUserScopeProvider>>()));
-}
-else
-{
-    var podTokenStore = new PodGitHubTokenStore();
-    builder.Services.AddSingleton<IGitHubTokenStore>(podTokenStore);
-    builder.Services.AddSingleton<IGitHubTokenScopeProvider, PodInstallationScopeProvider>();
-}
+// ── GitHub capability credential boundary ──────────────────────────────────────
+// The API redeems the immutable run snapshot and delivers exactly one bounded Copilot
+// credential through /configure. AgentHost cannot resolve a user, read a token store, or
+// use configuration as an authentication fallback.
+builder.Services.AddSingleton<AgentHostRuntimeState>();
+builder.Services.AddSingleton<IGitHubCopilotCapabilityCredentialProvider,
+    AgentHostGitHubCapabilityCredentialProvider>();
 
 // ── Sandbox policy (no DB in pod) ─────────────────────────────────────────────
 builder.Services.AddSingleton<ISandboxPolicyStore, PodSandboxPolicyStore>();
@@ -180,9 +113,8 @@ builder.Services.AddSingleton<CopilotAIAgent>();
 
 // ── Operator assistant (narrow AgentHost cutover, #346/#347) ──────────────────
 // Same MCP-driven Copilot chat loop that used to run in the API pod, now hosted here when a pod is
-// configured with AgentHostPurpose.OperatorAssistant. GitHubCopilotClientFactory and the pod's
-// IGitHubTokenScopeProvider (registered above per credential path) are reused as-is — the operator
-// assistant needs no infrastructure this pod doesn't already provision for CopilotAIAgent.
+// configured with AgentHostPurpose.OperatorAssistant. Its Copilot client is constrained to the
+// same immutable run snapshot credential as CopilotAIAgent.
 builder.Services.AddSingleton<IAgentweaverMcpToolProvider>(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<AgentHostOptions>>().Value;
@@ -264,8 +196,8 @@ app.Use(async (ctx, next) =>
     await next(ctx).ConfigureAwait(false);
 });
 
-// ── Warm-pool one-time /configure endpoint (Option C) ───────────────────────────
-// Injects the per-run RunId/UserId/TurnBearerToken (and the KV secret name) into an already-warm
+// ── Warm-pool one-time /configure endpoint ─────────────────────────────────────
+// Injects the per-run RunId/UserId/TurnBearerToken and immutable capability credential into an already-warm
 // pod, then runs the deferred SetupAsync. Placed BEFORE the A2A bearer-auth middleware: it cannot be
 // protected by the TurnBearerToken (chicken-and-egg — the token is delivered HERE). NetworkPolicy
 // (ingress to AgentHost pods restricted to API/worker) is the guard. One-time: a second call (or a
@@ -292,6 +224,13 @@ app.MapPost("/configure", async (HttpContext ctx) =>
 
     if (body is null || string.IsNullOrWhiteSpace(body.RunId))
         return Results.BadRequest("runId is required");
+    if (body.CopilotCredential is null ||
+        string.IsNullOrWhiteSpace(body.CopilotCredential.SnapshotReference) ||
+        string.IsNullOrWhiteSpace(body.CopilotCredential.AccessToken) ||
+        body.CopilotCredential.ExpiresAt <= DateTimeOffset.UtcNow)
+    {
+        return Results.BadRequest("A live run-bound Copilot capability credential is required");
+    }
 
     var configuration = body.ToRunConfiguration();
     try
@@ -578,8 +517,6 @@ internal sealed record ConfigureRequest
     public string? RunId { get; init; }
     public string? UserId { get; init; }
     public string? TurnBearerToken { get; init; }
-    public string? KvUserSecretName { get; init; }
-
     /// <summary>
     /// Per-run preview-runner credential (spec-006 decouple-preview, BLOCKER A). Delivered in-memory
     /// only — never placed in pod env/config/file — so the untrusted preview process cannot inherit it.
@@ -588,10 +525,10 @@ internal sealed record ConfigureRequest
     public string? PreviewRunnerCredential { get; init; }
 
     /// <summary>
-    /// GitHub OAuth access token pre-resolved by the API (which has KV access).
-    /// When present, the pod skips the Key Vault fetch entirely — no OIDC or KV egress needed.
+    /// Immutable Copilot credential redeemed by the API from this run's unattended Copilot snapshot.
+    /// The AgentHost never resolves it from a user identity or a token store.
     /// </summary>
-    public string? GitHubAccessToken { get; init; }
+    public GitHubCapabilitySnapshotCredential? CopilotCredential { get; init; }
 
     /// <summary>
     /// Short-lived credential for the configured run and repository. The runtime gives this value
@@ -601,7 +538,7 @@ internal sealed record ConfigureRequest
 
     /// <summary>
     /// Authenticated platform caller token used by the operator assistant's MCP connection. Kept
-    /// separate from <see cref="GitHubAccessToken"/> because Entra deployments use different
+    /// separate from <see cref="CopilotCredential"/> because Entra deployments use different
     /// credentials for Agentweaver API authorization and the linked GitHub/Copilot account.
     /// </summary>
     public string? CallerBearerToken { get; init; }
@@ -681,8 +618,7 @@ internal sealed record ConfigureRequest
         RunId ?? string.Empty,
         UserId ?? string.Empty,
         TurnBearerToken ?? string.Empty,
-        KvUserSecretName,
-        GitHubAccessToken,
+        CopilotCredential,
         PreviewRunnerCredential,
         SharedWorkingDirectory ?? WorkingDirectory,
         Purpose,

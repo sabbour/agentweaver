@@ -23,7 +23,6 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
     public string NodeKind => "live";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _sandboxExecutor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
@@ -46,7 +45,6 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
 
     public BuildTestTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor sandboxExecutor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -70,7 +68,6 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
         LogicalNodeId = logicalNodeId;
         DisplayLabel = displayLabel;
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _sandboxExecutor = sandboxExecutor;
         _sandboxPolicyStore = sandboxPolicyStore;
         _approvalStore = approvalStore;
@@ -108,7 +105,6 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
             agent = _agentFactory?.CreateBuildTestAgent()
                 ?? new CopilotAIAgent(
                     _copilotClientFactory,
-                    _scopeProvider,
                     _sandboxExecutor,
                     _sandboxPolicyStore,
                     _approvalStore,

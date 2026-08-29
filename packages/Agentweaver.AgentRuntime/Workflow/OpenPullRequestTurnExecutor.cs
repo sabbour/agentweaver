@@ -44,8 +44,7 @@ public sealed class OpenPullRequestTurnExecutor : Executor<AgentTurnOutput, Agen
     public string NodeKind => "live";
 
     private readonly IGitHubPullRequestClient _prClient;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
-    private readonly IGitHubAccessTokenProvider _accessTokenProvider;
+    private readonly IGitHubRepositoryCapabilityCredentialProvider _credentialProvider;
     private readonly IProjectStore? _projectStore;
     private readonly ILogger<OpenPullRequestTurnExecutor> _logger;
     private readonly Func<string, ChannelWriter<RunEvent>?> _getRecordingWriter;
@@ -57,8 +56,7 @@ public sealed class OpenPullRequestTurnExecutor : Executor<AgentTurnOutput, Agen
 
     public OpenPullRequestTurnExecutor(
         IGitHubPullRequestClient prClient,
-        IGitHubTokenScopeProvider scopeProvider,
-        IGitHubAccessTokenProvider accessTokenProvider,
+        IGitHubRepositoryCapabilityCredentialProvider credentialProvider,
         ILoggerFactory loggerFactory,
         Func<string, ChannelWriter<RunEvent>?>? getRecordingWriter = null,
         IProjectStore? projectStore = null,
@@ -75,8 +73,7 @@ public sealed class OpenPullRequestTurnExecutor : Executor<AgentTurnOutput, Agen
         LogicalNodeId = logicalNodeId;
         DisplayLabel = displayLabel;
         _prClient = prClient;
-        _scopeProvider = scopeProvider;
-        _accessTokenProvider = accessTokenProvider;
+        _credentialProvider = credentialProvider;
         _projectStore = projectStore;
         _logger = loggerFactory.CreateLogger<OpenPullRequestTurnExecutor>();
         _getRecordingWriter = getRecordingWriter ?? (_ => null);
@@ -127,13 +124,12 @@ public sealed class OpenPullRequestTurnExecutor : Executor<AgentTurnOutput, Agen
             if (string.IsNullOrWhiteSpace(baseBranch))
                 baseBranch = DefaultBaseBranch;
 
-            var scope = await _scopeProvider
-                .ResolveAsync(input.SubmittingUser, input.ProjectId, ct)
-                .ConfigureAwait(false);
-            var accessToken = await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(accessToken))
+            var credential = await _credentialProvider.GetCredentialAsync(input.RunId, ct).ConfigureAwait(false);
+            if (credential is null || string.IsNullOrWhiteSpace(credential.AccessToken) ||
+                credential.ExpiresAt <= DateTimeOffset.UtcNow)
             {
-                Fail(writer, input.RunId, "no-access-token", "No valid GitHub access token is available to open the pull request.");
+                Fail(writer, input.RunId, "capability-unavailable",
+                    "No live run-bound GitHub repository capability is available to open the pull request.");
                 return input;
             }
 
@@ -141,7 +137,7 @@ public sealed class OpenPullRequestTurnExecutor : Executor<AgentTurnOutput, Agen
             var body = RenderTemplate(_bodyTemplate ?? DefaultBodyTemplate, input);
 
             var result = await _prClient.CreatePullRequestAsync(
-                owner, repo, title, body, baseBranch!, headBranch, _draft, accessToken!, ct).ConfigureAwait(false);
+                owner, repo, title, body, baseBranch!, headBranch, _draft, credential.AccessToken, ct).ConfigureAwait(false);
 
             if (result.Success)
             {

@@ -18,13 +18,12 @@ public sealed class RaiAIAgent : CopilotAIAgent
 {
     public RaiAIAgent(
         GitHubCopilotClientFactory factory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor executor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
         ILogger<CopilotAIAgent> logger)
-        : base(factory, scopeProvider, executor, sandboxPolicyStore, approvalStore, toolApprovalGate, logger)
+        : base(factory, executor, sandboxPolicyStore, approvalStore, toolApprovalGate, logger)
     {
     }
 

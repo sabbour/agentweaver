@@ -57,9 +57,9 @@ public sealed class SandboxEscapeEndToEndTests
                 "GitHub Copilot credentials not found. Set Providers:GitHubCopilot:ApiKey (or GitHubToken).");
         }
 
-        var factory = new GitHubCopilotClientFactory(config, new NullGitHubTokenStore(), new FixedInstallationScopeStub());
+        var factory = new GitHubCopilotClientFactory(config, new FixedGitHubCopilotCapabilityCredentialProvider());
         var logger = new CapturingLogger<GitHubCopilotAgentRunner>();
-        var runner = new GitHubCopilotAgentRunner(factory, new FixedInstallationScopeStub(), SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(), logger);
+        var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(), logger);
 
         await RunEscapeScenarioAsync(ModelSource.GitHubCopilot, runner, logger.Lines);
     }
