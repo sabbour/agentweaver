@@ -31,6 +31,7 @@ vi.mock('../api/apiClient', () => ({
     getProjectAccessOverview: vi.fn(),
     getNotifications: vi.fn(),
     beginProjectCopilotAuthorization: vi.fn(),
+    getProjectCopilotConnection: vi.fn(),
   },
 }));
 
@@ -114,6 +115,10 @@ beforeEach(() => {
     github_identity_override_login: null,
     effective_github_login: 'octocat',
   } as never);
+  vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
+    status: 'not_connected',
+    github_login: null,
+  });
 });
 
 afterEach(() => {
@@ -185,6 +190,7 @@ describe('AppShell navigation', () => {
 
     expect(await screen.findByText(GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE)).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Copilot' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub account' }));
     await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('proj-1'));
     expect(assign).toHaveBeenCalledWith(
       'https://api.example.test/api/projects/proj-1/github/copilot/authorizations/redirect',

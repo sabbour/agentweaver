@@ -257,6 +257,23 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         body.TryGetProperty("permissions", out _).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task GetProjectCopilotConnection_ReturnsOnlyRedactedConnectionState()
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/copilot/connection");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("not_connected");
+        body.GetProperty("github_login").ValueKind.Should().Be(JsonValueKind.Null);
+        body.TryGetProperty("authorization_url", out _).Should().BeFalse();
+        body.TryGetProperty("transaction_id", out _).Should().BeFalse();
+        body.TryGetProperty("access_token", out _).Should().BeFalse();
+        body.TryGetProperty("refresh_token", out _).Should().BeFalse();
+    }
+
     // =========================================================================
     // PE-07: DELETE /api/projects/{id}?confirm=true returns 204
     // =========================================================================

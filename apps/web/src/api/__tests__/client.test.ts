@@ -123,6 +123,23 @@ describe('AgentweaverApiClient keepalive', () => {
     expect(error.payload).toEqual(payload);
   });
 
+  it('reads the redacted project Copilot connection state from its scoped endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ status: 'connected', github_login: 'octocat' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    const connection = await client.getProjectCopilotConnection('project/1');
+
+    expect(connection).toEqual({ status: 'connected', github_login: 'octocat' });
+    expect(fetchMock.mock.calls[0][0])
+      .toBe('https://api.example.test/api/projects/project%2F1/github/copilot/connection');
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
+  });
+
   it('broadcasts the shared Copilot connection action for every typed requirement response', async () => {
     const requirement = {
       code: 'github_copilot_connection_required',

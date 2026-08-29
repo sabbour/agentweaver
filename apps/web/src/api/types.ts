@@ -536,6 +536,15 @@ export interface UnattendedReadiness {
   repo_app_installation_connected: boolean;
 }
 
+/**
+ * The safe, project-scoped view of the Copilot App binding. It deliberately
+ * excludes authorization transactions, provider permissions, and credentials.
+ */
+export interface ProjectCopilotConnection {
+  status: 'connected' | 'not_connected';
+  github_login: string | null;
+}
+
 
 // --- Casting / Team types ---
 
