@@ -89,6 +89,16 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
                 lastDetail =
                     $"executor sidecar socket '{_socketPath}' is not answering ({ex.Message}); "
                     + "the pod must run the 'agentweaver-exec' container";
+                // A visible socket file that refuses every connection is the signature of issue
+                // #1008: the IPC volume reaches the guest over a shared filesystem, where the peer
+                // container's bind is registered against a different inode. Say so, because
+                // "not answering" would otherwise send an operator hunting a crashed sidecar.
+                if (File.Exists(_socketPath)
+                    && !PodExecEndpoint.CanHostCrossContainerRendezvous(_socketPath, out var rendezvousDetail))
+                {
+                    lastDetail =
+                        $"executor sidecar socket '{_socketPath}' exists but refuses connections: {rendezvousDetail}";
+                }
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(1), deadline.Token).ConfigureAwait(false);
