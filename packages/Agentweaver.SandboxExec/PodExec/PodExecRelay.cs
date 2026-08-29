@@ -42,6 +42,8 @@ public static class PodExecRelay
     public static async Task<int> RunAsync(string? socketPath, CancellationToken ct = default)
     {
         var resolvedSocketPath = PodExecEndpoint.ResolveSocketPath(socketPath);
+        var transport = PodExecEndpoint.ResolveTransport();
+        var tcpPort = PodExecEndpoint.ResolveTcpPort();
         var requestLine = await Console.In.ReadLineAsync(ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(requestLine))
         {
@@ -56,8 +58,10 @@ public static class PodExecRelay
             return 126;
         }
 
-        using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        await socket.ConnectAsync(new UnixDomainSocketEndPoint(resolvedSocketPath), ct).ConfigureAwait(false);
+        using var socket = PodExecTransportConnection.CreateClient(transport);
+        await PodExecTransportConnection
+            .ConnectAsync(socket, transport, resolvedSocketPath, tcpPort, ct)
+            .ConfigureAwait(false);
         await using var stream = new NetworkStream(socket, ownsSocket: false);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);

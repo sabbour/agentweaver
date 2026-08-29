@@ -155,11 +155,17 @@ spec:
             # model-controlled commands, and refuses to start if the sidecar is unavailable.
             - name: AgentHost__SandboxMode
               value: "kata"
-            # Pod-private executor IPC endpoint (Unix domain socket on the exec-ipc emptyDir). The
-            # socket dir is mounted ONLY into these two containers and is never bound into a
-            # sandboxed child's mount namespace.
+            # Kata cannot connect to an AF_UNIX listener across containers even when the socket
+            # inode is visible on a shared emptyDir (#1008). Use pod-loopback TCP instead: it is
+            # not declared as a container port, Service, host port, or NetworkPolicy exposure, and
+            # every request still needs the random mode-0600 token in exec-ipc (never mounted in a
+            # sandboxed child).
             - name: AGENTWEAVER_EXEC_SOCKET
               value: "/var/run/agentweaver-exec/exec.sock"
+            - name: AGENTWEAVER_EXEC_TRANSPORT
+              value: "tcp"
+            - name: AGENTWEAVER_EXEC_TCP_PORT
+              value: "18081"
             # In-cluster AgentweaverMCP /mcp URL, required unconditionally at pod startup
             # (Program.cs throws InvalidOperationException from DI if empty) -- the operator
             # assistant purpose (#346/#347) is wired eagerly, not lazily per-run, so every
@@ -237,7 +243,7 @@ spec:
             # Writable HOME (CopilotClient / git config + caches).
             - name: home
               mountPath: /home/appuser
-            # Pod-private executor IPC (UDS + token). Mounted in exactly two containers.
+            # Pod-private executor token directory. Mounted in exactly two containers.
             - name: exec-ipc
               mountPath: /var/run/agentweaver-exec
             # Optional in PoC (RequireMtls=false): server TLS cert. Required in production.
@@ -252,7 +258,7 @@ spec:
         # ── Executor sidecar ──────────────────────────────────────────────────────────────
         # Runs EVERY model-controlled process (shell tool calls, preview servers). Same image as
         # AgentHost so the toolchain is byte-identical and only one image is built/scanned/tagged;
-        # `--exec-agent` starts the UDS daemon instead of the web host.
+        # `--exec-agent` starts the authenticated executor daemon instead of the web host.
         #
         # WHY A SECOND CONTAINER (not just bubblewrap inside AgentHost): the Linux kernel refuses
         # `mount -t proc` inside an unprivileged user namespace when the visible procfs has
@@ -293,6 +299,10 @@ spec:
           env:
             - name: AGENTWEAVER_EXEC_SOCKET
               value: "/var/run/agentweaver-exec/exec.sock"
+            - name: AGENTWEAVER_EXEC_TRANSPORT
+              value: "tcp"
+            - name: AGENTWEAVER_EXEC_TCP_PORT
+              value: "18081"
             - name: HOME
               value: "/home/appuser"
             # Image builds are served by an OPTIONAL BuildKit sidecar in this same pod, reached over
@@ -373,7 +383,7 @@ spec:
           emptyDir: {}
         - name: home
           emptyDir: {}
-        # Executor sidecar volumes. exec-ipc carries only the UDS + token (never bound into a
+        # Executor sidecar volumes. exec-ipc carries only the transport state + token (never bound into a
         # sandboxed child's mount namespace); exec-tmp/exec-home are the sidecar's own writable
         # scratch and HOME, deliberately NOT shared with AgentHost so model-controlled code cannot
         # read or tamper with AgentHost's git credentials/caches.

@@ -40,6 +40,38 @@ public sealed class PodExecSidecarTests
         PodExecEndpoint.ResolveSocketPath(null).Should().NotBeNullOrWhiteSpace();
         PodExecEndpoint.ResolveTokenPath("/var/run/agentweaver-exec/exec.sock")
             .Should().Be(Path.Combine(Path.GetFullPath("/var/run/agentweaver-exec"), "exec.token"));
+        PodExecEndpoint.ResolveTransport("unix").Should().Be(PodExecTransport.UnixDomainSocket);
+        PodExecEndpoint.ResolveTransport("tcp").Should().Be(PodExecTransport.LoopbackTcp);
+        PodExecEndpoint.ResolveTcpPort(18081).Should().Be(18081);
+    }
+
+    [Theory]
+    [InlineData("udp")]
+    [InlineData("http")]
+    public void Endpoint_RejectsUnsupportedTransport(string transport) =>
+        ((Action)(() => PodExecEndpoint.ResolveTransport(transport)))
+            .Should().Throw<InvalidOperationException>()
+            .WithMessage($"*{PodExecEndpoint.TransportEnvVar}*");
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1023)]
+    [InlineData(65536)]
+    public void Endpoint_RejectsInvalidTcpPort(int port) =>
+        ((Action)(() => PodExecEndpoint.ResolveTcpPort(port)))
+            .Should().Throw<InvalidOperationException>()
+            .WithMessage($"*{PodExecEndpoint.TcpPortEnvVar}*");
+
+    [Fact]
+    public void TcpTransport_BindsOnlyToLoopback()
+    {
+        using var listener = PodExecTransportConnection.CreateListener(
+            PodExecTransport.LoopbackTcp,
+            "/unused",
+            FindFreeTcpPort());
+
+        listener.LocalEndPoint.Should().BeOfType<IPEndPoint>()
+            .Which.Address.Should().Be(IPAddress.Loopback);
     }
 
     [Fact]
@@ -71,6 +103,50 @@ public sealed class PodExecSidecarTests
         frame.Type.Should().Be(PodExecFrameTypes.Error);
         frame.Ok.Should().BeFalse();
         frame.Message.Should().Contain("token");
+    }
+
+    [SidecarLinuxFact]
+    public async Task TcpLoopback_RejectsRequestsWithoutThePodPrivateToken()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        await using var harness = PodExecTestHarness.StartServer(
+            NewRoot(),
+            PodExecTransport.LoopbackTcp,
+            FindFreeTcpPort());
+
+        var frame = await SendRawAsync(
+            harness.SocketPath,
+            new PodExecRequest { Op = PodExecOps.Probe, Token = "not-the-token" },
+            harness.Transport,
+            harness.TcpPort);
+
+        frame.Type.Should().Be(PodExecFrameTypes.Error);
+        frame.Ok.Should().BeFalse();
+        frame.Message.Should().Contain("token");
+    }
+
+    [SidecarLinuxFact]
+    public async Task TcpLoopback_AuthenticatesBeforeApplyingThePidBoundaryGate()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        await using var harness = PodExecTestHarness.StartServer(
+            NewRoot(),
+            PodExecTransport.LoopbackTcp,
+            FindFreeTcpPort());
+        var client = new PodExecSandboxClient(
+            harness.SocketPath,
+            transport: harness.Transport,
+            tcpPort: harness.TcpPort);
+
+        var (ok, detail) = await client.ProbeAsync(TimeSpan.FromSeconds(10));
+
+        ok.Should().BeFalse("the in-process test harness deliberately has no container PID boundary");
+        detail.Should().Contain("share PID namespace",
+            "a token-authenticated TCP request must reach the server before that fail-closed gate runs");
     }
 
     /// <summary>
@@ -562,10 +638,14 @@ public sealed class PodExecSidecarTests
         }
     }
 
-    private static async Task<PodExecFrame> SendRawAsync(string socketPath, PodExecRequest request)
+    private static async Task<PodExecFrame> SendRawAsync(
+        string socketPath,
+        PodExecRequest request,
+        PodExecTransport transport = PodExecTransport.UnixDomainSocket,
+        int tcpPort = PodExecEndpoint.DefaultTcpPort)
     {
-        using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath));
+        using var socket = PodExecTransportConnection.CreateClient(transport);
+        await PodExecTransportConnection.ConnectAsync(socket, transport, socketPath, tcpPort, CancellationToken.None);
         await using var stream = new NetworkStream(socket, ownsSocket: false);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);

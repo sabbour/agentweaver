@@ -18,14 +18,17 @@ namespace Agentweaver.SandboxExec.PodExec;
 /// remaining per-run filesystem scoping is applied by <see cref="KataBwrapExecutor"/> inside this
 /// container.</para>
 ///
-/// <para>Reachability: an <c>AF_UNIX</c> socket on a pod-private <c>emptyDir</c> that is mounted in
-/// the AgentHost and executor containers only, is never bound into a sandboxed child's mount
-/// namespace, and is additionally guarded by a 32-byte token written mode-0600 next to it.</para>
+/// <para>Reachability: Unix sockets use a pod-private <c>emptyDir</c>; Kata uses a listener bound
+/// only to pod loopback. Both transports are additionally guarded by a 32-byte token written
+/// mode-0600 in the pod-private directory, which is never bound into a sandboxed child's mount
+/// namespace.</para>
 /// </summary>
 public sealed class PodExecServer : IAsyncDisposable
 {
     private readonly string _socketPath;
     private readonly string _tokenPath;
+    private readonly PodExecTransport _transport;
+    private readonly int _tcpPort;
     private readonly ILogger? _logger;
     private readonly KataBwrapExecutor _executor;
     private readonly ConcurrentDictionary<string, SpawnedSession> _sessions =
@@ -34,15 +37,23 @@ public sealed class PodExecServer : IAsyncDisposable
     private Socket? _listener;
     private string _token = string.Empty;
 
-    public PodExecServer(string? socketPath = null, ILogger? logger = null)
+    public PodExecServer(
+        string? socketPath = null,
+        ILogger? logger = null,
+        PodExecTransport? transport = null,
+        int? tcpPort = null)
     {
         _socketPath = PodExecEndpoint.ResolveSocketPath(socketPath);
         _tokenPath = PodExecEndpoint.ResolveTokenPath(_socketPath);
+        _transport = transport ?? PodExecEndpoint.ResolveTransport();
+        _tcpPort = PodExecEndpoint.ResolveTcpPort(tcpPort);
         _logger = logger;
         _executor = new KataBwrapExecutor(logger);
     }
 
     public string SocketPath => _socketPath;
+    public PodExecTransport Transport => _transport;
+    public int TcpPort => _tcpPort;
 
     /// <summary>
     /// Verifies the sandbox boundary this container is responsible for, publishes the token, and
@@ -55,23 +66,24 @@ public sealed class PodExecServer : IAsyncDisposable
             throw new InvalidOperationException($"Executor sidecar isolation is unavailable: {reason}");
 
         var directory = Path.GetDirectoryName(Path.GetFullPath(_socketPath))
-            ?? throw new InvalidOperationException($"Executor socket path '{_socketPath}' has no directory.");
+            ?? throw new InvalidOperationException($"Executor token path '{_tokenPath}' has no directory.");
         Directory.CreateDirectory(directory);
-        if (File.Exists(_socketPath))
+        if (_transport == PodExecTransport.UnixDomainSocket && File.Exists(_socketPath))
             File.Delete(_socketPath);
 
         _token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         File.WriteAllText(_tokenPath, _token);
         TrySetOwnerOnlyFileMode(_tokenPath);
 
-        _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        _listener.Bind(new UnixDomainSocketEndPoint(_socketPath));
+        _listener = PodExecTransportConnection.CreateListener(_transport, _socketPath, _tcpPort);
         _listener.Listen(64);
-        TrySetOwnerOnlyFileMode(_socketPath);
+        if (_transport == PodExecTransport.UnixDomainSocket)
+            TrySetOwnerOnlyFileMode(_socketPath);
 
         _logger?.LogInformation(
-            "Executor sidecar listening on {SocketPath} (backend={Backend}, pidNamespace={PidNamespace}, uid={Uid}).",
-            _socketPath,
+            "Executor sidecar listening via {Transport} at {Endpoint} (backend={Backend}, pidNamespace={PidNamespace}, uid={Uid}).",
+            _transport,
+            _transport == PodExecTransport.UnixDomainSocket ? _socketPath : $"127.0.0.1:{_tcpPort}",
             _executor.BackendName,
             KataBwrapExecutor.TryReadPidNamespace(),
             OperatingSystem.IsLinux() ? Environment.GetEnvironmentVariable("UID") ?? "n/a" : "n/a");
@@ -668,8 +680,10 @@ public sealed class PodExecServer : IAsyncDisposable
         _shutdown.Dispose();
         try
         {
-            if (File.Exists(_socketPath))
+            if (_transport == PodExecTransport.UnixDomainSocket && File.Exists(_socketPath))
                 File.Delete(_socketPath);
+            if (File.Exists(_tokenPath))
+                File.Delete(_tokenPath);
         }
         catch
         {

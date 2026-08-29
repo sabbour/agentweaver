@@ -18,6 +18,8 @@ namespace Agentweaver.SandboxExec.PodExec;
 public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegistrar
 {
     private readonly string _socketPath;
+    private readonly PodExecTransport _transport;
+    private readonly int _tcpPort;
     private readonly ILogger? _logger;
     private readonly string _relayCommand;
     private readonly string _relayAssembly;
@@ -26,9 +28,13 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
         string? socketPath = null,
         ILogger? logger = null,
         string? relayCommand = null,
-        string? relayAssembly = null)
+        string? relayAssembly = null,
+        PodExecTransport? transport = null,
+        int? tcpPort = null)
     {
         _socketPath = PodExecEndpoint.ResolveSocketPath(socketPath);
+        _transport = transport ?? PodExecEndpoint.ResolveTransport();
+        _tcpPort = PodExecEndpoint.ResolveTcpPort(tcpPort);
         _logger = logger;
         _relayCommand = relayCommand ?? Environment.ProcessPath ?? "dotnet";
         _relayAssembly = relayAssembly ?? System.Reflection.Assembly.GetEntryAssembly()?.Location ?? string.Empty;
@@ -87,7 +93,7 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
             catch (Exception ex)
             {
                 lastDetail =
-                    $"executor sidecar socket '{_socketPath}' is not answering ({ex.Message}); "
+                    $"executor sidecar endpoint '{EndpointDescription}' is not answering ({ex.Message}); "
                     + "the pod must run the 'agentweaver-exec' container";
                 try
                 {
@@ -295,6 +301,9 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
         }
         psi.ArgumentList.Add(PodExecRelay.RelayArgument);
         psi.ArgumentList.Add(_socketPath);
+        psi.Environment[PodExecEndpoint.TransportEnvVar] =
+            _transport == PodExecTransport.LoopbackTcp ? "tcp" : "unix";
+        psi.Environment[PodExecEndpoint.TcpPortEnvVar] = _tcpPort.ToString();
 
         var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         if (!process.Start())
@@ -448,8 +457,10 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
 
     private async Task<PodExecFrame> SendAsync(PodExecRequest request, CancellationToken ct)
     {
-        using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        await socket.ConnectAsync(new UnixDomainSocketEndPoint(_socketPath), ct).ConfigureAwait(false);
+        using var socket = PodExecTransportConnection.CreateClient(_transport);
+        await PodExecTransportConnection
+            .ConnectAsync(socket, _transport, _socketPath, _tcpPort, ct)
+            .ConfigureAwait(false);
         await using var stream = new NetworkStream(socket, ownsSocket: false);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
@@ -464,6 +475,9 @@ public sealed class PodExecSandboxClient : ISandboxExecutor, IRunWorkspaceRegist
     }
 
     private string ReadToken() => PodExecRelay.ReadToken(_socketPath);
+
+    private string EndpointDescription =>
+        _transport == PodExecTransport.UnixDomainSocket ? _socketPath : $"127.0.0.1:{_tcpPort}";
 
     /// <summary>A sandboxed long-lived process supervised through the executor sidecar.</summary>
     public sealed record RemoteSupervisedProcess(
