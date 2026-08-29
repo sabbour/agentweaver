@@ -1,4 +1,8 @@
-import { isSerializedWorkPlan, stripSerializedWorkPlanMessages } from '../timeline/coordinatorPlanFilter';
+import {
+  isOutcomeSpecMessagePrefix,
+  isSerializedWorkPlan,
+  stripSerializedWorkPlanMessages,
+} from '../timeline/coordinatorPlanFilter';
 import { describe, expect, it } from 'vitest';
 import type { TimelineItem } from '../timeline/types';
 describe('isSerializedWorkPlan', () => {
@@ -28,6 +32,15 @@ describe('isSerializedWorkPlan', () => {
     expect(isSerializedWorkPlan('')).toBe(false);
     expect(isSerializedWorkPlan('{}')).toBe(false);
     expect(isSerializedWorkPlan('not json [oops')).toBe(false);
+  });
+});
+
+describe('isOutcomeSpecMessagePrefix', () => {
+  it('recognizes incomplete canonical outcome-spec JSON without matching ordinary text', () => {
+    expect(isOutcomeSpecMessagePrefix('{"desired_out')).toBe(true);
+    expect(isOutcomeSpecMessagePrefix('  { "desiredOutcome":')).toBe(true);
+    expect(isOutcomeSpecMessagePrefix('Drafting an outcome plan now.')).toBe(false);
+    expect(isOutcomeSpecMessagePrefix('{"description":"An ordinary JSON response"}')).toBe(false);
   });
 });
 

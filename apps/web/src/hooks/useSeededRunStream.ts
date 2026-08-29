@@ -1,7 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { useRunStream } from '../api/sse';
 import { mergeRunEvents } from '../timeline/mergeRunEvents';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EventType, RunStreamEvent, StreamStatus } from '../api/sse';
 export interface SeededRunStream {
   /** Persisted seed folded under the live SSE deltas — feed this to useTimelineItems. */
@@ -12,6 +12,10 @@ export interface SeededRunStream {
   seedEvents: RunStreamEvent[];
   status: StreamStatus;
   error: string | null;
+  /** Failure loading the durable event history; live SSE events remain available. */
+  seedError: string | null;
+  /** Reload the durable event history without recreating the live SSE connection. */
+  refresh: () => Promise<RunStreamEvent[]>;
   /** Count of events evicted from the live buffer — forward to useTimelineItems. */
   droppedEventCount: number;
   reconnect: () => void;
@@ -27,11 +31,8 @@ export interface SeededRunStream {
  * the browser console TUI needs the exact same behaviour, so it lives here once.
  *
  * @param runId the run to bind to ('' disables the stream).
- * @param status the run's lifecycle status; terminal/parked states still rely on
- *   the same durable events endpoint, and active runs also seed once so durable
- *   events emitted before the SSE subscription are visible.
  */
-export function useSeededRunStream(runId: string, status?: string): SeededRunStream {
+export function useSeededRunStream(runId: string): SeededRunStream {
   const {
     events: liveEvents,
     droppedEventCount,
@@ -41,27 +42,50 @@ export function useSeededRunStream(runId: string, status?: string): SeededRunStr
   } = useRunStream(runId);
 
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
+  const [seedError, setSeedError] = useState<string | null>(null);
+  const refreshGenerationRef = useRef(0);
 
   useEffect(() => {
-    if (!runId) { setSeedEvents([]); return; } // eslint-disable-line react-hooks/set-state-in-effect
-    let cancelled = false;
-    apiClient.getRunEvents(runId)
-      .then((persisted) => {
-        if (cancelled) return;
-        setSeedEvents(persisted.map((e) => ({
-          sequence: e.sequence,
-          type: e.type as EventType,
-          payload: e.payload,
-        })));
-      })
-      .catch(() => { /* durable log may 404 — fall back to the live stream */ });
-    return () => { cancelled = true; };
-  }, [runId, status]);
+    refreshGenerationRef.current += 1;
+  }, [runId]);
+
+  const refresh = useCallback(async (): Promise<RunStreamEvent[]> => {
+    const refreshGeneration = ++refreshGenerationRef.current;
+    const isCurrentRefresh = () => refreshGeneration === refreshGenerationRef.current;
+    if (isCurrentRefresh()) setSeedError(null);
+    if (!runId) {
+      if (isCurrentRefresh()) {
+        setSeedEvents([]);
+      }
+      return [];
+    }
+    try {
+      const persisted = await apiClient.getRunEvents(runId);
+      const refreshed = persisted.map((e) => ({
+        sequence: e.sequence,
+        type: e.type as EventType,
+        payload: e.payload,
+      }));
+      if (isCurrentRefresh()) {
+        setSeedEvents(refreshed);
+        setSeedError(null);
+      }
+      return refreshed;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'The saved event history could not be loaded.';
+      if (isCurrentRefresh()) setSeedError(message);
+      throw err;
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    void refresh().catch(() => {});
+  }, [refresh]);
 
   const events = useMemo<RunStreamEvent[]>(
     () => mergeRunEvents(seedEvents, liveEvents),
     [seedEvents, liveEvents],
   );
 
-  return { events, liveEvents, seedEvents, status: streamStatus, error, droppedEventCount, reconnect };
+  return { events, liveEvents, seedEvents, status: streamStatus, error, seedError, droppedEventCount, reconnect, refresh };
 }

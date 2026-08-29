@@ -10,6 +10,7 @@ import remarkGfm from 'remark-gfm';
 import { BotRegular } from '@fluentui/react-icons';
 import { memo } from 'react';
 import { defaultSchema } from 'rehype-sanitize';
+import { isOutcomeSpecMessagePrefix, parseOutcomeSpecMessage } from '../timeline/coordinatorPlanFilter';
 import { formatAbsoluteTime, formatRelativeTime } from '../utils/relativeTime';
 import type { ComponentProps } from 'react';
 // SECURITY: sanitize with the default schema (no raw HTML passthrough).
@@ -177,28 +178,6 @@ const useStyles = makeStyles({
 /** Characters shown before the "show more" truncation affordance (Y-1). */
 const DISPLAY_MAX = 50_000;
 
-function formatOutcomeSpecJson(content: string): string | null {
-  const trimmed = content.trim();
-  if (!trimmed.startsWith('{') || !/"desired_outcome"|"desiredOutcome"/.test(trimmed)) return null;
-  try {
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    const desiredOutcome = parsed['desired_outcome'] ?? parsed['desiredOutcome'];
-    const scope = parsed['scope'];
-    const sections = [
-      '### Outcome plan',
-      typeof desiredOutcome === 'string' && desiredOutcome.trim()
-        ? `**Desired outcome:**\n\n${desiredOutcome.trim()}`
-        : null,
-      typeof scope === 'string' && scope.trim()
-        ? `**Scope:**\n\n${scope.trim()}`
-        : null,
-    ].filter(Boolean);
-    return sections.length > 1 ? sections.join('\n\n') : null;
-  } catch {
-    return null;
-  }
-}
-
 // SECURITY: custom link renderer forces safe external-link attributes.
 // This prevents target="_blank" without rel="noopener noreferrer" (reverse tabnapping).
 function SafeLink({ href, children }: ComponentProps<'a'>) {
@@ -235,12 +214,9 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
   // Suppress render for empty settled messages (§7.3)
   if (!streaming && content.trim() === '') return null;
 
-  // The coordinator's spec-drafting turn streams its final answer as a raw JSON object
-  // ({"desired_outcome": …, "scope": …, …}). That JSON is already surfaced structurally in the
-  // Outcome plan panel, so rendering the raw blob in the timeline is redundant and ugly. Replace it
-  // with a compact pointer. Detect by the leading brace + the spec's signature key.
-  const looksLikeSpecDraft = /^\s*\{/.test(content) && /"desired_outcome"\s*:/.test(content);
-  if (looksLikeSpecDraft) {
+  // Only show a completed-plan pointer once a parseable spec is present. While the same JSON is
+  // token-streaming, preserve a meaningful activity signal instead of exposing its partial syntax.
+  if (parseOutcomeSpecMessage(content)) {
     return (
       <div className={styles.wrapper} aria-label="Agent message">
         <span className={styles.icon} aria-hidden="true"><BotRegular style={{ fontSize: 20 }} /></span>
@@ -250,10 +226,19 @@ export const AgentMessageBubble = memo(function AgentMessageBubble({
       </div>
     );
   }
+  if (streaming && isOutcomeSpecMessagePrefix(content)) {
+    return (
+      <div className={styles.wrapper} aria-label="Agent message">
+        <span className={styles.icon} aria-hidden="true"><BotRegular style={{ fontSize: 20 }} /></span>
+        <Text as="span" style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic', paddingTop: tokens.spacingVerticalXXS }}>
+          Drafting outcome plan…
+        </Text>
+      </div>
+    );
+  }
 
   const isTruncated = content.length >= DISPLAY_MAX;
-  const formattedOutcomeSpec = !showCursor ? formatOutcomeSpecJson(content) : null;
-  const displayContent = formattedOutcomeSpec ?? (isTruncated ? content.slice(0, DISPLAY_MAX) : content);
+  const displayContent = isTruncated ? content.slice(0, DISPLAY_MAX) : content;
 
   return (
     // aria-label on wrapper; aria-live scoped to inner text only when streaming (§6.3, fix #6)

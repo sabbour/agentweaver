@@ -306,6 +306,42 @@ describe('OutcomePlanPanel terminal run after a plan was already drafted', () =>
   });
 });
 
+describe('OutcomePlanPanel external clarification state', () => {
+  it('keeps the existing plan visible and actions disabled until the parent settles a sent clarification', async () => {
+    const { rerender } = render(
+      <Wrapper>
+        <OutcomePlanPanel
+          runId="run-1"
+          events={[]}
+          streamStatus="streaming"
+          clarificationSent
+        />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText('Ship the feature')).toBeTruthy();
+    expect(screen.getByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: /confirm plan/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /clarify plan/i }) as HTMLButtonElement).disabled).toBe(true);
+
+    rerender(
+      <Wrapper>
+        <OutcomePlanPanel
+          runId="run-1"
+          events={[]}
+          streamStatus="streaming"
+          clarificationSent={false}
+        />
+      </Wrapper>,
+    );
+
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: /confirm plan/i }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(screen.queryByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeNull();
+  });
+});
+
 describe('OutcomePlanPanel terminal REST status precedence', () => {
   it('shows declined from the REST snapshot even when the latest SSE spec event is awaiting confirmation', async () => {
     vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue({ ...awaitingSpec, status: 'declined' });
