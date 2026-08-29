@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
+using System.Buffers;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Agentweaver.SandboxFs;
 using Microsoft.Extensions.Logging;
 
@@ -25,6 +27,10 @@ namespace Agentweaver.SandboxExec.PodExec;
 /// </summary>
 public sealed class PodExecServer : IAsyncDisposable
 {
+    private const int DefaultMaxConcurrentConnections = 16;
+    private const int DefaultMaxRequestFrameBytes = 128 * 1024;
+    private static readonly TimeSpan DefaultInitialRequestTimeout = TimeSpan.FromSeconds(5);
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly string _socketPath;
     private readonly string _tokenPath;
     private readonly PodExecTransport _transport;
@@ -34,26 +40,64 @@ public sealed class PodExecServer : IAsyncDisposable
     private readonly ConcurrentDictionary<string, SpawnedSession> _sessions =
         new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly SemaphoreSlim _connectionSlots;
+    private readonly ConcurrentDictionary<long, Task> _connections = new();
+    private readonly int _maxConcurrentConnections;
+    private readonly TimeSpan _initialRequestTimeout;
+    private readonly int _maxRequestFrameBytes;
     private Socket? _listener;
     private string _token = string.Empty;
+    private long _nextConnectionId;
+    private int _disposed;
 
     public PodExecServer(
         string? socketPath = null,
         ILogger? logger = null,
         PodExecTransport? transport = null,
         int? tcpPort = null)
+        : this(
+            socketPath,
+            logger,
+            transport,
+            tcpPort,
+            DefaultMaxConcurrentConnections,
+            DefaultInitialRequestTimeout,
+            DefaultMaxRequestFrameBytes)
     {
+    }
+
+    internal PodExecServer(
+        string? socketPath,
+        ILogger? logger,
+        PodExecTransport? transport,
+        int? tcpPort,
+        int maxConcurrentConnections,
+        TimeSpan initialRequestTimeout,
+        int maxRequestFrameBytes)
+    {
+        if (maxConcurrentConnections <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxConcurrentConnections));
+        if (initialRequestTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(initialRequestTimeout));
+        if (maxRequestFrameBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxRequestFrameBytes));
+
         _socketPath = PodExecEndpoint.ResolveSocketPath(socketPath);
         _tokenPath = PodExecEndpoint.ResolveTokenPath(_socketPath);
         _transport = transport ?? PodExecEndpoint.ResolveTransport();
         _tcpPort = PodExecEndpoint.ResolveTcpPort(tcpPort);
         _logger = logger;
         _executor = new KataBwrapExecutor(logger);
+        _connectionSlots = new SemaphoreSlim(maxConcurrentConnections, maxConcurrentConnections);
+        _maxConcurrentConnections = maxConcurrentConnections;
+        _initialRequestTimeout = initialRequestTimeout;
+        _maxRequestFrameBytes = maxRequestFrameBytes;
     }
 
     public string SocketPath => _socketPath;
     public PodExecTransport Transport => _transport;
     public int TcpPort => _tcpPort;
+    internal int ActiveConnectionCount => _connections.Count;
 
     /// <summary>
     /// Verifies the sandbox boundary this container is responsible for, publishes the token, and
@@ -95,24 +139,80 @@ public sealed class PodExecServer : IAsyncDisposable
         var listener = _listener
             ?? throw new InvalidOperationException("Start() must be called before RunAsync().");
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _shutdown.Token);
-        while (!linked.Token.IsCancellationRequested)
+        try
         {
-            Socket connection;
-            try
+            while (!linked.Token.IsCancellationRequested)
             {
-                connection = await listener.AcceptAsync(linked.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch (SocketException ex)
-            {
-                _logger?.LogWarning(ex, "Executor sidecar accept failed.");
-                continue;
-            }
+                Socket connection;
+                try
+                {
+                    connection = await listener.AcceptAsync(linked.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException) when (linked.Token.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (SocketException ex)
+                {
+                    if (linked.Token.IsCancellationRequested)
+                        break;
+                    _logger?.LogWarning(ex, "Executor sidecar accept failed.");
+                    continue;
+                }
 
-            _ = Task.Run(() => HandleConnectionAsync(connection, linked.Token), CancellationToken.None);
+                if (linked.Token.IsCancellationRequested)
+                {
+                    connection.Dispose();
+                    break;
+                }
+
+                if (!_connectionSlots.Wait(0))
+                {
+                    _logger?.LogWarning(
+                        "Executor sidecar rejected a connection because all {ConnectionLimit} connection slots are occupied.",
+                        _maxConcurrentConnections);
+                    connection.Dispose();
+                    continue;
+                }
+
+                var connectionId = Interlocked.Increment(ref _nextConnectionId);
+                var startGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var task = HandleAcceptedConnectionAsync(connectionId, connection, startGate.Task, linked.Token);
+                if (!_connections.TryAdd(connectionId, task))
+                {
+                    connection.Dispose();
+                    _connectionSlots.Release();
+                    startGate.SetCanceled();
+                    throw new InvalidOperationException("Executor sidecar could not track an accepted connection.");
+                }
+                startGate.SetResult();
+            }
+        }
+        finally
+        {
+            await DrainConnectionsAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async Task HandleAcceptedConnectionAsync(
+        long connectionId,
+        Socket connection,
+        Task startGate,
+        CancellationToken ct)
+    {
+        try
+        {
+            await startGate.ConfigureAwait(false);
+            await HandleConnectionAsync(connection, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _connections.TryRemove(connectionId, out _);
+            _connectionSlots.Release();
         }
     }
 
@@ -120,7 +220,7 @@ public sealed class PodExecServer : IAsyncDisposable
     {
         using var stream = new NetworkStream(connection, ownsSocket: true);
         using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
-        var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true)
+        using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true)
         {
             AutoFlush = true,
         };
@@ -128,7 +228,7 @@ public sealed class PodExecServer : IAsyncDisposable
         PodExecRequest? request = null;
         try
         {
-            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+            var line = await ReadInitialRequestFrameAsync(stream, ct).ConfigureAwait(false);
             if (line is null)
                 return;
             request = PodExecJson.Deserialize<PodExecRequest>(line);
@@ -182,6 +282,30 @@ public sealed class PodExecServer : IAsyncDisposable
                     break;
             }
         }
+        catch (InitialRequestTimeoutException)
+        {
+            _logger?.LogWarning(
+                "Executor sidecar closed a connection that did not send a complete initial request within {Timeout}.",
+                _initialRequestTimeout);
+        }
+        catch (RequestFrameTooLargeException)
+        {
+            _logger?.LogWarning(
+                "Executor sidecar rejected an initial request exceeding {MaxRequestFrameBytes} bytes.",
+                _maxRequestFrameBytes);
+            await TryWriteAsync(writer, Error("Executor request frame exceeds the permitted size."))
+                .ConfigureAwait(false);
+        }
+        catch (JsonException ex)
+        {
+            _logger?.LogWarning(ex, "Executor sidecar rejected a malformed request.");
+            await TryWriteAsync(writer, Error("Malformed executor request.")).ConfigureAwait(false);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            _logger?.LogWarning(ex, "Executor sidecar rejected a request with invalid UTF-8.");
+            await TryWriteAsync(writer, Error("Malformed executor request.")).ConfigureAwait(false);
+        }
         catch (SandboxViolationException ex)
         {
             _logger?.LogWarning(ex, "Executor sidecar denied a request (op={Op}).", request?.Op);
@@ -204,9 +328,62 @@ public sealed class PodExecServer : IAsyncDisposable
             _logger?.LogError(ex, "Executor sidecar failed a request (op={Op}).", request?.Op);
             await TryWriteAsync(writer, Error(ex.Message)).ConfigureAwait(false);
         }
+    }
+
+    private async Task<string?> ReadInitialRequestFrameAsync(Stream stream, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(_initialRequestTimeout);
+        try
+        {
+            return await ReadRequestFrameAsync(stream, deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            throw new InitialRequestTimeoutException();
+        }
+    }
+
+    private async Task<string?> ReadRequestFrameAsync(Stream stream, CancellationToken ct)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(_maxRequestFrameBytes);
+        try
+        {
+            var length = 0;
+            var current = new byte[1];
+            while (true)
+            {
+                var read = await stream.ReadAsync(current.AsMemory(), ct).ConfigureAwait(false);
+                if (read == 0)
+                    return length == 0 ? null : StrictUtf8.GetString(buffer, 0, length);
+                if (current[0] == (byte)'\n')
+                    return StrictUtf8.GetString(buffer, 0, length);
+                if (length == _maxRequestFrameBytes)
+                    throw new RequestFrameTooLargeException();
+                buffer[length++] = current[0];
+            }
+        }
         finally
         {
-            writer.Dispose();
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
+    }
+
+    private async Task DrainConnectionsAsync()
+    {
+        while (!_connections.IsEmpty)
+        {
+            var connections = _connections.Values.ToArray();
+            if (connections.Length == 0)
+                continue;
+            try
+            {
+                await Task.WhenAll(connections).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Executor sidecar connection handler failed during shutdown.");
+            }
         }
     }
 
@@ -666,7 +843,12 @@ public sealed class PodExecServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         await _shutdown.CancelAsync().ConfigureAwait(false);
+        _listener?.Dispose();
+        await DrainConnectionsAsync().ConfigureAwait(false);
         foreach (var session in _sessions.Values)
             await TerminateAsync(session, TimeSpan.FromSeconds(2)).ConfigureAwait(false);
         _sessions.Clear();
@@ -676,7 +858,7 @@ public sealed class PodExecServer : IAsyncDisposable
         // explicit release here (in addition to the stale-workspace reap that already runs on the
         // hot path) is the only place a graceful shutdown gets to free every slot deterministically.
         _executor.Dispose();
-        _listener?.Dispose();
+        _connectionSlots.Dispose();
         _shutdown.Dispose();
         try
         {
@@ -694,6 +876,14 @@ public sealed class PodExecServer : IAsyncDisposable
     private sealed record SpawnedSession(string Handle, KataBwrapExecutor.SupervisedProcess Supervised)
     {
         public int ProcessGroupId => Supervised.WorkloadProcessGroupId;
+    }
+
+    private sealed class InitialRequestTimeoutException : Exception
+    {
+    }
+
+    private sealed class RequestFrameTooLargeException : Exception
+    {
     }
 }
 

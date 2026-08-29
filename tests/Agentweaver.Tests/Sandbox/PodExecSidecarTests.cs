@@ -150,6 +150,113 @@ public sealed class PodExecSidecarTests
     }
 
     /// <summary>
+    /// A network-enabled workload shares the executor sidecar's network namespace and can therefore
+    /// connect to its loopback listener. Partial frames must consume only the fixed pre-authentication
+    /// budget, expire quickly, and never keep a token-authenticated AgentHost request from completing.
+    /// </summary>
+    [SidecarLinuxFact]
+    public async Task TcpLoopback_IncompletePreAuthenticationFramesExpireAndReleaseConnectionSlots()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        await using var harness = PodExecTestHarness.StartServer(
+            NewRoot(),
+            PodExecTransport.LoopbackTcp,
+            FindFreeTcpPort(),
+            maxConcurrentConnections: 2,
+            initialRequestTimeout: TimeSpan.FromMilliseconds(200));
+        var incompleteClients = new[]
+        {
+            await ConnectIncompleteTcpClientAsync(harness.TcpPort),
+            await ConnectIncompleteTcpClientAsync(harness.TcpPort),
+        };
+
+        try
+        {
+            await Task.WhenAll(incompleteClients.Select(WaitForPeerCloseAsync));
+            await WaitUntilAsync(
+                () => harness.ActiveConnectionCount == 0,
+                TimeSpan.FromSeconds(2),
+                "timed-out clients should be fully released before the authenticated request connects");
+
+            var token = await File.ReadAllTextAsync(PodExecEndpoint.ResolveTokenPath(harness.SocketPath));
+            var frame = await SendRawAsync(
+                harness.SocketPath,
+                new PodExecRequest { Op = PodExecOps.Probe, Token = token },
+                harness.Transport,
+                harness.TcpPort);
+
+            frame.Type.Should().Be(PodExecFrameTypes.Probe,
+                "timed-out pre-authentication clients must release their bounded connection slots");
+        }
+        finally
+        {
+            foreach (var client in incompleteClients)
+                client.Dispose();
+        }
+    }
+
+    [SidecarLinuxFact]
+    public async Task TcpLoopback_MalformedAndOversizePreAuthenticationFramesDoNotBlockAuthenticatedRequests()
+    {
+        if (!KataRuntimeGate.Available())
+            return;
+
+        await using var harness = PodExecTestHarness.StartServer(
+            NewRoot(),
+            PodExecTransport.LoopbackTcp,
+            FindFreeTcpPort(),
+            maxConcurrentConnections: 1,
+            maxRequestFrameBytes: 64);
+        var malformed = await SendRawLineAsync(
+            harness.SocketPath,
+            "{",
+            harness.Transport,
+            harness.TcpPort);
+        malformed.Type.Should().Be(PodExecFrameTypes.Error);
+        malformed.Message.Should().Contain("Malformed");
+        await WaitUntilAsync(
+            () => harness.ActiveConnectionCount == 0,
+            TimeSpan.FromSeconds(2),
+            "a malformed frame should be fully released before the next request connects");
+
+        using var oversizedClient = PodExecTransportConnection.CreateClient(harness.Transport);
+        await PodExecTransportConnection.ConnectAsync(
+            oversizedClient,
+            harness.Transport,
+            harness.SocketPath,
+            harness.TcpPort,
+            CancellationToken.None);
+        await oversizedClient.SendAsync(
+            Encoding.UTF8.GetBytes(new string('x', 65)),
+            SocketFlags.None);
+
+        await using (var oversizedStream = new NetworkStream(oversizedClient, ownsSocket: false))
+        using (var reader = new StreamReader(oversizedStream, Encoding.UTF8, leaveOpen: true))
+        {
+            var line = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            var rejected = PodExecJson.Deserialize<PodExecFrame>(line ?? "{}")!;
+            rejected.Type.Should().Be(PodExecFrameTypes.Error);
+            rejected.Message.Should().Contain("frame");
+        }
+        await WaitUntilAsync(
+            () => harness.ActiveConnectionCount == 0,
+            TimeSpan.FromSeconds(2),
+            "an oversized frame should be fully released before the authenticated request connects");
+
+        var token = await File.ReadAllTextAsync(PodExecEndpoint.ResolveTokenPath(harness.SocketPath));
+        var frame = await SendRawAsync(
+            harness.SocketPath,
+            new PodExecRequest { Op = PodExecOps.Probe, Token = token },
+            harness.Transport,
+            harness.TcpPort);
+
+        frame.Type.Should().Be(PodExecFrameTypes.Probe,
+            "a rejected oversized request must not retain the sole connection slot");
+    }
+
+    /// <summary>
     /// The probe is the deployment's fail-closed gate. In-process the caller shares the server's PID
     /// namespace, which is precisely the misconfiguration (single container, or
     /// <c>shareProcessNamespace: true</c>) the probe must refuse.
@@ -643,15 +750,65 @@ public sealed class PodExecSidecarTests
         PodExecRequest request,
         PodExecTransport transport = PodExecTransport.UnixDomainSocket,
         int tcpPort = PodExecEndpoint.DefaultTcpPort)
+        => await SendRawLineAsync(
+            socketPath,
+            PodExecJson.Serialize(request),
+            transport,
+            tcpPort);
+
+    private static async Task<PodExecFrame> SendRawLineAsync(
+        string socketPath,
+        string requestLine,
+        PodExecTransport transport,
+        int tcpPort)
     {
         using var socket = PodExecTransportConnection.CreateClient(transport);
         await PodExecTransportConnection.ConnectAsync(socket, transport, socketPath, tcpPort, CancellationToken.None);
         await using var stream = new NetworkStream(socket, ownsSocket: false);
         using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
-        await writer.WriteLineAsync(PodExecJson.Serialize(request));
+        await writer.WriteLineAsync(requestLine);
         var line = await reader.ReadLineAsync();
         return PodExecJson.Deserialize<PodExecFrame>(line ?? "{}")!;
+    }
+
+    private static async Task<Socket> ConnectIncompleteTcpClientAsync(int tcpPort)
+    {
+        var socket = PodExecTransportConnection.CreateClient(PodExecTransport.LoopbackTcp);
+        try
+        {
+            await PodExecTransportConnection.ConnectAsync(
+                socket,
+                PodExecTransport.LoopbackTcp,
+                "/unused",
+                tcpPort,
+                CancellationToken.None);
+            await socket.SendAsync(Encoding.UTF8.GetBytes("{"), SocketFlags.None);
+            return socket;
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task WaitForPeerCloseAsync(Socket socket)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var received = await socket.ReceiveAsync(new byte[1], SocketFlags.None, timeout.Token);
+        received.Should().Be(0, "an incomplete frame must be closed when the initial request deadline expires");
+    }
+
+    private static async Task WaitUntilAsync(
+        Func<bool> condition,
+        TimeSpan timeout,
+        string because)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition() && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+        condition().Should().BeTrue(because);
     }
 
     private static string NewRoot()
