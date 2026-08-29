@@ -1,5 +1,6 @@
 import userEvent from '@testing-library/user-event';
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ArtifactBrowser, FilesTabPanel } from '../components/ArtifactBrowser';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
@@ -74,6 +75,7 @@ afterEach(() => {
   // Explicit cleanup guarantees no DOM state leaks between tests,
   // regardless of whether vitest auto-cleanup is active.
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -96,6 +98,25 @@ describe('ArtifactBrowser', () => {
     await waitFor(() => {
       expect(screen.getByText('No changes')).toBeDefined();
     });
+  });
+
+  it('backs off failing server file-list retries while preserving the visible error', async () => {
+    vi.useFakeTimers();
+    getRunFilesMock().mockRejectedValue(new ApiError(500, 'temporary server failure'));
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser runId="run-server-error" runStatus="in_progress" />
+      </Wrapper>,
+    );
+
+    await vi.waitFor(() => expect(getRunFilesMock()).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(getRunFilesMock()).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain('temporary server failure');
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(getRunFilesMock()).toHaveBeenCalledTimes(2);
   });
 
   // AB-01b: at a review gate, an empty file list means the run reached review with zero

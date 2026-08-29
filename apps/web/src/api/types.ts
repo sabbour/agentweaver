@@ -45,8 +45,10 @@ export interface SubmitRunResponse {
 
 export interface RetryRunResponse {
   run_id: string;
-  retried_from: string;
+  retried_from: string | null;
   status: string;
+  /** True when the failed coordinator resumed under the same run id. */
+  resumed?: boolean;
 }
 
 export interface RunDetail {
@@ -534,6 +536,15 @@ export interface UnattendedReadiness {
   reason_code: string;
   message: string;
   repo_app_installation_connected: boolean;
+}
+
+/**
+ * The safe, project-scoped view of the Copilot App binding. It deliberately
+ * excludes authorization transactions, provider permissions, and credentials.
+ */
+export interface ProjectCopilotConnection {
+  status: 'connected' | 'not_connected';
+  github_login: string | null;
 }
 
 

@@ -840,13 +840,24 @@ Response `201 Created`:
 { "run_id": "new-run-id", "retried_from": "old-run-id", "status": "in_progress" }
 ```
 
+When a failed coordinator can resume its existing recovery point, the response is instead
+`200 OK` and keeps the same run id:
+
+```json
+{ "run_id": "existing-run-id", "retried_from": null, "status": "in_progress", "resumed": true }
+```
+
+On an AgentHost deployment, the retry requires the project's explicitly connected, run-bound
+GitHub Copilot capability before pod creation. A missing connection returns `409 Conflict` with
+the standard `github_copilot_connection_required` action payload.
+
 ### GET /api/runs/{id}/workspace
 
 Returns a tree of all files in the run's worktree (folders + files). Files include `path`, `is_folder`, `status` (added/modified/deleted, null for unchanged), `added_lines`, `removed_lines`. Returns `404` for terminal runs whose worktrees have been removed (failed/merged/declined/merge_failed). Returns empty array for `pending`. Returns `409` while the worktree does not exist for an active run.
 
 ### GET /api/runs/{id}/files
 
-Flat list of changed files. Query param `filter`: `all` (committed + uncommitted), `committed`, `uncommitted`, `last-commit`. Returns `409` for non-terminal runs with no worktree.
+Flat list of changed files. Query param `filter`: `all` (committed + uncommitted), `committed`, `uncommitted`, `last-commit`. Returns an empty array while asynchronous worktree provisioning is incomplete. Coordinator runs always return an empty array here because they have no per-run worktree; use `GET /api/runs/{id}/assembly/files` for their collective output.
 
 ### GET /api/runs/{id}/files/{**path}
 
@@ -973,7 +984,7 @@ Response `201 Created`:
 }
 ```
 
-`message` and `tools_invoked` are `null` when no opening message was supplied. Errors: `429 Too Many Requests` with `{ "error": "operator_run_limit", "limit": 3 }` when the caller already has `MaxConcurrentRunsPerUser` (3) sessions in progress; other 4xx from `AssistantRunHttpException`; a model/provider failure maps to `401` (auth), `429` (rate limited), or `503` (other provider failure).
+`message` and `tools_invoked` are `null` when no opening message was supplied. On an AgentHost deployment, `project_id` is required and its GitHub Copilot App must be explicitly connected before the API creates a pod; a missing project returns `400` (`project_context_required`) and a missing connection returns `409 Conflict` with the standard redacted `github_copilot_connection_required` action payload. Other errors: `429 Too Many Requests` with `{ "error": "operator_run_limit", "limit": 3 }` when the caller already has `MaxConcurrentRunsPerUser` (3) sessions in progress; other 4xx from `AssistantRunHttpException`; a model/provider failure maps to `401` (auth), `429` (rate limited), or `503` (other provider failure).
 
 ### GET /api/assistant/runs
 
@@ -1610,7 +1621,7 @@ Confirming the outcome spec advances the coordinator run through Phase 2: **conf
 
 ### GET /api/runs/{coordinatorRunId}/work-plan
 
-Returns the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Owner-scoped. Returns `null` (or `404`) before the coordinator has drafted a plan.
+Returns the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Owner-scoped. Before asynchronous decomposition persists the plan, returns `404 Not Found` with `error: "work_plan_not_found"`; for an existing coordinator run, clients should treat this as a not-ready state and retry on their normal bounded refresh cadence.
 
 Response `200 OK`:
 
@@ -1783,7 +1794,7 @@ Response `200 OK`:
 
 ### GET /api/runs/{id}/assembly/files
 
-Lists files in the coordinator assembly workspace. Owner-scoped.
+Lists files in the coordinator assembly workspace. Owner-scoped. Returns an empty array before assembly creates the integration branch; this is a normal planning/dispatch state.
 
 ### GET /api/runs/{id}/assembly/files/{**path}
 

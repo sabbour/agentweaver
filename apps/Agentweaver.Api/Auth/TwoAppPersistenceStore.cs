@@ -753,6 +753,17 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             await db.SaveChangesAsync(ct).ConfigureAwait(false); await tx.CommitAsync(ct).ConfigureAwait(false); return binding;
         }
 
+    internal Task<RepoAppCredentialReference?> GetActiveCopilotBindingAsync(
+        string projectId,
+        CancellationToken ct = default) =>
+        db.ProjectCopilotBindings.AsNoTracking()
+            .Where(x => x.ProjectId == projectId &&
+                        x.Status == GitHubBindingStatus.Active &&
+                        x.DeactivatedAt == null)
+            .Select(x => new RepoAppCredentialReference(
+                x.Id, x.CredentialReference, x.CredentialVersion, x.BoundAt))
+            .SingleOrDefaultAsync(ct);
+
     /// <summary>
     /// Resolves exactly one current, project-bound Repo App grant and Copilot binding, then
     /// atomically records their immutable identity tuple. Callers cannot supply any repository,

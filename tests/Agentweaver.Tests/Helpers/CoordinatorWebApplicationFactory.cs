@@ -41,8 +41,15 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
     private readonly string _worktreesPath;
     private readonly string _checkpointsPath;
     private readonly string _coordinatorCheckpointsPath;
+    private readonly string _agentExecutionMode;
 
-    public CoordinatorWebApplicationFactory()
+    public CoordinatorWebApplicationFactory() : this("in-api")
+    {
+    }
+
+    public static CoordinatorWebApplicationFactory CreatePodPerRun() => new("pod-per-run");
+
+    private CoordinatorWebApplicationFactory(string agentExecutionMode)
     {
         var unique = Guid.NewGuid().ToString("N");
         _dbPath                     = Path.Combine(Path.GetTempPath(), $"agentweaver-coord-{unique}.db");
@@ -50,6 +57,7 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
         _worktreesPath              = Path.Combine(Path.GetTempPath(), $"agentweaver-coord-wt-{unique}");
         _checkpointsPath            = Path.Combine(Path.GetTempPath(), $"agentweaver-coord-cp-{unique}");
         _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-coord-ccp-{unique}");
+        _agentExecutionMode         = agentExecutionMode;
 
         Directory.CreateDirectory(_workspaceRoot);
     }
@@ -119,6 +127,7 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
                 // (non-git workspaces + signed-out tokens cannot spawn real child runs). The
                 // dispatch-frontier logic is covered by SubtaskFrontierTests instead.
                 ["Coordinator:AutoDispatch"]              = "false",
+                ["Sandbox:AgentExecutionMode"]            = _agentExecutionMode,
             });
         });
 

@@ -79,7 +79,9 @@ vi.mock('../api/sse', () => ({
 }));
 
 vi.mock('../components/OutcomePlanPanel', () => ({
-  OutcomePlanPanel: () => null,
+  OutcomePlanPanel: ({ onClarifyPlan, clarificationSent = false }: { onClarifyPlan?: () => void; clarificationSent?: boolean }) => (
+    <button type="button" disabled={clarificationSent} onClick={onClarifyPlan}>Clarify plan</button>
+  ),
 }));
 
 import type { GraphDescriptor } from '../api/types';
@@ -139,6 +141,31 @@ describe('CoordinatorRunPage operator console redesign', () => {
       { from: 'planned:assembly-merge', to: 'planned:assembly-scribe', cardinality: 'direct', loopback: false },
     ],
   };
+
+  it('reports an in-place retry and restores the page to live coordinator state', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      status: 'failed',
+      coordinator_status: 'failed',
+    } as never);
+    vi.mocked(apiClient.retryRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      retried_from: null,
+      status: 'in_progress',
+      resumed: true,
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const retryButton = await screen.findByTestId('coordinator-retry-button', undefined, { timeout: 4000 });
+    await waitFor(() => expect((retryButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(retryButton);
+
+    await waitFor(() => expect(vi.mocked(apiClient.retryRun)).toHaveBeenCalledWith('coord-run-1'));
+    expect((await screen.findByTestId('coordinator-retry-status')).textContent).toContain(
+      'Retry resumed from the last failure point. Coordinator progress is reconnecting.',
+    );
+    expect((retryButton as HTMLButtonElement).disabled).toBe(true);
+  });
 
   it('surfaces a durable ready preview on Build & Test and human review', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
@@ -1084,6 +1111,203 @@ describe('CoordinatorRunPage operator console redesign', () => {
     // Coordinator-scoped messages steer the whole run, not a specific child.
     expect(vi.mocked(apiClient.steerCoordinator).mock.calls[0][1]).not.toHaveProperty('target_child_run_id');
     expect(await screen.findByText('Message sent to coordinator.')).toBeTruthy();
+  });
+
+  it('keeps an acknowledged outcome-plan clarification visibly revising until a newer plan event arrives', async () => {
+    const user = userEvent.setup();
+    const initialPlanEvent: RunStreamEvent = {
+      sequence: 10,
+      type: 'coordinator.outcome_spec',
+      payload: {
+        status: 'awaiting_confirmation',
+        goal: 'Ship the feature',
+        desiredOutcome: 'A working feature',
+        scope: 'Web only',
+      },
+    };
+    currentEvents = [initialPlanEvent];
+
+    const { rerender } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const outcomePlan = await screen.findByRole('treeitem', { name: /Select Outcome plan: Awaiting confirmation/i }, { timeout: 4000 });
+    fireEvent.click(outcomePlan);
+    const input = await screen.findByPlaceholderText('Message coordinator...');
+    await user.type(input, 'Clarify the outcome plan: support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
+    expect(await screen.findByRole('treeitem', { name: /Select Outcome plan: Changes requested — revising/i })).toBeTruthy();
+
+    currentEvents = [{
+      ...initialPlanEvent,
+      sequence: 11,
+      payload: {
+        ...initialPlanEvent.payload,
+        desiredOutcome: 'A working feature with a dry run',
+      },
+    }];
+    rerender(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    expect(await screen.findByRole('treeitem', { name: /Select Outcome plan: Awaiting confirmation/i })).toBeTruthy();
+  });
+
+  it('keeps the composer available after Goal-panel Clarify plan until the clarification is acknowledged', async () => {
+    const user = userEvent.setup();
+    currentEvents = [{
+      sequence: 10,
+      type: 'coordinator.outcome_spec',
+      payload: {
+        status: 'awaiting_confirmation',
+        goal: 'Ship the feature',
+        desiredOutcome: 'A working feature',
+      },
+    }];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await user.click(await screen.findByTestId('run-summary-chip-goal'));
+    await user.click(screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!);
+
+    const input = await screen.findByPlaceholderText('Message coordinator...');
+    expect(input).not.toHaveProperty('disabled', true);
+    await user.type(input, 'support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledWith('coord-run-1', {
+      kind: 'send',
+      instruction: 'Clarify the outcome plan: support a dry run.',
+    }));
+    expect(await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
+  });
+
+  it('keeps the re-opened Goal panel locked after an acknowledged clarification', async () => {
+    const user = userEvent.setup();
+    currentEvents = [{
+      sequence: 10,
+      type: 'coordinator.outcome_spec',
+      payload: {
+        status: 'awaiting_confirmation',
+        goal: 'Ship the feature',
+        desiredOutcome: 'A working feature',
+      },
+    }];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await user.click(await screen.findByTestId('run-summary-chip-goal'));
+    await user.click(screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!);
+    const input = await screen.findByPlaceholderText('Message coordinator...');
+    await user.type(input, 'Clarify the outcome plan: support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.');
+    await user.click(await screen.findByTestId('run-summary-chip-goal'));
+
+    const goalPanelClarify = screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!;
+    expect(goalPanelClarify).toHaveProperty('disabled', true);
+  });
+
+  it('does not re-lock a completed redraft when its SSE plan arrives before the HTTP acknowledgement', async () => {
+    const user = userEvent.setup();
+    const initialPlanEvent: RunStreamEvent = {
+      sequence: 10,
+      type: 'coordinator.outcome_spec',
+      payload: {
+        status: 'awaiting_confirmation',
+        goal: 'Ship the feature',
+        desiredOutcome: 'A working feature',
+      },
+    };
+    let acknowledge!: (value: { status: string }) => void;
+    vi.mocked(apiClient.steerCoordinator).mockImplementation(() => new Promise((resolve) => {
+      acknowledge = resolve;
+    }) as never);
+    currentEvents = [initialPlanEvent];
+
+    const { rerender } = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await user.click(await screen.findByTestId('run-summary-chip-goal'));
+    await user.click(screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!);
+    const input = await screen.findByPlaceholderText('Message coordinator...');
+    await user.type(input, 'Clarify the outcome plan: support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledTimes(1));
+
+    currentEvents = [{
+      ...initialPlanEvent,
+      sequence: 11,
+      payload: {
+        ...initialPlanEvent.payload,
+        desiredOutcome: 'A working feature with a dry run',
+      },
+    }];
+    rerender(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await act(async () => {
+      acknowledge({ status: 'applied' });
+      await Promise.resolve();
+    });
+
+    await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.');
+    expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', false);
+    expect(await screen.findByRole('treeitem', { name: /Select Outcome plan: Awaiting confirmation/i })).toBeTruthy();
+  });
+
+  it('keeps outcome-plan actions locked after 30 seconds while the server still reports drafting', async () => {
+    const user = userEvent.setup();
+    try {
+      currentEvents = [
+        {
+          sequence: 10,
+          type: 'coordinator.outcome_spec',
+          payload: {
+            status: 'awaiting_confirmation',
+            goal: 'Ship the feature',
+            desiredOutcome: 'A working feature',
+          },
+        },
+        {
+          sequence: 11,
+          type: 'coordinator.outcome_spec.drafting',
+          payload: { message: 'Re-drafting the outcome plan' },
+        },
+      ];
+      vi.mocked(apiClient.getRun).mockResolvedValue({
+        status: 'in_progress',
+        coordinator_status: 'drafting',
+        autopilot: false,
+        auto_approve_tools: false,
+      } as never);
+
+      render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+      await user.click(await screen.findByTestId('run-summary-chip-goal'));
+      await user.click(screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!);
+      const input = await screen.findByPlaceholderText('Message coordinator...');
+      await user.type(input, 'Clarify the outcome plan: support a dry run.');
+      vi.useFakeTimers();
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(30_001);
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByRole('treeitem', { name: /Select Outcome plan: Changes requested — revising/i })).toBeTruthy();
+      expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
+      expect(vi.mocked(apiClient.getRunEvents).mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('surfaces automation toggle failures instead of silently rolling back', async () => {

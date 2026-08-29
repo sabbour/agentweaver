@@ -155,6 +155,54 @@ public sealed class ProjectCopilotBindingServiceTests
             .Should().NotContain("ghu_").And.NotContain("refresh-secret").And.NotContain("code");
     }
 
+    [Fact]
+    public async Task ConnectionStatus_ReturnsTheVerifiedGitHubLoginWithoutCredentialMaterial()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var project = ProjectId.New();
+        await SeedProjectAsync(db, project);
+        roles.SetOwner(project, "owner");
+        var service = CreateService(
+            db,
+            roles,
+            new InMemorySecretStore(),
+            """{"access_token":"ghu_provider","refresh_token":"refresh-secret"}""");
+        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project);
+
+        (await service.CompleteAsync(
+            Human("owner"), HumanPrincipal(), project, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Should().Be(CopilotBindingOutcome.Success);
+
+        var connection = await service.GetConnectionAsync(Human("owner"), HumanPrincipal(), project);
+
+        connection.Outcome.Should().Be(CopilotBindingOutcome.Success);
+        connection.Connected.Should().BeTrue();
+        connection.GitHubLogin.Should().Be("octocat");
+        JsonSerializer.Serialize(connection).Should()
+            .NotContain("ghu_").And.NotContain("refresh-secret").And.NotContain("credential");
+        (await service.GetCallbackRedirectAsync(
+            CopilotBindingOutcome.Success, Query(begin.AuthorizationUrl!, "state")))
+            .Should().Be($"http://localhost:5173/projects/{project}/settings?section=unattended&copilot_app_auth=success");
+    }
+
+    [Fact]
+    public async Task ConnectionStatus_WithoutABindingReportsNotConnected()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var project = ProjectId.New();
+        await SeedProjectAsync(db, project);
+        roles.SetOwner(project, "owner");
+        var service = CreateService(db, roles, new InMemorySecretStore());
+
+        var connection = await service.GetConnectionAsync(Human("owner"), HumanPrincipal(), project);
+
+        connection.Outcome.Should().Be(CopilotBindingOutcome.Success);
+        connection.Connected.Should().BeFalse();
+        connection.GitHubLogin.Should().BeNull();
+    }
+
     private static ProjectCopilotBindingService CreateService(MemoryDbContext db, MutableRoles roles, ISecretStore secrets, string? provider = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -207,9 +255,13 @@ public sealed class ProjectCopilotBindingServiceTests
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
                 Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent(request.RequestUri!.AbsolutePath.StartsWith("/apps/", StringComparison.Ordinal)
-                        ? """{"permissions":{"metadata":"read"}}"""
-                        : body),
+                    Content = new StringContent(request.RequestUri!.AbsolutePath switch
+                    {
+                        var path when path.StartsWith("/apps/", StringComparison.Ordinal) =>
+                            """{"permissions":{"metadata":"read"}}""",
+                        "/user" => """{"login":"octocat"}""",
+                        _ => body,
+                    }),
                 });
         }
     }

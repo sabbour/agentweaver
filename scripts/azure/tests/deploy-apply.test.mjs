@@ -54,7 +54,13 @@ const CFG = {
   APPINSIGHTS_WORKSPACE_ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 };
 
-function makeFakes({ hasSandboxCrd = true, workerRolloutFails = false, ddcExists = true, keyvaultFound = true } = {}) {
+function makeFakes({
+  hasSandboxCrd = true,
+  workerRolloutFails = false,
+  ddcExists = true,
+  keyvaultFound = true,
+  domain = "*.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io",
+} = {}) {
   const calls = [];
   const writtenFiles = new Map();
 
@@ -92,7 +98,7 @@ function makeFakes({ hasSandboxCrd = true, workerRolloutFails = false, ddcExists
       return { stdout: "", stderr: "", code: 0 }; // insights already provisioned
     }
     if (cmd === "kubectl" && args.includes("jsonpath={.status.domain}")) {
-      return { stdout: "*.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io", stderr: "", code: 0 };
+      return { stdout: domain, stderr: "", code: 0 };
     }
     if (cmd === "kubectl" && args[0] === "get" && args[1] === "defaultdomaincertificate") {
       return ddcExists ? { stdout: "", stderr: "", code: 0 } : { stdout: "", stderr: "", code: 1 };
@@ -218,6 +224,35 @@ test("run(): throws loudly (before applying any manifest) when KEYVAULT_NAME doe
   );
   const applied = appliedFilenames(calls);
   assert.equal(applied.length, 0, "must not apply any manifest before the Key Vault existence check passes");
+});
+
+test("run(): rejects an empty managed domain before rendering or applying manifests", async () => {
+  const { calls, writtenFiles, execRun, execCapture, log, az, fsImpl } = makeFakes({ domain: "" });
+  await assert.rejects(
+    () => run(CFG, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT }),
+    /DefaultDomainCertificate status\.domain must be a DNS hostname/,
+  );
+  assert.equal(appliedFilenames(calls).length, 0, "must not apply manifests when the managed domain is absent");
+  assert.equal(
+    calls.filter((c) => c.type === "capture" && c.cmd === "kubectl" && c.args[0] === "kustomize").length,
+    0,
+    "must not render manifests when the managed domain is absent",
+  );
+  assert.equal(writtenFiles.size, 0, "must not write rendered manifests when the managed domain is absent");
+});
+
+test("run(): accepts a valid wildcard managed domain and renders its public hostname", async () => {
+  const domain = "*.valid-zone.westus2.staging.aksapp.io";
+  const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes({ domain });
+  const result = await run(CFG, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT });
+
+  assert.equal(result.HOST, "agentweaver.valid-zone.westus2.staging.aksapp.io");
+  assert.equal(result.ZONE_SUFFIX, "valid-zone.westus2.staging.aksapp.io");
+  assert.equal(
+    calls.filter((c) => c.type === "capture" && c.cmd === "kubectl" && c.args[0] === "kustomize").length,
+    1,
+    "a valid managed domain must proceed to manifest rendering",
+  );
 });
 
 test("run(): applied manifests carry real kustomize-resolved values, not the committed overlay's placeholders", async () => {

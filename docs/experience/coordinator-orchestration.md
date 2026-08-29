@@ -323,7 +323,7 @@ The orchestration detail page is the main control room. It combines the confirma
 
 ### Header and goal
 
-The page title is **Orchestration**. It shows a short id in the breadcrumb, live connection spinner when the stream is connecting or streaming, and a **Retry** action for retryable failed or merge-failed coordinator runs. If the run is a retry, the header links back to the run it retried from. The original goal appears as **Goal:** once the `coordinator.started` event is available.
+The page title is **Orchestration**. It shows a short id in the breadcrumb, live connection spinner when the stream is connecting or streaming, and a **Retry** action for retryable failed or merge-failed coordinator runs. Retry immediately reports that it is reconnecting to coordinator progress. A retry that resumes the existing coordinator remains on the same page and refreshes its live state; a retry that starts a linked run navigates to that new run. A failure is displayed and leaves the action available when the run remains retryable. If the run is a retry, the header links back to the run it retried from. The original goal appears as **Goal:** once the `coordinator.started` event is available.
 
 ### Coordinator Graph
 

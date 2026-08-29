@@ -59,11 +59,9 @@ export interface CoordinatorRunModel {
  * copies coordinator reducer/gate wiring.
  *
  * @param runId  run to bind to ('' disables the stream).
- * @param runStatus  lifecycle status, used only to decide whether to seed history
- *   for a parked/terminal run (see useSeededRunStream / SEED_STATUSES).
  */
-export function useCoordinatorRunModel(runId: string, runStatus?: string): CoordinatorRunModel {
-  const { events, status, error, droppedEventCount, reconnect } = useSeededRunStream(runId, runStatus);
+export function useCoordinatorRunModel(runId: string): CoordinatorRunModel {
+  const { events, status, error, droppedEventCount, reconnect } = useSeededRunStream(runId);
   const { items, runOutcome } = useTimelineItems(events, runId, droppedEventCount);
   const isLiveRun = status === 'connecting' || status === 'streaming';
   const derivedRunStatus = deriveRunStatusFromEvents(events, isLiveRun);

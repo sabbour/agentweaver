@@ -41,6 +41,32 @@ describe('RunTimeline layout (overlap regression)', () => {
 });
 
 describe('RunTimeline default expansion', () => {
+  it('shows drafting status instead of partial outcome-spec JSON while preserving ordinary streaming text', () => {
+    const planning = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Drafting outcome plan' }),
+      evt(2, 'agent.message.delta', { messageId: 'm1', delta: '{"desired_out' }),
+    ]);
+    const prose = buildRunTimeline([
+      evt(1, 'agent.intent', { intent: 'Explaining the work' }),
+      evt(2, 'agent.message.delta', { messageId: 'm2', delta: 'Checking the requirements.' }),
+    ]);
+
+    const { rerender } = render(
+      <Wrapper>
+        <RunTimeline embedded steps={planning.steps} running />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Drafting outcome plan…')).toBeTruthy();
+    expect(screen.queryByText('{"desired_out')).toBeNull();
+
+    rerender(
+      <Wrapper>
+        <RunTimeline embedded steps={prose.steps} running />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Checking the requirements.')).toBeTruthy();
+  });
+
   it('keeps the step count label aligned with the rendered top-level steps after narration collapsing', () => {
     const model = buildRunTimeline([
       evt(1, 'agent.intent', { intent: "Now let's build the prototype with Vite + React" }),

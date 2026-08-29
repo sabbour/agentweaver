@@ -283,6 +283,18 @@ const ASSEMBLY_EVENT_PHASE: Record<string, { phase: OrchPhase; priority?: number
   'coordinator.assembly_declined': { phase: 'declined', priority: 3 },
 };
 
+function planningPhaseForEvent(type: string): OrchPhase | undefined {
+  switch (type) {
+    case 'coordinator.outcome_spec.confirmed':
+    case 'coordinator.work_plan':
+    case 'subtask.dispatched':
+    case 'subtask.running':
+      return 'dispatching';
+    default:
+      return undefined;
+  }
+}
+
 function normalizePhase(raw: string | undefined | null): OrchPhase {
   if (!raw) return 'unknown';
   const k = raw.toLowerCase().replace(/[^a-z]/g, '');
@@ -302,6 +314,32 @@ function normalizePhase(raw: string | undefined | null): OrchPhase {
   if (k.includes('declin')) return 'declined';
   if (k.includes('dispatch')) return 'dispatching';
   return 'unknown';
+}
+
+function outcomePlanRedraftIsActive(
+  events: RunStreamEvent[],
+  runStatus: RunStatus | undefined,
+  coordinatorStatus: string | undefined,
+): boolean {
+  if (isTerminalRunStatus(runStatus ? String(runStatus) : undefined)) return false;
+
+  if (coordinatorStatus) {
+    const normalizedStatus = coordinatorStatus.toLowerCase().replace(/[^a-z]/g, '');
+    if (normalizedStatus.includes('awaitingconfirmation')) return false;
+    const coordinatorPhase = normalizePhase(coordinatorStatus);
+    if (coordinatorPhase !== 'unknown') return coordinatorPhase === 'drafting_outcome';
+  }
+
+  let latestDraftingSequence = -1;
+  let latestOutcomeSequence = -1;
+  for (const event of events) {
+    if (event.type === 'coordinator.outcome_spec.drafting') {
+      latestDraftingSequence = Math.max(latestDraftingSequence, event.sequence);
+    } else if (event.type === 'coordinator.outcome_spec' || event.type === 'coordinator.outcome_spec.confirmed') {
+      latestOutcomeSequence = Math.max(latestOutcomeSequence, event.sequence);
+    }
+  }
+  return latestDraftingSequence > latestOutcomeSequence;
 }
 
 function readStr(p: Record<string, unknown>, keys: string[]): string | undefined {
@@ -583,6 +621,7 @@ function deriveOrchState(
   let latestOutcomeDrafting: RunStreamEvent | undefined;
   let latestOutcomeSupersedingSeq = -1;
   let latestAssemblyGateLabel = gateLabelForKind(undefined);
+  let latestPlanningTransition: { phase: OrchPhase; payload: Record<string, unknown>; type: string; sequence: number } | undefined;
   for (const evt of events) {
     if (evt.type === 'coordinator.outcome_spec.drafting') {
       if (!latestOutcomeDrafting || evt.sequence >= latestOutcomeDrafting.sequence) latestOutcomeDrafting = evt;
@@ -597,6 +636,15 @@ function deriveOrchState(
     }
     if (evt.type === 'coordinator.assembly_review_requested') {
       latestAssemblyGateLabel = gateLabelForKind(readGateKind(evt.payload));
+    }
+    const planningPhase = planningPhaseForEvent(evt.type);
+    if (planningPhase && (!latestPlanningTransition || evt.sequence >= latestPlanningTransition.sequence)) {
+      latestPlanningTransition = {
+        phase: planningPhase,
+        payload: evt.payload,
+        type: evt.type,
+        sequence: evt.sequence,
+      };
     }
     const mapped = ASSEMBLY_EVENT_PHASE[evt.type as string];
     if (!mapped) continue;
@@ -642,6 +690,14 @@ function deriveOrchState(
       ineligibleSubtasks: ineligibleSubtasks.length > 0 ? ineligibleSubtasks : undefined,
       sourceLabel: `${winner.type} event #${winner.sequence}`,
       updatedAt: readEventTimestamp(winner.payload),
+    };
+  }
+  if (latestPlanningTransition) {
+    return {
+      phase: latestPlanningTransition.phase,
+      reason: readStr(latestPlanningTransition.payload, ['message', 'reason', 'detail']),
+      sourceLabel: `${latestPlanningTransition.type} event #${latestPlanningTransition.sequence}`,
+      updatedAt: readEventTimestamp(latestPlanningTransition.payload),
     };
   }
   if (latestOutcomeDrafting && (latestOutcomeDrafting.sequence ?? -1) > latestOutcomeSupersedingSeq) {
@@ -2208,8 +2264,10 @@ export function CoordinatorRunPage() {
     droppedEventCount,
     status: streamStatus,
     error: streamError,
+    seedError,
     reconnect: reconnectStream,
-  } = useSeededRunStream(runId ?? '', runLevelStatus);
+    refresh: refreshStreamEvents,
+  } = useSeededRunStream(runId ?? '');
   const artifactsLiveUpdateKey = liveEvents[liveEvents.length - 1]?.sequence ?? liveEvents.length;
 
   // Topology graph orientation (dagre rank direction). LR = horizontal (default), TB = vertical.
@@ -2269,6 +2327,8 @@ export function CoordinatorRunPage() {
   // Retry state for the header button.
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [retryStatus, setRetryStatus] = useState<string | null>(null);
+  const [retryRefreshNonce, setRetryRefreshNonce] = useState(0);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
   const [stopConfirmationOpen, setStopConfirmationOpen] = useState(false);
@@ -2317,37 +2377,6 @@ export function CoordinatorRunPage() {
         if (cancelled) return;
         setGraphError(formatApiError(err, 'The saved run graph could not be loaded.'));
       });
-
-    // Fetch work plan + children for topology status seed. Skip for child runs —
-    // work-plan is a coordinator-only artifact and child runs will never have one.
-    void (async () => {
-      const runDetail = await apiClient.getRun(runId).catch((err) => {
-        if (!cancelled) setRunLoadError(formatApiError(err, 'The run could not be loaded.'));
-        return null;
-      });
-      if (cancelled) return;
-      if (runDetail) setRunLoadError(null);
-      if (runDetail?.parent_run_id != null) {
-        setIsChildRun(true);
-        return;
-      }
-      const [workPlan, children] = await Promise.all([
-        apiClient.getWorkPlan(runId).catch((err) => {
-          if (!(err instanceof ApiError && err.status === 404) && !cancelled) {
-            setWorkPlanError(formatApiError(err, 'The work plan could not be loaded.'));
-          }
-          return null;
-        }),
-        apiClient.getCoordinatorChildren(runId).catch(() => null),
-      ]);
-      if (cancelled) return;
-      if (workPlan) {
-        setWorkPlanError(null);
-        setNoWorkPlan(false);
-        setTopoSeed(seedTopologyFromWorkPlan(workPlan, children));
-        setWorkPlanData(workPlan);
-      }
-    })();
 
     return () => { cancelled = true; };
   }, [runId]);
@@ -2489,7 +2518,7 @@ export function CoordinatorRunPage() {
 
     void tick();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [runId, setRunLevelStatus]);
+  }, [retryRefreshNonce, runId, setRunLevelStatus]);
 
   // Goal is carried by the coordinator.started event.
   const goal = useMemo<string | undefined>(() => {
@@ -3154,11 +3183,114 @@ export function CoordinatorRunPage() {
   }, [inSpecAuthoring, liveRfNodes, displayEdges, assemblyNodeIds]);
 
   const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
+  const [outcomePlanClarificationReconcileEpoch, setOutcomePlanClarificationReconcileEpoch] = useState(0);
   const pendingApprovalCounts = useMemo(() => pendingApprovalsByRun(events, runId ?? ''), [events, runId]);
+  const outcomePlanClarificationBaseSequenceRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (latestOutcomePlanEvent) queueMicrotask(() => setOutcomePlanClarifying(false));
+    outcomePlanClarificationBaseSequenceRef.current = null;
+  }, [runId]);
+
+  useEffect(() => {
+    const sequence = latestOutcomePlanEvent?.sequence;
+    const baseSequence = outcomePlanClarificationBaseSequenceRef.current;
+    if (outcomePlanClarifying && sequence != null && baseSequence != null && sequence > baseSequence) {
+      outcomePlanClarificationBaseSequenceRef.current = null;
+      queueMicrotask(() => setOutcomePlanClarifying(false));
+    }
+  }, [latestOutcomePlanEvent?.sequence, outcomePlanClarifying]);
+
+  const handleOutcomePlanClarificationPendingChange = useCallback((
+    pending: boolean,
+    preSubmitPlanSequence?: number,
+  ) => {
+    if (!pending) {
+      outcomePlanClarificationBaseSequenceRef.current = null;
+      setOutcomePlanClarifying(false);
+      return;
+    }
+
+    // The coordinator can publish the replacement plan before the HTTP acknowledgement
+    // returns. Only arm the pending state when the plan that was submitted against is still
+    // current; otherwise a completed revision would be re-locked for the timeout window.
+    if (
+      preSubmitPlanSequence != null
+      && latestOutcomePlanEvent?.sequence != null
+      && latestOutcomePlanEvent.sequence > preSubmitPlanSequence
+    ) {
+      outcomePlanClarificationBaseSequenceRef.current = null;
+      setOutcomePlanClarifying(false);
+      return;
+    }
+
+    outcomePlanClarificationBaseSequenceRef.current = preSubmitPlanSequence ?? latestOutcomePlanEvent?.sequence ?? null;
+    setOutcomePlanClarifying(true);
   }, [latestOutcomePlanEvent]);
+
+  useEffect(() => {
+    if (!outcomePlanClarifying) return;
+    // A local acknowledgement means the clarification was accepted, not that drafting finished.
+    // Reconcile the live run plus persisted events before releasing the controls, then keep the
+    // bounded retry alive while the coordinator still reports an active redraft.
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      void (async () => {
+        const [detail, refreshedEvents] = await Promise.allSettled([
+          runId ? apiClient.getRun(runId) : Promise.resolve(undefined),
+          refreshStreamEvents(),
+        ]);
+        if (cancelled) return;
+
+        const refreshedDetail = detail.status === 'fulfilled' ? detail.value : undefined;
+        if (refreshedDetail) {
+          setRunLevelStatus(refreshedDetail.status);
+          setCoordStatusField(refreshedDetail.coordinator_status ?? undefined);
+          setCoordStatusReason(refreshedDetail.coordinator_status_reason ?? undefined);
+          setCoordinatorSteerable(
+            typeof refreshedDetail.coordinator_steerable === 'boolean'
+              ? refreshedDetail.coordinator_steerable
+              : undefined,
+          );
+        }
+        reconnectStream();
+
+        const reconciledEvents = refreshedEvents.status === 'fulfilled'
+          ? [...events, ...refreshedEvents.value]
+          : events;
+        const serverStillDrafting = outcomePlanRedraftIsActive(
+          reconciledEvents,
+          refreshedDetail?.status ?? runLevelStatus,
+          refreshedDetail?.coordinator_status ?? coordStatusField,
+        );
+        const clarificationBaseSequence = outcomePlanClarificationBaseSequenceRef.current;
+        const completedPlanObserved = clarificationBaseSequence != null
+          && reconciledEvents.some((event) =>
+            event.type === 'coordinator.outcome_spec'
+            && event.sequence > clarificationBaseSequence,
+          );
+        const reconciliationFailed = detail.status === 'rejected' || refreshedEvents.status === 'rejected';
+        if (serverStillDrafting || (reconciliationFailed && !completedPlanObserved)) {
+          setOutcomePlanClarificationReconcileEpoch((value) => value + 1);
+        } else {
+          setOutcomePlanClarifying(false);
+        }
+      })();
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    coordStatusField,
+    events,
+    outcomePlanClarificationReconcileEpoch,
+    outcomePlanClarifying,
+    reconnectStream,
+    refreshStreamEvents,
+    runId,
+    runLevelStatus,
+    setRunLevelStatus,
+  ]);
 
   const { sessionTree, sessionNodeIds, defaultSessionNodeId } = useMemo<{
     sessionTree: RunSessionTree[];
@@ -3454,7 +3586,6 @@ export function CoordinatorRunPage() {
   const topologyViewportApiRef = useRef<TopologyViewportApi | null>(null);
 
   const focusOutcomePlanComposer = useCallback(() => {
-    setOutcomePlanClarifying(true);
     setPanelNodeId('outcome-plan');
     setSessionPanelOpen(true);
     setComposerFocusSignal((value) => value + 1);
@@ -3627,15 +3758,25 @@ export function CoordinatorRunPage() {
     if (!runId || !projectId || retrying) return;
     setRetrying(true);
     setRetryError(null);
+    setRetryStatus('Retry requested. Reconnecting to coordinator progress…');
     setStopError(null);
     try {
       const res = await apiClient.retryRun(runId);
+      if (res.resumed) {
+        setRunLevelStatus('in_progress');
+        setRetryStatus('Retry resumed from the last failure point. Coordinator progress is reconnecting.');
+        setRetrying(false);
+        setRetryRefreshNonce((value) => value + 1);
+        reconnectStream();
+        return;
+      }
       navigate(`/projects/${projectId}/orchestrations/${res.run_id}`);
     } catch (err) {
       setRetryError(formatApiErrorMessage(err, 'Could not retry this run.'));
       setRetrying(false);
+      setRetryStatus(null);
     }
-  }, [runId, projectId, retrying, navigate]);
+  }, [reconnectStream, runId, projectId, retrying, navigate, setRunLevelStatus]);
 
   const handleStopRun = useCallback(async () => {
     if (!runId || stopping) return;
@@ -4371,8 +4512,13 @@ export function CoordinatorRunPage() {
         <span>Orchestration {shortId}</span>
       </nav>
 
-      {(retryError || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || streamError || droppedEventCount > 0 || streamStatus === 'error') && (
+      {(retryError || retryStatus || stopError || automationError || workPlanError || (runLoadError && (restDescriptor || events.length > 0)) || seedError || streamError || droppedEventCount > 0 || streamStatus === 'connecting' || streamStatus === 'error') && (
         <div className={styles.statusBannerStack} aria-live="polite">
+          {retryStatus && (
+            <MessageBar intent="info" data-testid="coordinator-retry-status">
+              <MessageBarBody>{retryStatus}</MessageBarBody>
+            </MessageBar>
+          )}
           {runLoadError && (restDescriptor || events.length > 0) && (
             <MessageBar intent="warning">
               <MessageBarBody>Run refresh failed: {runLoadError.message}{runLoadError.detail ? ` ${runLoadError.detail}` : ''}</MessageBarBody>
@@ -4389,10 +4535,19 @@ export function CoordinatorRunPage() {
               </MessageBarActions>
             </MessageBar>
           )}
-          {(streamError || streamStatus === 'error' || droppedEventCount > 0) && (
+          {seedError && (
+            <MessageBar intent="warning" data-testid="coordinator-history-health">
+              <MessageBarBody>Saved event history refresh failed: {seedError}. Live updates remain active when connected.</MessageBarBody>
+            </MessageBar>
+          )}
+          {(streamError || streamStatus === 'connecting' || streamStatus === 'error' || droppedEventCount > 0) && (
             <MessageBar intent="warning" data-testid="coordinator-stream-health">
               <MessageBarBody>
-                {streamError ? `Live stream issue: ${streamError}` : streamStatus === 'error' ? 'Live stream disconnected.' : 'Live stream dropped older events.'}
+                {streamStatus === 'connecting' && !streamError
+                  ? 'Connecting to live updates. Displayed run state may be briefly behind.'
+                  : streamError ? `Live stream issue: ${streamError}`
+                    : streamStatus === 'error' ? 'Live stream disconnected.'
+                      : 'Live stream dropped older events.'}
                 {droppedEventCount > 0 ? ` ${droppedEventCount} event${droppedEventCount === 1 ? '' : 's'} were dropped from the in-memory buffer; refresh for a complete replay.` : ' Refresh or reconnect if the graph looks stale.'}
               </MessageBarBody>
               <MessageBarActions>
@@ -4482,7 +4637,7 @@ export function CoordinatorRunPage() {
                 <Button
                   appearance={isRetryable ? 'secondary' : 'subtle'}
                   size="small"
-                  icon={<ArrowRepeatAllRegular />}
+                  icon={retrying ? <Spinner size="extra-tiny" /> : <ArrowRepeatAllRegular />}
                   disabled={!isRetryable || retrying}
                   onClick={() => void handleRetry()}
                   data-testid="coordinator-retry-button"
@@ -4634,7 +4789,7 @@ export function CoordinatorRunPage() {
                   onCoordinatorFollowUp={reconnectStream}
                   coordinatorActive={coordActive}
                   composerFocusSignal={composerFocusSignal}
-                  onOutcomePlanClarify={() => setOutcomePlanClarifying(true)}
+                  onOutcomePlanClarificationPendingChange={handleOutcomePlanClarificationPendingChange}
                   artifactAdapter={coordAdapter}
                   runChips={runSummaryChips}
                   workPlanTopologyThumbnail={renderTopologyThumbnail('workplan')}
@@ -4684,6 +4839,7 @@ export function CoordinatorRunPage() {
             onCollapse={() => setPlanPanelOpen(false)}
             onReconnect={reconnectStream}
             onClarifyPlan={() => { setPlanPanelOpen(false); focusOutcomePlanComposer(); }}
+            clarificationSent={outcomePlanClarifying}
             onFooterChange={setPlanFooter}
           />
         </SlidePanel>

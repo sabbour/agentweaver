@@ -425,6 +425,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
   const statusMeta = STATUS_META[status] ?? STATUS_META.drafting;
   const awaiting = status === 'awaiting_confirmation';
   const runInterrupted = actionError?.includes('no longer active') ?? false;
+  const revisionPending = revising || clarificationSent;
 
   const hasContent = spec != null && (spec.goal || spec.desiredOutcome || toLines(spec.scope).length > 0 || toLines(spec.assumptions).length > 0);
   const failedBeforeDraft = !hasContent && !revising && normalizedRunStatus !== '' && RUN_FAILURE_STATUSES.has(normalizedRunStatus);
@@ -505,7 +506,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
       >
         <Checkbox
           checked={allowTaskPromotion}
-          disabled={acting || revising || runInterrupted || runTerminal}
+          disabled={acting || revisionPending || runInterrupted || runTerminal}
           label="Allow standalone backlog tasks for independent deliverables"
           onChange={(_, data) => setAllowTaskPromotion(Boolean(data.checked))}
         />
@@ -514,7 +515,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         <Button
           appearance="primary"
           icon={<CheckmarkCircleRegular />}
-          disabled={acting || revising || runInterrupted || runTerminal}
+          disabled={acting || revisionPending || runInterrupted || runTerminal}
           onClick={() => void handleConfirm()}
         >
           {acting ? 'Confirming plan...' : 'Confirm plan'}
@@ -522,7 +523,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         <Button
           appearance="secondary"
           icon={<EditRegular />}
-          disabled={acting || revising || runInterrupted || runTerminal}
+          disabled={acting || revisionPending || runInterrupted || runTerminal}
           onClick={openRevise}
         >
           Clarify plan
@@ -536,7 +537,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
     onFooterChange(footerContent);
     return () => onFooterChange(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onFooterChange, awaiting, allowTaskPromotion, acting, revising, runInterrupted, runTerminal]);
+  }, [onFooterChange, awaiting, allowTaskPromotion, acting, revisionPending, runInterrupted, runTerminal]);
 
   return (
     <div className={styles.panel}>
@@ -590,9 +591,9 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         </MessageBar>
       )}
 
-      {(revising || clarificationSent) && (
+      {revisionPending && (
         <span className={styles.drafting}>
-          {revising && <Spinner size="extra-tiny" aria-hidden="true" />}
+          <Spinner size="extra-tiny" aria-hidden="true" />
           <InfoRegular aria-hidden="true" />
           <Text>Clarification sent — the coordinator is revising the Outcome plan.</Text>
         </span>
@@ -606,7 +607,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         <MessageBar intent="info">
           <MessageBarBody>The run finished before the Outcome plan could be drafted.</MessageBarBody>
         </MessageBar>
-      ) : !hasContent && !revising ? (
+      ) : !hasContent && !revisionPending ? (
         <AgentStepList
           steps={[{
             id: 'drafting-outcome-plan',

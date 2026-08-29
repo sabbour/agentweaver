@@ -123,6 +123,23 @@ describe('AgentweaverApiClient keepalive', () => {
     expect(error.payload).toEqual(payload);
   });
 
+  it('reads the redacted project Copilot connection state from its scoped endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ status: 'connected', github_login: 'octocat' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    const connection = await client.getProjectCopilotConnection('project/1');
+
+    expect(connection).toEqual({ status: 'connected', github_login: 'octocat' });
+    expect(fetchMock.mock.calls[0][0])
+      .toBe('https://api.example.test/api/projects/project%2F1/github/copilot/connection');
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
+  });
+
   it('broadcasts the shared Copilot connection action for every typed requirement response', async () => {
     const requirement = {
       code: 'github_copilot_connection_required',
@@ -142,6 +159,30 @@ describe('AgentweaverApiClient keepalive', () => {
     await expect(client.getProject('project-1')).rejects.toMatchObject({ status: 401, payload: requirement });
 
     expect(received).toHaveBeenCalledTimes(1);
+    expect((received.mock.calls[0]![0] as CustomEvent).detail).toEqual(requirement);
+    window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+  });
+
+  it('broadcasts the shared Copilot connection action when an in-place retry is fenced', async () => {
+    const requirement = {
+      code: 'github_copilot_connection_required',
+      message: GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
+      action: { type: 'connect_project_copilot_app', project_id: 'project-1' },
+    };
+    const received = vi.fn();
+    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      text: async () => JSON.stringify(requirement),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await expect(client.retryRun('run/1')).rejects.toMatchObject({ status: 409, payload: requirement });
+
+    expect(fetchMock.mock.calls[0][0])
+      .toBe('https://api.example.test/api/runs/run%2F1/retry');
     expect((received.mock.calls[0]![0] as CustomEvent).detail).toEqual(requirement);
     window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
   });

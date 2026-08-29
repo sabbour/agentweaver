@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.2
+
+### Patch Changes
+
+- d9ac7f0: Keep the run artifact browser available while coordinator planning or sandbox worktree setup is still in progress, instead of treating not-yet-created artifacts as request failures.
+- 416054a: Keep Outcome plan clarification controls synchronized while a revised plan is prepared, including when live updates arrive before the acknowledgement.
+- cdcf581: Require explicit Entra redirect and frontend URLs, and derive both public production URLs from the deployment host instead of falling back to localhost.
+- b2e6495: Keep the selected workflow node or edge open in the visual editor while its properties and workflow metadata are edited.
+- 1531361: PostgreSQL migration containers now use their injected runtime database configuration instead of an image-embedded local database address.
+- 9b8defb: Restore the project-scoped GitHub Copilot account picker so project owners can connect or switch the verified account used by the current GitHub App capability flow.
+- 3412759: Require an explicitly connected project Copilot capability before AgentHost launches and show coordinator retry progress or an actionable failure.
+
 ## 0.21.1
 
 ### Patch Changes

@@ -156,6 +156,7 @@ public sealed class CoordinatorRunService
             RetriedFrom = retriedFrom,
         };
 
+        await EnsureAgentHostCapabilityAsync(run, ct).ConfigureAwait(false);
         await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
 
         // Interactive define-outcome runs stop at the confirmation gate; Direct runs skip only that
@@ -216,6 +217,7 @@ public sealed class CoordinatorRunService
             RetriedFrom = source.Id.ToString(),
         };
 
+        await EnsureAgentHostCapabilityAsync(run, ct).ConfigureAwait(false);
         await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
 
         await ActivateAsync(
@@ -320,6 +322,17 @@ public sealed class CoordinatorRunService
         if (!await lifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
             throw new InvalidOperationException(
                 $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
+    }
+
+    private async Task EnsureAgentHostCapabilityAsync(Run run, CancellationToken ct)
+    {
+        if (!_sandboxRuntime.IsPodPerRun)
+            return;
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
+            throw new GitHubCopilotConnectionRequiredException(run.ProjectId!.Value);
     }
 
     private async Task<string?> ResolveOutcomeSpecGenerationModelAsync(ProjectId projectId, CancellationToken ct)

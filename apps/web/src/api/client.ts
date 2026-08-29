@@ -48,6 +48,7 @@ import type {
   PagedResult,
   Project,
   ProjectAccessOverview,
+  ProjectCopilotConnection,
   RequestChangesResponse,
   RepositoryOwner,
   ReroleRequest,
@@ -437,6 +438,13 @@ export class AgentweaverApiClient {
     expires_at: string;
   }> {
     return this.request('POST', `/projects/${encodeURIComponent(projectId)}/github/copilot/authorizations`, {});
+  }
+
+  getProjectCopilotConnection(projectId: string): Promise<ProjectCopilotConnection> {
+    return this.request<ProjectCopilotConnection>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/github/copilot/connection`,
+    );
   }
 
   deleteProject(projectId: string): Promise<void> {

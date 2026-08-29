@@ -329,7 +329,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     });
   }, []);
 
-  const { events, status: streamStatus } = useSeededRunStream(runId, undefined);
+  const { events, status: streamStatus } = useSeededRunStream(runId);
 
   // Keep the URL in sync with the active run id so a refresh or shared link resumes the
   // same conversation instead of dropping back to the empty invitation state.

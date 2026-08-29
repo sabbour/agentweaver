@@ -127,6 +127,34 @@ export function stripWildcardPrefix(domain) {
 }
 
 /**
+ * Validates the DNS suffix returned by DefaultDomainCertificate.status.domain.
+ * AKS currently returns `*.{zone}`, but accept a bare hostname as well to
+ * tolerate the resource's documented hostname form.
+ */
+export function validateManagedDomain(domain) {
+  const value = String(domain ?? "").trim().toLowerCase();
+  const zoneSuffix = stripWildcardPrefix(value);
+  const labels = zoneSuffix.split(".");
+  const validLabel = (label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label);
+
+  if (
+    !value ||
+    value.length > 255 ||
+    (value !== zoneSuffix && !value.startsWith("*.")) ||
+    zoneSuffix.includes("*") ||
+    labels.length < 2 ||
+    labels.some((label) => !validLabel(label)) ||
+    !/[a-z]/i.test(labels.at(-1))
+  ) {
+    throw new Error(
+      "DefaultDomainCertificate status.domain must be a DNS hostname, optionally prefixed with '*.'; refusing to render or apply manifests.",
+    );
+  }
+
+  return zoneSuffix;
+}
+
+/**
  * Builds the full production overlay via `kubectl kustomize` (kubectl's
  * built-in Kustomize support -- no standalone `kustomize` binary required)
  * and splits the combined output back into `{kind, name, text}` docs, ready
@@ -224,9 +252,13 @@ export async function run(cfg, opts = {}) {
 
     // Derive compound variables from primitives so templates can reference them directly.
     const AGENTHOST_KEYVAULT_URI = cfg.AGENTHOST_KEYVAULT_URI || `https://${cfg.KEYVAULT_NAME}.vault.azure.net/`;
-
-    log.info("Applying namespace...");
-    await execRun("kubectl", ["apply", "-f", path.join(repoRoot, "k8s", "base", "namespace.yaml")]);
+    let namespaceApplied = false;
+    const applyNamespace = async () => {
+      if (namespaceApplied) return;
+      log.info("Applying namespace...");
+      await execRun("kubectl", ["apply", "-f", path.join(repoRoot, "k8s", "base", "namespace.yaml")]);
+      namespaceApplied = true;
+    };
 
     // Provision monitoring if not already done.
     const insightsCheck = await execCapture(
@@ -255,6 +287,9 @@ export async function run(cfg, opts = {}) {
     if (ddcCheck.code === 0) {
       log.ok("DefaultDomainCertificate 'cert' already exists.");
     } else {
+      // A newly-created certificate needs the namespace, but an existing one
+      // lets us validate its live domain before applying any manifests.
+      await applyNamespace();
       fsImpl.mkdirSync(RENDERED_DIR, { recursive: true });
       const inlineDdcPath = path.join(RENDERED_DIR, "_defaultdomaincertificate-cert.yaml");
       fsImpl.writeFileSync(inlineDdcPath, INLINE_DEFAULT_DOMAIN_CERTIFICATE(NAMESPACE));
@@ -279,7 +314,9 @@ export async function run(cfg, opts = {}) {
       "--output",
       "jsonpath={.status.domain}",
     ]);
-    const HOST = `agentweaver.${stripWildcardPrefix(DOMAIN)}`;
+    const ZONE_SUFFIX = validateManagedDomain(DOMAIN);
+    const HOST = `agentweaver.${ZONE_SUFFIX}`;
+    kustomize.publicHttpsOrigin(HOST);
 
     log.info(`  Managed domain: ${DOMAIN}`);
     log.info(`  Ingress host:   ${HOST}`);
@@ -290,7 +327,6 @@ export async function run(cfg, opts = {}) {
     // path and reuse agentweaver-tls. See 30-deploy.sh for full spike evidence.
     log.info("");
     log.info("Setting preview gateway hostname (single-label fallback -- AKS nested DDC not supported)...");
-    const ZONE_SUFFIX = stripWildcardPrefix(DOMAIN);
     const PREVIEW_TLS_SECRET = "agentweaver-tls";
     const PREVIEW_HOSTNAME = `*.${ZONE_SUFFIX}`;
     const SANDBOX_PREVIEW_ENABLED = "true";
@@ -311,6 +347,9 @@ export async function run(cfg, opts = {}) {
       SANDBOX_PREVIEW_ZONE_SUFFIX,
     };
 
+    // Do not apply any application manifest until the managed domain and its
+    // derived public origin have both passed validation.
+    await applyNamespace();
     cleanupRenderedDir();
     fsImpl.mkdirSync(RENDERED_DIR, { recursive: true });
 

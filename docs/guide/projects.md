@@ -94,18 +94,20 @@ Controls how agent commands execute and what they can reach. Options include:
 ### Unattended
 
 The **Unattended** section reports a project-scoped, read-only automation readiness status and
-a fixed reason code. It never reveals GitHub identities, repository names, installation IDs,
-permission maps, or credentials. A Project Owner can start the separate Copilot App binding when
+a fixed reason code. It never reveals repository names, installation IDs, permission maps, or
+credentials. Its **GitHub Copilot account** control shows the verified login bound to this
+project (when connected), or lets a Project Owner connect or switch that account through
+GitHub's secure browser page. A Project Owner can start the separate Copilot App binding when
 that is the missing prerequisite, but this page has no automation enablement or activation
 control; activation consent is a separate step.
 
-Project Settings does not include per-project GitHub identity selection, webhook provisioning, or
+Project Settings does not include legacy account-link controls, webhook provisioning, or
 webhook-secret controls. Repository event delivery is configured through the Repo App's
 App-level webhook.
 
-After completing the Copilot App authorization in GitHub, Agentweaver returns to the Project
-Gallery and shows a safe completion message. The message contains only the outcome; it does not
-show authorization data, identities, repository or installation details, permissions, or credentials.
+After completing the Copilot App authorization in GitHub, Agentweaver returns to the project's
+**Unattended** settings and shows the selected GitHub login. It does not show authorization data,
+repository or installation details, permissions, or credentials.
 
 ### Danger Zone
 

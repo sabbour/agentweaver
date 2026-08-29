@@ -89,7 +89,7 @@ test("buildRuntimeConfigLiterals() passes through deployment values without reti
   assert.equal(literals.SANDBOX_PREVIEW_ZONE_SUFFIX, "abc123def456.westus2.staging.aksapp.io");
 });
 
-test("buildRuntimeConfigLiterals() derives ENTRA_REDIRECT_URI from HOST and defaults AUTH_MODE to Entra", () => {
+test("buildRuntimeConfigLiterals() derives public Entra URLs from HOST and defaults AUTH_MODE to Entra", () => {
   const literals = buildRuntimeConfigLiterals(VARS);
   assert.equal(literals.AUTH_MODE, "Entra");
   assert.equal(literals.ENTRA_CLIENT_ID, VARS.ENTRA_CLIENT_ID);
@@ -98,6 +98,7 @@ test("buildRuntimeConfigLiterals() derives ENTRA_REDIRECT_URI from HOST and defa
     literals.ENTRA_REDIRECT_URI,
     "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/entra/callback",
   );
+  assert.equal(literals.ENTRA_FRONTEND_URL, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
 });
 
 test("buildRuntimeConfigLiterals() passes AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID through when set", () => {
@@ -133,6 +134,22 @@ test("buildRuntimeConfigLiterals() requires Entra configuration", () => {
   );
 });
 
+test("buildRuntimeConfigLiterals() requires a structurally valid public HOST for Entra", () => {
+  for (const host of ["", "localhost:5000", "agentweaver.", "https://agentweaver.example.com", "agentweaver.example.com/path", "127.0.0.1"]) {
+    assert.throws(
+      () => buildRuntimeConfigLiterals({ ...VARS, HOST: host }),
+      /requires a structurally valid public HOST/,
+      `${host || "(empty)"} must not be used as an Entra origin`,
+    );
+  }
+});
+
+test("buildRuntimeConfigLiterals() preserves explicit local GitHubLegacy development configuration", () => {
+  const literals = buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "GitHubLegacy", HOST: "localhost:5000" });
+  assert.equal(literals.ENTRA_REDIRECT_URI, "https://localhost:5000/auth/entra/callback");
+  assert.equal(literals.ENTRA_FRONTEND_URL, "https://localhost:5000");
+});
+
 test("rewriteOverlayKustomization() rewrites every images: entry and configMapGenerator literal, leaving structure intact", () => {
   const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
   const original = fs.readFileSync(overlayPath, "utf8");
@@ -151,6 +168,10 @@ test("rewriteOverlayKustomization() rewrites every images: entry and configMapGe
   assert.match(
     rewritten,
     /- "ENTRA_REDIRECT_URI=https:\/\/agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io\/auth\/entra\/callback"/,
+  );
+  assert.match(
+    rewritten,
+    /- "ENTRA_FRONTEND_URL=https:\/\/agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io"/,
   );
   // Untouched structural content (resources:/replacements: blocks) should survive verbatim.
   assert.match(rewritten, /resources:\s*\n\s*- \.\.\/\.\.\/base/);
@@ -182,6 +203,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__Entra__ClientId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_CLIENT_ID\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__TenantId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_TENANT_ID\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__RedirectUri\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_REDIRECT_URI\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__Entra__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.doesNotMatch(builtYaml, /name: Auth__Entra__ClientSecret/);
   assert.doesNotMatch(builtYaml, /changeme/);
   assert.doesNotMatch(builtYaml, /example\.com/);

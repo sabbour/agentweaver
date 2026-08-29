@@ -130,6 +130,23 @@ describe('RunCard — Retry button', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/projects/proj-1/orchestrations/new-run-456'),
     );
   });
+
+  it('restores Retry and reports an API failure', async () => {
+    vi.mocked(apiClient.retryRun).mockRejectedValue(new Error('GitHub Copilot connection is required'));
+
+    render(
+      <Wrapper>
+        <RunCard card={makeCard({ status: 'failed' })} projectId="proj-1" />
+      </Wrapper>,
+    );
+
+    const retry = screen.getByTestId('run-card-retry') as HTMLButtonElement;
+    fireEvent.click(retry);
+
+    await waitFor(() => expect(retry.disabled).toBe(false));
+    expect(screen.getByText(/Retry failed: GitHub Copilot connection is required/)).toBeTruthy();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 });
 
 describe('RunCard — card navigation', () => {

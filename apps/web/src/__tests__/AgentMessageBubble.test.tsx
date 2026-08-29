@@ -209,6 +209,23 @@ describe('AgentMessageBubble', () => {
     expect(container.textContent).toContain('# Heading');
   });
 
+  it('hides partial outcome-plan JSON behind drafting status while preserving ordinary streaming text', () => {
+    const { rerender } = render(
+      <Wrapper>
+        <AgentMessageBubble content={'{"desired_out'} streaming={true} isLiveRun={true} />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Drafting outcome plan…')).toBeDefined();
+    expect(screen.queryByText('{"desired_out')).toBeNull();
+
+    rerender(
+      <Wrapper>
+        <AgentMessageBubble content="Checking the requirements." streaming={true} isLiveRun={true} />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Checking the requirements.')).toBeDefined();
+  });
+
   // SPEC-01: the coordinator's raw outcome-plan JSON is replaced with a pointer to the panel
   it('replaces a raw outcome-plan JSON blob with a pointer to the Outcome plan panel', () => {
     const specJson = JSON.stringify({
