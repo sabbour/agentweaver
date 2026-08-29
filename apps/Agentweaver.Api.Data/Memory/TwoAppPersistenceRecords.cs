@@ -26,8 +26,7 @@ public enum GitHubAuditReasonCode
     ActivationPrerequisiteAmbiguous,
     ActivationConflict,
 }
-public enum GitHubRepositorySelectionCredentialKind { EntraRepoApp, GitHubLegacy }
-
+public enum GitHubRepositorySelectionCredentialKind { EntraRepoApp }
 public sealed class GitHubAuthorizationRecord
 {
     [System.Text.Json.Serialization.JsonIgnore]
@@ -122,7 +121,6 @@ public sealed class GitHubRepositorySelectionCodeRecord
     /// being consumed after an auth-mode change as a different kind of caller.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public GitHubRepositorySelectionCredentialKind CredentialKind { get; set; }
     public long RepositoryId { get; set; }
     public long ExpiresAtUnixMilliseconds { get; set; }
     public long? ConsumedAtUnixMilliseconds { get; set; }

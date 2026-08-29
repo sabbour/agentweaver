@@ -777,8 +777,6 @@ public sealed class WorkflowGeneratorTests
         private readonly string _checkpointsPath;
         private readonly string _coordinatorCheckpointsPath;
 
-        public InMemoryGitHubTokenStore TokenStore { get; } = new();
-
         public StubWorkflowGeneratorFactory()
         {
             var unique = Guid.NewGuid().ToString("N");
@@ -815,7 +813,6 @@ public sealed class WorkflowGeneratorTests
                     ["Worktrees:BasePath"] = _worktreesPath,
                     ["Checkpoints:Path"] = _checkpointsPath,
                     ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
-                    ["Testing:BypassGitHubOrgAuthorization"] = "true",
                     ["Auth:ApiKey"] = TestApiKey,
                     ["Auth:User"] = TestUser,
                     ["Auth:GitHub:ClientId"] = "test-github-client-id",
@@ -835,9 +832,6 @@ public sealed class WorkflowGeneratorTests
 
             builder.ConfigureServices(services =>
             {
-                Remove<Agentweaver.Domain.IGitHubTokenStore>(services);
-                services.AddSingleton<Agentweaver.Domain.IGitHubTokenStore>(TokenStore);
-
                 Remove<Agentweaver.Api.Git.ProjectGitInitializer>(services);
                 services.AddSingleton<Agentweaver.Api.Git.ProjectGitInitializer, NoOpProjectGitInitializer>();
 

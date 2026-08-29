@@ -125,82 +125,6 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         reusedBody.GetRawText().Should().NotContain("repository_id");
     }
 
-    [Fact]
-    public async Task GitHubLegacy_BrowseIssueAndCreate_BindsTheCodeToTheAuthenticatedCaller()
-    {
-        using var factory = new GitHubLegacyRepositorySelectionWebApplicationFactory();
-        await factory.TokenStore.SetAsync(
-            GitHubTokenScope.Installation,
-            new GitHubToken("legacy-test-token", null, null, "legacy-owner", null, []));
-        using var owner = factory.CreateAuthenticatedClient();
-        using var other = factory.CreateClient();
-        other.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "legacy-other");
-
-        var browse = await owner.GetAsync("/api/github/repository-selections");
-        browse.StatusCode.Should().Be(HttpStatusCode.OK);
-        (await browse.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("repositories").EnumerateArray().Single()
-            .GetProperty("full_name").GetString().Should().Be("octo/secure-repo");
-
-        var issue = await owner.PostAsJsonAsync(
-            "/api/github/repository-selections", new { full_name = "octo/secure-repo" });
-        issue.StatusCode.Should().Be(HttpStatusCode.OK);
-        var code = (await issue.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("selection_code").GetString()!;
-
-        var crossCaller = await other.PostAsJsonAsync("/api/projects", new
-        {
-            name = "Legacy cross-caller",
-            origin = "github",
-            working_directory = factory.NewWorkingDirectory(),
-            repository_selection_code = code,
-        });
-        crossCaller.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await crossCaller.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("error").GetString().Should().Be("github_repository_selection_unavailable");
-
-        var created = await owner.PostAsJsonAsync("/api/projects", new
-        {
-            name = "Legacy server-resolved",
-            origin = "github",
-            working_directory = factory.NewWorkingDirectory(),
-            repository_selection_code = code,
-        });
-        created.StatusCode.Should().Be(HttpStatusCode.Created);
-        (await created.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("source_repository").GetString().Should().Be("https://github.com/octo/secure-repo");
-    }
-
-    [Fact]
-    public async Task GitHubLegacy_SigningOutInvalidatesAnUnconsumedSelectionCode()
-    {
-        using var factory = new GitHubLegacyRepositorySelectionWebApplicationFactory();
-        await factory.TokenStore.SetAsync(
-            GitHubTokenScope.Installation,
-            new GitHubToken("legacy-test-token", null, null, "legacy-owner", null, []));
-        using var client = factory.CreateAuthenticatedClient();
-
-        var issue = await client.PostAsJsonAsync(
-            "/api/github/repository-selections", new { full_name = "octo/secure-repo" });
-        issue.StatusCode.Should().Be(HttpStatusCode.OK);
-        var code = (await issue.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("selection_code").GetString()!;
-
-        await factory.TokenStore.SignOutAsync(GitHubTokenScope.Installation);
-
-        var create = await client.PostAsJsonAsync("/api/projects", new
-        {
-            name = "Legacy invalidated selection",
-            origin = "github",
-            working_directory = factory.NewWorkingDirectory(),
-            repository_selection_code = code,
-        });
-        create.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await create.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("error").GetString().Should().Be("github_repository_selection_unavailable");
-    }
-
     private sealed class RepositorySelectionWebApplicationFactory : EntraWebApplicationFactory
     {
         private readonly HttpMessageHandler _handler = new RepositoryHandler();
@@ -257,22 +181,4 @@ public sealed class GitHubRepositorySelectionEndpointsTests
             });
     }
 
-    private sealed class GitHubLegacyRepositorySelectionWebApplicationFactory : ProjectsWebApplicationFactory
-    {
-        private readonly HttpMessageHandler _handler = new RepositoryHandler();
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            base.ConfigureWebHost(builder);
-            builder.ConfigureServices(services =>
-            {
-                services.Configure<Microsoft.Extensions.Http.HttpClientFactoryOptions>(
-                    "github",
-                    options =>
-                    {
-                        options.HttpMessageHandlerBuilderActions.Add(build => build.PrimaryHandler = _handler);
-                    });
-            });
-        }
-    }
 }

@@ -9,13 +9,9 @@ using Agentweaver.Tests.Helpers;
 namespace Agentweaver.Tests.Backlog;
 
 /// <summary>
-/// HTTP integration tests for the Feature 009 backlog endpoints that exercise behaviour the
-/// store-level tests cannot: the capture handler resolving the signed-in GitHub login as CapturedBy,
-/// and the bulk "send all to Ready" endpoint. Runs against a real in-process API host
-/// (<see cref="ProjectsWebApplicationFactory"/>) with the sanctioned in-memory
-/// <see cref="Agentweaver.Api.Auth.InMemoryGitHubTokenStore"/> (a real component, not a mock —
-/// Principle VII). The default scope provider is the fixed installation scope, so the caller's token
-/// lives under <see cref="GitHubTokenScope.Installation"/>.
+/// HTTP integration tests for the backlog endpoints that exercise behavior the store-level tests
+/// cannot, including protected automation-invocation handoffs. Runs against a real in-process API
+/// host (<see cref="ProjectsWebApplicationFactory"/>).
 /// </summary>
 public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplicationFactory>
 {
@@ -26,38 +22,6 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
     {
         _factory = factory;
         _client = factory.CreateAuthenticatedClient();
-    }
-
-    // =========================================================================
-    // CAPTURE: persist the signed-in GitHub login as CapturedBy (falls back to caller.User).
-    // =========================================================================
-    [Fact]
-    public async Task Capture_WhenSignedIn_PersistsGitHubLoginAsCapturedBy()
-    {
-        // Sign the installation scope in as GitHub login "sabbour".
-        await _factory.TokenStore.SetAsync(
-            GitHubTokenScope.Installation,
-            new GitHubToken("access-tok", null, null, "sabbour", null, Array.Empty<string>()));
-
-        var projectId = await CreateProjectAsync();
-        var task = await CaptureAsync(projectId, "Signed-in capture");
-
-        task.GetProperty("captured_by").GetString().Should().Be(
-            "sabbour", "the signed-in GitHub login must be stored as who captured the task");
-    }
-
-    [Fact]
-    public async Task Capture_WhenSignedOut_FallsBackToCallerUser()
-    {
-        // Explicit signed-out tombstone for the installation scope.
-        await _factory.TokenStore.SignOutAsync(GitHubTokenScope.Installation);
-
-        var projectId = await CreateProjectAsync();
-        var task = await CaptureAsync(projectId, "Signed-out capture");
-
-        task.GetProperty("captured_by").GetString().Should().Be(
-            ProjectsWebApplicationFactory.TestUser,
-            "with no signed-in GitHub identity, CapturedBy falls back to the API-key Auth:User");
     }
 
     [Theory]

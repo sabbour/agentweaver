@@ -495,30 +495,6 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     // =========================================================================
-    // PE-13: GET /api/auth/github returns status
-    // =========================================================================
-    [Fact]
-    public async Task GetAuthGitHub_ReturnsStatus()
-    {
-        var response = await _client.GetAsync("/api/auth/github");
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.TryGetProperty("status", out _).Should().BeTrue();
-    }
-
-    // =========================================================================
-    // PE-14: POST /api/auth/github/sign-out returns 204
-    // =========================================================================
-    [Fact]
-    public async Task PostSignOut_Returns204()
-    {
-        var response = await _client.PostAsync("/api/auth/github/sign-out", null);
-
-        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
-    }
-
-    // =========================================================================
     // PE-15: GET /healthz/workspace returns 200 with local-filesystem provider
     //   (LocalFilesystemWorkspaceProvider.IsMountRootHealthy is always true)
     // =========================================================================

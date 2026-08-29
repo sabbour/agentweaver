@@ -11,8 +11,7 @@ namespace Agentweaver.Tests.Helpers;
 
 /// <summary>
 /// Web application factory for project-related integration tests.
-/// Replaces OsCredentialStoreGitHubTokenStore with InMemoryGitHubTokenStore,
-/// uses LocalFilesystemWorkspaceProvider pointed at an isolated temp directory,
+/// Uses LocalFilesystemWorkspaceProvider pointed at an isolated temp directory,
 /// and stubs out ProjectGitInitializer to skip real git operations.
 /// </summary>
 public class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
@@ -25,8 +24,6 @@ public class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
     private readonly string _worktreesPath;
     private readonly string _checkpointsPath;
     private readonly string _coordinatorCheckpointsPath;
-
-    public InMemoryGitHubTokenStore TokenStore { get; } = new();
 
     public ProjectsWebApplicationFactory()
     {
@@ -69,9 +66,7 @@ public class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
                 ["Worktrees:BasePath"]                    = _worktreesPath,
                 ["Checkpoints:Path"]                      = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
-                ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Testing:BypassGitHubTokenAuth"]        = "true",
-                ["Auth:Mode"]                            = "GitHubLegacy",
                 ["Auth:ApiKey"]                           = TestApiKey,
                 ["Auth:User"]                             = TestUser,
                 ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
@@ -94,12 +89,6 @@ public class ProjectsWebApplicationFactory : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
-            // Replace OS credential store with in-memory store for tests.
-            RemoveService<IGitHubTokenStore>(services);
-            services.AddSingleton<IGitHubTokenStore>(TokenStore);
-            RemoveService<IGitHubTokenScopeProvider>(services);
-            services.AddSingleton<IGitHubTokenScopeProvider, FixedInstallationScopeStub>();
-
             // Replace ProjectGitInitializer with a no-op stub.
             RemoveService<ProjectGitInitializer>(services);
             services.AddSingleton<ProjectGitInitializer, NoOpProjectGitInitializer>();

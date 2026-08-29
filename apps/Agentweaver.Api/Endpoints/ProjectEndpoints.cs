@@ -281,14 +281,13 @@ app.MapPost("/api/projects", CreateProjectAsync)
 // GET /api/server/info — public server metadata (no auth required)
 app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider, IConfiguration configuration) =>
 {
-    var authMode = AuthModeResolver.Resolve(configuration);
     return Results.Ok(new
     {
         data_directory          = AppPaths.DataDirectory,
         workspace_auto_assigned = workspaceProvider.AutoAssignsPath,
-        auth_mode               = AuthModeResolver.ToWireValue(authMode),
-        auth_mode_label         = AuthModeResolver.ToLabel(authMode),
-        auth_mode_recommended   = AuthModeResolver.IsRecommended(authMode),
+        auth_mode               = "entra",
+        auth_mode_label         = "Entra ID",
+        auth_mode_recommended   = true,
     });
 }).AllowAnonymous();
 
@@ -320,8 +319,6 @@ app.MapGet("/api/projects/{id}/role-assignments", async (
     ProjectRoleAssignmentService roleAssignments,
     CancellationToken ct) =>
 {
-    if (!IsEntraMode(httpContext))
-        return Results.NotFound();
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
 
@@ -349,8 +346,6 @@ app.MapPost("/api/projects/{id}/role-assignments", async (
     ProjectRoleAssignmentService roleAssignments,
     CancellationToken ct) =>
 {
-    if (!IsEntraMode(httpContext))
-        return Results.NotFound();
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
     if (string.IsNullOrWhiteSpace(request.PrincipalId))
@@ -393,8 +388,6 @@ app.MapDelete("/api/projects/{id}/role-assignments/{principalId}", async (
     ProjectRoleAssignmentService roleAssignments,
     CancellationToken ct) =>
 {
-    if (!IsEntraMode(httpContext))
-        return Results.NotFound();
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
     if (string.IsNullOrWhiteSpace(principalId))
@@ -510,96 +503,6 @@ app.MapPut("/api/projects/{id}/preview-settings", async (
 })
     .WithName("UpdateProjectPreviewSettings")
     .WithTags("Projects");
-
-// GET /api/projects/{id}/github/repository-owners — accounts a new repo could be created under
-app.MapGet("/api/projects/{id}/github/repository-owners", async (
-    HttpContext httpContext,
-    string id,
-    ProjectService projectService,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    var view = await projectService.GetViewAsync(projectId, ct);
-    if (view is null) return Results.NotFound();
-    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    IReadOnlyList<GitHubRepositoryOwner> owners;
-    try
-    {
-        owners = await projectService.ListRepositoryOwnersAsync(caller.User, ct, view.Project.Id);
-    }
-    catch (InvalidOperationException ex)
-    {
-        return Results.Problem(ex.Message, statusCode: StatusCodes.Status401Unauthorized);
-    }
-
-    return Results.Ok(owners.Select(o => new RepositoryOwnerResponse(o.Login, o.IsUser ? "user" : "org")));
-})
-    .WithName("ListProjectRepositoryOwners")
-    .WithTags("Projects")
-    .AddOpenApiOperationTransformer((operation, _, _) =>
-    {
-        operation.Description ??=
-            "Lists the GitHub accounts (the caller's own login, plus orgs) a new repository could be created under.";
-        return Task.CompletedTask;
-    });
-
-// POST /api/projects/{id}/github/repository — create+connect a new GitHub repository
-app.MapPost("/api/projects/{id}/github/repository", async (
-    HttpContext httpContext,
-    string id,
-    CreateProjectRepositoryRequest request,
-    ProjectService projectService,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    if (string.IsNullOrWhiteSpace(request.Owner))
-        return Results.BadRequest(new { error = "owner is required." });
-
-    var view = await projectService.GetViewAsync(projectId, ct);
-    if (view is null) return Results.NotFound();
-    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
-
-    if (view.Project.Origin.Kind != ProjectOriginKind.Blank)
-        return Results.Conflict(new
-        {
-            error = $"Project already has a connected repository ('{view.Project.Origin.SourceRepository}'). " +
-                     "This endpoint only connects a currently-unconnected project."
-        });
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    try
-    {
-        var connected = await projectService.CreateAndConnectRepositoryAsync(
-            projectId, request.Owner, request.Name, request.Private ?? true, caller.User, ct);
-        var sourceRepository = connected.Origin.SourceRepository!;
-        return Results.Ok(new ConnectedRepositoryResponse(sourceRepository, $"https://github.com/{sourceRepository}"));
-    }
-    catch (InvalidOperationException ex)
-    {
-        logger.LogWarning(ex, "Failed to create/connect a GitHub repository for project {ProjectId}", id);
-        return Results.Conflict(new { error = ex.Message });
-    }
-    catch (KeyNotFoundException)
-    {
-        return Results.NotFound();
-    }
-})
-    .WithName("CreateProjectRepository")
-    .WithTags("Projects")
-    .AddOpenApiOperationTransformer((operation, _, _) =>
-    {
-        operation.Description ??=
-            "Creates a new GitHub repository and connects it to a currently-unconnected (blank-origin) project, " +
-            "pushing the project's existing local git history to it.";
-        return Task.CompletedTask;
-    });
 
 // DELETE /api/projects/{id}?confirm=true — record-only delete
 app.MapDelete("/api/projects/{id}", async (
@@ -778,15 +681,8 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         }
 
         if (request.Origin == "github" &&
-            AuthModeResolver.Resolve(configuration) == AuthMode.Entra &&
             HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) != HumanEntraSubjectState.Allowed)
-        {
             return Results.Conflict(new { error = "human_entra_subject_required" });
-        }
-        if (request.Origin == "github" &&
-            AuthModeResolver.Resolve(configuration) == AuthMode.GitHubLegacy &&
-            httpContext.User.HasClaim("agentweaver_internal", "true"))
-            return Results.StatusCode(StatusCodes.Status403Forbidden);
 
         // working_directory is only mandatory when the active workspace provider cannot auto-assign
         // one (e.g. LocalFilesystemWorkspaceProvider). Providers that report AutoAssignsPath == true
@@ -873,19 +769,17 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                 project = await projectService.CreateFromGitHubAsync(
                     request.Name!, resolvedRepository!.SourceRepository, requestedWorkingDirectory,
                     request.DefaultProvider, request.DefaultModelGitHubCopilot,
-                    request.DefaultModelMicrosoftFoundry, caller.User, ct,
-                    accessTokenOverride: resolvedRepository.AccessToken);
+                    request.DefaultModelMicrosoftFoundry, caller.User, resolvedRepository.AccessToken, ct);
             }
 
-            if (AuthModeResolver.Resolve(configuration) == AuthMode.Entra &&
-                !string.IsNullOrWhiteSpace(caller.EntraObjectId ?? caller.User))
+            if (!string.IsNullOrWhiteSpace(caller.EntraObjectId))
             {
                 try
                 {
                     await roleAssignments.SeedOwnerAsync(
                         project.Id,
-                        (caller.EntraObjectId ?? caller.User)!,
-                        caller.EntraObjectId ?? caller.User,
+                        caller.EntraObjectId!,
+                        caller.EntraObjectId,
                         ct);
                 }
                 catch (Exception roleAssignmentEx)
@@ -983,7 +877,6 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
     {
         var views = await projectService.ListViewsAsync(ct);
         List<ProjectResponse> projects;
-        if (AuthModeResolver.Resolve(configuration) == AuthMode.Entra)
         {
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
             if (projectRoles.IsPlatformAdmin(caller))
@@ -1000,13 +893,6 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                     .Select(v => MapProject(v.Project, v.Available, visibleRoles[v.Project.Id]))
                     .ToList();
             }
-        }
-        else
-        {
-            projects = views
-                .Where(v => IsProjectOwner(httpContext, v.Project))
-                .Select(v => MapProject(v.Project, v.Available))
-                .ToList();
         }
         return Results.Ok(Paging.Of(projects, page, page_size));
     }
@@ -1169,18 +1055,8 @@ static ProjectResponse MapProject(Project p, bool available, ProjectRole? effect
 private static readonly Regex AgentNameSlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
 private static readonly Regex AllowedModelRegex = new("^(gpt|claude|o)[a-z0-9._-]*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-private static bool IsProjectOwner(HttpContext httpContext, Agentweaver.Domain.Project project)
-{
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    return caller.Owns(project.Owner);
-}
-
 private static async Task<ProjectResponse> MapProjectAsync(HttpContext httpContext, Project project, bool available, CancellationToken ct)
 {
-    var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
-    if (AuthModeResolver.Resolve(configuration) != AuthMode.Entra)
-        return MapProject(project, available);
-
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
     var roles = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
     var effectiveRole = await roles.GetEffectiveRoleAsync(caller, project.Id, ct).ConfigureAwait(false);
@@ -1195,12 +1071,6 @@ private static async Task<IResult?> RequireProjectRoleAsync(
 {
     var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
     return await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, minimumRole, ct).ConfigureAwait(false);
-}
-
-private static bool IsEntraMode(HttpContext httpContext)
-{
-    var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
-    return AuthModeResolver.Resolve(configuration) == AuthMode.Entra;
 }
 
 private static ProjectRoleAssignmentResponse MapProjectRoleAssignment(ProjectRoleAssignment assignment) => new()

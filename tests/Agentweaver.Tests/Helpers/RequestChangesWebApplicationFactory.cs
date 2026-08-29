@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Helpers;
@@ -76,6 +77,7 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
                 ["Auth:User"]                             = OwnerUser,
                 ["Auth:Keys:0:Token"]                     = OtherApiKey,
                 ["Auth:Keys:0:User"]                      = OtherUser,
+                ["Auth:Keys:0:PlatformRoles"]             = PlatformRoles.Viewer,
                 ["Git:Author:Name"]                       = "Test",
                 ["Git:Author:Email"]                      = "test@localhost",
                 ["Providers:GitHubCopilot:ApiKey"]        = "test-copilot-key",

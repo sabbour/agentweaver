@@ -59,7 +59,6 @@ public sealed class ProjectWorkspaceService
     private readonly IProjectStore _projectStore;
     private readonly IRunStore _runStore;
     private readonly IProjectRoleAuthorizationService _projectRoles;
-    private readonly AuthMode _authMode;
 
     public ProjectWorkspaceService(
         IProjectStore projectStore,
@@ -70,7 +69,6 @@ public sealed class ProjectWorkspaceService
         _projectStore = projectStore;
         _runStore = runStore;
         _projectRoles = projectRoles ?? new NullProjectRoleAuthorizationService();
-        _authMode = configuration is null ? AuthMode.GitHubLegacy : AuthModeResolver.Resolve(configuration);
     }
 
     /// <summary>
@@ -412,9 +410,6 @@ public sealed class ProjectWorkspaceService
         var project = await _projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
         if (project is null)
             return null;
-
-        if (_authMode == AuthMode.GitHubLegacy)
-            return caller.Owns(project.Owner) ? project : null;
 
         return await _projectRoles.HasRoleAsync(caller, projectId, ProjectRole.Viewer, ct).ConfigureAwait(false)
             ? project

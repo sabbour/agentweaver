@@ -37,7 +37,6 @@ public sealed class NotificationsService
     private readonly PendingToolApprovalRunsQuery _pendingApprovalQuery;
     private readonly IBacklogTaskStore _backlogStore;
     private readonly MemoryDbContext _db;
-    private readonly AuthMode _authMode;
 
     public NotificationsService(
         IRunStore runStore,
@@ -54,7 +53,6 @@ public sealed class NotificationsService
         _pendingApprovalQuery = pendingApprovalQuery;
         _backlogStore = backlogStore;
         _db = db;
-        _authMode = AuthModeResolver.Resolve(configuration);
     }
 
     public async Task<NotificationsResponseDto> GetPendingAsync(CallerContext caller, CancellationToken ct = default)
@@ -223,9 +221,6 @@ public sealed class NotificationsService
     private async Task<IReadOnlyList<Project>> ListVisibleProjectsAsync(CallerContext caller, CancellationToken ct)
     {
         var projects = await _projectStore.ListAsync(ct).ConfigureAwait(false);
-        if (_authMode == AuthMode.GitHubLegacy)
-            return projects.Where(project => caller.Owns(project.Owner)).ToList();
-
         if (_projectRoles.IsPlatformAdmin(caller))
             return projects;
 

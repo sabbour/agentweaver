@@ -18,14 +18,7 @@ namespace Agentweaver.Tests.Mcp;
 /// <summary>
 /// Unit tests for <see cref="McpBearerTokenMiddleware"/>.
 ///
-/// Coverage map:
-///   S1 (partial) — Verifies the current 401 shape; after T6 new assertions check
-///                  WWW-Authenticate header with resource_metadata.
-///   S4            — Static API key path removed; only OAuth JWT + GitHub passthrough remain.
-///
-/// Tests labelled [Skip] need Tank's T6 (MCP RS changes) before they can be enabled.
-///
-/// Seraph design ref: §2 (WWW-Authenticate), §6 (backward compat).
+/// Validates Entra-only MCP authentication and bearer forwarding.
 /// </summary>
 public sealed class McpBearerTokenMiddlewareTests
 {
@@ -51,11 +44,11 @@ public sealed class McpBearerTokenMiddlewareTests
     }
 
     // =========================================================================
-    // S4-04 / S1-03 — Unknown bearer token (not an API key, GitHub call fails) → 401
+    // An untrusted bearer token is rejected.
     //                 GitHub HTTP call in this test always returns 401.
     // =========================================================================
     [Fact]
-    public async Task UnknownBearerToken_GitHubValidationFails_Returns401()
+    public async Task UnknownBearerToken_IsRejected()
     {
         // GitHub /user returns 401 for the unknown token.
         var githubHandler = new FixedStatusHttpMessageHandler(HttpStatusCode.Unauthorized);
@@ -84,7 +77,7 @@ public sealed class McpBearerTokenMiddlewareTests
     }
 
     // =========================================================================
-    // S4-05 — An unknown bearer token (GitHub validation fails) → 401
+    // Scheme matching remains case-insensitive while the bearer is still rejected.
     // =========================================================================
     [Fact]
     public async Task UnknownBearer_WithLowercaseScheme_Rejected()
@@ -97,7 +90,7 @@ public sealed class McpBearerTokenMiddlewareTests
         await middleware.InvokeAsync(context);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized,
-            "no static key path remains; an unknown token must fail GitHub validation");
+            "an untrusted bearer must fail Entra validation");
     }
 
     [Fact]
@@ -232,18 +225,6 @@ public sealed class McpBearerTokenMiddlewareTests
     }
 
     // =========================================================================
-    // S2-01 (STUB — requires Tank T2 + T6)
-    // A valid Agentweaver-minted JWT (correct iss/aud/exp/sig) must be accepted.
-    // =========================================================================
-    [Fact(Skip = "TODO: Tank T2 (McpTokenService), T6 (JWT validation in McpBearerTokenMiddleware)")]
-    public async Task ValidAgentWeaverJwt_PassesThrough()
-    {
-        // When T6 lands: mint a test JWT via McpTokenService (test-only RSA key),
-        // send it as Bearer, assert 200 and mcp.user is the sub claim.
-        await Task.CompletedTask;
-    }
-
-    // =========================================================================
     // S2-02 (STUB — requires Tank T2 + T6)
     // A JWT with a tampered signature must be rejected 401.
     // =========================================================================
@@ -289,14 +270,8 @@ public sealed class McpBearerTokenMiddlewareTests
             .AddInMemoryCollection(configValues ?? new Dictionary<string, string?>())
             .Build();
 
-        var cache    = new MemoryCache(new MemoryCacheOptions());
         var handler  = githubHandler ?? new FixedStatusHttpMessageHandler(HttpStatusCode.Unauthorized);
         var factory  = new SingleClientHttpClientFactory(handler);
-        var validator = new McpAccessTokenValidator(
-            config,
-            cache,
-            factory,
-            NullLogger<McpAccessTokenValidator>.Instance);
         var entraValidator = new McpEntraAccessTokenValidator(
             config,
             factory,
@@ -304,12 +279,7 @@ public sealed class McpBearerTokenMiddlewareTests
 
         return new McpBearerTokenMiddleware(
             next,
-            validator,
-            entraValidator,
-            config,
-            cache,
-            factory,
-            NullLogger<McpBearerTokenMiddleware>.Instance);
+            entraValidator);
     }
 
     private static EntraFixture CreateEntraFixture(RSA rsa)

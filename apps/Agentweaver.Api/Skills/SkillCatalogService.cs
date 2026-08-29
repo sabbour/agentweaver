@@ -188,7 +188,6 @@ public sealed class SkillCatalogService
     private readonly IGitHubSkillTreeClient? _treeClient;
     private readonly IMarketplaceCatalogIndexer? _catalogIndexer;
     private readonly ILogger<SkillCatalogService> _logger;
-    private readonly AuthMode _authMode;
     private readonly ConcurrentDictionary<string, PreviewCloneCacheEntry> _previewCloneCache = new(StringComparer.Ordinal);
 
     public SkillCatalogService(
@@ -216,7 +215,6 @@ public sealed class SkillCatalogService
         _treeClient = treeClient;
         _catalogIndexer = catalogIndexer;
         _logger = logger;
-        _authMode = configuration is null ? AuthMode.GitHubLegacy : AuthModeResolver.Resolve(configuration);
     }
 
     public SkillCatalogService(
@@ -1526,16 +1524,12 @@ public sealed class SkillCatalogService
         if (project is null)
             return null;
 
-        if (_authMode == AuthMode.GitHubLegacy)
-            return caller.Owns(project.Owner) ? project : null;
-
         return await _projectRoles.HasRoleAsync(caller, projectId, minimumRole, ct).ConfigureAwait(false)
             ? project
             : null;
     }
 
-    private string ResolveGitHubPrincipal(CallerContext caller, Project project) =>
-        _authMode == AuthMode.Entra ? caller.User : project.Owner;
+    private static string ResolveGitHubPrincipal(CallerContext caller, Project project) => caller.User;
 
     private static string? SafeReadText(string path)
     {

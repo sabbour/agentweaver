@@ -139,10 +139,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
         new(
             new TwoAppPersistenceStore(new MemoryDbContext(options)),
             new TwoAppCredentialVault(secrets),
-            new GitHubRepositorySelectionClient(new StubHttpClientFactory(handler)),
-            new StubAccessTokenProvider(),
-            new FixedInstallationScopeStub(),
-            new ConfigurationBuilder().Build());
+            new GitHubRepositorySelectionClient(new StubHttpClientFactory(handler)));
 
     private static async Task SeedLiveAuthorizationAsync(
         DbContextOptions<MemoryDbContext> options,
@@ -198,9 +195,4 @@ public sealed class GitHubRepositorySelectionBrokerTests
             });
     }
 
-    private sealed class StubAccessTokenProvider : IGitHubAccessTokenProvider
-    {
-        public Task<string?> GetValidAccessTokenAsync(GitHubTokenScope scope, CancellationToken ct = default) =>
-            Task.FromResult<string?>("test-token");
-    }
 }
