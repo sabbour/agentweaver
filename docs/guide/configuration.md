@@ -150,11 +150,15 @@ public client flows and no client secret is configured).
 | `Auth:Entra:Scopes` | `openid profile email <ClientId>/.default` | Space-delimited scopes requested at authorize time. The `<ClientId>/.default` scope yields an access token whose `aud` is the app itself and carries the platform App Roles claim |
 | `Auth:Entra:FrontendUrl` | none | URL the API redirects to after a successful (or failed) Entra sign-in |
 
-Both URLs are required when Entra browser sign-in is enabled. Configure localhost URLs
-explicitly for local development only. The production Kustomize renderer derives the public
-callback and frontend origin from `HOST`; it never falls back to localhost and refuses to
-render when the managed domain or resulting public hostname is absent or malformed. The Entra
-app registration must separately contain the same public callback URL.
+Both URLs are required when Entra browser sign-in is enabled. `ClientId` must be the
+application (client) ID GUID issued by Entra. `Authority` must use the public
+`https://login.microsoftonline.com/<tenant>[/v2.0]` endpoint (or an HTTP loopback endpoint
+for local development), and `RedirectUri` must be an absolute callback URL ending in
+`/auth/entra/callback`. HTTP is allowed only for loopback local-development URLs; production
+URLs must use HTTPS. The production Kustomize renderer derives the public callback and
+frontend origin from `HOST`; it never falls back to localhost and refuses to render when the
+managed domain or resulting public hostname is absent or malformed. The Entra app registration
+must separately contain the same public callback URL.
 
 If your tenant allows password credentials and you want confidential-client redemption, set
 the Entra client secret locally with user-secrets:

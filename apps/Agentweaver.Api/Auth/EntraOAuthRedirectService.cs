@@ -28,6 +28,8 @@ namespace Agentweaver.Api.Auth;
 public sealed class EntraOAuthRedirectService
 {
     private const string DefaultScopes = "openid profile email";
+    private const string EntraAuthorityHost = "login.microsoftonline.com";
+    private const string EntraCallbackPath = "/auth/entra/callback";
     private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(10);
 
     private readonly IConfiguration _configuration;
@@ -77,18 +79,39 @@ public sealed class EntraOAuthRedirectService
         return $"{DefaultScopes} {clientId}/.default";
     }
 
-    private string RequireClientId() =>
-        !string.IsNullOrWhiteSpace(ClientId) ? ClientId!
-        : throw new EntraNotConfiguredException("Auth:Entra:ClientId must be configured.");
+    private string RequireClientId()
+    {
+        var configured = ClientId;
+        if (string.IsNullOrWhiteSpace(configured))
+            throw new EntraNotConfiguredException("Auth:Entra:ClientId must be configured.");
+
+        if (!Guid.TryParseExact(configured, "D", out _))
+            throw new EntraNotConfiguredException(
+                "Auth:Entra:ClientId must be an Entra application (client) ID.");
+
+        return configured;
+    }
 
     private ClientAuthenticationMode TokenClientAuthenticationMode =>
         string.IsNullOrWhiteSpace(ClientSecret)
             ? ClientAuthenticationMode.None
             : ClientAuthenticationMode.Secret;
 
-    private string RequireRedirectUri() =>
-        !string.IsNullOrWhiteSpace(RedirectUri) ? RedirectUri!
-        : throw new EntraNotConfiguredException("Auth:Entra:RedirectUri must be configured.");
+    private string RequireRedirectUri()
+    {
+        var configured = RedirectUri;
+        if (string.IsNullOrWhiteSpace(configured))
+            throw new EntraNotConfiguredException("Auth:Entra:RedirectUri must be configured.");
+
+        if (!TryGetApplicationEndpoint(configured, out var redirectUri)
+            || redirectUri.AbsolutePath != EntraCallbackPath)
+        {
+            throw new EntraNotConfiguredException(
+                "Auth:Entra:RedirectUri must be an absolute HTTPS callback URL or an HTTP loopback callback URL.");
+        }
+
+        return redirectUri.AbsoluteUri;
+    }
 
     private string RequireFrontendUrl()
     {
@@ -96,15 +119,11 @@ public sealed class EntraOAuthRedirectService
         if (string.IsNullOrWhiteSpace(configured))
             throw new EntraNotConfiguredException("Auth:Entra:FrontendUrl must be configured.");
 
-        if (!Uri.TryCreate(configured, UriKind.Absolute, out var frontendUri)
-            || (frontendUri.Scheme != Uri.UriSchemeHttp && frontendUri.Scheme != Uri.UriSchemeHttps)
-            || !string.IsNullOrEmpty(frontendUri.UserInfo)
-            || frontendUri.AbsolutePath != "/"
-            || !string.IsNullOrEmpty(frontendUri.Query)
-            || !string.IsNullOrEmpty(frontendUri.Fragment))
+        if (!TryGetApplicationEndpoint(configured, out var frontendUri)
+            || frontendUri.AbsolutePath != "/")
         {
             throw new EntraNotConfiguredException(
-                "Auth:Entra:FrontendUrl must be an absolute HTTP(S) origin.");
+                "Auth:Entra:FrontendUrl must be an absolute HTTPS origin or an HTTP loopback origin.");
         }
 
         return frontendUri.GetLeftPart(UriPartial.Authority);
@@ -115,13 +134,63 @@ public sealed class EntraOAuthRedirectService
         var authority = _tokenValidator.Authority
             ?? throw new EntraNotConfiguredException("Auth:Entra:TenantId or Auth:Entra:Authority must be configured.");
 
+        if (!Uri.TryCreate(authority, UriKind.Absolute, out var authorityUri)
+            || !authorityUri.IsWellFormedOriginalString()
+            || !IsPermittedAuthorityOrigin(authorityUri)
+            || !IsTenantAuthorityPath(authorityUri))
+        {
+            throw new EntraNotConfiguredException(
+                "Auth:Entra:Authority must be a permitted absolute Entra HTTPS endpoint or HTTP loopback endpoint.");
+        }
+
         // Microsoft's v2.0 authorize/token endpoints hang off the tenant base, not the /v2.0 issuer
-        // suffix that the discovery Authority carries. Strip a trailing /v2.0 so we can append the
-        // /oauth2/v2.0/{authorize,token} paths deterministically (no network round trip at /authorize).
-        var trimmed = authority.TrimEnd('/');
-        if (trimmed.EndsWith("/v2.0", StringComparison.OrdinalIgnoreCase))
-            trimmed = trimmed[..^"/v2.0".Length];
-        return trimmed;
+        // suffix that the discovery Authority carries. Strip the optional trailing /v2.0 so we can
+        // append /oauth2/v2.0/{authorize,token} deterministically (no network round trip at /authorize).
+        var tenantSegment = authorityUri.Segments[1].TrimEnd('/');
+        return $"{authorityUri.GetLeftPart(UriPartial.Authority)}/{tenantSegment}";
+    }
+
+    private static bool TryGetApplicationEndpoint(string configured, out Uri endpoint)
+    {
+        if (!Uri.TryCreate(configured, UriKind.Absolute, out endpoint!)
+            || !endpoint.IsWellFormedOriginalString()
+            || !string.IsNullOrEmpty(endpoint.UserInfo)
+            || !string.IsNullOrEmpty(endpoint.Query)
+            || !string.IsNullOrEmpty(endpoint.Fragment))
+        {
+            endpoint = null!;
+            return false;
+        }
+
+        return endpoint.Scheme == Uri.UriSchemeHttps
+            || (endpoint.Scheme == Uri.UriSchemeHttp && endpoint.IsLoopback);
+    }
+
+    private static bool IsPermittedAuthorityOrigin(Uri authorityUri) =>
+        string.IsNullOrEmpty(authorityUri.UserInfo)
+        && string.IsNullOrEmpty(authorityUri.Query)
+        && string.IsNullOrEmpty(authorityUri.Fragment)
+        && ((authorityUri.Scheme == Uri.UriSchemeHttps
+                && authorityUri.IsDefaultPort
+                && string.Equals(authorityUri.Host, EntraAuthorityHost, StringComparison.OrdinalIgnoreCase))
+            || (authorityUri.Scheme == Uri.UriSchemeHttp && authorityUri.IsLoopback));
+
+    private static bool IsTenantAuthorityPath(Uri authorityUri)
+    {
+        var segments = authorityUri.Segments;
+        if (segments.Length is not (2 or 3))
+            return false;
+
+        if (segments.Length == 3
+            && !string.Equals(segments[2].TrimEnd('/'), "v2.0", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var tenant = Uri.UnescapeDataString(segments[1].TrimEnd('/'));
+        return !string.IsNullOrWhiteSpace(tenant)
+            && !tenant.Contains('/', StringComparison.Ordinal)
+            && !tenant.Contains('\\', StringComparison.Ordinal)
+            && !tenant.Contains('?', StringComparison.Ordinal)
+            && !tenant.Contains('#', StringComparison.Ordinal);
     }
 
     /// <summary>

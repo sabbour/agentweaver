@@ -68,6 +68,27 @@ public sealed class EntraSignInEndpointsTests
     }
 
     [Fact]
+    public Task Authorize_WithMalformedAuthority_ReturnsServiceUnavailableWithoutPersistingState() =>
+        AssertInvalidAuthorizeConfigurationAsync(
+            "Auth:Entra:Authority",
+            "not-a-uri",
+            "Auth:Entra:Authority must be a permitted absolute Entra HTTPS endpoint or HTTP loopback endpoint.");
+
+    [Fact]
+    public Task Authorize_WithMalformedRedirectUri_ReturnsServiceUnavailableWithoutPersistingState() =>
+        AssertInvalidAuthorizeConfigurationAsync(
+            "Auth:Entra:RedirectUri",
+            "not-a-uri",
+            "Auth:Entra:RedirectUri must be an absolute HTTPS callback URL or an HTTP loopback callback URL.");
+
+    [Fact]
+    public Task Authorize_WithMalformedClientId_ReturnsServiceUnavailableWithoutPersistingState() =>
+        AssertInvalidAuthorizeConfigurationAsync(
+            "Auth:Entra:ClientId",
+            "not-an-entra-application-id",
+            "Auth:Entra:ClientId must be an Entra application (client) ID.");
+
+    [Fact]
     public async Task Callback_WithoutConfiguredFrontendUrl_ReturnsServiceUnavailable()
     {
         await using var factory = new MissingFrontendUrlEntraWebApplicationFactory();
@@ -85,7 +106,7 @@ public sealed class EntraSignInEndpointsTests
     // with PKCE (code_challenge + S256).
     // -------------------------------------------------------------------------
     [Fact]
-    public async Task Authorize_WhenEntraConfigured_RedirectsToMicrosoft_AndArmsStateCookie()
+    public async Task Authorize_WithValidLocalDevelopmentConfiguration_RedirectsToMicrosoft_AndArmsStateCookie()
     {
         await using var factory = new EntraSignInWebApplicationFactory();
         var client = factory.CreateClient(NoRedirectNoCookies);
@@ -97,6 +118,8 @@ public sealed class EntraSignInEndpointsTests
         location.Should().Contain("login.microsoftonline.com")
             .And.Contain("/oauth2/v2.0/authorize")
             .And.Contain("response_type=code")
+            .And.Contain(
+                $"redirect_uri={Uri.EscapeDataString(EntraSignInWebApplicationFactory.RedirectUriValue)}")
             .And.Contain("code_challenge=")
             .And.Contain("code_challenge_method=S256");
 
@@ -244,6 +267,22 @@ public sealed class EntraSignInEndpointsTests
         return null;
     }
 
+    private static async Task AssertInvalidAuthorizeConfigurationAsync(
+        string configurationKey,
+        string configurationValue,
+        string expectedError)
+    {
+        await using var factory = new InvalidEntraConfigurationWebApplicationFactory(
+            configurationKey, configurationValue);
+        var client = factory.CreateClient(NoRedirectNoCookies);
+
+        var response = await client.GetAsync("/auth/entra/authorize");
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        (await response.Content.ReadAsStringAsync()).Should().Contain(expectedError);
+        (await factory.CountEntraOAuthStatesAsync()).Should().Be(0);
+    }
+
     private sealed class MissingAuthorityEntraWebApplicationFactory : EntraWebApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -268,6 +307,35 @@ public sealed class EntraSignInEndpointsTests
                 {
                     ["Auth:Entra:RedirectUri"] = EntraSignInWebApplicationFactory.RedirectUriValue,
                     ["Auth:Entra:FrontendUrl"] = string.Empty,
+                }));
+        }
+    }
+
+    private sealed class InvalidEntraConfigurationWebApplicationFactory : EntraWebApplicationFactory
+    {
+        private readonly string _configurationKey;
+        private readonly string _configurationValue;
+
+        public InvalidEntraConfigurationWebApplicationFactory(
+            string configurationKey,
+            string configurationValue)
+        {
+            _configurationKey = configurationKey;
+            _configurationValue = configurationValue;
+        }
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Auth:Entra:RedirectUri"] = EntraSignInWebApplicationFactory.RedirectUriValue,
+                    ["Auth:Entra:FrontendUrl"] = EntraSignInWebApplicationFactory.FrontendUrlValue,
+                    [_configurationKey] = _configurationValue,
+                    ["Auth:Entra:TenantId"] = _configurationKey == "Auth:Entra:Authority"
+                        ? string.Empty
+                        : EntraWebApplicationFactory.TenantId,
                 }));
         }
     }
