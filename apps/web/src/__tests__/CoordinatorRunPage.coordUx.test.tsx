@@ -79,7 +79,9 @@ vi.mock('../api/sse', () => ({
 }));
 
 vi.mock('../components/OutcomePlanPanel', () => ({
-  OutcomePlanPanel: () => null,
+  OutcomePlanPanel: ({ onClarifyPlan }: { onClarifyPlan?: () => void }) => (
+    <button type="button" onClick={onClarifyPlan}>Clarify plan</button>
+  ),
 }));
 
 import type { GraphDescriptor } from '../api/types';
@@ -1122,6 +1124,92 @@ describe('CoordinatorRunPage operator console redesign', () => {
     rerender(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     expect(await screen.findByRole('treeitem', { name: /Select Outcome plan: Awaiting confirmation/i })).toBeTruthy();
+  });
+
+  it('keeps the composer available after Goal-panel Clarify plan until the clarification is acknowledged', async () => {
+    const user = userEvent.setup();
+    currentEvents = [{
+      sequence: 10,
+      type: 'coordinator.outcome_spec',
+      payload: {
+        status: 'awaiting_confirmation',
+        goal: 'Ship the feature',
+        desiredOutcome: 'A working feature',
+      },
+    }];
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await user.click(await screen.findByTestId('run-summary-chip-goal'));
+    await user.click(screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!);
+
+    const input = await screen.findByPlaceholderText('Message coordinator...');
+    expect(input).not.toHaveProperty('disabled', true);
+    await user.type(input, 'support a dry run.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(apiClient.steerCoordinator).toHaveBeenCalledWith('coord-run-1', {
+      kind: 'send',
+      instruction: 'Clarify the outcome plan: support a dry run.',
+    }));
+    expect(await screen.findByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
+  });
+
+  it('keeps outcome-plan actions locked after 30 seconds while the server still reports drafting', async () => {
+    const user = userEvent.setup();
+    try {
+      currentEvents = [
+        {
+          sequence: 10,
+          type: 'coordinator.outcome_spec',
+          payload: {
+            status: 'awaiting_confirmation',
+            goal: 'Ship the feature',
+            desiredOutcome: 'A working feature',
+          },
+        },
+        {
+          sequence: 11,
+          type: 'coordinator.outcome_spec.drafting',
+          payload: { message: 'Re-drafting the outcome plan' },
+        },
+      ];
+      vi.mocked(apiClient.getRun).mockResolvedValue({
+        status: 'in_progress',
+        coordinator_status: 'drafting',
+        autopilot: false,
+        auto_approve_tools: false,
+      } as never);
+
+      render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+      await user.click(await screen.findByTestId('run-summary-chip-goal'));
+      await user.click(screen.getAllByRole('button', { name: 'Clarify plan' }).at(-1)!);
+      const input = await screen.findByPlaceholderText('Message coordinator...');
+      await user.type(input, 'Clarify the outcome plan: support a dry run.');
+      vi.useFakeTimers();
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(30_001);
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByRole('treeitem', { name: /Select Outcome plan: Changes requested — revising/i })).toBeTruthy();
+      expect(screen.getByPlaceholderText('Message coordinator...')).toHaveProperty('disabled', true);
+      expect(vi.mocked(apiClient.getRunEvents).mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('surfaces automation toggle failures instead of silently rolling back', async () => {

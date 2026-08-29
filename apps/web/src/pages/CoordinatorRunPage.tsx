@@ -316,6 +316,32 @@ function normalizePhase(raw: string | undefined | null): OrchPhase {
   return 'unknown';
 }
 
+function outcomePlanRedraftIsActive(
+  events: RunStreamEvent[],
+  runStatus: RunStatus | undefined,
+  coordinatorStatus: string | undefined,
+): boolean {
+  if (isTerminalRunStatus(runStatus ? String(runStatus) : undefined)) return false;
+
+  if (coordinatorStatus) {
+    const normalizedStatus = coordinatorStatus.toLowerCase().replace(/[^a-z]/g, '');
+    if (normalizedStatus.includes('awaitingconfirmation')) return false;
+    const coordinatorPhase = normalizePhase(coordinatorStatus);
+    if (coordinatorPhase !== 'unknown') return coordinatorPhase === 'drafting_outcome';
+  }
+
+  let latestDraftingSequence = -1;
+  let latestOutcomeSequence = -1;
+  for (const event of events) {
+    if (event.type === 'coordinator.outcome_spec.drafting') {
+      latestDraftingSequence = Math.max(latestDraftingSequence, event.sequence);
+    } else if (event.type === 'coordinator.outcome_spec' || event.type === 'coordinator.outcome_spec.confirmed') {
+      latestOutcomeSequence = Math.max(latestOutcomeSequence, event.sequence);
+    }
+  }
+  return latestDraftingSequence > latestOutcomeSequence;
+}
+
 function readStr(p: Record<string, unknown>, keys: string[]): string | undefined {
   for (const k of keys) {
     const v = p[k];
@@ -2240,6 +2266,7 @@ export function CoordinatorRunPage() {
     error: streamError,
     seedError,
     reconnect: reconnectStream,
+    refresh: refreshStreamEvents,
   } = useSeededRunStream(runId ?? '');
   const artifactsLiveUpdateKey = liveEvents[liveEvents.length - 1]?.sequence ?? liveEvents.length;
 
@@ -3154,6 +3181,7 @@ export function CoordinatorRunPage() {
   }, [inSpecAuthoring, liveRfNodes, displayEdges, assemblyNodeIds]);
 
   const [outcomePlanClarifying, setOutcomePlanClarifying] = useState(false);
+  const [outcomePlanClarificationReconcileEpoch, setOutcomePlanClarificationReconcileEpoch] = useState(0);
   const pendingApprovalCounts = useMemo(() => pendingApprovalsByRun(events, runId ?? ''), [events, runId]);
   const latestOutcomePlanSequenceRef = useRef<number | null>(null);
 
@@ -3173,9 +3201,61 @@ export function CoordinatorRunPage() {
 
   useEffect(() => {
     if (!outcomePlanClarifying) return;
-    const timeoutId = window.setTimeout(() => setOutcomePlanClarifying(false), 30_000);
-    return () => window.clearTimeout(timeoutId);
-  }, [outcomePlanClarifying]);
+    // A local acknowledgement means the clarification was accepted, not that drafting finished.
+    // Reconcile the live run plus persisted events before releasing the controls, then keep the
+    // bounded retry alive while the coordinator still reports an active redraft.
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      void (async () => {
+        const [detail, refreshedEvents] = await Promise.allSettled([
+          runId ? apiClient.getRun(runId) : Promise.resolve(undefined),
+          refreshStreamEvents(),
+        ]);
+        if (cancelled) return;
+
+        const refreshedDetail = detail.status === 'fulfilled' ? detail.value : undefined;
+        if (refreshedDetail) {
+          setRunLevelStatus(refreshedDetail.status);
+          setCoordStatusField(refreshedDetail.coordinator_status ?? undefined);
+          setCoordStatusReason(refreshedDetail.coordinator_status_reason ?? undefined);
+          setCoordinatorSteerable(
+            typeof refreshedDetail.coordinator_steerable === 'boolean'
+              ? refreshedDetail.coordinator_steerable
+              : undefined,
+          );
+        }
+        reconnectStream();
+
+        const reconciledEvents = refreshedEvents.status === 'fulfilled'
+          ? [...events, ...refreshedEvents.value]
+          : events;
+        const serverStillDrafting = outcomePlanRedraftIsActive(
+          reconciledEvents,
+          refreshedDetail?.status ?? runLevelStatus,
+          refreshedDetail?.coordinator_status ?? coordStatusField,
+        );
+        if (serverStillDrafting) {
+          setOutcomePlanClarificationReconcileEpoch((value) => value + 1);
+        } else {
+          setOutcomePlanClarifying(false);
+        }
+      })();
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    coordStatusField,
+    events,
+    outcomePlanClarificationReconcileEpoch,
+    outcomePlanClarifying,
+    reconnectStream,
+    refreshStreamEvents,
+    runId,
+    runLevelStatus,
+    setRunLevelStatus,
+  ]);
 
   const { sessionTree, sessionNodeIds, defaultSessionNodeId } = useMemo<{
     sessionTree: RunSessionTree[];
@@ -3471,7 +3551,6 @@ export function CoordinatorRunPage() {
   const topologyViewportApiRef = useRef<TopologyViewportApi | null>(null);
 
   const focusOutcomePlanComposer = useCallback(() => {
-    setOutcomePlanClarifying(true);
     setPanelNodeId('outcome-plan');
     setSessionPanelOpen(true);
     setComposerFocusSignal((value) => value + 1);
