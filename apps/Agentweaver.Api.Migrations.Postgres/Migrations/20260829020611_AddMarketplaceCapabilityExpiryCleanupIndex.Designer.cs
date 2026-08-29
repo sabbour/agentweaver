@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Api.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260829020611_AddMarketplaceCapabilityExpiryCleanupIndex")]
+    partial class AddMarketplaceCapabilityExpiryCleanupIndex
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -252,14 +255,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("automation_key");
 
-                    b.Property<string>("CopilotBindingGrantDigest")
-                        .HasColumnType("text")
-                        .HasColumnName("copilot_binding_grant_digest");
-
-                    b.Property<string>("CopilotBindingId")
-                        .HasColumnType("text")
-                        .HasColumnName("copilot_binding_id");
-
                     b.Property<long>("InstallationId")
                         .HasColumnType("bigint")
                         .HasColumnName("installation_id");
@@ -277,10 +272,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
-                    b.Property<string>("RepositoryGrantDigest")
-                        .HasColumnType("text")
-                        .HasColumnName("repository_grant_digest");
-
                     b.Property<int>("Status")
                         .HasColumnType("integer")
                         .HasColumnName("status");
@@ -289,10 +280,8 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.HasIndex("InstallationId", "RepositoryId");
 
-                    b.HasIndex("ProjectId")
-                        .IsUnique()
-                        .HasFilter("status = 0")
-                        .HasDatabaseName("UX_automation_activations_active_project");
+                    b.HasIndex("ProjectId", "InstallationId", "RepositoryId", "AutomationKey")
+                        .IsUnique();
 
                     b.ToTable("automation_activations", (string)null);
                 });
