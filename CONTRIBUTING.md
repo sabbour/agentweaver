@@ -178,17 +178,19 @@ purposes:
 
 | Job | What it runs | Gating | Runs when |
 |---|---|---|---|
-| `.NET tests` | Stable namespace shards plus isolated PostgreSQL/Testcontainers, process-global environment, and Kata runtime gates; every shard writes TRX results | Blocking — must pass | `.cs`/`.csproj`/`.sln`/`global.json`/`nuget.config`/`tests/**` changed |
+| Seven `.NET test shard (…)` jobs | Stable namespace shards plus isolated PostgreSQL/Testcontainers, process-global environment, and Kata runtime gates; every shard writes TRX results | Blocking — must pass | Every PR targeting `dev`, so all seven ruleset-required contexts are emitted even for metadata-only PRs |
 | `Node toolchain tests` | Full Node toolchain/CI-helper tests plus `npm --prefix scripts/ui-harness test` | Blocking — must pass | Node toolchain paths or UI harness/shared harness paths changed |
 | `Web tests` | Web tests and lint after one isolated `npm ci` | Blocking — must pass | `apps/web/**` changed |
 | `Docs build` | `npm run docs:build` | Blocking — must pass | `docs/**` changed |
 | `Changeset advisory` | `npm run version:check && npm run changeset:check` | Blocking — must pass | Always, on every PR |
 
-The repository policy requires these five blocking jobs (path-conditional jobs count
-as passing when skipped) on a branch that is up to date with `dev`. The GitHub
-ruleset described in [`.github/dev-branch-protection.md`](.github/dev-branch-protection.md)
-is **active**, so admission is mechanical: direct pushes to `dev` are rejected and
-merges are blocked until the branch is current and the required checks are green.
+The repository policy requires the seven named .NET shard jobs plus the Node toolchain,
+web, docs, and changeset jobs on a branch that is up to date with `dev`. Path-conditional
+non-.NET jobs count as passing when skipped; the named .NET shard jobs intentionally run
+on every `dev` PR so GitHub emits each required context. The GitHub ruleset described in
+[`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) is **active**, so
+admission is mechanical: direct pushes to `dev` are rejected and merges are blocked until
+the branch is current and the required checks are green.
 `Changeset advisory` now fails the build (not just a warning) when a release-relevant
 change has no changeset and no `changeset:not-required` exemption.
 

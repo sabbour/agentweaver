@@ -22,10 +22,16 @@ Create an **active branch ruleset** targeting only `dev`:
 - Require status checks: **enabled**
   - Require branches to be up to date before merging: **enabled**
   - Required checks, with the `CI` workflow as source:
-    - `.NET tests`
-    - `Node toolchain tests`
-    - `Web tests`
-    - `Docs build`
+  - `.NET test shard (orchestration)`
+  - `.NET test shard (application and authorization)`
+  - `.NET test shard (runtime and sandbox)`
+  - `.NET test shard (catalog and integrations)`
+  - `.NET test shard (PostgreSQL Testcontainers)`
+  - `.NET test shard (process-global environment)`
+  - `.NET test shard (Kata runtime)`
+  - `Node toolchain tests`
+  - `Web tests`
+  - `Docs build`
     - `Changeset advisory`
 
 ## Repository merge settings
