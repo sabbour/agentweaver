@@ -8,7 +8,7 @@ The Agentweaver backend is the single source of truth for run lifecycle, streami
 
 ## Authentication
 
-Send the API key on API requests unless the endpoint is explicitly public (`/`, `/health`, `/auth/github/*`, or `/api/server/info`):
+Send the API key on API requests unless the endpoint is explicitly public (`/`, `/health`, `/auth/entra/*`, or `/api/server/info`):
 
 ```http
 Authorization: Bearer <api-key>
@@ -30,13 +30,12 @@ A request without recognized credentials returns `401 Unauthorized`. A request f
 cannot access returns `403 Forbidden` (or `404 Not Found` on existence-hiding artifact routes).
 When no credentials are configured, authenticated API requests are unauthorized.
 
-A run with a persisted `project_id` inherits authorization from that project. In Entra mode,
+A run with a persisted `project_id` inherits authorization from that project.
 `Viewer` can use read, stream, history, graph, metrics, workspace, file, and preview-list endpoints;
 `Contributor` and `Owner` can also use run mutations such as review, approval, steering, retry,
-archive, cancellation, and sandbox preview control. In GitHubLegacy mode, the persisted project
-owner remains the boundary. The server resolves the project from the stored run record, never from
-caller input. Linked GitHub identities provide repository and Copilot access but do not grant
-project access. Runs with no `project_id` retain submitting-user ownership. The trusted internal
+archive, cancellation, and sandbox preview control. The server resolves the project from the stored
+run record, never from caller input. GitHub App capabilities do not grant project access. Runs with
+no `project_id` retain submitting-user ownership. The trusted internal
 service identity is denied on ordinary run read and mutation routes; only explicitly opted-in,
 run-bound callbacks such as agent-initiated preview creation accept it.
 
@@ -44,9 +43,9 @@ run-bound callbacks such as agent-initiated preview creation accept it.
 
 ### Runs
 
-Project-scoped run endpoints use the authorization boundary of the run's persisted project: in Entra
-mode, viewers may inspect a run and contributors or owners may operate it; in GitHubLegacy mode, the
-project owner retains access. Older runs without a project remain submitting-user scoped. There is no
+Project-scoped run endpoints use the authorization boundary of the run's persisted project: viewers
+may inspect a run and contributors or owners may operate it. Older runs without a project remain
+submitting-user scoped. There is no
 username-based administrative override.
 
 | Method | Path | Purpose |
@@ -99,8 +98,6 @@ Assistant endpoints back the **Sessions** feature (see [The Assistant and Sessio
 | `GET` | `/api/projects/{id}` | Get a project by id |
 | `PATCH` | `/api/projects/{id}` | Rename a project |
 | `PUT` | `/api/projects/{id}/provider-settings` | Update provider and model defaults |
-| `GET` | `/api/projects/{id}/github-identity` | Get the effective linked GitHub identity for the caller in this project |
-| `PUT` | `/api/projects/{id}/github-identity` | Set or clear the caller's per-project linked GitHub identity override |
 | `DELETE` | `/api/projects/{id}` | Delete a project (record only; cancels active runs) |
 | `GET` | `/api/projects/{id}/runs` | List runs for a project |
 | `POST` | `/api/projects/{id}/runs` | Deprecated direct run submission; returns `410 Gone` |
@@ -110,6 +107,56 @@ Run summary objects returned by `GET /api/projects/{id}/runs` include a `result`
 The standalone project-scoped workflow-run detail endpoint (`GET /api/projects/{id}/runs/{workflowRunId}`) has been removed with the retired standalone run pages. Use owner-scoped `/api/runs/{id}` and child run endpoints for embedded coordinator panels.
 
 Run control state is durable. Shell approvals/denials, tool approval requests, run-scoped/always allow policies, child-to-parent approval inheritance, `ask_question` answers, `auto-approve`, and `autopilot` are replayed from persisted run events. That means approval, answer, and toggle requests may land on any API replica and still be observed by the worker that owns the run.
+
+### GitHub repository selection codes
+
+These endpoints are the pre-project handoff for GitHub-backed project creation. They require an
+authenticated **human Entra subject** and use only that caller's current Repo App authorization.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/github/repository-selections` | List up to 200 bounded, metadata-only repositories available to the caller |
+| `POST` | `/api/github/repository-selections` | Verify one selected browse result and mint a short-lived opaque selection code |
+
+`GET` returns:
+
+```json
+{
+  "repositories": [
+    {
+      "full_name": "octo/example",
+      "owner_login": "octo",
+      "private": true,
+      "default_branch": "main",
+      "pushed_at": "2026-08-28T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+The list intentionally has no repository permission map, clone URL, installation ID,
+credential data, provider error, or assertion that public metadata proves operational access.
+`POST` accepts `{ "full_name": "octo/example" }` only as a user selection instruction. The server
+rechecks that name against the caller's bounded Repo App browse result, then returns:
+
+```json
+{ "selection_code": "opaque-43-character-base64url-value", "expires_at": "2026-08-28T00:05:00+00:00" }
+```
+
+The code is cryptographically random, stored only as a digest, caller-bound, valid for five
+minutes, credential-kind-bound, and atomically single-use. Entra codes are bound to the exact Repo
+App authorization used to issue them. A code is not a general GitHub credential. Missing,
+revoked, malformed, expired, reused, or cross-subject codes fail closed and do not disclose
+repository scope. Browser responses contain no GitHub repository IDs, installation or
+authorization IDs, tokens, secrets, or permission maps. These endpoints return `409` with one of
+`human_entra_subject_required`, `github_binding_unavailable`, or
+`github_capability_unavailable`; malformed selection input returns `400`.
+
+The GitHub branch of `POST /api/projects` accepts only `repository_selection_code` as repository
+authority. It atomically consumes the code for the authenticated caller, verifies the active Repo
+App authorization is still usable, then resolves clone metadata server-side. It rejects
+client-supplied repository URLs, identifiers, owner/name,
+installation IDs, tokens, and permission maps.
 
 ### Memory
 
@@ -166,25 +213,23 @@ Agent loopback writes authenticate with the normal internal API key plus a run-s
 | `POST` | `/api/projects/{id}/memory/export` | Export DB memory → `.squad/` + `.agentweaver/context/` |
 | `POST` | `/api/projects/{id}/memory/import` | Import `.squad/decisions/inbox/*.md` → DB |
 
-### GitHub authentication
+### GitHub capability authorization
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/auth/github/authorize` | Begin the GitHub OAuth redirect flow |
-| `GET` | `/auth/github/callback` | Receive the GitHub OAuth callback |
-| `POST` | `/api/auth/github/device` | Start the GitHub device authorization flow |
-| `POST` | `/api/auth/github/poll` | Poll the device flow for completion |
-| `GET` | `/api/auth/github` | Get current GitHub authentication status |
-| `GET` | `/api/auth/github-accounts` | List the caller's linked GitHub accounts (default flag, avatar, Copilot status, linked time) |
-| `POST` | `/api/auth/github-accounts/link` | Start a second GitHub OAuth round-trip that links another GitHub account to the current Entra user |
-| `DELETE` | `/api/auth/github-accounts/{login}` | Unlink one linked GitHub account; if it was default, the store promotes the next remaining linked account |
-| `PUT` | `/api/auth/github-accounts/{login}/default` | Make a linked GitHub account the caller's default account |
-| `GET` | `/api/auth/github-accounts/accessible-repos` | Enumerate repositories reachable across all linked GitHub accounts, tagged with the login and GitHub-reported permission level |
-| `GET` | `/api/github/accounts` | List the signed-in user's personal account followed by organizations |
-| `GET` | `/api/github/repos` | List repositories for the signed-in GitHub user or selected account |
-| `POST` | `/api/auth/github/sign-out` | Sign out and delete the stored token |
+| `POST` | `/api/auth/github/repo-app/authorizations` | Begin an Entra-user-bound Repo App authorization; returns an authorization URL and opaque transaction ID |
+| `POST` | `/api/auth/github/repo-app/authorizations/handoff` | Begin an MCP-safe Repo App browser handoff; returns only an opaque transaction ID, browser URL, and expiry |
+| `GET` | `/auth/github/repo-app/handoff/{transactionId}` | Redeem an MCP browser URL only from the initiating user's authenticated Entra browser session; issues the callback cookie and redirects to GitHub |
+| `GET` | `/auth/github/repo-app/callback` | Complete the Repo App browser callback with its one-time callback cookie |
+| `GET` | `/api/auth/github/repo-app/authorizations/{transactionId}` | Return only the initiating subject's safe transaction status |
+| `POST` | `/api/auth/github/repo-app/authorization/refresh` | Refresh the caller's Repo App authorization without changing its grant identity |
+| `DELETE` | `/api/auth/github/repo-app/authorization` | Revoke the caller's Repo App authorization and write a credential tombstone |
 
-The linked-account and per-project GitHub-identity endpoints are available only in Entra auth mode and require an authenticated caller with an Entra object id. `GET /api/projects/{id}/github-identity` requires project `Viewer` or higher; `PUT /api/projects/{id}/github-identity` requires project `Contributor` or higher. These endpoints surface the real GitHub permissions reported by each linked identity; Agentweaver project roles do not simulate or override GitHub repo rights.
+Project Copilot App authorization has equivalent project-scoped endpoints at
+`/api/projects/{id}/github/copilot/authorizations/handoff` and
+`/auth/github/copilot-app/handoff/{transactionId}`. Handoff URLs require the same
+initiating Entra browser session through callback completion; the transaction ID alone
+cannot issue a callback cookie or authorize a GitHub account.
 
 ### Team casting
 
@@ -253,8 +298,16 @@ Backlog, board, review-policy, and workflow endpoints are project-scoped and req
 | `PATCH` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Partially update one trigger by type |
 | `DELETE` | `/api/projects/{projectId}/workflows/{workflowId}/trigger` | Clear all triggers, or one type with `?type=` |
 | `POST` | `/api/projects/{projectId}/workflow-events` | Fire a named workflow event manually |
-| `POST` | `/api/projects/{projectId}/webhooks/github` | Receive an HMAC-signed GitHub webhook delivery |
-| `POST` | `/api/projects/{projectId}/webhooks/github/provision` | Create or update the connected repository's webhook using the project's effective GitHub identity |
+
+### GitHub App webhook receiver
+
+GitHub delivers repository events only to the Repo App's App-level receiver; do not
+configure per-project webhook URLs or provisioning routes. The API verifies the webhook
+signature before parsing and routing the delivery.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/github/webhooks/repo-app` | Receive an HMAC-signed Repo App webhook delivery |
 
 Workflow trigger objects use the existing top-level trigger fields (`type`, `interval`,
 `day_of_week`, `day_of_month`, `time_of_day`, `event_name`) plus an optional `if` predicate array
@@ -420,7 +473,7 @@ Five component health checks run **concurrently** with a 5-second individual tim
 | Check name | What it tests |
 | --- | --- |
 | `postgresql` | Postgres connectivity |
-| `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means the signing-key step in `npm run azure:provision-infra` was skipped. |
+| `key_vault` | Azure Key Vault CSI delivery of the required `mcp-api-key`. `critical: secret 'mcp-api-key' not found` means API authentication and worker loopback calls cannot run. |
 | `agent_pod_quota` | Effective admission headroom in the sandbox namespace, computed from the tighter of the `pods` and SandboxClaim object quotas. |
 | `warm_pool` | Warm-pool agent-sandbox availability |
 | `kubernetes_api` | Kubernetes API server reachability |
@@ -812,11 +865,11 @@ Request:
 Scope values: `once` = this call only; `run` = all calls to the same tool+url this run; `always` = all calls this server session; `tool` = all calls to this tool regardless of url.
 For a decision forwarded to a pod-local gate, `always` is effectively run-scoped and does not survive a pod restart.
 
-Response `200 OK` `{ "run_id", "request_id", "approved": true }`. Terminal/replayed and pod-forwarded responses also include `resolved: true`, `expired`, and `state: "approved" | "denied" | "expired"`. The returned `run_id` is the run that actually **owned** the approval, which may differ from `{id}`.
+Response `200 OK` `{ "run_id", "request_id", "approved": true }`. Terminal/replayed and pod-forwarded responses also include `resolved: true`, `expired`, and `state: "approved" | "denied" | "expired"`; pod-forwarded approvals also include `applied`, which confirms that the owning AgentHost accepted this exact forwarding request. The returned `run_id` is the run that actually **owned** the approval, which may differ from `{id}`.
 
 **Owning-run resolution.** The approval context lives on the run that *raised* the tool call. When `{id}` is a coordinator run (`ParentRunId == null` and `AgentName == "Coordinator"`), the API checks its children and then scans persisted `coordinator.child_approval_required` events for the matching `requestId` and `childRunId`. Approving therefore works whether the client posts the coordinator id or the child id.
 
-**Pod-per-run fallback.** If the API's `DurableToolApprovalGate` returns `Unknown` for the resolved child, the API uses `IAgentHostOriginResolver` and `AgentHostApprovalHttpClient` to forward the decision to the pod's authenticated `/tool-approvals` route through the `a2a-sandbox-pod` client. The bearer is re-fetched with `PreviewRunnerCredential.SecretKey(runId)`. A successful terminal forward emits `tool.approval_resolved` on the child run.
+**Pod-per-run fallback.** If the API's `DurableToolApprovalGate` returns `Unknown` for the resolved child, the API uses `IAgentHostOriginResolver` and `AgentHostApprovalHttpClient` to forward the selected scope to the pod's authenticated `/tool-approvals` route through the `a2a-sandbox-pod` client. The bearer is re-fetched with `PreviewRunnerCredential.SecretKey(runId)`. The AgentHost publishes its current-pod scope bridge only when it wins and applies that pending approval; the API publishes the durable cross-pod policy only after it receives `resolved: true`, `state: "approved"`, and `applied: true` for that exact forward. A duplicate or late terminal response with `applied: false`, and every failed, denied, or expired forward, leaves no durable policy. A successful terminal forward emits `tool.approval_resolved` on the child run.
 
 | Status | Approval result |
 | --- | --- |
@@ -1292,14 +1345,16 @@ Request:
 }
 ```
 
-For a GitHub-origin project, add `"source_repository": "owner/repo"` and the server will clone the repository into `working_directory`.
+For a GitHub-origin project, first mint a `repository_selection_code` through the repository
+selection endpoints, then provide that code. The server verifies and consumes it before resolving
+the repository and cloning into `working_directory`; direct repository URLs and identifiers are rejected.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `name` | string | Yes | Display name |
 | `origin` | string | Yes | `"blank"` or `"github"` |
 | `working_directory` | string | Yes | Absolute local path for the project |
-| `source_repository` | string | When `origin` is `"github"` | GitHub repository in `owner/repo` format |
+| `repository_selection_code` | string | When `origin` is `"github"` | Short-lived opaque selection code from `POST /api/github/repository-selections` |
 | `default_provider` | string | No | `"github-copilot"` or `"microsoft-foundry"`. Falls back to the runtime default when omitted. |
 | `default_model_github_copilot` | string | No | Model name override for the GitHub Copilot provider |
 | `default_model_microsoft_foundry` | string | No | Model name override for the Microsoft Foundry provider |
@@ -1743,94 +1798,6 @@ Returns the assembly workspace tree. Owner-scoped.
 Returns raw file content from the assembly workspace. Owner-scoped.
 
 
-
-### GET /auth/github/authorize
-
-Begins the GitHub OAuth redirect flow. This endpoint is anonymous and redirects to GitHub. If GitHub OAuth is not configured it returns `503`.
-
-### GET /auth/github/callback
-
-Receives the GitHub OAuth callback, exchanges the code for a token, and redirects to the configured frontend with `auth=success` or `auth=error`.
-
-### POST /api/auth/github/device
-
-Starts the GitHub device authorization flow for the calling user.
-
-Response `200 OK`:
-
-```json
-{
-  "user_code": "XXXX-XXXX",
-  "verification_uri": "https://github.com/login/device",
-  "expires_in": 900,
-  "interval": 5
-}
-```
-
-Direct the user to `verification_uri` and ask them to enter `user_code`. Then poll `POST /api/auth/github/poll` at the returned `interval` (seconds) until the flow completes or expires.
-
-### POST /api/auth/github/poll
-
-Polls the active device flow for the calling user.
-
-Response `200 OK`:
-
-```json
-{ "status": "pending", "login": null }
-```
-
-| `status` value | Meaning |
-| --- | --- |
-| `pending` | User has not yet authorized — keep polling |
-| `success` | Authorization granted; `login` contains the GitHub username |
-| `expired` | The device code expired before the user authorized |
-| `denied` | The user actively denied the request |
-
-On `success` the token is stored server-side and used automatically for subsequent Copilot provider calls.
-
-### GET /api/auth/github
-
-Returns the current GitHub authentication state for the calling user.
-
-Response `200 OK`:
-
-```json
-{ "status": "signed_in", "login": "octocat", "avatar_url": "https://avatars.githubusercontent.com/u/..." }
-```
-
-| `status` value | Meaning |
-| --- | --- |
-| `signed_in` | A valid token is stored; `login` contains the GitHub username |
-| `signed_out` | The user explicitly signed out |
-| `never_signed_in` | No sign-in has been completed for this user |
-
-### GET /api/github/accounts
-
-Lists GitHub repository sources for the signed-in user. The first entry is always the authenticated user's personal account (`type: "user"`); subsequent entries are organizations (`type: "org"`).
-
-Response `200 OK` is an array of:
-
-```json
-{ "login": "octocat", "name": "The Octocat", "avatar_url": "https://...", "type": "user" }
-```
-
-Returns `401 Unauthorized` when no valid GitHub access token is stored.
-
-### GET /api/github/repos
-
-Lists repositories for the signed-in GitHub user. Optional `?account={login}` selects the repository source: omitted or the user's own login reads personal repositories via GitHub `/user/repos?affiliation=owner`; an organization login reads `/orgs/{org}/repos?type=all`.
-
-Response `200 OK` is an array of:
-
-```json
-{ "full_name": "owner/repo", "description": "string", "private": true, "default_branch": "main" }
-```
-
-Returns `401 Unauthorized` when no valid GitHub access token is stored.
-
-### POST /api/auth/github/sign-out
-
-Deletes the stored GitHub token for the calling user. Response `204 No Content`.
 
 ## Team casting endpoints
 

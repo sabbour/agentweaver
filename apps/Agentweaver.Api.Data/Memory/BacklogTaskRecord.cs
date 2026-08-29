@@ -20,4 +20,5 @@ public sealed class BacklogTaskRecord
     public string? ParentPrdRunId { get; set; }
     public string? PromotionKey { get; set; }
     public string? PromotionReason { get; set; }
+    public bool IsAutomationInvocationPending { get; set; }
 }

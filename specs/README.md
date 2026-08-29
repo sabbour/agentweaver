@@ -78,6 +78,8 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Drive Agentweaver through MCP tools](./mcp-integrations/drive-agentweaver-through-mcp.md) — [#33](https://github.com/sabbour/agentweaver/issues/33)
 - [Provide a Copilot agent for every project](./mcp-integrations/provide-project-copilot-agent.md) — [#35](https://github.com/sabbour/agentweaver/issues/35)
 - [Operate Agentweaver from a browser chat control console](./mcp-integrations/browser-chat-control-console.md) — [#50](https://github.com/sabbour/agentweaver/issues/50)
+- [Connect GitHub App capabilities without changing product sign-in](./mcp-integrations/connect-github-app-capabilities.md) — [#939](https://github.com/sabbour/agentweaver/issues/939)
+- [Review unattended project settings and diagnostics](./mcp-integrations/unattended-project-settings-and-diagnostics.md) — [#946](https://github.com/sabbour/agentweaver/issues/946)
 
 ## Deployment & platform
 

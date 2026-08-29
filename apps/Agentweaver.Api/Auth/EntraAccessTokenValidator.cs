@@ -114,6 +114,8 @@ public sealed class EntraAccessTokenValidator
             result.ClaimsIdentity.FindFirst("name")?.Value,
             email,
             oid);
+        if (!long.TryParse(result.ClaimsIdentity.FindFirst("exp")?.Value, out var expirationUnixSeconds))
+            return null;
 
         return new EntraAccessTokenClaims(
             oid,
@@ -122,7 +124,8 @@ public sealed class EntraAccessTokenValidator
             email,
             recognizedRoles,
             allRoles,
-            PlatformRoles.SelectPrimaryRole(recognizedRoles));
+            PlatformRoles.SelectPrimaryRole(recognizedRoles),
+            DateTimeOffset.FromUnixTimeSeconds(expirationUnixSeconds));
     }
 
     private async Task<IReadOnlyList<SecurityKey>> GetSigningKeysAsync(bool forceRefresh, CancellationToken ct)
@@ -195,4 +198,5 @@ public sealed record EntraAccessTokenClaims(
     string? Email,
     IReadOnlyList<string> RecognizedRoles,
     IReadOnlyList<string> RawRoles,
-    string? PrimaryRole);
+    string? PrimaryRole,
+    DateTimeOffset ExpiresAt);

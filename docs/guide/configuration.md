@@ -29,18 +29,108 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Auth:GitHub:ClientId` | none | GitHub OAuth App client ID — required for sign-in |
-| `Auth:GitHub:ClientSecret` | none | GitHub OAuth App client secret — required for sign-in |
-| `Auth:GitHub:CallbackUrl` | none | OAuth callback URL registered in the GitHub App (must match exactly) |
-| `Auth:GitHub:FrontendUrl` | none | URL the API redirects to after a successful sign-in |
-| `Auth:GitHub:AllowedOrg` | none | Comma/semicolon-delimited list of allow-rules. Each rule is one of: `*` (all organizations), `org` (bare org — any member), `org/*` (explicit organization wildcard), or `org/team-slug` (only that specific team). A caller is allowed if they satisfy ANY rule. Team display names with spaces or uppercase are defensively slugified (e.g. `Azure/AKS PM` is treated as `Azure/aks-pm`). Example: `Azure/aks,Azure/AKS PM,azure-management-and-platforms/*`. |
+| `Auth:Mode` | `Entra` | Microsoft Entra browser sign-in mode |
+| `Auth:Entra:ClientId` | none | Entra application (client) ID |
+| `Auth:Entra:TenantId` | none | Entra tenant (directory) ID |
+| `Auth:Entra:RedirectUri` | none | Exact Entra application callback URL |
 
-Set the OAuth client secret locally with user-secrets:
+#### Repo App user authorization
 
-```powershell
-cd apps/Agentweaver.Api
-dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
-```
+Interactive repository access is authorized separately from product sign-in. An Entra-authenticated human starts
+`POST /api/auth/github/repo-app/authorizations`; the browser completes the App callback at
+`GET /auth/github/repo-app/callback`. The API persists only opaque transaction and credential
+references. It uses PKCE S256 and a one-time `__Host-` callback cookie; do not register the
+legacy `/auth/github/callback` URL for this App.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Auth:RepoApp:ClientId` | none | Repo GitHub App OAuth client ID |
+| `Auth:RepoApp:ClientSecret` | none | Repo GitHub App OAuth client secret; set through user-secrets or Key Vault |
+| `Auth:RepoApp:CallbackUrl` | none | Exact registered callback URL, ending in `/auth/github/repo-app/callback` |
+| `Auth:RepoApp:BaseUrl` | `https://github.com` | GitHub authorization origin |
+| `Auth:RepoApp:Scopes` | `repo read:user` | Explicit user-authorization scopes |
+| `Auth:RepoApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for fixed post-callback routes |
+
+The begin request accepts only `settings` or `projects` as `return_route_key`; it never
+accepts an arbitrary URL or path. Refresh and disconnect use the corresponding
+`POST /api/auth/github/repo-app/authorization/refresh` and
+`DELETE /api/auth/github/repo-app/authorization` endpoints. Both require the same
+human Entra subject as authorization begin.
+
+#### Repo App installation and webhook
+
+The API identity reads the Repo App PEM and webhook secrets through its configured secret
+store; in hosted deployments those names resolve only through the API's Key Vault access.
+The PEM, App JWT, and installation access token are never configuration values, persisted
+records, logs, or API responses. Configure GitHub's single Repo App webhook to the
+App-level receiver implemented by the API; do not configure per-project webhook URLs.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Auth:RepoApp:AppId` | none | Numeric Repo App ID used as the App-JWT issuer |
+| `Auth:RepoApp:PrivateKeySecretName` | none | Secret-store name of the Repo App PEM, readable only by the API |
+| `Auth:RepoApp:WebhookSecretName` | none | Secret-store name of the active webhook HMAC secret |
+| `Auth:RepoApp:PreviousWebhookSecretName` | none | Secret-store name of the prior HMAC secret during a rotation |
+| `Auth:RepoApp:PreviousWebhookSecretExpiresAt` | none | UTC expiration after which the previous secret is rejected |
+| `Auth:RepoApp:WebhookMaxBodyBytes` | `1048576` | Maximum unauthenticated raw request-body size |
+| `Auth:RepoApp:WebhookVerificationTimeoutSeconds` | `5` | Body-read and signature-verification timeout (maximum `10`) |
+| `Auth:RepoApp:ApiUrl` | `https://api.github.com` | GitHub API origin for App installation-token minting |
+
+Project App grants use GitHub numeric installation and repository IDs derived and verified by
+the server; clients never submit or override those identifiers, repository names, or permission
+maps. Repository names remain display-only and are never authorization inputs. A provider
+permission expansion or reduction invalidates the affected unattended grant and activation; fix
+the App permissions and wait for the server to verify a new grant.
+Installation tokens are scoped to Agentweaver's server-declared unattended repository
+permissions and never inherit unrelated installation permissions.
+
+#### Purpose-bound broker
+
+The trusted run lifecycle captures and revalidates immutable, purpose-specific snapshots for
+root launches, child launches, retries, and resumes. Interactive repository snapshots are bound
+to the initiating Entra subject and exact live Repo App user authorization; they do **not**
+require an installation or repository grant. Unattended repository snapshots remain bound to an
+active installation, canonical repository grant, and unchanged permission digest. No API, MCP,
+or sandbox route exposes the broker. Repository and Copilot adapter delivery is owned by #947;
+this broker layer never configures a sandbox or model process.
+
+Two-App credential reads use current secret versions only. Revocation writes a tombstone before
+deleting the current value. Azure Key Vault soft-delete and purge protection can retain older
+provider versions for the configured retention period; this is an accepted recovery risk,
+mitigated by retention policy and least-privilege Key Vault RBAC that forbids versioned reads
+outside the API credential vault.
+
+#### Project Copilot App binding
+
+An Entra-authenticated **explicit Project Owner** starts a project-specific Copilot App
+binding with `POST /api/projects/{id}/github/copilot/authorizations`. The callback is
+`GET /auth/github/copilot-app/callback`; it is pinned to the project and rechecks the
+same Owner assignment before completing. Poll
+`GET /api/projects/{id}/github/copilot/authorizations/{transactionId}` only exposes
+`pending`, `completed`, `failed`, or `expired` to the initiating Entra subject. A
+human Project Owner or human Platform Admin can disconnect with
+`DELETE /api/projects/{id}/github/copilot/binding`.
+
+The Copilot App has no repository permissions, installation, PEM, or repository
+operations. Its client ID, client secret, and optional Key Vault secret path must differ
+from the Repo App's values. Registration validation rejects a Copilot private key or
+repository permission, a shared App credential, or a Repo App configured to request user
+authorization during installation.
+At startup and whenever Project Settings checks automation readiness, Agentweaver retrieves the
+public Copilot App registration. Any reported permission fails closed: the App cannot be bound
+or used for unattended work until its registration has zero permissions.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Auth:CopilotApp:ClientId` | none | Copilot GitHub App OAuth client ID; must differ from `Auth:RepoApp:ClientId` |
+| `Auth:CopilotApp:ClientSecret` | none | Copilot App OAuth client secret; store in user-secrets or Key Vault |
+| `Auth:CopilotApp:CallbackUrl` | none | Exact callback URL ending in `/auth/github/copilot-app/callback` |
+| `Auth:CopilotApp:BaseUrl` | `https://github.com` | GitHub authorization origin |
+| `Auth:CopilotApp:Slug` | none | GitHub App slug used for the required live registration check |
+| `Auth:CopilotApp:ApiUrl` | `https://api.github.com` | GitHub API origin used to check the public App registration |
+| `Auth:CopilotApp:Scopes` | `read:user` | Explicit non-repository user-authorization scopes |
+| `Auth:CopilotApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for the fixed callback route |
+| `Auth:CopilotApp:SecretPath` | none | Optional Key Vault path; must not equal the Repo App secret path |
 
 When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
 GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)
@@ -74,13 +164,12 @@ allow public client flows.
 ::: tip AKS deploy pipeline wiring
 On the AKS deploy pipeline, `Auth:Mode`/`Auth:Entra:ClientId`/`Auth:Entra:TenantId`/
 `Auth:Entra:RedirectUri` are set from the deploy-time `AUTH_MODE`/`ENTRA_CLIENT_ID`/
-`ENTRA_TENANT_ID` environment variables (mirroring how `GITHUB_ALLOWED_ORG` etc. flow into
-`Auth:GitHub:*` for GitHub mode) — see `scripts/azure/variables.mjs` and
+`ENTRA_TENANT_ID` environment variables — see `scripts/azure/variables.mjs` and
 `k8s/base/api-deployment.yaml`. `Auth:Entra:ClientSecret` (`Auth__Entra__ClientSecret`) is
 deliberately **not** wired through the deploy pipeline: this environment is PKCE-only per the
 tenant policy noted above, so there is no deploy-time env var / ConfigMap key for it. If a
 future tenant allows a confidential-client secret, set `Auth__Entra__ClientSecret` manually via
-the Key Vault CSI `SecretProviderClass`, mirroring the existing `github-client-secret` wiring.
+the Key Vault CSI `SecretProviderClass`.
 :::
 
 ### CORS settings
@@ -130,7 +219,8 @@ Grounded in `apps/Agentweaver.Api/appsettings.json` (`Logging:LogLevel`). Overri
 
 ## Web environment variables
 
-The web UI authenticates users through GitHub OAuth and sends the resulting session token automatically — it does not require a static API key.
+The web UI authenticates users through Microsoft Entra ID and sends the resulting session
+cookie automatically — it does not require a static API key.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |

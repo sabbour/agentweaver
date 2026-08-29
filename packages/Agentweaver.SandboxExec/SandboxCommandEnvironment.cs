@@ -16,6 +16,22 @@ internal static class SandboxCommandEnvironment
             startInfo.Environment[key] = value;
     }
 
+    public static void RemoveInheritedCommandHelperVariables(ProcessStartInfo startInfo)
+    {
+        foreach (var key in startInfo.Environment.Keys.ToArray())
+        {
+            if (key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase) ||
+                key.StartsWith("GH_", StringComparison.OrdinalIgnoreCase) ||
+                key.StartsWith("GITHUB_", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("PAGER", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("EDITOR", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("VISUAL", StringComparison.OrdinalIgnoreCase))
+            {
+                startInfo.Environment.Remove(key);
+            }
+        }
+    }
+
     public static string PrefixPosixExports(
         string commandLine,
         IReadOnlyDictionary<string, string>? environment)

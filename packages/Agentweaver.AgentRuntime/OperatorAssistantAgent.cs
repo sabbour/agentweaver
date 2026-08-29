@@ -98,7 +98,6 @@ public interface IOperatorAssistantAgent
 /// </summary>
 public sealed class OperatorAssistantAgent(
     GitHubCopilotClientFactory factory,
-    IGitHubTokenScopeProvider scopeProvider,
     IAgentweaverMcpToolProvider mcpToolProvider,
     ILogger<OperatorAssistantAgent> logger) : IOperatorAssistantAgent
 {
@@ -127,23 +126,12 @@ public sealed class OperatorAssistantAgent(
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (string.IsNullOrWhiteSpace(request.CallerUser))
+        if (string.IsNullOrWhiteSpace(request.RunId))
             throw new AgentProviderException(
                 ModelSource.GitHubCopilot,
                 AgentProviderFailureKind.Authorization,
                 "github_copilot_auth_required",
-                "Operator assistant cannot start: no authenticated caller identity is available.",
-                isRetryable: false);
-
-        var scope = await scopeProvider
-            .ResolveAsync(request.CallerUser, request.ProjectId, ct)
-            .ConfigureAwait(false);
-        if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-            throw new AgentProviderException(
-                ModelSource.GitHubCopilot,
-                AgentProviderFailureKind.Authorization,
-                "github_copilot_auth_required",
-                "Operator assistant requires the signed-in user's Copilot-entitled token, not the installation token.",
+                "Operator assistant cannot start without a run-bound Copilot capability snapshot.",
                 isRetryable: false);
 
         // Connect to the real MCP server as the caller and adapt its tools to AIFunctions.
@@ -155,7 +143,7 @@ public sealed class OperatorAssistantAgent(
             "Operator assistant connected to MCP server: {ToolCount} tools available for conversation {ConversationId}",
             toolDeclarations.Count, request.ConversationId);
 
-        await using var client = await factory.CreateClientAsync(scope, request.ModelId, ct).ConfigureAwait(false);
+        await using var client = await factory.CreateClientAsync(request.RunId, request.ModelId, ct).ConfigureAwait(false);
         try
         {
             await client.StartAsync(ct).ConfigureAwait(false);

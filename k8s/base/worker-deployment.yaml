@@ -71,17 +71,6 @@ spec:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
-            # OAuthConfigGuard fires in Production during efbundle host build.
-            - name: Auth__OAuth__Issuer
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_ISSUER
-            - name: Auth__OAuth__Audience
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_AUDIENCE
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -100,13 +89,7 @@ spec:
             - -c
             - |
               set -eu
-              # Worker needs GitHub credentials for repo operations (clone, worktree, PR).
-              # OAuth signing key read here too; Auth:ApiKey needed for agent tool loopback calls.
-              export GitHub__ClientId="$(cat /mnt/secrets-store/github-client-id)"
-              export GitHub__ClientSecret="$(cat /mnt/secrets-store/github-client-secret)"
-              export Auth__GitHub__ClientId="${GitHub__ClientId}"
-              export Auth__GitHub__ClientSecret="${GitHub__ClientSecret}"
-              export Auth__OAuth__SigningKey="$(cat /mnt/secrets-store/mcp-oauth-signing-key)"
+              # Auth:ApiKey is required for agent tool loopback calls.
               export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
               exec dotnet Agentweaver.Api.dll
           ports:
@@ -157,33 +140,6 @@ spec:
             # Mirror api-deployment.yaml: worker launches Phase-3 Build/Test AgentHost pods and must use the same plain-http healthz scheme.
             - name: Sandbox__AgentHost__RequireMtls
               value: "false"
-            # GitHub OAuth metadata (callback/frontend for any per-run GitHub auth flows).
-            - name: Auth__GitHub__AllowedOrg
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: GITHUB_ALLOWED_ORG
-            - name: Auth__GitHub__CallbackUrl
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: GITHUB_CALLBACK_URL
-            - name: Auth__GitHub__FrontendUrl
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: GITHUB_FRONTEND_URL
-            # OAuth AS metadata — worker may need to validate inbound tokens.
-            - name: Auth__OAuth__Issuer
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_ISSUER
-            - name: Auth__OAuth__Audience
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_AUDIENCE
             # Postgres (worker always uses Postgres — it is the run-state owner).
             # Flip Database__Provider to "sqlite" ONLY as an emergency rollback; doing so
             # will break run leasing since the lease schema is Postgres-specific.

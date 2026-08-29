@@ -214,15 +214,82 @@ public sealed class ToolApprovalGateTests
         result.Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData(ApprovalScope.Run)]
+    [InlineData(ApprovalScope.Tool)]
+    [InlineData(ApprovalScope.Always)]
+    public async Task Clear_RevokesFinalizedLocalScopePolicies(ApprovalScope scope)
+    {
+        var gate = CreateGate();
+        const string runId = "run-finalized-clear";
+        const string requestId = "req-finalized-clear";
+        const string scopeGrantId = "scope-finalized-clear";
+
+        var pending = Register(gate, runId, requestId);
+        (await gate.GrantProvisionalScopeAsync(
+            runId,
+            requestId,
+            scope,
+            scopeGrantId,
+            DateTimeOffset.UtcNow.AddMinutes(1))).Should().BeTrue();
+        (await pending).Should().BeTrue();
+        gate.FinalizeScopeGrant(runId, requestId, scopeGrantId).Should().BeTrue();
+        gate.IsAutoApproved(runId, "web_fetch", "https://before-clear.test").Should().BeTrue();
+
+        gate.Clear(runId);
+
+        gate.IsAutoApproved(runId, "web_fetch", "https://after-clear.test").Should().BeFalse(
+            "finalized pod-local scopes remain lifecycle-bound and must be withdrawn with their run");
+    }
+
+    [Fact]
+    public async Task InvalidateScopeGrantsForPolicy_OnlyRemovesMatchingScopeAndPreservesPendingApproval()
+    {
+        var gate = CreateGate();
+        const string runId = "run-scope-isolation";
+        var finalized = Register(gate, runId, "req-finalized", toolName: "web_fetch");
+        var rejected = Register(gate, runId, "req-rejected", toolName: "shell");
+        var unrelatedPending = Register(gate, runId, "req-pending", toolName: "start_preview");
+
+        (await gate.GrantProvisionalScopeAsync(
+            runId,
+            "req-finalized",
+            ApprovalScope.Run,
+            "grant-finalized",
+            DateTimeOffset.UtcNow.AddMinutes(1))).Should().BeTrue();
+        (await finalized).Should().BeTrue();
+        gate.FinalizeScopeGrant(runId, "req-finalized", "grant-finalized").Should().BeTrue();
+
+        (await gate.GrantProvisionalScopeAsync(
+            runId,
+            "req-rejected",
+            ApprovalScope.Tool,
+            "grant-rejected",
+            DateTimeOffset.UtcNow.AddMinutes(1))).Should().BeTrue();
+        (await rejected).Should().BeTrue();
+
+        gate.InvalidateScopeGrantsForPolicy(runId, "shell", null).Should().BeTrue();
+
+        gate.IsAutoApproved(runId, "web_fetch", "https://finalized.test").Should().BeTrue(
+            "a failed shell scope must not revoke a finalized web-fetch scope");
+        gate.GetRequestState(runId, "req-pending").Should().Be(ToolApprovalRequestState.Pending,
+            "a failed scope must not clear unrelated pending approvals");
+        gate.IsAutoApproved(runId, "shell", null).Should().BeFalse();
+
+        gate.Deny(runId, "req-pending").Should().BeTrue();
+        (await unrelatedPending).Should().BeFalse();
+    }
+
     // ── Sibling propagation (RegisterParentRun, commit cb7fbbf) ───────────────────
 
     [Fact]
-    public async Task ToolScope_GrantInChildA_PropagatesToSiblingChildB()
+    public async Task ToolScope_GrantInChildA_RemainsConfinedToChildA()
     {
         var gate = CreateGate();
         const string parent = "coord-1";
         const string childA = "child-A";
         const string childB = "child-B";
+        const string childC = "child-C";
 
         gate.RegisterParentRun(childA, parent);
         gate.RegisterParentRun(childB, parent);
@@ -232,12 +299,18 @@ public sealed class ToolApprovalGateTests
         await gate.GrantAsync(childA, "req-1", ApprovalScope.Tool);
         (await task).Should().BeTrue();
 
-        // Sibling child B sees the policy for the same tool (any URL).
-        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeTrue();
+        gate.IsAutoApproved(childA, "web_fetch", "https://another-url.test").Should().BeTrue(
+            "Tool scope remains URL-agnostic within the approving child run");
+        gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeFalse(
+            "Tool scope must not authorize a sibling child");
+
+        gate.RegisterParentRun(childC, parent);
+        gate.IsAutoApproved(childC, "web_fetch", "https://future-child.test").Should().BeFalse(
+            "Tool scope must not authorize a future child");
     }
 
     [Fact]
-    public async Task ToolScope_PropagatesAcrossUrls_RunScope_DoesNot()
+    public async Task RunScope_PropagatesAcrossChildren_WhileToolScopeDoesNot()
     {
         var gate = CreateGate();
         const string parent = "coord-2";
@@ -255,13 +328,13 @@ public sealed class ToolApprovalGateTests
         // The propagated run-scoped grant covers the tool for every URL.
         gate.IsAutoApproved(childB, "web_fetch", "https://other.com").Should().BeTrue();
 
-        // Tool scope is URL-agnostic: grant for a different tool in child A.
+        // Tool scope is URL-agnostic, but only within the approving child.
         var toolTask = Register(gate, childA, "req-tool", toolName: "shell", url: "https://anything.com");
         await gate.GrantAsync(childA, "req-tool", ApprovalScope.Tool);
         (await toolTask).Should().BeTrue();
 
-        // Tool-scoped grant propagates to the sibling for ANY URL of that tool.
-        gate.IsAutoApproved(childB, "shell", "https://different.com").Should().BeTrue();
+        gate.IsAutoApproved(childA, "shell", "https://different.com").Should().BeTrue();
+        gate.IsAutoApproved(childB, "shell", "https://different.com").Should().BeFalse();
     }
 
     [Fact]
@@ -276,7 +349,7 @@ public sealed class ToolApprovalGateTests
         gate.RegisterParentRun(childB, parent);
 
         var task = Register(gate, childA, "req-1", url: "https://example.com");
-        await gate.GrantAsync(childA, "req-1", ApprovalScope.Tool);
+        await gate.GrantAsync(childA, "req-1", ApprovalScope.Run);
         (await task).Should().BeTrue();
 
         gate.IsAutoApproved(childB, "web_fetch", "https://example.com").Should().BeTrue();
@@ -694,6 +767,204 @@ public sealed class DurableToolApprovalGateEventTests : IDisposable
             "run-arm2", "req-arm2", "coordinator_start", null, ExpirationTimeout, CancellationToken.None);
 
         gate.HasArmedApproval("run-arm2").Should().BeFalse("an expired request must not count as armed");
+    }
+
+    // ── PR #972 findings #2 and #3: active-run claim for every non-once scope/caller ──
+
+    [Fact]
+    public async Task GrantAsync_StandardApiPath_FailsClosed_WhenRunAlreadyTerminalized()
+    {
+        var streams = new RunStreamStore();
+        var runIdValue = RunId.New();
+        var runId = runIdValue.ToString();
+        streams.Create(runId, "owner");
+        var runStore = new FixedStatusRunStore(RunStatus.Failed);
+        var gate = new DurableToolApprovalGate(NewState(), streams, runStore: runStore);
+
+        // Register a live pending context via the standard (non-AgentHost-context) path. Calling
+        // WaitForApprovalAsync synchronously appends the context before this expression returns
+        // control, mirroring the endpoint's own "register pending, then later grant" flow.
+        var pending = gate.WaitForApprovalAsync(
+            runId, "req-standard-1", "web_fetch", "https://example.test",
+            TimeSpan.FromMilliseconds(300), CancellationToken.None);
+
+        var granted = await gate.GrantAsync(runId, "req-standard-1", ApprovalScope.Run);
+
+        granted.Should().BeFalse(
+            "the standard API GrantAsync path (context: null) must also require an active run " +
+            "before persisting a non-once scope -- there is no context-based carve-out");
+        gate.IsAutoApproved(runId, "web_fetch", "https://other.test").Should().BeFalse();
+
+        (await pending).Should().BeFalse("the request was never granted, so it must expire");
+    }
+
+    [Fact]
+    public async Task PersistAgentHostApprovalAsync_HoldsActiveClaimAcrossReadAndCommit_ExpiresAfterConcurrentReviewReady()
+    {
+        var streams = new RunStreamStore();
+        var runIdValue = RunId.New();
+        var runId = runIdValue.ToString();
+        streams.Create(runId, "owner");
+        var guard = new RunActiveClaimGuard();
+        var inner = new PausableActiveRunStore();
+        var guardedStore = new RunActiveClaimGuardedRunStore(inner, guard);
+        var gate = new DurableToolApprovalGate(
+            NewState(), streams, runStore: guardedStore, runActiveClaimGuard: guard);
+
+        var grantTask = gate.PersistAgentHostApprovalAsync(
+            runId, "req-race-1", "web_fetch", "https://example.test", ApprovalScope.Run);
+
+        await inner.EnteredRead.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // While the grant's active-run read is paused mid-flight -- still holding the claim
+        // acquired around the whole read-then-commit critical section -- marking the same run
+        // review-ready must be unable to proceed. This is the atomicity finding #3 requires on
+        // SQLite, where the run store and the RunEvents/policy store are separate database files
+        // that cannot share one ACID transaction.
+        var reviewReadyTask = guardedStore.UpdateReviewReadyAsync(
+            runIdValue, "tree", "diff", 1, CancellationToken.None);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+        reviewReadyTask.IsCompleted.Should().BeFalse(
+            "marking review ready must wait for the in-flight durable approval-scope grant");
+        inner.ReviewReadyCalls.Should().Be(0);
+
+        inner.ReleaseRead.SetResult();
+
+        (await grantTask.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeTrue(
+            "the run was InProgress for the entire atomic claim, so the grant must succeed");
+        await reviewReadyTask.WaitAsync(TimeSpan.FromSeconds(5));
+        inner.ReviewReadyCalls.Should().Be(1);
+
+        gate.IsAutoApproved(runId, "web_fetch", "https://other.test").Should().BeFalse(
+            "the durable run-scope policy committed before terminalization, but the run is no longer active");
+    }
+
+    private sealed class FixedStatusRunStore(RunStatus status) : IRunStore
+    {
+        public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default) =>
+            Task.FromResult<Run?>(new Run
+            {
+                Id = runId,
+                RepositoryPath = "dummy-repo-path",
+                OriginatingBranch = "main",
+                ModelSource = ModelSource.GitHubCopilot,
+                Task = "tool approval gate test",
+                SubmittingUser = "owner",
+                Status = status,
+                StartedAt = DateTimeOffset.UtcNow,
+            });
+
+        public Task<bool> TrySetTerminalStatusAsync(
+            RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default) =>
+            throw new NotImplementedException();
+
+        public Task InsertAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus s, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateStatusAsync(RunId runId, RunStatus s, DateTimeOffset? endedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateResultAsync(RunId runId, RunStatus s, string result, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus s, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryTransitionToCommittingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryRevertCommittingAsync(RunId runId, string? treeHash = null, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryStartMergingAsync(RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> RevertMergingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> CompleteMergingAsync(RunId runId, RunStatus s, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default, string? mergedCommitHash = null) => throw new NotImplementedException();
+        public Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> SetAssembleReadyAsync(RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateToInProgressAsync(RunId runId, string worktreePath, string worktreeBranch, DateTimeOffset startedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task DeleteAsync(RunId runId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateWorktreeAsync(RunId runId, string worktreePath, string worktreeBranch, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task SetSandboxInfoAsync(RunId runId, string? backend, string? claimName, string? podName, string? @namespace, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetRunsByProjectAsync(ProjectId projectId, bool includeChildren = false, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(ProjectId projectId, IEnumerable<RunStatus> s, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryCreateProjectRunAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Run?> GetByWorkflowRunIdAsync(string workflowRunId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default) => throw new NotImplementedException();
+    }
+
+    private sealed class PausableActiveRunStore : IRunStore
+    {
+        private RunStatus _status = RunStatus.InProgress;
+        private int _getCalls;
+
+        public readonly TaskCompletionSource EnteredRead =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource ReleaseRead =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int TerminalizeCalls;
+        public int ReviewReadyCalls;
+
+        public async Task<Run?> GetAsync(RunId runId, CancellationToken ct = default)
+        {
+            // DurableToolApprovalGate.ResolveAndPersistAsync reads the run store twice for a
+            // non-once scope: once in SubjectOfAsync (subject resolution, BEFORE the active-run
+            // claim is acquired) and once inside LockAndRequireActiveRunAsync (the active-run
+            // check, AFTER the claim is held). Only the second read is the one the claim is meant
+            // to bracket, so only it pauses here; the first must return promptly so the gate can
+            // reach the guarded section at all.
+            if (Interlocked.Increment(ref _getCalls) == 2)
+            {
+                EnteredRead.TrySetResult();
+                await ReleaseRead.Task.ConfigureAwait(false);
+            }
+
+            return new Run
+            {
+                Id = runId,
+                RepositoryPath = "dummy-repo-path",
+                OriginatingBranch = "main",
+                ModelSource = ModelSource.GitHubCopilot,
+                Task = "tool approval gate test",
+                SubmittingUser = "owner",
+                Status = _status,
+                StartedAt = DateTimeOffset.UtcNow,
+            };
+        }
+
+        public Task<bool> TrySetTerminalStatusAsync(
+            RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref TerminalizeCalls);
+            _status = toStatus;
+            return Task.FromResult(true);
+        }
+
+        public Task InsertAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus s, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateStatusAsync(RunId runId, RunStatus s, DateTimeOffset? endedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateResultAsync(RunId runId, RunStatus s, string result, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null)
+        {
+            Interlocked.Increment(ref ReviewReadyCalls);
+            _status = RunStatus.AwaitingReview;
+            return Task.CompletedTask;
+        }
+        public Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus s, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryTransitionToCommittingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryRevertCommittingAsync(RunId runId, string? treeHash = null, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> TryStartMergingAsync(RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> RevertMergingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
+        public Task<bool> CompleteMergingAsync(RunId runId, RunStatus s, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default, string? mergedCommitHash = null) => throw new NotImplementedException();
+        public Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> SetAssembleReadyAsync(RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateToInProgressAsync(RunId runId, string worktreePath, string worktreeBranch, DateTimeOffset startedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task DeleteAsync(RunId runId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateWorktreeAsync(RunId runId, string worktreePath, string worktreeBranch, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task SetSandboxInfoAsync(RunId runId, string? backend, string? claimName, string? podName, string? @namespace, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetRunsByProjectAsync(ProjectId projectId, bool includeChildren = false, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(ProjectId projectId, IEnumerable<RunStatus> s, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryCreateProjectRunAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Run?> GetByWorkflowRunIdAsync(string workflowRunId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private DurableRunControlState NewState()

@@ -579,7 +579,13 @@ public sealed class PodExecServer : IAsyncDisposable
                 request.ReadOnlyPaths ?? [],
                 []),
             request.TimeoutMs,
-            request.NetworkEnabled);
+            request.NetworkEnabled,
+            DirectExecution: string.IsNullOrWhiteSpace(request.DirectExecutable)
+                ? null
+                : new SandboxDirectExecution(
+                    request.DirectExecutable,
+                    request.DirectArguments ?? [],
+                    request.DirectEnvironment));
 
     private bool IsAuthorized(string? token) =>
         !string.IsNullOrEmpty(_token)

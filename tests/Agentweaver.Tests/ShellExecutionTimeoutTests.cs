@@ -60,12 +60,9 @@ public sealed class ShellExecutionTimeoutTests
     {
         var executor = SandboxExecutorFactory.CreatePassthrough();
         var factory = new GitHubCopilotClientFactory(
-            new ConfigurationBuilder().Build(),
-            new NullGitHubTokenStore(),
-            new FixedInstallationScopeStub());
+            new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider());
         await using var agent = new CopilotAIAgent(
             factory,
-            new FixedInstallationScopeStub(),
             executor,
             new StubPolicyStore(),
             new InMemoryShellApprovalStore(),
@@ -103,11 +100,9 @@ public sealed class ShellExecutionTimeoutTests
     {
         var executor = SandboxExecutorFactory.CreatePassthrough();
         var factory = new GitHubCopilotClientFactory(
-            new ConfigurationBuilder().Build(),
-            new NullGitHubTokenStore(),
-            new FixedInstallationScopeStub());
+            new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider());
         await using var agent = new CopilotAIAgent(
-            factory, new FixedInstallationScopeStub(), executor, new StubPolicyStore(),
+            factory, executor, new StubPolicyStore(),
             new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(),
             NullLogger<CopilotAIAgent>.Instance);
         using var tracker = new ShellExecutionTracker();

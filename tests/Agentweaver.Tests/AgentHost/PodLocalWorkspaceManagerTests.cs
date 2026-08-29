@@ -20,6 +20,7 @@ using PodLocalWorkspaceSpec = agenthost::Agentweaver.AgentHost.PodLocalWorkspace
 
 namespace Agentweaver.Tests.AgentHost;
 
+[Trait("Category", "ProcessEnvironment")]
 public sealed class PodLocalWorkspaceManagerTests : IDisposable
 {
     private readonly string _root = Path.Combine(
@@ -350,8 +351,7 @@ public sealed class PodLocalWorkspaceManagerTests : IDisposable
             "workspace-run",
             UserId: "owner",
             TurnBearerToken: "token",
-            KvUserSecretName: null,
-            GitHubAccessToken: null,
+            CopilotCredential: null,
             PreviewRunnerCredential: null,
             SharedWorkingDirectory: sharedWorkingDirectory,
             Purpose: AgentHostPurpose.AssemblyBuildTest,

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Helpers;
@@ -35,6 +36,30 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
         _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-rc-ccp-{Guid.NewGuid():N}");
     }
 
+    public async Task<ProjectId> CreateBlankProjectAsync(string workingDirectory)
+    {
+        var projectId = ProjectId.New();
+        var now = DateTimeOffset.UtcNow;
+        await Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
+        {
+            Id = projectId,
+            Name = $"Request changes test {Guid.NewGuid():N}",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = workingDirectory,
+            DefaultBranch = "main",
+            Owner = OwnerUser,
+            ProviderSettings = new ProjectProviderSettings
+            {
+                DefaultProvider = ModelSource.GitHubCopilot,
+            },
+            State = ProjectState.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        return projectId;
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.ConfigureAppConfiguration((_, cfg) =>
@@ -52,6 +77,7 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
                 ["Auth:User"]                             = OwnerUser,
                 ["Auth:Keys:0:Token"]                     = OtherApiKey,
                 ["Auth:Keys:0:User"]                      = OtherUser,
+                ["Auth:Keys:0:PlatformRoles"]             = PlatformRoles.Viewer,
                 ["Git:Author:Name"]                       = "Test",
                 ["Git:Author:Email"]                      = "test@localhost",
                 ["Providers:GitHubCopilot:ApiKey"]        = "test-copilot-key",

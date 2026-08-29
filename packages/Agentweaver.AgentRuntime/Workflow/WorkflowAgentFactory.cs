@@ -13,7 +13,6 @@ namespace Agentweaver.AgentRuntime.Workflow;
 public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
 {
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _sandboxExecutor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
@@ -24,7 +23,6 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
 
     public WorkflowAgentFactory(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor sandboxExecutor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -34,7 +32,6 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
         ILoggerFactory loggerFactory)
     {
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _sandboxExecutor = sandboxExecutor;
         _sandboxPolicyStore = sandboxPolicyStore;
         _approvalStore = approvalStore;
@@ -45,22 +42,22 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
     }
 
     public IWorkflowTurnAgent CreateWorkerAgent() => new CopilotAIAgent(
-        _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+        _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(), _questionGate, _runOptions);
 
     public IWorkflowTurnAgent CreateRaiAgent() => new RaiAIAgent(
-        _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+        _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>());
 
     public IWorkflowTurnAgent CreateRubberduckAgent() => new CopilotAIAgent(
-        _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+        _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>());
 
     public IWorkflowTurnAgent CreateBuildTestAgent() => new CopilotAIAgent(
-        _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+        _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>());
 
     public IWorkflowTurnAgent CreateScribeAgent() => new ScribeAIAgent(
-        _copilotClientFactory, _scopeProvider, _sandboxExecutor, _sandboxPolicyStore,
+        _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>());
 }

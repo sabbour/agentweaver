@@ -1,4 +1,5 @@
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Auth;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -65,6 +66,7 @@ public sealed class ReviewWebApplicationFactory : WebApplicationFactory<Program>
                 // Second user added via the multi-key list (Auth:Keys[]).
                 ["Auth:Keys:0:Token"]                     = OtherApiKey,
                 ["Auth:Keys:0:User"]                      = OtherUser,
+                ["Auth:Keys:0:PlatformRoles"]             = PlatformRoles.Viewer,
                 ["Auth:Keys:1:Token"]                     = InternalServiceApiKey,
                 ["Auth:Keys:1:User"]                      = ProjectAuthorization.InternalServiceUser,
                 ["Git:Author:Name"]                       = "Test",

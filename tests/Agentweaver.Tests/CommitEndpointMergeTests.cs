@@ -28,6 +28,7 @@ namespace Agentweaver.Tests.Api;
 ///                  worktree preserved.
 ///   Wrong status — commit on a non-awaiting_review run returns 409.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class CommitEndpointMergeTests : IClassFixture<ReviewWebApplicationFactory>, IDisposable
 {
     private readonly ReviewWebApplicationFactory _factory;

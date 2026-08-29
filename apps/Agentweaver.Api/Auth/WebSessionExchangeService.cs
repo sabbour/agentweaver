@@ -32,33 +32,24 @@ public sealed class WebSessionExchangeService
     private static readonly TimeSpan CodeLifetime = TimeSpan.FromSeconds(60);
 
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IConfiguration _configuration;
-    private readonly AuthModeEpochService _authModeEpochService;
     private readonly ILogger<WebSessionExchangeService> _logger;
 
     public WebSessionExchangeService(
         IServiceScopeFactory scopeFactory,
-        IConfiguration configuration,
-        AuthModeEpochService authModeEpochService,
         ILogger<WebSessionExchangeService> logger)
     {
         _scopeFactory = scopeFactory;
-        _configuration = configuration;
-        _authModeEpochService = authModeEpochService;
         _logger = logger;
     }
 
     /// <summary>
-    /// Issues a single-use one-time code bound to the GitHub access token + login and persists it
+    /// Issues a single-use one-time code bound to the Entra access token + display name and persists it
     /// to the shared database (visible to all replicas). Returns the opaque code the user agent
     /// carries back in the redirect URL.
     /// </summary>
     public async Task<string> IssueAsync(string accessToken, string login, CancellationToken ct = default)
     {
-        if (!await _authModeEpochService.IsCurrentInstanceActiveAsync(ct).ConfigureAwait(false))
-            throw new InvalidOperationException("This instance is no longer serving the active auth mode epoch.");
-
-        var code = GenerateOpaqueCode(AuthModeResolver.Resolve(_configuration));
+        var code = GenerateOpaqueCode();
         var expiresAt = DateTimeOffset.UtcNow.Add(CodeLifetime);
 
         using var scope = _scopeFactory.CreateScope();
@@ -92,7 +83,7 @@ public sealed class WebSessionExchangeService
         });
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
-        _logger.LogInformation("Issued web session exchange code for GitHub login {Login}.", login);
+        _logger.LogInformation("Issued web session exchange code for Entra user {Login}.", login);
         return code;
     }
 
@@ -107,10 +98,7 @@ public sealed class WebSessionExchangeService
         if (string.IsNullOrWhiteSpace(code))
             return (false, string.Empty, string.Empty);
 
-        if (!await _authModeEpochService.IsCurrentInstanceActiveAsync(ct).ConfigureAwait(false))
-            return (false, string.Empty, string.Empty);
-
-        if (!IsCurrentModeCode(code, AuthModeResolver.Resolve(_configuration)))
+        if (!code.StartsWith("entra.", StringComparison.Ordinal))
             return (false, string.Empty, string.Empty);
 
         var now = DateTimeOffset.UtcNow;
@@ -123,7 +111,7 @@ public sealed class WebSessionExchangeService
         // replay (or a redeem on another pod that consumed the code first) sees zero rows affected →
         // reject. Expiry is enforced on the snapshot rather than in the DELETE predicate because the
         // DateTimeOffset comparison is not translatable on SQLite (it is on Postgres); this mirrors
-        // the OAuthState and McpOAuthBrokerState pattern. Guarantees at-most-once redemption across
+        // the persisted browser-state pattern. Guarantees at-most-once redemption across
         // replicas.
         var existing = await db.WebSessionExchangeCodes
             .AsNoTracking()
@@ -145,12 +133,8 @@ public sealed class WebSessionExchangeService
     }
 
     /// <summary>
-    /// Generates a 256-bit random, URL-safe opaque one-time code prefixed with the issuing auth mode
-    /// so codes become invalid immediately if the deployment switches auth mode before redemption.
+    /// Generates a 256-bit random, URL-safe opaque one-time code for the sole Entra sign-in mode.
     /// </summary>
-    public static string GenerateOpaqueCode(AuthMode authMode) =>
-        $"{AuthModeResolver.Normalize(authMode)}.{Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32))}";
-
-    private static bool IsCurrentModeCode(string code, AuthMode authMode) =>
-        code.StartsWith($"{AuthModeResolver.Normalize(authMode)}.", StringComparison.Ordinal);
+    public static string GenerateOpaqueCode() =>
+        $"entra.{Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32))}";
 }

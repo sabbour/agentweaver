@@ -12,12 +12,8 @@ namespace Agentweaver.AgentRuntime.Providers;
 /// </summary>
 public sealed class GitHubCopilotClientFactory : IAsyncDisposable
 {
-    private readonly string? _configFallbackToken;
-    private readonly string? _configFallbackTokenFile;
     private readonly string? _runtimeCliPath;
-    private readonly IGitHubTokenStore _tokenStore;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
-    private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
+    private readonly IGitHubCopilotCapabilityCredentialProvider _credentialProvider;
     private readonly ILogger<GitHubCopilotClientFactory>? _logger;
     private static readonly TimeSpan TokenExpirySkew = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan[] RateLimitRetryDelays =
@@ -28,21 +24,14 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
     ];
 
     public GitHubCopilotClientFactory(
-        IConfiguration configuration,
-        IGitHubTokenStore tokenStore,
-        IGitHubTokenScopeProvider scopeProvider,
-        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        Microsoft.Extensions.Configuration.IConfiguration configuration,
+        IGitHubCopilotCapabilityCredentialProvider credentialProvider,
         ILogger<GitHubCopilotClientFactory>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentNullException.ThrowIfNull(tokenStore);
-        ArgumentNullException.ThrowIfNull(scopeProvider);
+        ArgumentNullException.ThrowIfNull(credentialProvider);
 
         var section = configuration.GetSection("Providers:GitHubCopilot");
-        _configFallbackToken = section.GetValue<string>("GitHubToken")
-            ?? section.GetValue<string>("ApiKey");
-        _configFallbackTokenFile = section.GetValue<string>("GitHubTokenFile")
-            ?? section.GetValue<string>("ApiKeyFile");
         // Optional explicit path to the native Copilot CLI runtime. When the SDK's automatic
         // resolution (bin/.../runtimes/<rid>/native/copilot) is unavailable — e.g. a dev host
         // whose RID was never provisioned into the build output — this lets an operator point the
@@ -51,54 +40,79 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
             section.GetValue<string>("RuntimeCliPath"),
             Environment.GetEnvironmentVariable("AGENTWEAVER_COPILOT_CLI_PATH"),
             Environment.GetEnvironmentVariable("COPILOT_CLI_PATH"));
-        _tokenStore = tokenStore;
-        _scopeProvider = scopeProvider;
-        _accessTokenProvider = accessTokenProvider;
+        _credentialProvider = credentialProvider;
         _logger = logger;
     }
 
     /// <summary>
-    /// Synchronous factory kept for backward compatibility during transition.
-    /// Uses only the config fallback token; does not consult the token store.
-    /// </summary>
-    public CopilotClient CreateClient()
-    {
-        var options = new CopilotClientOptions();
-        ApplyRuntimeConnection(options);
-        var token = ReadConfigFallbackToken();
-        if (!string.IsNullOrWhiteSpace(token))
-            options.GitHubToken = token;
-        return new CopilotClient(options);
-    }
-
-    /// <summary>
-    /// Resolves the token for the given scope and returns a configured client.
-    /// Throws <see cref="GitHubCopilotUnauthorizedException"/> when no valid token is available.
+    /// Resolves the immutable credential for the given run and returns a configured client.
+    /// Throws <see cref="GitHubCopilotUnauthorizedException"/> when its snapshot cannot be redeemed.
     /// The model ID is applied to the session later via <see cref="GitHub.Copilot.SDK.SessionConfig.Model"/>;
     /// it is accepted here to keep the factory signature aligned with the runner call site.
     /// </summary>
     public async Task<CopilotClient> CreateClientAsync(
-        GitHubTokenScope scope, string? modelId, CancellationToken ct)
+        string runId, string? modelId, CancellationToken ct)
     {
         var options = new CopilotClientOptions();
         ApplyRuntimeConnection(options);
-        var entry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
-        var token = entry.Status switch
-        {
-            // Route signed-in tokens through the refresh-aware provider so an expired access
-            // token is transparently rotated; fall back to the raw token when no provider is wired.
-            GitHubTokenStatus.SignedIn      => _accessTokenProvider is not null
-                                                   ? await _accessTokenProvider
-                                                       .GetValidAccessTokenAsync(scope, ct).ConfigureAwait(false)
-                                                   : entry.AccessToken,
-            GitHubTokenStatus.SignedOut     => null,                   // fail closed after explicit sign-out
-            GitHubTokenStatus.NeverSignedIn => ReadConfigFallbackToken(), // config MAY be used locally
-            _ => null
-        };
-        if (string.IsNullOrWhiteSpace(token))
+        var credential = await _credentialProvider.GetCredentialAsync(runId, ct).ConfigureAwait(false);
+        if (credential is null || string.IsNullOrWhiteSpace(credential.AccessToken) ||
+            credential.ExpiresAt <= DateTimeOffset.UtcNow)
             throw new GitHubCopilotUnauthorizedException(
-                "GitHub Copilot is not authorized. Sign in with 'agentweaver github sign-in'.");
-        options.GitHubToken = token;
+                "GitHub Copilot requires a live run-bound capability snapshot.");
+        options.GitHubToken = credential.AccessToken;
+        return new CopilotClient(options);
+    }
+
+    /// <summary>
+    /// Resolves a caller- and project-bound marketplace-classification capability. This path is
+    /// intentionally separate from run snapshot redemption so a non-run request cannot fabricate
+    /// a run identifier or borrow an ambient credential scope.
+    /// </summary>
+    public async Task<CopilotClient> CreateMarketplaceClientAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        string? modelId,
+        CancellationToken ct) =>
+        await CreateProjectOperationClientAsync(
+            capabilityReference,
+            projectId,
+            entraObjectId,
+            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            modelId,
+            ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Resolves one explicit, purpose-bound non-run capability. This deliberately does not accept
+    /// a run id and cannot fall back to an ambient or installation-scoped credential.
+    /// </summary>
+    public async Task<CopilotClient> CreateProjectOperationClientAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        string? modelId,
+        CancellationToken ct)
+    {
+        if (!Enum.IsDefined(purpose) ||
+            string.IsNullOrWhiteSpace(capabilityReference) ||
+            string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId))
+            throw new GitHubCopilotUnauthorizedException(
+                "GitHub Copilot requires a live project-bound capability.");
+
+        var options = new CopilotClientOptions();
+        ApplyRuntimeConnection(options);
+        var credential = await _credentialProvider
+            .GetProjectOperationCredentialAsync(
+                capabilityReference, projectId, entraObjectId, purpose, ct)
+            .ConfigureAwait(false);
+        if (credential is null || string.IsNullOrWhiteSpace(credential.AccessToken) ||
+            credential.ExpiresAt <= DateTimeOffset.UtcNow)
+            throw new GitHubCopilotUnauthorizedException(
+                "GitHub Copilot requires a live project-bound capability.");
+        options.GitHubToken = credential.AccessToken;
         return new CopilotClient(options);
     }
 
@@ -138,13 +152,10 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
     }
 
 
-    public async Task<bool> ShouldRefreshBeforeAiCallAsync(GitHubTokenScope scope, CancellationToken ct)
+    public async Task<bool> ShouldRefreshBeforeAiCallAsync(string runId, CancellationToken ct)
     {
-        var token = await _tokenStore.GetTokenAsync(scope, ct).ConfigureAwait(false);
-        if (token?.ExpiresAt is null)
-            return false;
-
-        return token.ExpiresAt <= DateTimeOffset.UtcNow.Add(TokenExpirySkew);
+        var credential = await _credentialProvider.GetCredentialAsync(runId, ct).ConfigureAwait(false);
+        return credential is null || credential.ExpiresAt <= DateTimeOffset.UtcNow.Add(TokenExpirySkew);
     }
 
     public static bool IsUnauthorized(Exception ex) =>
@@ -189,32 +200,6 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
         for (var current = ex; current is not null; current = current.InnerException)
             messages.Add(current.Message);
         return string.Join(" | ", messages);
-    }
-
-    private string? ReadConfigFallbackToken()
-    {
-        if (!string.IsNullOrWhiteSpace(_configFallbackTokenFile))
-        {
-            try
-            {
-                if (File.Exists(_configFallbackTokenFile))
-                {
-                    var token = File.ReadAllText(_configFallbackTokenFile).Trim();
-                    if (!string.IsNullOrWhiteSpace(token))
-                        return token;
-                }
-            }
-            catch (IOException)
-            {
-                // Fall back to direct config below; auth failure handling must not leak paths or token data.
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // Fall back to direct config below; auth failure handling must not leak paths or token data.
-            }
-        }
-
-        return _configFallbackToken;
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

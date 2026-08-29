@@ -2,8 +2,8 @@
 
 ## 2026-07-20T12-01-24-07-00 — Active decisions reset after size gate
 
-**By:** Scribe  
-**What:** Archived the previous active snapshot to `decisions/archive/2026-07-20T12-01-24-07-00-pre-inbox-archive.md`, then rebuilt the active file from the current high-signal decisions plus today's processed inbox.  
+**By:** Scribe
+**What:** Archived the previous active snapshot to `decisions/archive/2026-07-20T12-01-24-07-00-pre-inbox-archive.md`, then rebuilt the active file from the current high-signal decisions plus today's processed inbox.
 **Why:** `decisions.md` had grown to 147846 bytes and was functioning as a long-form archive instead of a working decision index. The full prior detail is preserved in the archive snapshot; the active file now carries the current operating decisions.
 
 ---

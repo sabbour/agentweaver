@@ -120,25 +120,13 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     [Fact]
-    public async Task RotateWebhookSecret_ReturnsSecretOnceAndStoresItOutsideProjectMetadata()
+    public async Task LegacyProjectWebhookSecretRoute_IsNotAvailable()
     {
         var id = await CreateBlankProjectAsync("Webhook Project");
 
         var response = await _client.PostAsJsonAsync($"/api/projects/{id}/webhook-secret/rotate", new { });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<WebhookSecretRotationResponse>();
-        body!.Secret.Should().NotBeNullOrWhiteSpace();
-
-        var detail = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{id}");
-        detail.TryGetProperty("webhook_secret", out _).Should().BeFalse();
-
-        using var scope = _factory.Services.CreateScope();
-        var store = scope.ServiceProvider.GetRequiredService<IProjectStore>();
-        var secretStore = scope.ServiceProvider.GetRequiredService<ISecretStore>();
-        var project = await store.GetAsync(ProjectId.Parse(id));
-        project!.WebhookSecret.Should().NotBeNullOrWhiteSpace();
-        (await secretStore.GetSecretAsync(project.WebhookSecret!)).Value.Should().Be(body.Secret);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // =========================================================================
@@ -232,6 +220,41 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
             new UpdateProjectPreviewSettingsRequest { ApprovalTimeoutMinutes = minutes });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task PutRepoAppInstallation_IsNotAvailableForCallerSuppliedScope()
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/github/repo-app-installation",
+            new
+            {
+                installationId = 72,
+                repositoryId = 99,
+                permissions = new { contents = "write" },
+                fullNameDisplay = "forged/repository",
+            });
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task GetUnattendedReadiness_ReturnsOnlyAClosedRedactedStatus()
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/unattended-readiness");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("not_ready");
+        body.GetProperty("reason_code").GetString().Should().Be("copilot_app_not_configured");
+        body.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeFalse();
+        body.TryGetProperty("installation_id", out _).Should().BeFalse();
+        body.TryGetProperty("repository_id", out _).Should().BeFalse();
+        body.TryGetProperty("permissions", out _).Should().BeFalse();
     }
 
     // =========================================================================
@@ -469,30 +492,6 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("error").GetString().Should().Be("working_directory is required.");
-    }
-
-    // =========================================================================
-    // PE-13: GET /api/auth/github returns status
-    // =========================================================================
-    [Fact]
-    public async Task GetAuthGitHub_ReturnsStatus()
-    {
-        var response = await _client.GetAsync("/api/auth/github");
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.TryGetProperty("status", out _).Should().BeTrue();
-    }
-
-    // =========================================================================
-    // PE-14: POST /api/auth/github/sign-out returns 204
-    // =========================================================================
-    [Fact]
-    public async Task PostSignOut_Returns204()
-    {
-        var response = await _client.PostAsync("/api/auth/github/sign-out", null);
-
-        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
     }
 
     // =========================================================================

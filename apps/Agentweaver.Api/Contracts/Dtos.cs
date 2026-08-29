@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 
 namespace Agentweaver.Api.Contracts;
 
@@ -565,8 +566,16 @@ public sealed record CreateProjectRequest
     [JsonPropertyName("name")] public string? Name { get; init; }
     /// <summary>Project bootstrap mode: <c>blank</c> creates an empty workspace and <c>github</c> clones a repository.</summary>
     [JsonPropertyName("origin")] public string? Origin { get; init; }                   // "blank" | "github"
-    /// <summary>Repository to clone when <see cref="Origin"/> is <c>github</c>.</summary>
-    [JsonPropertyName("source_repository")] public string? SourceRepository { get; init; }
+    /// <summary>
+    /// Short-lived, caller-bound authority minted by <c>POST /api/github/repository-selections</c>.
+    /// Required when <see cref="Origin"/> is <c>github</c>; repository URLs and identifiers are not accepted.
+    /// </summary>
+    [JsonPropertyName("repository_selection_code")] public string? RepositorySelectionCode { get; init; }
+    /// <summary>
+    /// Captures unknown request fields so GitHub-origin creation can reject legacy or authority-bearing
+    /// repository inputs rather than silently ignoring them.
+    /// </summary>
+    [JsonExtensionData] public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
     /// <summary>Absolute workspace path where the project should live on the server.</summary>
     [JsonPropertyName("working_directory")] public string? WorkingDirectory { get; init; }
     /// <summary>Default provider used for future model-driven operations in the project.</summary>
@@ -586,6 +595,44 @@ public sealed record CreateProjectRequest
     /// value returned in <c>generated_workflow_yaml</c> from <c>POST /api/blueprints/generate</c>.
     /// </summary>
     [JsonPropertyName("generated_workflow_yaml")] public string? GeneratedWorkflowYaml { get; init; }
+}
+
+/// <summary>
+/// Metadata-only repository candidate returned by the pre-project Repo App browse endpoint.
+/// Visibility is display data, not evidence of clone or installation authority.
+/// </summary>
+public sealed record GitHubRepositorySelectionCandidateDto
+{
+    [JsonPropertyName("full_name")] public required string FullName { get; init; }
+    [JsonPropertyName("owner_login")] public required string OwnerLogin { get; init; }
+    [JsonPropertyName("private")] public required bool IsPrivate { get; init; }
+    [JsonPropertyName("default_branch")] public required string DefaultBranch { get; init; }
+    [JsonPropertyName("pushed_at")] public DateTimeOffset? PushedAt { get; init; }
+}
+
+/// <summary>Response for GET /api/github/repository-selections.</summary>
+public sealed record GitHubRepositorySelectionListResponse
+{
+    [JsonPropertyName("repositories")] public required IReadOnlyList<GitHubRepositorySelectionCandidateDto> Repositories { get; init; }
+}
+
+/// <summary>
+/// A requested repository choice. Its numeric ID is only a selection instruction; the server
+/// independently verifies it through the caller's active Repo App authorization before minting.
+/// </summary>
+public sealed record IssueGitHubRepositorySelectionRequest
+{
+    [JsonPropertyName("full_name")] public string? FullName { get; init; }
+}
+
+/// <summary>
+/// Short-lived opaque authority for the next GitHub project-create layer. No repository metadata,
+/// installation identity, credential reference, permission, or token is returned.
+/// </summary>
+public sealed record GitHubRepositorySelectionCodeResponse
+{
+    [JsonPropertyName("selection_code")] public required string SelectionCode { get; init; }
+    [JsonPropertyName("expires_at")] public required DateTimeOffset ExpiresAt { get; init; }
 }
 
 /// <summary>Request body for renaming a project.</summary>
@@ -668,118 +715,6 @@ public sealed record CreateProjectRunRequest
     [JsonPropertyName("model_id")] public string? ModelId { get; init; }
     [JsonPropertyName("base_branch")] public string? BaseBranch { get; init; }
     [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
-}
-
-/// <summary>One candidate owner returned by GET /api/projects/{id}/github/repository-owners.</summary>
-public sealed record RepositoryOwnerResponse(
-    [property: JsonPropertyName("login")] string Login,
-    [property: JsonPropertyName("type")] string Type);
-
-/// <summary>Request body for POST /api/projects/{id}/github/repository.</summary>
-public sealed record CreateProjectRepositoryRequest
-{
-    [JsonPropertyName("owner")] public required string Owner { get; init; }
-    [JsonPropertyName("name")] public string? Name { get; init; }
-    [JsonPropertyName("private")] public bool? Private { get; init; }
-}
-
-/// <summary>Response for POST /api/projects/{id}/github/repository.</summary>
-public sealed record ConnectedRepositoryResponse(
-    [property: JsonPropertyName("source_repository")] string SourceRepository,
-    [property: JsonPropertyName("html_url")] string HtmlUrl);
-
-/// <summary>Returned only by a webhook-secret rotation request; the value is not retrievable later.</summary>
-public sealed record WebhookSecretRotationResponse(
-    [property: JsonPropertyName("secret")] string Secret);
-
-/// <summary>Response for automatic GitHub webhook provisioning.</summary>
-public sealed record GitHubWebhookProvisioningResponse(
-    [property: JsonPropertyName("hook_id")] long HookId,
-    [property: JsonPropertyName("created")] bool Created,
-    [property: JsonPropertyName("repository")] string Repository,
-    [property: JsonPropertyName("payload_url")] string PayloadUrl);
-
-// -----------------------------------------------------------------------
-// GitHub auth
-// -----------------------------------------------------------------------
-
-public sealed record GitHubDeviceFlowResponse
-{
-    [JsonPropertyName("user_code")] public required string UserCode { get; init; }
-    [JsonPropertyName("verification_uri")] public required string VerificationUri { get; init; }
-    [JsonPropertyName("expires_in")] public required int ExpiresIn { get; init; }
-    [JsonPropertyName("interval")] public required int Interval { get; init; }
-}
-
-public sealed record GitHubPollResponse
-{
-    [JsonPropertyName("status")] public required string Status { get; init; }   // "pending" | "success" | "expired" | "denied"
-    [JsonPropertyName("login")] public string? Login { get; init; }
-}
-
-public sealed record GitHubAuthStatusResponse
-{
-    [JsonPropertyName("status")] public required string Status { get; init; }   // "signed_in" | "signed_out" | "never_signed_in"
-    [JsonPropertyName("login")] public string? Login { get; init; }
-    [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; init; }
-    /// <summary>True when the user must take action (re-link / sign in) to restore GitHub access.</summary>
-    [JsonPropertyName("token_action_required")] public bool TokenActionRequired { get; init; }
-}
-
-public sealed record BeginGitHubAccountLinkResponse(
-    [property: JsonPropertyName("authorize_url")] string AuthorizeUrl);
-
-public sealed record LinkedGitHubAccountResponse
-{
-    [JsonPropertyName("login")] public required string Login { get; init; }
-    // GitHub identity links only ever represent a personal user account (not an org), and the
-    // display name isn't fetched at link time — populate both with the values the frontend's
-    // LinkedGitHubAccount type requires so it never silently mis-renders as "undefined".
-    [JsonPropertyName("name")] public string? Name { get; init; }
-    [JsonPropertyName("avatar_url")] public string? AvatarUrl { get; init; }
-    [JsonPropertyName("type")] public string Type { get; init; } = "user";
-    [JsonPropertyName("is_default")] public required bool IsDefault { get; init; }
-    [JsonPropertyName("copilot_entitled")] public bool? CopilotEntitled { get; init; }
-    [JsonPropertyName("linked_at")] public required DateTimeOffset LinkedAt { get; init; }
-    /// <summary>True when the linked token is currently valid (signed-in state); false means the user must re-link.</summary>
-    [JsonPropertyName("token_valid")] public bool? TokenValid { get; init; }
-}
-
-public sealed record UnlinkGitHubAccountResponse(
-    [property: JsonPropertyName("default_login")] string? DefaultLogin);
-
-public sealed record AccessibleGitHubRepositoryResponse
-{
-    // FullName/Description/Private/DefaultBranch/HtmlUrl intentionally use the default
-    // camelCase policy (no [JsonPropertyName]) to match the frontend's GitHubRepo type, which
-    // AccessibleGitHubRepo extends. Only the "source account" fields are snake_case, matching
-    // AccessibleGitHubRepo's own declared fields.
-    public required string FullName { get; init; }
-    public string? Description { get; init; }
-    public required bool Private { get; init; }
-    public required string DefaultBranch { get; init; }
-    public string? HtmlUrl { get; init; }
-    [JsonPropertyName("source_login")] public required string AccessibleViaLogin { get; init; }
-    [JsonPropertyName("source_avatar_url")] public string? AccessibleViaAvatarUrl { get; init; }
-    [JsonPropertyName("source_is_default")] public bool AccessibleViaIsDefault { get; init; }
-    [JsonPropertyName("permission")] public required string Permission { get; init; }
-}
-
-public sealed record UpdateProjectGitHubIdentityRequest
-{
-    [JsonPropertyName("github_login")] public string? GitHubLogin { get; init; }
-}
-
-public sealed record ProjectGitHubIdentityResponse
-{
-    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
-    [JsonPropertyName("project_override_login")] public string? ProjectOverrideLogin { get; init; }
-    [JsonPropertyName("effective_login")] public string? EffectiveLogin { get; init; }
-    [JsonPropertyName("effective_avatar_url")] public string? EffectiveAvatarUrl { get; init; }
-    [JsonPropertyName("copilot_entitled")] public bool? CopilotEntitled { get; init; }
-    [JsonPropertyName("is_default")] public bool? IsDefault { get; init; }
-    [JsonPropertyName("linked_at")] public DateTimeOffset? LinkedAt { get; init; }
-    [JsonPropertyName("resolution_source")] public required string ResolutionSource { get; init; }
 }
 
 // -----------------------------------------------------------------------

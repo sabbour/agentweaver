@@ -33,6 +33,240 @@ public static class ProjectEndpoints
 {
     public static void MapProjectEndpoints(this WebApplication app)
     {
+// POST /api/projects/{id}/github/copilot/authorizations — begin a project-pinned Copilot App bind.
+app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    if (await projectStore.GetAsync(projectId, ct).ConfigureAwait(false) is null)
+        return Results.NotFound();
+
+    var service = new ProjectCopilotBindingService(
+        httpContext.RequestServices.GetRequiredService<IConfiguration>(),
+        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+    var result = await service.BeginAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+    if (result.Outcome != CopilotBindingOutcome.Success)
+        return CopilotBindingFailure(result.Outcome);
+
+    ProjectCopilotBindingService.SetCallbackCookie(httpContext, result.CallbackCookie!);
+    return Results.Ok(new
+    {
+        authorization_url = result.AuthorizationUrl,
+        transaction_id = result.TransactionId,
+        expires_at = result.ExpiresAt,
+    });
+})
+    .WithName("BeginProjectCopilotAuthorization")
+    .WithTags("Projects", "GitHub Copilot")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description = "Begins an Owner-authorized, project-pinned Copilot App binding. The request has no caller-selected redirect URL.";
+        return Task.CompletedTask;
+    });
+
+// MCP receives only this opaque browser handoff; the OAuth state and callback cookie stay in the API.
+app.MapPost("/api/projects/{id}/github/copilot/authorizations/handoff", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    if (await projectStore.GetAsync(projectId, ct).ConfigureAwait(false) is null)
+        return Results.NotFound();
+
+    var service = new ProjectCopilotBindingService(
+        httpContext.RequestServices.GetRequiredService<IConfiguration>(),
+        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+    var result = await service.BeginMcpHandoffAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+    return result.Outcome == CopilotBindingOutcome.Success
+        ? Results.Ok(new
+        {
+            transaction_id = result.TransactionId,
+            browser_url = result.BrowserUrl,
+            expires_at = result.ExpiresAt,
+        })
+        : CopilotBindingFailure(result.Outcome);
+})
+    .WithName("BeginProjectCopilotAuthorizationMcpHandoff")
+    .WithTags("Projects", "GitHub Copilot");
+
+app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
+    HttpContext httpContext,
+    string transactionId,
+    IConfiguration configuration,
+    BrowserEntraSessionService browserSessions,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    // This browser route has no bearer header, so it validates the authenticated Entra browser
+    // session before an opaque MCP transaction can mint a callback cookie.
+    var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
+    if (browserSession is null)
+        return Results.Unauthorized();
+
+    var service = new ProjectCopilotBindingService(
+        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration);
+    var handoff = await service.TakeMcpBrowserHandoffAsync(
+        transactionId, browserSession.Id, browserSession.EntraObjectId, ct).ConfigureAwait(false);
+    if (handoff is null)
+        return Results.NotFound();
+
+    ProjectCopilotBindingService.SetCallbackCookie(httpContext, handoff.Value.CallbackCookie);
+    return Results.Redirect(handoff.Value.AuthorizationUrl);
+}).AllowAnonymous();
+
+// This callback uses only the one-time cookie issued at the authenticated begin endpoint. It never
+// accepts a project id or Entra subject from GitHub; both remain pinned in the transaction.
+app.MapGet("/auth/github/copilot-app/callback", async (
+    HttpContext httpContext,
+    string? code,
+    string? state,
+    string? error,
+    IConfiguration configuration,
+    BrowserEntraSessionService browserSessions,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    var service = new ProjectCopilotBindingService(
+        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration);
+    var cookie = ProjectCopilotBindingService.ReadCallbackCookie(httpContext);
+    ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
+    var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
+    var outcome = await service.CompleteBrowserCallbackAsync(
+        browserSession?.Id,
+        browserSession?.EntraObjectId,
+        state, string.IsNullOrWhiteSpace(error) ? code : null, cookie, ct).ConfigureAwait(false);
+    return Results.Redirect(service.GetCallbackRedirect(outcome));
+}).AllowAnonymous();
+
+// GET /api/projects/{id}/github/copilot/authorizations/{transactionId} — initiating-human-only poll.
+app.MapGet("/api/projects/{id}/github/copilot/authorizations/{transactionId}", async (
+    HttpContext httpContext,
+    string id,
+    string transactionId,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    var service = new ProjectCopilotBindingService(
+        httpContext.RequestServices.GetRequiredService<IConfiguration>(),
+        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+    var result = await service.PollAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, transactionId, ct).ConfigureAwait(false);
+    return result.Outcome == CopilotBindingOutcome.Success
+        ? Results.Ok(new { status = result.Status })
+        : CopilotBindingFailure(result.Outcome);
+})
+    .WithName("PollProjectCopilotAuthorization")
+    .WithTags("Projects", "GitHub Copilot");
+
+// DELETE /api/projects/{id}/github/copilot/binding — Owner or human platform-admin de-privileging path.
+app.MapDelete("/api/projects/{id}/github/copilot/binding", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    TwoAppPersistenceStore persistence,
+    ISecretStore secretStore,
+    IHttpClientFactory httpClientFactory,
+    IProjectRoleAssignmentStore roleAssignments,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    if (await projectStore.GetAsync(projectId, ct).ConfigureAwait(false) is null)
+        return Results.NotFound();
+    var service = new ProjectCopilotBindingService(
+        httpContext.RequestServices.GetRequiredService<IConfiguration>(),
+        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+    var outcome = await service.DisconnectAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+    return outcome == CopilotBindingOutcome.Success
+        ? Results.NoContent()
+        : CopilotBindingFailure(outcome);
+})
+    .WithName("DisconnectProjectCopilotBinding")
+    .WithTags("Projects", "GitHub Copilot")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description = "Revokes the active project Copilot binding. A human project Owner or human platform administrator may disconnect it.";
+        return Task.CompletedTask;
+    });
+
+// GET /api/projects/{id}/github/unattended-readiness — project-scoped, redacted status only.
+app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    MemoryDbContext db,
+    CopilotAppRegistrationService registration,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+    if (project is null)
+        return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid)
+        return forbid;
+
+    var projectKey = projectId.ToString();
+    var hasInstallation = await db.GitHubInstallations.AsNoTracking()
+        .AnyAsync(x => x.ProjectId == projectKey &&
+                       x.AppKind == GitHubAppKind.Repo &&
+                       x.RevokedAt == null, ct).ConfigureAwait(false);
+    var registrationState = await registration.ValidateAsync(ct).ConfigureAwait(false);
+    if (registrationState != CopilotAppRegistrationState.Ready)
+        return Results.Ok(CreateUnattendedReadiness(registrationState, hasInstallation));
+
+    var hasBinding = await db.ProjectCopilotBindings.AsNoTracking()
+        .AnyAsync(x => x.ProjectId == projectKey && x.Status == GitHubBindingStatus.Active, ct).ConfigureAwait(false);
+    var hasRepositoryGrant = await db.GitHubRepositoryGrants.AsNoTracking()
+        .AnyAsync(x => x.ProjectId == projectKey && x.RevokedAt == null, ct).ConfigureAwait(false);
+    return Results.Ok(CreateUnattendedReadiness(
+        hasBinding,
+        hasInstallation,
+        hasRepositoryGrant));
+})
+    .WithName("GetProjectUnattendedReadiness")
+    .WithTags("Projects", "GitHub")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description = "Returns a redacted, read-only unattended automation readiness status. It never returns GitHub identities, repository details, installation identifiers, permissions, or credentials.";
+        return Task.CompletedTask;
+    });
+
 // POST /api/projects — create blank or from GitHub
 app.MapPost("/api/projects", CreateProjectAsync)
     .WithName("CreateProject")
@@ -47,14 +281,13 @@ app.MapPost("/api/projects", CreateProjectAsync)
 // GET /api/server/info — public server metadata (no auth required)
 app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider, IConfiguration configuration) =>
 {
-    var authMode = AuthModeResolver.Resolve(configuration);
     return Results.Ok(new
     {
         data_directory          = AppPaths.DataDirectory,
         workspace_auto_assigned = workspaceProvider.AutoAssignsPath,
-        auth_mode               = AuthModeResolver.ToWireValue(authMode),
-        auth_mode_label         = AuthModeResolver.ToLabel(authMode),
-        auth_mode_recommended   = AuthModeResolver.IsRecommended(authMode),
+        auth_mode               = "entra",
+        auth_mode_label         = "Entra ID",
+        auth_mode_recommended   = true,
     });
 }).AllowAnonymous();
 
@@ -86,8 +319,6 @@ app.MapGet("/api/projects/{id}/role-assignments", async (
     ProjectRoleAssignmentService roleAssignments,
     CancellationToken ct) =>
 {
-    if (!IsEntraMode(httpContext))
-        return Results.NotFound();
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
 
@@ -115,8 +346,6 @@ app.MapPost("/api/projects/{id}/role-assignments", async (
     ProjectRoleAssignmentService roleAssignments,
     CancellationToken ct) =>
 {
-    if (!IsEntraMode(httpContext))
-        return Results.NotFound();
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
     if (string.IsNullOrWhiteSpace(request.PrincipalId))
@@ -159,8 +388,6 @@ app.MapDelete("/api/projects/{id}/role-assignments/{principalId}", async (
     ProjectRoleAssignmentService roleAssignments,
     CancellationToken ct) =>
 {
-    if (!IsEntraMode(httpContext))
-        return Results.NotFound();
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
     if (string.IsNullOrWhiteSpace(principalId))
@@ -276,185 +503,6 @@ app.MapPut("/api/projects/{id}/preview-settings", async (
 })
     .WithName("UpdateProjectPreviewSettings")
     .WithTags("Projects");
-
-// POST /api/projects/{id}/webhook-secret/rotate — generate and reveal a GitHub webhook secret once.
-app.MapPost("/api/projects/{id}/webhook-secret/rotate", async (
-    HttpContext httpContext,
-    string id,
-    IProjectStore projectStore,
-    ISecretStore secretStore,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    var project = await projectStore.GetAsync(projectId, ct);
-    if (project is null) return Results.NotFound();
-    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
-
-    var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-    var secretKey = project.WebhookSecret ?? $"github-webhook:{projectId}";
-    await secretStore.SetSecretAsync(secretKey, secret, ct: ct);
-    await projectStore.UpdateWebhookSecretAsync(projectId, secretKey, DateTimeOffset.UtcNow, ct);
-
-    return Results.Ok(new WebhookSecretRotationResponse(secret));
-})
-    .WithName("RotateProjectWebhookSecret")
-    .WithTags("Projects");
-
-// POST /api/projects/{id}/webhooks/github/provision — create or update the repository webhook.
-app.MapPost("/api/projects/{id}/webhooks/github/provision", async (
-    HttpContext httpContext,
-    string id,
-    IProjectStore projectStore,
-    IGitHubTokenScopeProvider scopeProvider,
-    ProjectGitHubIdentityService identityService,
-    IGitHubWebhookProvisioningService provisioningService,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    var project = await projectStore.GetAsync(projectId, ct);
-    if (project is null) return Results.NotFound();
-    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    GitHubTokenScope tokenScope;
-    if (!string.IsNullOrWhiteSpace(caller.EntraObjectId))
-    {
-        var effective = await identityService
-            .GetEffectiveIdentityAsync(projectId, caller.EntraObjectId!, ct)
-            .ConfigureAwait(false);
-        if (effective.EffectiveLink is null)
-            return Results.Unauthorized();
-        tokenScope = GitHubTokenScope.ForLinkedIdentity(
-            caller.EntraObjectId!,
-            effective.EffectiveLink.GitHubLogin);
-    }
-    else
-    {
-        tokenScope = scopeProvider.Resolve(caller.User);
-    }
-
-    var payloadUrl = new Uri(
-        $"{httpContext.Request.Scheme}://{httpContext.Request.Host}{httpContext.Request.PathBase}" +
-        $"/api/projects/{projectId}/webhooks/github");
-
-    try
-    {
-        var result = await provisioningService
-            .ProvisionAsync(project, tokenScope, payloadUrl, ct)
-            .ConfigureAwait(false);
-        return Results.Ok(new GitHubWebhookProvisioningResponse(
-            result.HookId,
-            result.Created,
-            result.Repository,
-            result.PayloadUrl));
-    }
-    catch (GitHubWebhookProvisioningException ex)
-    {
-        return Results.Json(new { error = ex.Message }, statusCode: ex.StatusCode);
-    }
-})
-    .WithName("ProvisionProjectGitHubWebhook")
-    .WithTags("Projects")
-    .AddOpenApiOperationTransformer((operation, _, _) =>
-    {
-        operation.Description =
-            "Creates or updates the connected repository's GitHub webhook using the project's effective GitHub identity.";
-        return Task.CompletedTask;
-    });
-
-// GET /api/projects/{id}/github/repository-owners — accounts a new repo could be created under
-app.MapGet("/api/projects/{id}/github/repository-owners", async (
-    HttpContext httpContext,
-    string id,
-    ProjectService projectService,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    var view = await projectService.GetViewAsync(projectId, ct);
-    if (view is null) return Results.NotFound();
-    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    IReadOnlyList<GitHubRepositoryOwner> owners;
-    try
-    {
-        owners = await projectService.ListRepositoryOwnersAsync(caller.User, ct, view.Project.Id);
-    }
-    catch (InvalidOperationException ex)
-    {
-        return Results.Problem(ex.Message, statusCode: StatusCodes.Status401Unauthorized);
-    }
-
-    return Results.Ok(owners.Select(o => new RepositoryOwnerResponse(o.Login, o.IsUser ? "user" : "org")));
-})
-    .WithName("ListProjectRepositoryOwners")
-    .WithTags("Projects")
-    .AddOpenApiOperationTransformer((operation, _, _) =>
-    {
-        operation.Description ??=
-            "Lists the GitHub accounts (the caller's own login, plus orgs) a new repository could be created under.";
-        return Task.CompletedTask;
-    });
-
-// POST /api/projects/{id}/github/repository — create+connect a new GitHub repository
-app.MapPost("/api/projects/{id}/github/repository", async (
-    HttpContext httpContext,
-    string id,
-    CreateProjectRepositoryRequest request,
-    ProjectService projectService,
-    ILogger<Program> logger,
-    CancellationToken ct) =>
-{
-    if (!ProjectId.TryParse(id, out var projectId))
-        return Results.BadRequest(new { error = "Invalid project id." });
-
-    if (string.IsNullOrWhiteSpace(request.Owner))
-        return Results.BadRequest(new { error = "owner is required." });
-
-    var view = await projectService.GetViewAsync(projectId, ct);
-    if (view is null) return Results.NotFound();
-    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbid) return forbid;
-
-    if (view.Project.Origin.Kind != ProjectOriginKind.Blank)
-        return Results.Conflict(new
-        {
-            error = $"Project already has a connected repository ('{view.Project.Origin.SourceRepository}'). " +
-                     "This endpoint only connects a currently-unconnected project."
-        });
-
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    try
-    {
-        var connected = await projectService.CreateAndConnectRepositoryAsync(
-            projectId, request.Owner, request.Name, request.Private ?? true, caller.User, ct);
-        var sourceRepository = connected.Origin.SourceRepository!;
-        return Results.Ok(new ConnectedRepositoryResponse(sourceRepository, $"https://github.com/{sourceRepository}"));
-    }
-    catch (InvalidOperationException ex)
-    {
-        logger.LogWarning(ex, "Failed to create/connect a GitHub repository for project {ProjectId}", id);
-        return Results.Conflict(new { error = ex.Message });
-    }
-    catch (KeyNotFoundException)
-    {
-        return Results.NotFound();
-    }
-})
-    .WithName("CreateProjectRepository")
-    .WithTags("Projects")
-    .AddOpenApiOperationTransformer((operation, _, _) =>
-    {
-        operation.Description ??=
-            "Creates a new GitHub repository and connects it to a currently-unconnected (blank-origin) project, " +
-            "pushing the project's existing local git history to it.";
-        return Task.CompletedTask;
-    });
 
 // DELETE /api/projects/{id}?confirm=true — record-only delete
 app.MapDelete("/api/projects/{id}", async (
@@ -598,7 +646,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
     /// Persona-style drivers should prefer this route over manual file bootstrapping because it atomically creates the
     /// project, validates blueprint inputs, and rolls back on apply failures.
     /// </remarks>
-    public static async Task<IResult> CreateProjectAsync(
+    internal static async Task<IResult> CreateProjectAsync(
         HttpContext httpContext,
         CreateProjectRequest request,
         ProjectService projectService,
@@ -607,6 +655,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         RunWorkflowRegistry workflowRegistry,
         IProjectStore projectStore,
         ProjectRoleAssignmentService roleAssignments,
+        GitHubRepositorySelectionBroker repositorySelections,
         IConfiguration configuration,
         IProjectWorkspaceProvider workspaceProvider,
         ILogger<Program> logger,
@@ -621,8 +670,19 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             (request.Origin != "blank" && request.Origin != "github"))
             return Results.BadRequest(new { error = "origin must be 'blank' or 'github'." });
 
-        if (request.Origin == "github" && string.IsNullOrWhiteSpace(request.SourceRepository))
-            return Results.BadRequest(new { error = "source_repository is required when origin is 'github'." });
+        if (request.Origin == "github" &&
+            (string.IsNullOrWhiteSpace(request.RepositorySelectionCode) ||
+             request.AdditionalProperties is { Count: > 0 }))
+        {
+            return Results.BadRequest(new
+            {
+                error = "repository_selection_code is required and GitHub repository metadata is not accepted."
+            });
+        }
+
+        if (request.Origin == "github" &&
+            HumanEntraSubjectAuthorization.Evaluate(caller, httpContext.User) != HumanEntraSubjectState.Allowed)
+            return Results.Conflict(new { error = "human_entra_subject_required" });
 
         // working_directory is only mandatory when the active workspace provider cannot auto-assign
         // one (e.g. LocalFilesystemWorkspaceProvider). Providers that report AutoAssignsPath == true
@@ -679,6 +739,15 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             blueprintSourceType = "inline";
         }
 
+        ResolvedGitHubRepositorySelection? resolvedRepository = null;
+        if (request.Origin == "github")
+        {
+            resolvedRepository = await repositorySelections.TryConsumeAndResolveAsync(
+                request.RepositorySelectionCode!, caller, ct).ConfigureAwait(false);
+            if (resolvedRepository is null)
+                return Results.Conflict(new { error = "github_repository_selection_unavailable" });
+        }
+
         try
         {
             Agentweaver.Domain.Project project;
@@ -698,20 +767,19 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             else
             {
                 project = await projectService.CreateFromGitHubAsync(
-                    request.Name!, request.SourceRepository!, requestedWorkingDirectory,
+                    request.Name!, resolvedRepository!.SourceRepository, requestedWorkingDirectory,
                     request.DefaultProvider, request.DefaultModelGitHubCopilot,
-                    request.DefaultModelMicrosoftFoundry, caller.User, ct);
+                    request.DefaultModelMicrosoftFoundry, caller.User, resolvedRepository.AccessToken, ct);
             }
 
-            if (AuthModeResolver.Resolve(configuration) == AuthMode.Entra &&
-                !string.IsNullOrWhiteSpace(caller.EntraObjectId ?? caller.User))
+            if (!string.IsNullOrWhiteSpace(caller.EntraObjectId))
             {
                 try
                 {
                     await roleAssignments.SeedOwnerAsync(
                         project.Id,
-                        (caller.EntraObjectId ?? caller.User)!,
-                        caller.EntraObjectId ?? caller.User,
+                        caller.EntraObjectId!,
+                        caller.EntraObjectId,
                         ct);
                 }
                 catch (Exception roleAssignmentEx)
@@ -809,7 +877,6 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
     {
         var views = await projectService.ListViewsAsync(ct);
         List<ProjectResponse> projects;
-        if (AuthModeResolver.Resolve(configuration) == AuthMode.Entra)
         {
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
             if (projectRoles.IsPlatformAdmin(caller))
@@ -826,13 +893,6 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                     .Select(v => MapProject(v.Project, v.Available, visibleRoles[v.Project.Id]))
                     .ToList();
             }
-        }
-        else
-        {
-            projects = views
-                .Where(v => IsProjectOwner(httpContext, v.Project))
-                .Select(v => MapProject(v.Project, v.Available))
-                .ToList();
         }
         return Results.Ok(Paging.Of(projects, page, page_size));
     }
@@ -995,18 +1055,8 @@ static ProjectResponse MapProject(Project p, bool available, ProjectRole? effect
 private static readonly Regex AgentNameSlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);
 private static readonly Regex AllowedModelRegex = new("^(gpt|claude|o)[a-z0-9._-]*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-private static bool IsProjectOwner(HttpContext httpContext, Agentweaver.Domain.Project project)
-{
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-    return caller.Owns(project.Owner);
-}
-
 private static async Task<ProjectResponse> MapProjectAsync(HttpContext httpContext, Project project, bool available, CancellationToken ct)
 {
-    var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
-    if (AuthModeResolver.Resolve(configuration) != AuthMode.Entra)
-        return MapProject(project, available);
-
     var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
     var roles = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
     var effectiveRole = await roles.GetEffectiveRoleAsync(caller, project.Id, ct).ConfigureAwait(false);
@@ -1023,12 +1073,6 @@ private static async Task<IResult?> RequireProjectRoleAsync(
     return await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, minimumRole, ct).ConfigureAwait(false);
 }
 
-private static bool IsEntraMode(HttpContext httpContext)
-{
-    var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
-    return AuthModeResolver.Resolve(configuration) == AuthMode.Entra;
-}
-
 private static ProjectRoleAssignmentResponse MapProjectRoleAssignment(ProjectRoleAssignment assignment) => new()
 {
     PrincipalId = assignment.PrincipalId,
@@ -1040,4 +1084,77 @@ private static ProjectRoleAssignmentResponse MapProjectRoleAssignment(ProjectRol
 
 private static bool IsAllowedModelId(string? modelId) =>
     string.IsNullOrWhiteSpace(modelId) || AllowedModelRegex.IsMatch(modelId.Trim());
+
+private static object CreateUnattendedReadiness(
+    CopilotAppRegistrationState registrationState,
+    bool repoAppInstallationConnected) => registrationState switch
+{
+    CopilotAppRegistrationState.ConfigurationUnavailable => new
+    {
+        status = "not_ready",
+        reason_code = "copilot_app_not_configured",
+        message = "The Copilot App is not configured.",
+        repo_app_installation_connected = repoAppInstallationConnected,
+    },
+    CopilotAppRegistrationState.RepositoryPermissionsDetected => new
+    {
+        status = "not_ready",
+        reason_code = "copilot_app_repository_permissions_detected",
+        message = "The Copilot App has repository permissions and cannot be used for unattended work.",
+        repo_app_installation_connected = repoAppInstallationConnected,
+    },
+    _ => new
+    {
+        status = "not_ready",
+        reason_code = "copilot_app_registration_unavailable",
+        message = "The Copilot App registration could not be verified.",
+        repo_app_installation_connected = repoAppInstallationConnected,
+    },
+};
+
+private static object CreateUnattendedReadiness(
+    bool hasCopilotBinding,
+    bool hasRepoAppInstallation,
+    bool hasRepositoryGrant)
+{
+    if (!hasCopilotBinding)
+        return new
+        {
+            status = "not_ready",
+            reason_code = "copilot_binding_required",
+            message = "Connect a project Copilot App identity before unattended work can run.",
+            repo_app_installation_connected = hasRepoAppInstallation,
+        };
+    if (!hasRepoAppInstallation)
+        return new
+        {
+            status = "not_ready",
+            reason_code = "repo_app_installation_required",
+            message = "Install the Repo App for this project before unattended work can run.",
+            repo_app_installation_connected = false,
+        };
+    if (!hasRepositoryGrant)
+        return new
+        {
+            status = "not_ready",
+            reason_code = "repo_app_repository_grant_required",
+            message = "The Repo App repository grant is unavailable for this project.",
+            repo_app_installation_connected = true,
+        };
+    return new
+    {
+        status = "ready",
+        reason_code = "ready",
+        message = "This project is ready for unattended automation when activation consent is granted.",
+        repo_app_installation_connected = true,
+    };
+}
+
+private static IResult CopilotBindingFailure(CopilotBindingOutcome outcome)
+{
+    var statusCode = outcome is CopilotBindingOutcome.HumanEntraSubjectRequired or CopilotBindingOutcome.ProjectOwnerRequired
+        ? StatusCodes.Status403Forbidden
+        : StatusCodes.Status409Conflict;
+    return Results.Json(new { error = ProjectCopilotBindingService.ToStateCode(outcome) }, statusCode: statusCode);
+}
 }

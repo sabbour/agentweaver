@@ -9,7 +9,6 @@ using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Generation;
-using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Sandbox.Preview;
 
@@ -31,7 +30,7 @@ namespace Agentweaver.Api.Sandbox.Preview;
 /// <see cref="PreviewStep"/> — no new trust boundary.
 /// </para>
 /// </summary>
-public sealed class CopilotPreviewCommandModel : IPreviewCommandModel
+public class CopilotPreviewCommandModel : IPreviewCommandModel
 {
     // Matches the coordinator classifier budget (#432 established 8s was too short under real load).
     internal static readonly TimeSpan ProposalTimeout = TimeSpan.FromSeconds(30);
@@ -58,19 +57,16 @@ public sealed class CopilotPreviewCommandModel : IPreviewCommandModel
         "{\"previewable\": true, \"command\": \"<shell command>\", \"cwd\": \"<relative dir or .>\"}.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ILogger<CopilotPreviewCommandModel> _logger;
     private readonly string? _modelId;
 
     public CopilotPreviewCommandModel(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ILogger<CopilotPreviewCommandModel> logger,
         IConfiguration configuration,
         IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _logger = logger;
         // Reuse the designated fast/cheap classifier tier (defaults to a small model) so the fallback
         // stays low-latency and low-cost — this is a bounded resolution, not a generation task.
@@ -83,16 +79,9 @@ public sealed class CopilotPreviewCommandModel : IPreviewCommandModel
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(context.SubmittingUser))
+            if (string.IsNullOrWhiteSpace(context.RunId))
                 throw new InvalidOperationException(
-                    "Preview command resolution requires a submitting user identity.");
-
-            var scope = await _scopeProvider
-                .ResolveAsync(context.SubmittingUser, context.ProjectId, ct)
-                .ConfigureAwait(false);
-            if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-                throw new InvalidOperationException(
-                    "Preview command resolution requires a user Copilot token scope.");
+                    "Preview command resolution requires a run-bound Copilot capability snapshot.");
 
             var digest = PreviewWorktreeDigest.Build(context.WorktreePath);
             if (string.IsNullOrWhiteSpace(digest))
@@ -103,7 +92,7 @@ public sealed class CopilotPreviewCommandModel : IPreviewCommandModel
             }
 
             var proposal = await RunWithTimeoutAsync(
-                token => RunModelTurnAsync(scope, BuildPrompt(digest), token),
+                token => RunModelTurnAsync(context.RunId, BuildPrompt(digest), token),
                 ProposalTimeout,
                 ct,
                 onTimeout: () => _logger.LogWarning(
@@ -150,13 +139,13 @@ public sealed class CopilotPreviewCommandModel : IPreviewCommandModel
         }
     }
 
-    private async Task<string?> RunModelTurnAsync(GitHubTokenScope scope, string prompt, CancellationToken ct)
+    protected virtual async Task<string?> RunModelTurnAsync(string runId, string prompt, CancellationToken ct)
     {
         CopilotClient? client = null;
         AIAgent? agent = null;
         try
         {
-            client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
+            client = await _copilotClientFactory.CreateClientAsync(runId, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
             var sessionConfig = new SessionConfig
             {

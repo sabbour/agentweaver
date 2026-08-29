@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Domain;
 
@@ -102,6 +103,7 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
                 // Second user via the multi-key list (Auth:Keys[]).
                 ["Auth:Keys:0:Token"]                     = OtherApiKey,
                 ["Auth:Keys:0:User"]                      = OtherUser,
+                ["Auth:Keys:0:PlatformRoles"]             = PlatformRoles.Viewer,
                 ["Git:Author:Name"]                       = "Test",
                 ["Git:Author:Email"]                      = "test@localhost",
                 ["Providers:GitHubCopilot:ApiKey"]        = "test-copilot-key",

@@ -131,7 +131,7 @@ Standard bearer-token authentication is required. See [API reference → Authent
 | `name` | What it tests |
 | --- | --- |
 | `postgresql` | Postgres connectivity |
-| `key_vault` | Azure Key Vault reachability and required `mcp-oauth-signing-key` lookup. `critical: secret 'mcp-oauth-signing-key' not found` means the signing-key step in `npm run azure:provision-infra` was skipped. |
+| `key_vault` | Azure Key Vault CSI delivery of the required `mcp-api-key`. `critical: secret 'mcp-api-key' not found` means API authentication and worker loopback calls cannot run. |
 | `agent_pod_quota` | Effective admission headroom in the sandbox namespace, computed from the tighter of the `pods` and SandboxClaim object quotas. Healthy means plenty of room remains, warning means only single-digit starts remain, and critical means no new agent pod can be admitted. |
 | `warm_pool` | Warm-pool agent-sandbox availability for the live AgentHost pool `agentweaver-agent-host` (`replicas: 2`) |
 | `kubernetes_api` | Kubernetes API server reachability |

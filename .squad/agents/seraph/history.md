@@ -6,8 +6,8 @@
 - Wrote the QA matrix for issue #641 covering predicates, webhook resilience, auto-provisioning, natural-language trigger generation, and UI round-trip behavior.
 ## Session: 2026-06-07 — Onboarding & Security Review Program Established
 
-**Project:** scaffolders — single-agent file-editing run system  
-**Role:** Security Reviewer  
+**Project:** scaffolders — single-agent file-editing run system
+**Role:** Security Reviewer
 **Onboarding context:** Feature 001 (single-agent run) runs agent tasks in git worktree sandboxes with live event streaming and approval gate. Primary threats: prompt injection (user task + file reads), PII/secret leakage (events/output streams), sandbox path bypass, governance bypass.
 
 **June 7–12 security review arc:** Pre-implementation YELLOW verdict on 001 (14 findings including 3 critical: sandbox bypass, content-safety gap, unauthenticated SSE); post-implementation reviews cleared most findings GREEN (streaming auth gate, per-run Workflow isolation, run-submission 400 mapping, path traversal hardening, sandboxed-execution tool design, tool-output redaction). Phase 6 sandbox policy enrichment also PASS with 2 medium findings (temp subdirectory contamination, network-enable operator visibility) resolved. FR-005 (GitHub unified auth) refined and approved; FR-024/FR-029 critical symlink/reparse issues caught and fixed in Feature 005 commit 3053741. Early review program established: comprehensive finding capture, pre-implementation YELLOW/post-implementation GREEN/RED gates, and deferred-follow-up tracking.

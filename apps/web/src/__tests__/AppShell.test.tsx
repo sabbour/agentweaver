@@ -1,6 +1,10 @@
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AppShell } from '../components/shell/AppShell';
+import {
+  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+  GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
+} from '../api/githubConnectionRequirement';
 import { projectIdFromPath } from '../components/shell/projectIdFromPath';
 import { resolveActiveKey } from '../components/shell/navConfig';
 import * as useAppVersionModule from '../hooks/useAppVersion';
@@ -24,9 +28,9 @@ vi.mock('../api/apiClient', () => ({
     getProject: vi.fn(),
     checkHealth: vi.fn(),
     getAuthSession: vi.fn(),
-    listLinkedGitHubAccounts: vi.fn(),
     getProjectAccessOverview: vi.fn(),
     getNotifications: vi.fn(),
+    beginProjectCopilotAuthorization: vi.fn(),
   },
 }));
 
@@ -100,16 +104,6 @@ beforeEach(() => {
     entra_object_id: 'entra-1',
     platform_roles: ['PlatformAdmin'],
   } as never);
-  vi.mocked(apiClient.listLinkedGitHubAccounts).mockResolvedValue([
-    {
-      login: 'octocat',
-      name: 'Octocat',
-      avatar_url: 'https://example.com/octocat.png',
-      type: 'user',
-      is_default: true,
-      copilot_entitled: true,
-    },
-  ] as never);
   vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
     auth_mode: 'entra',
     platform_roles: ['PlatformAdmin'],
@@ -172,6 +166,30 @@ describe('AppShell navigation', () => {
     expect(screen.getByRole('group', { name: 'Sessions' })).toBeDefined();
     expect(screen.queryByText('Work')).toBeNull();
     expect(screen.queryByText('System')).toBeNull();
+  });
+
+  it('shows the shared GitHub Copilot connection action for a typed capability requirement', async () => {
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    vi.mocked(apiClient.beginProjectCopilotAuthorization).mockResolvedValue({
+      authorization_url: 'https://api.example.test/api/projects/proj-1/github/copilot/authorizations/redirect',
+    } as never);
+    renderShellAt('/projects/proj-1/team');
+
+    window.dispatchEvent(new CustomEvent(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, {
+      detail: {
+        code: 'github_copilot_connection_required',
+        message: GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
+        action: { type: 'connect_project_copilot_app', project_id: 'proj-1' },
+      },
+    }));
+
+    expect(await screen.findByText(GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Copilot' }));
+    await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('proj-1'));
+    expect(assign).toHaveBeenCalledWith(
+      'https://api.example.test/api/projects/proj-1/github/copilot/authorizations/redirect',
+    );
+    assign.mockRestore();
   });
 
   it('resolves the active nav item from the route', () => {
@@ -258,16 +276,12 @@ describe('AppShell navigation', () => {
 
     renderShellAt('/overview');
 
-    expect(await screen.findByText('octocat')).toBeDefined();
     const badgeText = screen.getByText('v0.12.2-dev+a100e95');
     const badge = badgeText.closest('.aw-rail-footer__version') as HTMLElement | null;
-    const accountSwitcher = screen.getByRole('button', { name: 'GitHub account switcher' });
     expect(badge).toBeTruthy();
     expect(badge?.title).toContain('Full version: v0.12.2-dev+a100e95');
     expect(badge?.className).toContain('aw-rail-footer__version');
     expect(badgeText.className).toBe('aw-rail-footer__version-text');
-    expect(accountSwitcher.textContent).toContain('octocat');
-    expect(accountSwitcher.querySelector('img')).toBeTruthy();
     expect(screen.queryByText('Alpha v0.12.2-dev+a100e95')).toBeNull();
   });
 

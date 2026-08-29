@@ -14,9 +14,7 @@ namespace Agentweaver.Api.Auth;
 
 /// <summary>
 /// Handles the Microsoft identity platform v2.0 authorization-code + PKCE flow for interactive
-/// browser sign-in when <c>Auth:Mode=Entra</c>.
-///
-/// This is the Entra counterpart to <see cref="GitHubOAuthRedirectService"/>. It generates the
+/// browser sign-in. It generates the
 /// Microsoft <c>/oauth2/v2.0/authorize</c> URL (with a CSRF <c>state</c> and PKCE
 /// <c>code_challenge</c>), persists the PKCE <c>code_verifier</c> server-side bound to the state
 /// (<see cref="EntraOAuthState"/>) so the callback can redeem the code on ANY replica, then — at the

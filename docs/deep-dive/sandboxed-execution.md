@@ -40,6 +40,20 @@ The selected executor is injected into the per-run governance context and both a
 
 The executor selection decision, backend name, and probe reason are emitted as a `sandbox.selected` event when a run starts.
 
+## Command timeouts
+
+`run_command` uses a five-minute timeout when the caller does not provide `timeout_ms`.
+An explicit caller timeout is used as requested unless the active runtime policy has a
+minimum or maximum limit. The controlled Build/Test shell keeps its ten-minute minimum
+and maximum limit.
+
+Both agent runners add a separate five-minute grace period after the effective command
+timeout. The executor cancels the command first and returns `timed_out: true`. Copilot's
+streaming watchdog and Foundry's direct tool-invocation watchdog stop the agent turn only
+when the process still has not exited after that grace period. Both emit shell-progress
+heartbeats while waiting. This extra time is important for Kata VM pods, where process
+termination can take longer while the Kata agent relays the signal.
+
 ## Tool architecture
 
 Both agent runners (GitHub Copilot and Microsoft Foundry) register the same set of custom `AIFunction` tools assembled by `SandboxToolRegistry.Build`. There are nine tool names total:
@@ -83,6 +97,36 @@ The API (`GET /api/sandbox-policy`, `PUT /api/sandbox-policy`) reads and writes 
 | `MaxOutputBytes` | `int` | `4194304` (4 MB) | Output cap. Results exceeding this are truncated and marked with `OutputTruncated: true`. |
 
 The policy is read through `ISandboxPolicyStore.GetPolicyAsync` and is configurable via the API at `GET /api/sandbox-policy` and `PUT /api/sandbox-policy`. See [sandbox-setup.md](../reference/sandbox-setup.md) for operator instructions.
+When the settings file has no `sandbox` section, or its `sandbox` section omits
+`destructive_command_patterns`, the canonical default approval patterns apply. An explicit list,
+including `[]`, is an intentional override.
+
+The API sends one short-lived installation credential for the selected repository and run. When
+that credential is used, the sandbox parses the command and starts the approved `git` or `gh`
+executable directly instead of placing the credential in a shell environment. Credential-bearing
+Git is limited to argument-free `git status`; all other Git subcommands and flags are rejected.
+This prevents repository configuration from selecting external diffs, signing programs, filters,
+merge drivers, hooks, aliases, helpers, or remote helpers. The direct Git process disables hooks,
+credential helpers, filesystem monitors, and recursive submodules. Its GitHub authorization
+header is scoped to that process; it is never supplied to a child process.
+
+Credential-bearing `gh` invocations must also match a narrow parsed allowlist. It permits direct
+`gh api` and `gh status` calls; explicitly named repository list, view, and fork calls; and
+explicitly repository-scoped issue, pull-request, and workflow forms that do not launch another
+program. `gh issue develop` is limited to its `--list` form. Repository forks that clone or alter
+remotes, pull-request creation and checkout, branch-deleting close or merge commands, and
+browser/editor forms are rejected even after operator approval, so they never receive `GH_TOKEN`.
+`gh config set` is not allowlisted: editor and pager settings persist and can make a later command
+start an external program. Likewise, `gh gist edit` and every other editor-facing gist form remain
+outside the allowlist.
+
+The approval policy gates `git push`, remote changes, `gh pr` changes, `gh repo` changes,
+`gh workflow run`, `gh api`, `gh secret set`, and `gh auth` commands (including `gh auth token`).
+The API does not inspect or proxy these commands.
+
+The system keeps this credential out of pod specs, files, logs, events, annotations, shared environments, and credential-helper files. Normal release and orphan cleanup log failed revocations. The
+registry retains failed revocations independently of their SandboxClaim, and each reaper sweep retries
+due revocations with capped exponential backoff until they succeed or the credential actually expires.
 
 ## Security model
 

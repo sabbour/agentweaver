@@ -34,6 +34,7 @@ public sealed class OperatorToolApprovalPolicyTests
     [InlineData("coordinator_start")]
     [InlineData("project_delete")]
     [InlineData("run_submit")]
+    [InlineData("github_repository_selection_issue")]
     public void RequiresApproval_is_true_for_unknown_and_mutating_tools(string? toolName)
     {
         OperatorToolApprovalPolicy.RequiresApproval(toolName).Should().BeTrue();
@@ -48,6 +49,7 @@ public sealed class OperatorToolApprovalPolicyTests
     [InlineData("sandbox_policy_get")]
     [InlineData("skill_marketplace_sources_list")]
     [InlineData("list_project_workspace")]
+    [InlineData("github_repository_selections_list")]
     public void RequiresApproval_is_false_for_ungated_read_tools(string toolName)
     {
         OperatorToolApprovalPolicy.RequiresApproval(toolName).Should().BeFalse();

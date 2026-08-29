@@ -8,7 +8,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Generation;
-using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -36,7 +35,7 @@ public interface IPreviewClassifier
 
 /// <summary>Production Copilot-backed semantic preview classifier. A null result is deliberately consumed
 /// fail-safe by the coordinator: require a preview and preserve build/test feedback.</summary>
-public sealed class CopilotPreviewClassifier : IPreviewClassifier
+public class CopilotPreviewClassifier : IPreviewClassifier
 {
     // #432 established that the previous 8-second classifier budget was too short under real load.
     internal static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(30);
@@ -57,19 +56,16 @@ public sealed class CopilotPreviewClassifier : IPreviewClassifier
         "{\"preview_only\": false}.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ILogger<CopilotPreviewClassifier> _logger;
     private readonly string? _modelId;
 
     public CopilotPreviewClassifier(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ILogger<CopilotPreviewClassifier> logger,
         IConfiguration configuration,
         IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _logger = logger;
         _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveReplyClassificationModel();
@@ -93,17 +89,11 @@ public sealed class CopilotPreviewClassifier : IPreviewClassifier
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(submittingUser))
-                throw new InvalidOperationException($"{classificationName} classification requires a submitting user identity.");
-
-            var scope = await _scopeProvider
-                .ResolveAsync(submittingUser, projectId, ct)
-                .ConfigureAwait(false);
-            if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-                throw new InvalidOperationException($"{classificationName} classification requires a user Copilot token scope.");
+            if (string.IsNullOrWhiteSpace(runId))
+                throw new InvalidOperationException($"{classificationName} classification requires a run-bound Copilot capability snapshot.");
 
             var result = await RunWithTimeoutAsync(
-                token => RunModelTurnAsync(scope, charter, prompt, token),
+                token => RunModelTurnAsync(runId, charter, prompt, token),
                 ClassificationTimeout,
                 responseProperty,
                 ct,
@@ -142,8 +132,8 @@ public sealed class CopilotPreviewClassifier : IPreviewClassifier
         }
     }
 
-    private async Task<string?> RunModelTurnAsync(
-        GitHubTokenScope scope,
+    protected virtual async Task<string?> RunModelTurnAsync(
+        string runId,
         string charter,
         string prompt,
         CancellationToken ct)
@@ -152,7 +142,7 @@ public sealed class CopilotPreviewClassifier : IPreviewClassifier
         AIAgent? agent = null;
         try
         {
-            client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
+            client = await _copilotClientFactory.CreateClientAsync(runId, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
             var sessionConfig = new SessionConfig
             {

@@ -1,5 +1,5 @@
 import { Combobox, makeStyles, Option, OptionGroup, tokens, Tooltip } from '@fluentui/react-components';
-import { GITHUB_AUTHORIZE_URL } from '../../config';
+import { ENTRA_AUTHORIZE_URL } from '../../config';
 import { useProjectList } from '../../hooks/useProjectList';
 import { NAV_ITEMS } from './navConfig';
 import { useEffect, useMemo, useState } from 'react';
@@ -192,7 +192,7 @@ export function ProjectSwitcher({
         onInput={(e) => setComboValue(e.currentTarget.value)}
         onOptionSelect={(_, data) => {
           if (data.optionValue === '__signin__') {
-            window.location.href = GITHUB_AUTHORIZE_URL;
+            window.location.href = ENTRA_AUTHORIZE_URL;
             return;
           }
           if (data.optionValue) handleSwitch(data.optionValue);

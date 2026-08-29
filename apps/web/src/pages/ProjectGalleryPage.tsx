@@ -23,43 +23,24 @@ import {
   useId,
   useToastController,
 } from '@fluentui/react-components';
-import {
-  AddRegular,
-  CheckmarkCircleRegular,
-  ChevronDownRegular,
-  ChevronRightRegular,
-  ChevronUpRegular,
-  DismissCircleRegular,
-  SparkleRegular,
-} from '@fluentui/react-icons';
+import { AddRegular, CheckmarkCircleRegular, DismissCircleRegular, SparkleRegular } from '@fluentui/react-icons';
 import { BlueprintPanel } from '../components/BlueprintPicker';
 import { applyBlueprintToRequest, NO_BLUEPRINT, useBlueprintGeneration } from '../components/BlueprintPicker.helpers';
 import { GitHubIcon } from '../components/GitHubIcon';
+import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
 import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, TileGrid } from '../components/ui';
 import { Pager } from '../copilot-fluent-system';
-import { GITHUB_AUTHORIZE_URL } from '../config';
+import { ENTRA_AUTHORIZE_URL } from '../config';
 import { useProjectList } from '../hooks/useProjectList';
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type {
-  AccessibleGitHubRepo,
   CreateProjectRequest,
-  GitHubAccount,
-  GitHubRepo,
-  LinkedGitHubAccount,
   PagedResult,
   Project,
 } from '../api/types';
 import type { BlueprintSelection } from '../components/BlueprintPicker.helpers';
 import type { ReactElement, ReactNode } from 'react';
-/** Normalizes an owner/repo string or existing https URL to a full GitHub HTTPS URL. */
-function toGitHubUrl(val: string): string {
-  const v = val.trim();
-  if (v.startsWith('https://')) return v;
-  if (/^[\w.-]+\/[\w.-]/.test(v)) return `https://github.com/${v}`;
-  return v;
-}
-
 const useStyles = makeStyles({
   // One-time entrance for a freshly-created project card: a brand ring that
   // fades out with a slight rise. Purely a "this is the new one" cue.
@@ -230,20 +211,8 @@ const useStyles = makeStyles({
   repositoryPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   listBlock: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   listHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  orgRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer', textAlign: 'left' },
   pasteRow: { display: 'flex', gap: tokens.spacingHorizontalS },
   growInput: { flex: 1 },
-  accountOption: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-  },
-  accountAvatar: {
-    width: '28px',
-    height: '28px',
-    borderRadius: '50%',
-    flexShrink: 0,
-  },
   repoSelector: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   repoOption: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   githubMark: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralForeground1, color: tokens.colorNeutralBackground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightBold, flexShrink: 0 },
@@ -278,7 +247,16 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
         origin,
         working_directory: workingDirectory.trim(),
       };
-      if (origin === 'github') req.source_repository = toGitHubUrl(sourceRepository.trim());
+      if (origin === 'github') {
+        const selections = await apiClient.listGitHubRepositorySelections();
+        const selected = selections.repositories.find((repository) =>
+          repository.full_name.localeCompare(sourceRepository.trim(), undefined, { sensitivity: 'accent' }) === 0);
+        if (!selected) {
+          throw new Error('Select a repository available through your Repo App authorization.');
+        }
+        const issued = await apiClient.issueGitHubRepositorySelection(selected.full_name);
+        req.repository_selection_code = issued.selection_code;
+      }
       applyBlueprintToRequest(req, blueprint);
       const project = await apiClient.createProject(req);
       onCreated(project);
@@ -488,211 +466,71 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
   );
 }
 
-type RepoBrowserAccount = GitHubAccount & {
-  is_default?: boolean;
-  copilot_entitled?: boolean | null;
-};
-
-type RepoBrowserRepo = GitHubRepo & {
-  source_login?: string;
-  source_avatar_url?: string | null;
-  source_is_default?: boolean;
+type RepoBrowserRepo = {
+  fullName: string;
+  private: boolean;
+  defaultBranch: string;
+  pushedAt: string | null;
 };
 
 function useGitHubData(open: boolean) {
-  const [accounts, setAccounts] = useState<RepoBrowserAccount[]>([]);
-  const [accountsLoading, setAccountsLoading] = useState(false);
-  const [authRequired, setAuthRequired] = useState(false);
-  const [accountsError, setAccountsError] = useState<string | null>(null);
-  const [accountsKey, setAccountsKey] = useState(0);
-
-  const [selectedAccount, setSelectedAccount] = useState<RepoBrowserAccount | null>(null);
   const [repos, setRepos] = useState<RepoBrowserRepo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
   const [reposKey, setReposKey] = useState(0);
-  const [crossAccount, setCrossAccount] = useState(false);
 
-  // Reset all state when the dialog (re-)opens.
-  const [prevOpen, setPrevOpen] = useState(open);
-  if (open !== prevOpen) {
-    setPrevOpen(open);
-    if (open) {
-      setAccounts([]);
-      setAccountsLoading(false);
-      setAuthRequired(false);
-      setAccountsError(null);
-      setSelectedAccount(null);
-      setRepos([]);
-      setReposLoading(false);
-      setReposError(null);
-      setCrossAccount(false);
+  useEffect(() => {
+    if (!open) {
+      return;
     }
-  }
-
-  // Load accounts when dialog opens.
-  useEffect(() => {
-    if (!open) return;
     let cancelled = false;
-    const loadAccounts = async () => {
-      setAccountsLoading(true);
-      setAuthRequired(false);
-      setAccountsError(null);
-      try {
-        const linked = await apiClient.listLinkedGitHubAccounts();
-        if (cancelled) return;
-        const data: RepoBrowserAccount[] = linked.map((account: LinkedGitHubAccount) => ({
-          login: account.login,
-          name: account.name,
-          avatar_url: account.avatar_url,
-          type: account.type,
-          is_default: account.is_default,
-          copilot_entitled: account.copilot_entitled,
-        }));
-        setAccounts(data);
-        if (data.length > 0) {
-          const preferred = data.find((account) => account.is_default) ?? data[0];
-          setSelectedAccount(preferred);
-        }
-      } catch (err: unknown) {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 404) {
-          try {
-            const data = await apiClient.listGitHubAccounts();
-            if (cancelled) return;
-            setAccounts(data);
-            if (data.length > 0) setSelectedAccount(data[0]);
-          } catch (fallbackErr) {
-            if (cancelled) return;
-            if (fallbackErr instanceof ApiError && fallbackErr.status === 401) {
-              setAuthRequired(true);
-            } else {
-              setAccountsError(
-                fallbackErr instanceof ApiError
-                  ? `Error ${fallbackErr.status}: ${fallbackErr.body}`
-                  : fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
-              );
-            }
-          }
-        } else if (err instanceof ApiError && err.status === 401) {
-          setAuthRequired(true);
-        } else {
-          setAccountsError(
-            err instanceof ApiError
-              ? `Error ${err.status}: ${err.body}`
-              : err instanceof Error ? err.message : String(err),
-          );
-        }
-      } finally {
-        if (!cancelled) setAccountsLoading(false);
-      }
-    };
-    void loadAccounts();
-    return () => { cancelled = true; };
-  }, [open, accountsKey]);
-
-  // Load repos whenever the selected account changes.
-  useEffect(() => {
-    let cancelled = false;
-    const loadRepos = async () => {
+    const loadRepositories = async () => {
       setReposLoading(true);
       setReposError(null);
       try {
-        const data = await apiClient.listAccessibleGitHubRepos();
+        const selections = await apiClient.listGitHubRepositorySelections();
         if (cancelled) return;
-        setRepos(data.map((repo: AccessibleGitHubRepo) => ({
-          fullName: repo.fullName,
-          htmlUrl: repo.htmlUrl,
-          description: repo.description,
-          private: repo.private,
-          defaultBranch: repo.defaultBranch,
-          source_login: repo.source_login,
-          source_avatar_url: repo.source_avatar_url,
-          source_is_default: repo.source_is_default,
+        setRepos(selections.repositories.map((repository) => ({
+          fullName: repository.full_name,
+          private: repository.private,
+          defaultBranch: repository.default_branch,
+          pushedAt: repository.pushed_at,
         })));
-        setCrossAccount(true);
-        // Do NOT reset selectedAccount — keep the default/chosen account so the
-        // client-side filter in filteredRepos can apply immediately.
       } catch (err: unknown) {
         if (cancelled) return;
-        if (err instanceof ApiError && err.status === 404) {
-          if (!selectedAccount) {
-            setRepos([]);
-            setCrossAccount(false);
-            setReposLoading(false);
-            return;
-          }
-          try {
-            const fallbackRepos = await apiClient.listGitHubRepos(selectedAccount.login);
-            if (cancelled) return;
-            setRepos(fallbackRepos);
-            setCrossAccount(false);
-          } catch (fallbackErr) {
-            if (cancelled) return;
-            setReposError(
-              fallbackErr instanceof ApiError
-                ? `Error ${fallbackErr.status}: ${fallbackErr.body}`
-                : fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
-            );
-            setRepos([]);
-            setCrossAccount(false);
-          }
-        } else {
-          setReposError(
-            err instanceof ApiError
-              ? `Error ${err.status}: ${err.body}`
-              : err instanceof Error ? err.message : String(err),
-          );
-          setRepos([]);
-          setCrossAccount(false);
-        }
+        setReposError(
+          err instanceof ApiError
+            ? `Error ${err.status}: ${err.body}`
+            : err instanceof Error ? err.message : String(err),
+        );
       } finally {
         if (!cancelled) setReposLoading(false);
       }
     };
-    void loadRepos();
+    void loadRepositories();
     return () => { cancelled = true; };
-  }, [selectedAccount, reposKey]);
+  }, [open, reposKey]);
 
-  const changeAccount = (acc: RepoBrowserAccount | null) => {
-    setSelectedAccount(acc);
-    if (!crossAccount) {
-      setRepos([]);
-      setReposError(null);
-    }
-  };
-
-  const reloadAccounts = () => setAccountsKey((k) => k + 1);
   const reloadRepos = () => setReposKey((k) => k + 1);
 
   return {
-    accounts, accountsLoading, authRequired, accountsError,
-    selectedAccount, changeAccount,
-    repos, reposLoading, reposError,
-    reloadAccounts, reloadRepos, crossAccount,
+    repos, reposLoading, reposError, reloadRepos,
   };
 }
 
 function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCreated: (p: Project) => void; dataDir: string | null; workspaceAutoAssigned: boolean }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('github', onCreated);
-  const {
-    accounts, accountsLoading, authRequired, accountsError,
-    selectedAccount, changeAccount,
-    repos, reposLoading, reposError,
-    reloadAccounts, reloadRepos, crossAccount,
-  } = useGitHubData(d.open);
+  const { repos, reposLoading, reposError, reloadRepos } = useGitHubData(d.open);
   const [repoFilter, setRepoFilter] = useState('');
   const [pasteRepo, setPasteRepo] = useState('');
   const [folderName, setFolderName] = useState('');
   const [folderEdited, setFolderEdited] = useState(false);
-  const [showMoreSources, setShowMoreSources] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
-  const hasLinkedGitHubIdentity = accounts.length > 0 || selectedAccount !== null;
 
   const hasChosenRepository = /^(https:\/\/github\.com\/)?[\w.-]+\/[\w.-]+/.test(d.sourceRepository.trim());
-  const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && hasChosenRepository && hasLinkedGitHubIdentity && !d.saving);
+  const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && hasChosenRepository && !d.saving);
   const setWorkspaceSlug = (slug: string) => {
     setFolderName(slug);
     d.setWorkingDirectory(workspaceAutoAssigned ? slug : workspacePath(dataDir, slug));
@@ -720,20 +558,15 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   const filteredRepos = repos
     .filter((r) => {
       const byName = r.fullName?.toLowerCase().includes(repoFilter.toLowerCase()) ?? false;
-      const bySource = !selectedAccount || crossAccount
-        ? (!selectedAccount || r.source_login === selectedAccount.login)
-        : true;
-      return byName && bySource;
+      return byName;
     })
     .sort((a, b) => {
       const nameA = (a.fullName?.split('/').pop() ?? '').toLowerCase();
       const nameB = (b.fullName?.split('/').pop() ?? '').toLowerCase();
       return nameA.localeCompare(nameB);
     });
-  const visibleSources = showMoreSources ? accounts : accounts.slice(0, 5);
-
   const resetLocal = () => {
-    d.reset(); setRepoFilter(''); setPasteRepo(''); setFolderName(''); setFolderEdited(false); setShowMoreSources(false); setGenerateDescription(''); generation.setGenerated(null);
+    d.reset(); setRepoFilter(''); setPasteRepo(''); setFolderName(''); setFolderEdited(false); setGenerateDescription(''); generation.setGenerated(null);
   };
 
   const left = (
@@ -743,31 +576,26 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         <Combobox
           aria-label="Repository"
           freeform
-          placeholder={accountsLoading ? 'Loading...' : reposLoading ? 'Loading repositories...' : 'Search or select a repository'}
+          placeholder={reposLoading ? 'Loading repositories...' : 'Search or select a repository'}
           value={d.sourceRepository}
           onInput={(e) => { const val = (e.target as HTMLInputElement).value; setRepoFilter(val); d.setSourceRepository(val); if (val.includes('/')) applyRepo(val); }}
           onOptionSelect={(_, data) => { if (data.optionValue) applyRepo(data.optionValue); }}
-          disabled={accountsLoading}
+          disabled={reposLoading}
         >
           {filteredRepos.map((repo) => {
             const fullName = repo.fullName ?? '';
             return (
-              <Option key={`${repo.source_login ?? 'repo'}:${fullName}`} value={fullName} text={fullName}>
+              <Option key={fullName} value={fullName} text={fullName}>
                 <span className={styles.repoOption}>
                   <span className={styles.githubMark}>GH</span>
                   <Text weight="semibold">{repoDisplayName(fullName)}</Text>
-                  {repo.source_login && <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>via @{repo.source_login}</Text>}
                 </span>
               </Option>
             );
           })}
         </Combobox>
         <Text className={styles.tipLine}>
-          {crossAccount
-            ? selectedAccount
-              ? `Showing repositories reachable via @${selectedAccount.login}. Start typing to narrow the list.`
-              : 'Showing repositories reachable across all linked GitHub accounts. Start typing to narrow the list.'
-            : 'Start typing to search any owner/repository on GitHub. Import succeeds only if one of your linked GitHub identities can actually access it.'}
+          Start typing to narrow repositories available through the Repo App. Import succeeds only after its authorization verifies the selection.
         </Text>
       </div>
 
@@ -779,75 +607,9 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         />
       </Field>
 
-      {authRequired && (
-        <MessageBar intent="warning">
-          <MessageBarBody>Connect your GitHub account to list repositories, including private ones you can access. Public repos can still be pasted below without connecting.</MessageBarBody>
-          <MessageBarActions><Button size="small" onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}>Connect GitHub</Button></MessageBarActions>
-        </MessageBar>
-      )}
-      {accountsError && <MessageBar intent="error"><MessageBarBody>Could not load accounts: {accountsError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadAccounts}>Retry</Button></MessageBarActions></MessageBar>}
       {reposError && <MessageBar intent="error"><MessageBarBody>Could not load repositories: {reposError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadRepos}>Retry</Button></MessageBarActions></MessageBar>}
-      {!authRequired && !accountsLoading && accounts.length === 0 && !accountsError && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            Link at least one GitHub account before importing a repository or running background GitHub work.
-          </MessageBarBody>
-        </MessageBar>
-      )}
 
-      {!authRequired && (
-        <div className={styles.listBlock}>
-          <div className={styles.listHeader}>
-            <Text weight="semibold">{crossAccount ? 'Linked GitHub accounts' : 'My organizations'}</Text>
-            {accounts.length > 5 && (
-              <Button
-                appearance="transparent"
-                size="small"
-                icon={showMoreSources ? <ChevronUpRegular /> : <ChevronDownRegular />}
-                iconPosition="after"
-                onClick={() => setShowMoreSources(!showMoreSources)}
-              >
-                {showMoreSources ? 'Show less' : 'Show more'}
-              </Button>
-            )}
-          </div>
-          {visibleSources.length === 0 ? <Text className={styles.tipLine}>{accountsLoading ? 'Loading sources…' : 'No GitHub sources found.'}</Text> : visibleSources.map((acc) => (
-            <button
-              key={acc.login}
-              className={styles.orgRow}
-              type="button"
-              onClick={() => {
-                changeAccount(selectedAccount?.login === acc.login ? null : acc);
-                setRepoFilter('');
-                if (!crossAccount) d.setSourceRepository('');
-              }}
-            >
-              <span className={styles.accountOption}>
-                <img src={acc.avatar_url} alt="" className={styles.accountAvatar} />
-                <span>
-                  <Text weight="semibold">{acc.name ?? acc.login}</Text><br />
-                  <Text className={styles.tipLine}>@{acc.login}</Text>
-                </span>
-                {acc.type === 'user' && <Badge size="small" appearance="outline">You</Badge>}
-                {acc.is_default && <Badge size="small" appearance="filled">Default</Badge>}
-                {acc.copilot_entitled === true && <Badge size="small" appearance="filled">Copilot</Badge>}
-              </span>
-              <ChevronRightRegular />
-            </button>
-          ))}
-          {crossAccount ? (
-            <Text className={styles.tipLine}>
-              {selectedAccount
-                ? `Showing repositories reachable via @${selectedAccount.login}. Click again to show all linked accounts.`
-                : 'Showing repositories reachable across all linked GitHub accounts.'}
-            </Text>
-          ) : (
-            selectedAccount && <Text className={styles.tipLine}>Browsing @{selectedAccount.login} repositories</Text>
-          )}
-        </div>
-      )}
-
-      <Field label="Or paste any repository" hint="owner/repo e.g. kubernetes/client-go">
+      <Field label="Paste a repository from your Repo App authorization" hint="owner/repo e.g. kubernetes/client-go">
         <div className={styles.pasteRow}>
           <Input className={styles.growInput} value={pasteRepo} onChange={(_, v) => setPasteRepo(v.value)} placeholder="owner/repo" />
           <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Go →</Button>
@@ -946,6 +708,7 @@ function ProjectCard({ project, onOpen, highlight }: { project: Project; onOpen:
 
 export function ProjectGalleryPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { appendProject, refetch } = useProjectList();
   const [projectPage, setProjectPage] = useState<PagedResult<Project> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1066,6 +829,13 @@ export function ProjectGalleryPage() {
   const totalProjects = projectPage?.total_count ?? 0;
   const totalProjectPages = projectPage?.total_pages ?? 1;
   const showGalleryActions = !loading && !authError && totalProjects > 0;
+  const copilotAuthorizationResult = searchParams.get('copilot_app_auth');
+
+  const dismissCopilotAuthorizationResult = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('copilot_app_auth');
+    setSearchParams(next, { replace: true });
+  };
 
   return (
     <PageContainer>
@@ -1081,19 +851,24 @@ export function ProjectGalleryPage() {
         ) : undefined}
       />
 
+      <CopilotAuthorizationResultNotice
+        code={copilotAuthorizationResult}
+        onDismiss={dismissCopilotAuthorizationResult}
+      />
+
       {loading && <LoadingState label="Loading projects" rows={4} />}
 
       {!loading && authError && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            Sign in with GitHub to see your projects.
+            Sign in with Microsoft Entra ID to see your projects.
           </MessageBarBody>
           <MessageBarActions>
             <Button
               size="small"
-              onClick={() => { window.location.href = GITHUB_AUTHORIZE_URL; }}
+              onClick={() => { window.location.href = ENTRA_AUTHORIZE_URL; }}
             >
-              Sign in with GitHub
+              Sign in with Microsoft Entra ID
             </Button>
           </MessageBarActions>
         </MessageBar>

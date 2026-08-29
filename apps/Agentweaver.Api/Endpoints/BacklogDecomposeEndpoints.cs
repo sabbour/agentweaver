@@ -158,10 +158,6 @@ public static class BacklogDecomposeEndpoints
                 var run = await runStore.GetAsync(parsedRunId, ct);
                 if (run is null || run.ProjectId != projectId)
                     return Results.NotFound(new { error = "Coordinator run not found for this project." });
-                if (AuthModeResolver.Resolve(httpContext.RequestServices.GetRequiredService<IConfiguration>()) == AuthMode.GitHubLegacy
-                    && !caller.Owns(run.SubmittingUser))
-                    return Results.StatusCode(StatusCodes.Status403Forbidden);
-
                 var spec = await db.OutcomeSpecs
                     .AsNoTracking()
                     .FirstOrDefaultAsync(s => s.CoordinatorRunId == runId && s.ProjectId == projectId.ToString(), ct);
@@ -226,13 +222,20 @@ public static class BacklogDecomposeEndpoints
             DecomposeAgentResult agentResult;
             try
             {
-                agentResult = await decomposeService.DecomposeAsync(project, fileContent, caller.User, ct);
+                agentResult = await decomposeService.DecomposeAsync(project, fileContent, caller, ct);
             }
             catch (Exception ex)
             {
                 return Results.Problem(
                     $"Decomposition failed: {ex.Message}",
                     statusCode: 500);
+            }
+
+            if (agentResult.ConnectionRequirement is not null)
+            {
+                return Results.Json(
+                    agentResult.ConnectionRequirement,
+                    statusCode: StatusCodes.Status401Unauthorized);
             }
 
             // Idempotency: collect titles that already exist for this (project, source file).

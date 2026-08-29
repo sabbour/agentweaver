@@ -6,8 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Centralized project authorization for project-scoped endpoints. In GitHubLegacy mode this
-/// preserves the legacy owner-or-internal-service check; in Entra mode it defers to the Tier-2
+/// Centralized Entra project authorization for project-scoped endpoints. It defers to the Tier-2
 /// project-role service so viewer/contributor/owner semantics stay consistent across endpoints.
 ///
 /// SECURITY (broken access control + stored XPIA): without an ownership check, any authenticated
@@ -74,21 +73,12 @@ public static class ProjectAuthorization
         if (!allowInternalService && IsDedicatedInternalServiceCaller(httpContext, caller))
             return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-        if (AuthModeResolver.Resolve(configuration) == AuthMode.GitHubLegacy)
-            return caller.Owns(project.Owner)
-                || (allowInternalService && IsInternalServiceCaller(caller, configuration))
-                ? null
-                : Results.StatusCode(StatusCodes.Status403Forbidden);
-
         if (allowInternalService && IsInternalServiceCaller(caller, configuration))
             return null;
 
         var authorization = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
         if (await authorization.HasRoleAsync(caller, project.Id, minimumRole, ct).ConfigureAwait(false))
-        {
-            await SelectProjectGitHubIdentityAsync(httpContext, caller, project.Id, ct).ConfigureAwait(false);
             return null;
-        }
 
         var legacyBackfill = httpContext.RequestServices.GetRequiredService<ILegacyProjectRoleBackfillService>();
         return await legacyBackfill.GetClaimStateAsync(caller, project, ct).ConfigureAwait(false) switch
@@ -148,32 +138,5 @@ public static class ProjectAuthorization
         return CanAccess(caller, project.Owner, configuration)
             ? null
             : Results.StatusCode(StatusCodes.Status403Forbidden);
-    }
-
-    private static async Task SelectProjectGitHubIdentityAsync(
-        HttpContext httpContext,
-        CallerContext caller,
-        ProjectId projectId,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(caller.EntraObjectId))
-            return;
-
-        var tokenStore = httpContext.RequestServices.GetRequiredService<IGitHubTokenStore>();
-        if (tokenStore is not IMultiIdentityGitHubTokenStore)
-            return;
-
-        var identityService = httpContext.RequestServices.GetRequiredService<ProjectGitHubIdentityService>();
-        var effective = await identityService
-            .GetEffectiveIdentityAsync(projectId, caller.EntraObjectId, ct)
-            .ConfigureAwait(false);
-        if (effective.EffectiveLink is not null)
-        {
-            CallerTokenScopeProvider.SelectProjectIdentity(
-                httpContext,
-                projectId,
-                caller.EntraObjectId,
-                effective.EffectiveLink.GitHubLogin);
-        }
     }
 }

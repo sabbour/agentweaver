@@ -45,8 +45,7 @@ public sealed class McpEntraAccessTokenValidator
             Authority);
 
     private bool IsEnabled =>
-        string.Equals(_configuration["Auth:Mode"], "Entra", StringComparison.OrdinalIgnoreCase)
-        && !string.IsNullOrWhiteSpace(ClientId)
+        !string.IsNullOrWhiteSpace(ClientId)
         && !string.IsNullOrWhiteSpace(TenantId)
         && !string.IsNullOrWhiteSpace(Issuer);
 

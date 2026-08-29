@@ -58,18 +58,6 @@ spec:
               value: /tmp
             - name: DOTNET_BUNDLE_EXTRACT_BASE_DIR
               value: /tmp/.net
-            # EF design-time host build runs Program.Main, which trips OAuthConfigGuard.
-            # Pin Issuer/Audience here too so `efbundle` migrations pass the Production guard.
-            - name: Auth__OAuth__Issuer
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_ISSUER
-            - name: Auth__OAuth__Audience
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_AUDIENCE
             # spec-018 P2: run efbundle against Postgres.
             - name: Database__Provider
               value: "Postgres"
@@ -101,11 +89,6 @@ spec:
             - -c
             - |
               set -eu
-              export GitHub__ClientId="$(cat /mnt/secrets-store/github-client-id)"
-              export GitHub__ClientSecret="$(cat /mnt/secrets-store/github-client-secret)"
-              export Auth__GitHub__ClientId="${GitHub__ClientId}"
-              export Auth__GitHub__ClientSecret="${GitHub__ClientSecret}"
-              export Auth__OAuth__SigningKey="$(cat /mnt/secrets-store/mcp-oauth-signing-key)"
               export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
               exec dotnet Agentweaver.Api.dll
           ports:
@@ -162,24 +145,8 @@ spec:
               value: "true"
             - name: Sandbox__AgentHost__RequireMtls
               value: "false"
-            - name: Auth__GitHub__AllowedOrg
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: GITHUB_ALLOWED_ORG
-            - name: Auth__GitHub__CallbackUrl
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: GITHUB_CALLBACK_URL
-            - name: Auth__GitHub__FrontendUrl
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: GITHUB_FRONTEND_URL
             # Microsoft Entra ID browser sign-in (#653/#658). Only meaningful when Auth__Mode=Entra;
-            # ClientId/TenantId/RedirectUri are the deploy-time-resolved counterparts of the
-            # GITHUB_* wiring above. Auth__Entra__ClientSecret is deliberately OMITTED here -- #658
+            # Auth__Entra__ClientSecret is deliberately OMITTED here -- #658
             # made it optional so PKCE-only authorization-code redemption works when a tenant policy
             # blocks client secrets; set it manually via the Key Vault CSI/SecretProviderClass only
             # if/when a future tenant allows a confidential-client secret.
@@ -203,19 +170,6 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: ENTRA_REDIRECT_URI
-            # OAuth 2.1 Authorization Server config (RFC 8414 / RFC 9728)
-            # Issuer must match the public host so iss claim == AS metadata URL.
-            - name: Auth__OAuth__Issuer
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_ISSUER
-            # Audience bound to the MCP resource (RFC 8707); RS validates aud on every request.
-            - name: Auth__OAuth__Audience
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_AUDIENCE
             # Backward-compat: allow raw GitHub tokens while clients migrate to the new flow.
             # Flip to "false" once all MCP clients are using Agentweaver-minted tokens.
             - name: Auth__Mcp__AllowGitHubPassthrough

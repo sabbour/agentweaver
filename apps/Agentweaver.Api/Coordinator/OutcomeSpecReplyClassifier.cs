@@ -8,7 +8,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Generation;
-using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -90,19 +89,16 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
         "{\"decision\": \"confirm\"} or {\"decision\": \"revise\"}.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ILogger<CopilotOutcomeSpecReplyClassifier> _logger;
     private readonly string? _modelId;
 
     public CopilotOutcomeSpecReplyClassifier(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ILogger<CopilotOutcomeSpecReplyClassifier> logger,
         IConfiguration configuration,
         IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _logger = logger;
         // A low-latency binary classification on the synchronous steering path: resolve through the
         // validated generation-model options, which default to a small/fast model rather than the
@@ -119,18 +115,9 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
 
         try
         {
-            // Copilot model turns require a Copilot-entitled user token; installation scope is not a
-            // model credential and would yield empty/no-auth turns that look like parse failures.
-            if (string.IsNullOrWhiteSpace(context.SubmittingUser))
+            if (string.IsNullOrWhiteSpace(context.RunId))
                 throw new InvalidOperationException(
-                    "Outcome-spec reply classification requires a submitting user identity; installation-scope Copilot auth is not permitted.");
-
-            var scope = await _scopeProvider
-                .ResolveAsync(context.SubmittingUser, context.ProjectId, ct)
-                .ConfigureAwait(false);
-            if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-                throw new InvalidOperationException(
-                    "Outcome-spec reply classification requires a user Copilot token scope; installation-scope Copilot auth is not permitted.");
+                    "Outcome-spec reply classification requires a run-bound Copilot capability snapshot.");
 
             var prompt = BuildPrompt(context);
 
@@ -138,7 +125,7 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
             // must fail closed to revise within a few seconds rather than hang the request. Timeout
             // and any other failure both resolve to null (revise) below.
             var decision = await RunWithTimeoutAsync(
-                token => RunModelTurnAsync(scope, prompt, token),
+                token => RunModelTurnAsync(context.RunId, prompt, token),
                 ClassificationTimeout,
                 ct,
                 onTimeout: () => _logger.LogWarning(
@@ -193,13 +180,13 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
     /// Copilot session.
     /// </summary>
     protected virtual async Task<string?> RunModelTurnAsync(
-        GitHubTokenScope scope, string prompt, CancellationToken ct)
+        string runId, string prompt, CancellationToken ct)
     {
         CopilotClient? client = null;
         AIAgent? agent = null;
         try
         {
-            client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
+            client = await _copilotClientFactory.CreateClientAsync(runId, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 
             var sessionConfig = new SessionConfig

@@ -79,10 +79,178 @@ public sealed class DurableRunControlStateTests : IDisposable
 
         var wait = child.WaitForApprovalAsync(
             childId, "req-2", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
-        await WaitUntilAsync(() => sibling.GrantAsync(childId, "req-2", ApprovalScope.Tool));
+        await WaitUntilAsync(() => sibling.GrantAsync(childId, "req-2", ApprovalScope.Run));
 
         (await wait).Should().BeTrue();
         sibling.IsAutoApproved(siblingId, "web_fetch", "https://other.test").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ToolScopedApproval_OnChild_DoesNotAuthorizeSiblingOrFutureChild()
+    {
+        var parent = await InsertOwnedRunAsync("owner");
+        var child = await InsertOwnedRunAsync("owner");
+        var sibling = await InsertOwnedRunAsync("owner");
+        var futureChild = await InsertOwnedRunAsync("owner");
+        var gate = NewApprovalGate();
+        var parentId = parent.Id.ToString();
+        var childId = child.Id.ToString();
+
+        gate.RegisterParentRun(childId, parentId);
+        gate.RegisterParentRun(sibling.Id.ToString(), parentId);
+        var wait = gate.WaitForApprovalAsync(
+            childId, "tool-only", "web_fetch", "https://example.test", TimeSpan.FromSeconds(5), default);
+        (await gate.GrantAsync(childId, "tool-only", ApprovalScope.Tool)).Should().BeTrue();
+        (await wait).Should().BeTrue();
+
+        gate.IsAutoApproved(childId, "web_fetch", "https://same-child.test").Should().BeTrue(
+            "Tool scope covers the approving child for the rest of its run");
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://sibling.test").Should().BeFalse(
+            "Tool scope must not become a coordinator policy for an active sibling");
+
+        gate.RegisterParentRun(futureChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(futureChild.Id.ToString(), "web_fetch", "https://future-child.test").Should().BeFalse(
+            "Tool scope must not become a coordinator policy for a future child");
+    }
+
+    [Fact]
+    public async Task RunScopedApproval_OnChild_DoesNotOutliveFailedParent()
+    {
+        var parent = await InsertOwnedRunAsync("owner");
+        var child = await InsertOwnedRunAsync("owner");
+        var sibling = await InsertOwnedRunAsync("owner");
+        var futureChild = await InsertOwnedRunAsync("owner");
+        var gate = NewApprovalGate();
+        var parentId = parent.Id.ToString();
+        var childId = child.Id.ToString();
+        var siblingId = sibling.Id.ToString();
+        gate.RegisterParentRun(childId, parentId);
+        gate.RegisterParentRun(siblingId, parentId);
+
+        var wait = gate.WaitForApprovalAsync(
+            childId, "failed-parent", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        await WaitUntilAsync(() => gate.GrantAsync(childId, "failed-parent", ApprovalScope.Run));
+
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved(siblingId, "web_fetch", "https://before-failure.test").Should().BeTrue(
+            "an active coordinator propagates its child's session policy to active siblings");
+
+        await _runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+
+        gate.IsAutoApproved(childId, "web_fetch", "https://approving-child-after-failure.test").Should().BeFalse(
+            "the approving child must not retain its local copy of a run scope after its coordinator fails");
+        (await _runStore.GetAsync(sibling.Id))!.Status.Should().Be(RunStatus.InProgress);
+        gate.IsAutoApproved(siblingId, "web_fetch", "https://after-failure.test").Should().BeFalse(
+            "an active sibling must not inherit a failed coordinator's stale policy");
+
+        gate.RegisterParentRun(futureChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(futureChild.Id.ToString(), "web_fetch", "https://future-child.test").Should().BeFalse(
+            "a future child must not inherit a failed coordinator's stale policy");
+    }
+
+    [Fact]
+    public async Task RunScopedApproval_OnChild_DoesNotReviveAfterParentRecovery()
+    {
+        var parent = await InsertOwnedRunAsync("owner");
+        var firstChild = await InsertOwnedRunAsync("owner");
+        var recoveredChild = await InsertOwnedRunAsync("owner");
+        var gate = NewApprovalGate();
+        var parentId = parent.Id.ToString();
+
+        gate.RegisterParentRun(firstChild.Id.ToString(), parentId);
+        var wait = gate.WaitForApprovalAsync(
+            firstChild.Id.ToString(), "before-terminalization", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        (await gate.GrantAsync(firstChild.Id.ToString(), "before-terminalization", ApprovalScope.Run)).Should().BeTrue();
+        (await wait).Should().BeTrue();
+
+        gate.RegisterParentRun(recoveredChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(recoveredChild.Id.ToString(), "web_fetch", "https://active.test").Should().BeTrue(
+            "an active coordinator's session policy is inherited by newly dispatched children");
+
+        await _runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        await _runStore.UpdateStatusAsync(parent.Id, RunStatus.InProgress, endedAt: null);
+
+        var postRecoveryChild = await InsertOwnedRunAsync("owner");
+        gate.RegisterParentRun(postRecoveryChild.Id.ToString(), parentId);
+        gate.IsAutoApproved(postRecoveryChild.Id.ToString(), "web_fetch", "https://recovered.test").Should().BeFalse(
+            "the coordinator lifecycle generation advances on terminalization, preventing pre-terminal policies from authorizing recovered children");
+    }
+
+    [Fact]
+    public async Task RecoveredGenerationTwoRun_DoesNotMatchGenerationOnePolicy()
+    {
+        var project = ProjectId.New();
+        var recoveredRun = NewOwnedRun("owner", project, approvalGeneration: 2);
+        await _runStore.InsertAsync(recoveredRun);
+        var state = NewState();
+        state.Append(
+            recoveredRun.Id.ToString(),
+            "tool.approval_policy_granted",
+            new
+            {
+                projectId = project.ToString(),
+                owner = "owner",
+                toolId = "web_fetch",
+                riskSemantics = "network-read/v1",
+                approvalGeneration = 1,
+            });
+
+        var gate = NewApprovalGate();
+
+        gate.IsAutoApproved(recoveredRun.Id.ToString(), "web_fetch", "https://recovered.test")
+            .Should().BeFalse(
+                "recovery must retain generation 2 so a policy from generation 1 cannot authorize it");
+    }
+
+    [Fact]
+    public async Task UpgradedGenerationOneRun_DoesNotMatchLegacyPolicyWithoutGeneration()
+    {
+        var upgradedRun = NewOwnedRun("owner");
+        await _runStore.InsertAsync(upgradedRun);
+        var state = NewState();
+        state.Append(
+            upgradedRun.Id.ToString(),
+            "tool.approval_policy_granted",
+            new
+            {
+                projectId = (string?)null,
+                owner = "owner",
+                toolId = "web_fetch",
+                riskSemantics = "network-read/v1",
+            });
+
+        var gate = NewApprovalGate();
+
+        gate.IsAutoApproved(upgradedRun.Id.ToString(), "web_fetch", "https://upgraded.test")
+            .Should().BeFalse(
+                "legacy run policies lacking a lifecycle generation require renewed operator consent after upgrade");
+    }
+
+    [Fact]
+    public async Task RunScopedApproval_OnChild_FailsWhenParentIsNoLongerActive()
+    {
+        var parent = await InsertOwnedRunAsync("owner");
+        var child = await InsertOwnedRunAsync("owner");
+        var sibling = await InsertOwnedRunAsync("owner");
+        var gate = NewApprovalGate();
+        await _runStore.UpdateReviewReadyAsync(parent.Id, "tree", "diff", 1);
+        gate.RegisterParentRun(child.Id.ToString(), parent.Id.ToString());
+
+        var wait = gate.WaitForApprovalAsync(
+            child.Id.ToString(), "inactive-parent", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+
+        (await gate.GrantAsync(child.Id.ToString(), "inactive-parent", ApprovalScope.Run)).Should().BeFalse(
+            "a run-scoped child grant would write a policy to its parent, which is awaiting review");
+        gate.Deny(child.Id.ToString(), "inactive-parent").Should().BeTrue();
+        (await wait).Should().BeFalse();
+
+        (await _runStore.TryTransitionReviewToInProgressAsync(parent.Id)).Should().BeTrue();
+        gate.RegisterParentRun(sibling.Id.ToString(), parent.Id.ToString());
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://later-child.test").Should().BeFalse(
+            "a late grant must not leave a durable parent policy for children created after the parent resumes");
     }
 
     [Fact]
@@ -113,12 +281,44 @@ public sealed class DurableRunControlStateTests : IDisposable
     }
 
     [Fact]
+    public async Task TimeoutLosingClaim_ReturnsWinningApproval()
+    {
+        var owner = NewApprovalGate();
+        var secondary = NewApprovalGate();
+        var wait = owner.WaitForApprovalAsync(
+            "run-timeout-grant", "req-timeout-grant", "web_fetch", "https://example.test",
+            TimeSpan.FromMilliseconds(200), default);
+
+        await WaitUntilAsync(() =>
+            secondary.GrantAsync("run-timeout-grant", "req-timeout-grant", ApprovalScope.Once));
+
+        (await wait).Should().BeTrue("a timeout loser must return the winning approval resolution");
+        owner.GetRequestState("run-timeout-grant", "req-timeout-grant")
+            .Should().Be(ToolApprovalRequestState.Approved);
+    }
+
+    [Fact]
+    public async Task TimedOutApproval_RemainsDeniedAndExpired()
+    {
+        var gate = NewApprovalGate();
+
+        var approved = await gate.WaitForApprovalAsync(
+            "run-timeout-deny", "req-timeout-deny", "web_fetch", "https://example.test",
+            TimeSpan.FromMilliseconds(50), default);
+
+        approved.Should().BeFalse();
+        gate.GetRequestState("run-timeout-deny", "req-timeout-deny")
+            .Should().Be(ToolApprovalRequestState.Expired);
+    }
+
+    [Fact]
     public async Task AlwaysApproval_IsVisibleToFutureRunForSameOwner_AfterSourceClear()
     {
         var owner = NewApprovalGate();
         var secondary = NewApprovalGate();
-        var sourceRun = await InsertOwnedRunAsync("alice");
-        var futureRun = await InsertOwnedRunAsync("alice");
+        var project = ProjectId.New();
+        var sourceRun = await InsertOwnedRunAsync("alice", project);
+        var futureRun = await InsertOwnedRunAsync("alice", project);
         var sourceId = sourceRun.Id.ToString();
 
         var wait = owner.WaitForApprovalAsync(
@@ -136,8 +336,9 @@ public sealed class DurableRunControlStateTests : IDisposable
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         IRunStore runStore = new SqliteRunStore(testDb.Db);
-        var aliceRun = NewOwnedRun("alice");
-        var bobRun = NewOwnedRun("bob");
+        var project = ProjectId.New();
+        var aliceRun = NewOwnedRun("alice", project);
+        var bobRun = NewOwnedRun("bob", project);
         await runStore.InsertAsync(aliceRun);
         await runStore.InsertAsync(bobRun);
 
@@ -158,22 +359,23 @@ public sealed class DurableRunControlStateTests : IDisposable
     [Fact]
     public async Task LegacyGlobalAndUnscopedOwnerBucketGrants_AuthorizeNobody()
     {
-        var aliceRun = await InsertOwnedRunAsync("alice");
+        var project = ProjectId.New();
+        var aliceRun = await InsertOwnedRunAsync("alice", project);
         var state = NewState();
         state.Append(
             "__agentweaver_tool_approvals__",
             "tool.approval_policy_granted",
             new { policyKey = "web_fetch:" });
         state.Append(
-            DurableToolApprovalGate.OwnerPolicyBucket("alice"),
+            "__agentweaver_tool_approvals_owner_sha256_v1__legacy",
             "tool.approval_policy_granted",
             new { policyKey = "web_fetch:" });
         state.Append(
-            DurableToolApprovalGate.OwnerPolicyBucket("alice"),
+            "__agentweaver_tool_approvals_owner_sha256_v1__legacy",
             "tool.approval_policy_granted",
             new { owner = "alice", toolId = "web_fetch", riskSemantics = "network-write/v1" });
         state.Append(
-            DurableToolApprovalGate.OwnerPolicyBucket("alice"),
+            "__agentweaver_tool_approvals_owner_sha256_v1__legacy",
             "tool.approval_policy_granted",
             new { owner = "Alice", toolId = "web_fetch", riskSemantics = "network-read/v1" });
 
@@ -183,14 +385,14 @@ public sealed class DurableRunControlStateTests : IDisposable
             .Should().BeFalse();
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AlwaysApproval_MissingOrEmptyPersistedOwner_FailsClosed(bool persistEmptyOwner)
+    [Fact]
+    public async Task AlwaysApproval_EmptyPersistedOwner_ApprovesRequestButPolicyFailsClosed()
     {
-        var runId = persistEmptyOwner
-            ? (await InsertOwnedRunAsync("")).Id.ToString()
-            : RunId.New().ToString();
+        // The run exists and is active, so PR #972 finding 2's active-run requirement is
+        // satisfied; the pending request itself is approved. But its persisted owner is empty,
+        // so no subject can be resolved -- the broader durable "always" policy must still fail
+        // closed rather than apply to an unidentified owner.
+        var runId = (await InsertOwnedRunAsync("")).Id.ToString();
         var gate = NewApprovalGate();
         var wait = gate.WaitForApprovalAsync(
             runId, "req-ownerless", "web_fetch", "https://example.test",
@@ -203,6 +405,28 @@ public sealed class DurableRunControlStateTests : IDisposable
         gate.IsAutoApproved(runId, "web_fetch", "https://example.test/next").Should().BeFalse();
     }
 
+    [Fact]
+    public async Task AlwaysApproval_RunNotFoundInStore_FailsClosedEntirely()
+    {
+        // PR #972 finding 2: every non-once scope from every caller -- not only AgentHost-context
+        // callers -- now requires an atomic active-run claim/check before any approval or policy
+        // event is persisted. A run id absent from the run store can never satisfy "InProgress",
+        // so the grant itself must fail closed here, not merely the durable policy: there is no
+        // context-based carve-out that would let this succeed.
+        var runId = RunId.New().ToString();
+        var gate = NewApprovalGate();
+        var wait = gate.WaitForApprovalAsync(
+            runId, "req-unpersisted", "web_fetch", "https://example.test",
+            TimeSpan.FromMilliseconds(300), default);
+
+        (await gate.GrantAsync(runId, "req-unpersisted", ApprovalScope.Always)).Should().BeFalse(
+            "a run absent from the run store can never satisfy the active-run requirement");
+
+        (await wait).Should().BeFalse(
+            "no approval event was ever persisted for a run that could not be proven active, so the pending request must expire");
+        gate.IsAutoApproved(runId, "web_fetch", "https://example.test").Should().BeFalse();
+    }
+
     [Theory]
     [InlineData("start_preview")]
     [InlineData("write_file")]
@@ -210,8 +434,9 @@ public sealed class DurableRunControlStateTests : IDisposable
     [InlineData("Web_Fetch")]
     public async Task AlwaysApproval_NonEligibleTool_RemainsGatedAcrossRuns(string toolName)
     {
-        var sourceRun = await InsertOwnedRunAsync("alice");
-        var futureRun = await InsertOwnedRunAsync("alice");
+        var project = ProjectId.New();
+        var sourceRun = await InsertOwnedRunAsync("alice", project);
+        var futureRun = await InsertOwnedRunAsync("alice", project);
         var gate = NewApprovalGate();
         var requestId = $"req-{toolName}";
         var wait = gate.WaitForApprovalAsync(
@@ -229,9 +454,10 @@ public sealed class DurableRunControlStateTests : IDisposable
     [Fact]
     public async Task ConcurrentAlwaysGrants_AcrossReplicas_AppendAndReadSameOwnerPolicy()
     {
-        var sourceA = await InsertOwnedRunAsync("alice");
-        var sourceB = await InsertOwnedRunAsync("alice");
-        var future = await InsertOwnedRunAsync("alice");
+        var project = ProjectId.New();
+        var sourceA = await InsertOwnedRunAsync("alice", project);
+        var sourceB = await InsertOwnedRunAsync("alice", project);
+        var future = await InsertOwnedRunAsync("alice", project);
         var replicaA = NewApprovalGate();
         var replicaB = NewApprovalGate();
         var waitA = replicaA.WaitForApprovalAsync(
@@ -250,6 +476,128 @@ public sealed class DurableRunControlStateTests : IDisposable
         (await waitB).Should().BeTrue();
         replicaA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test")
             .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ConcurrentOnceAndAlwaysDecisions_OnlyTheWinningDecisionCanCreateAPolicy()
+    {
+        var project = ProjectId.New();
+        var source = await InsertOwnedRunAsync("alice", project);
+        var future = await InsertOwnedRunAsync("alice", project);
+        var replicaA = NewApprovalGate();
+        var replicaB = NewApprovalGate();
+        var wait = replicaA.WaitForApprovalAsync(
+            source.Id.ToString(), "once-vs-always", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+
+        var once = replicaA.GrantAsync(source.Id.ToString(), "once-vs-always", ApprovalScope.Once);
+        var always = replicaB.GrantAsync(source.Id.ToString(), "once-vs-always", ApprovalScope.Always);
+        await Task.WhenAll(once, always);
+
+        (await once).Should().NotBe(await always, "the durable request claim has exactly one winner");
+        (await wait).Should().BeTrue();
+        replicaA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test")
+            .Should().Be(await always,
+                "only an Always decision that won the atomic request claim may create a future policy");
+    }
+
+    [Fact]
+    public async Task ConcurrentAlwaysGrantAndDeny_OnlyTheWinningClaimCanLeaveAPolicy()
+    {
+        var project = ProjectId.New();
+        var source = await InsertOwnedRunAsync("alice", project);
+        var future = await InsertOwnedRunAsync("alice", project);
+        var replicaA = NewApprovalGate();
+        var replicaB = NewApprovalGate();
+        var runId = source.Id.ToString();
+        var wait = replicaA.WaitForApprovalAsync(
+            runId, "always-vs-deny", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var always = Task.Run(async () =>
+        {
+            await start.Task;
+            return await replicaA.GrantAsync(runId, "always-vs-deny", ApprovalScope.Always);
+        });
+        var deny = Task.Run(async () =>
+        {
+            await start.Task;
+            return replicaB.Deny(runId, "always-vs-deny");
+        });
+        start.SetResult();
+
+        await Task.WhenAll(always, deny);
+
+        (await always).Should().NotBe(await deny,
+            "the exclusive request-stream claim permits exactly one terminal decision");
+        if (await deny)
+        {
+            (await wait).Should().BeFalse();
+            replicaA.GetRequestState(runId, "always-vs-deny").Should().Be(ToolApprovalRequestState.Denied);
+            replicaA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test")
+                .Should().BeFalse("a denial must not leave an Always policy behind");
+        }
+        else
+        {
+            (await wait).Should().BeTrue();
+            replicaA.GetRequestState(runId, "always-vs-deny").Should().Be(ToolApprovalRequestState.Approved);
+            replicaA.IsAutoApproved(future.Id.ToString(), "web_fetch", "https://future.test").Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task AlwaysApproval_DoesNotCrossProjectBoundary()
+    {
+        var sourceProject = ProjectId.New();
+        var otherProject = ProjectId.New();
+        var source = await InsertOwnedRunAsync("alice", sourceProject);
+        var sameProject = await InsertOwnedRunAsync("alice", sourceProject);
+        var otherProjectRun = await InsertOwnedRunAsync("alice", otherProject);
+        var gate = NewApprovalGate();
+
+        var wait = gate.WaitForApprovalAsync(
+            source.Id.ToString(), "project-boundary", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        await WaitUntilAsync(() =>
+            gate.GrantAsync(source.Id.ToString(), "project-boundary", ApprovalScope.Always));
+
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved(sameProject.Id.ToString(), "web_fetch", "https://same-project.test")
+            .Should().BeTrue();
+        gate.IsAutoApproved(otherProjectRun.Id.ToString(), "web_fetch", "https://other-project.test")
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SessionApproval_DoesNotCrossOrchestrationBoundary_AndClearsWithTheSession()
+    {
+        var project = ProjectId.New();
+        var session = await InsertOwnedRunAsync("alice", project);
+        var child = await InsertOwnedRunAsync("alice", project);
+        var sibling = await InsertOwnedRunAsync("alice", project);
+        var otherSession = await InsertOwnedRunAsync("alice", project);
+        var otherChild = await InsertOwnedRunAsync("alice", project);
+        var gate = NewApprovalGate();
+        gate.RegisterParentRun(child.Id.ToString(), session.Id.ToString());
+        gate.RegisterParentRun(sibling.Id.ToString(), session.Id.ToString());
+        gate.RegisterParentRun(otherChild.Id.ToString(), otherSession.Id.ToString());
+
+        var wait = gate.WaitForApprovalAsync(
+            child.Id.ToString(), "session-scope", "web_fetch", "https://example.test",
+            TimeSpan.FromSeconds(5), default);
+        await WaitUntilAsync(() =>
+            gate.GrantAsync(child.Id.ToString(), "session-scope", ApprovalScope.Run));
+
+        (await wait).Should().BeTrue();
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://sibling.test")
+            .Should().BeTrue("a session approval covers other work in the same orchestration");
+        gate.IsAutoApproved(otherChild.Id.ToString(), "web_fetch", "https://other-session.test")
+            .Should().BeFalse("a session approval must not escape to another orchestration");
+
+        gate.Clear(session.Id.ToString());
+        gate.IsAutoApproved(sibling.Id.ToString(), "web_fetch", "https://after-clear.test")
+            .Should().BeFalse("ending a session removes its session-only approval");
     }
 
     [Fact]
@@ -346,14 +694,17 @@ public sealed class DurableRunControlStateTests : IDisposable
         return provider;
     }
 
-    private async Task<Run> InsertOwnedRunAsync(string submittingUser)
+    private async Task<Run> InsertOwnedRunAsync(string submittingUser, ProjectId? projectId = null)
     {
-        var run = NewOwnedRun(submittingUser);
+        var run = NewOwnedRun(submittingUser, projectId);
         await _runStore.InsertAsync(run);
         return run;
     }
 
-    private static Run NewOwnedRun(string submittingUser) => new()
+    private static Run NewOwnedRun(
+        string submittingUser,
+        ProjectId? projectId = null,
+        int approvalGeneration = 1) => new()
     {
         Id = RunId.New(),
         RepositoryPath = "approval-scope-test",
@@ -363,6 +714,8 @@ public sealed class DurableRunControlStateTests : IDisposable
         SubmittingUser = submittingUser,
         Status = RunStatus.InProgress,
         StartedAt = DateTimeOffset.UtcNow,
+        ProjectId = projectId,
+        ApprovalGeneration = approvalGeneration,
     };
 
     private static async Task WaitUntilAsync(Func<Task<bool>> action)

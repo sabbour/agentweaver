@@ -88,8 +88,8 @@ export async function getIdentityClientId(resourceGroup, identityName, opts = {}
  * manifests). Unlike this module's other helpers, this deliberately returns
  * a boolean rather than swallowing failure to '': deploy callers must fail
  * loudly on `false`, since a nonexistent (or typo'd-but-real, wrong) vault
- * here silently corrupts GitHub OAuth credential lookups downstream instead
- * of erroring cleanly. See scripts/harness-shared/learnings.md for the
+ * here silently corrupts downstream secret lookups instead of erroring
+ * cleanly. See scripts/harness-shared/learnings.md for the
  * incident this guards against.
  * @param {string} name
  * @returns {Promise<boolean>}

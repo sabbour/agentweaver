@@ -10,27 +10,6 @@ public sealed class McpProgram
 
         var builder = WebApplication.CreateBuilder(args);
 
-        // Fix 1 (Seraph T4–T7 review): in HTTP (Resource Server) mode, the issuer/audience used to
-        // validate forwarded AS JWTs must be pinned to the PUBLIC host — NOT derived from the request
-        // host, which behind the gateway/internal routing would not match the token's aud
-        // (https://<HOST>/mcp). Fail fast at boot in Production if they are not configured. Stdio mode
-        // is single-user/local and performs no JWT validation, so it is exempt.
-        if (!useStdio && builder.Environment.IsProduction())
-        {
-            var missing = new[] { "Auth:Mcp:Issuer", "Auth:Mcp:Audience" }
-                .Where(key => string.IsNullOrWhiteSpace(builder.Configuration[key]))
-                .ToArray();
-            if (missing.Length > 0)
-            {
-                throw new InvalidOperationException(
-                    "Refusing to start: the following OAuth configuration value(s) must be pinned to " +
-                    $"the public host in Production but are unset/empty: {string.Join(", ", missing)}. " +
-                    "Set Auth:Mcp:Issuer = https://<HOST> and Auth:Mcp:Audience = https://<HOST>/mcp. " +
-                    "Host-derived issuer/audience is permitted only in Development; in Production it " +
-                    "would break validation of forwarded AS access tokens (audience mismatch).");
-            }
-        }
-
         var apiUrl = builder.Configuration["Agentweaver:ApiUrl"]
             ?? Environment.GetEnvironmentVariable("AGENTWEAVER_API_URL")
             ?? "http://localhost:5000";
@@ -38,8 +17,7 @@ public sealed class McpProgram
             ?? Environment.GetEnvironmentVariable("AGENTWEAVER_API_KEY")
             ?? string.Empty;
 
-        // #474: the per-user bearer (AGENTWEAVER_TOKEN) — an Agentweaver-minted OAuth access token
-        // or a GitHub token (e.g. `gh auth token`). In stdio mode there is no inbound HTTP request to
+        // The per-user Entra bearer (AGENTWEAVER_TOKEN). In stdio mode there is no inbound HTTP request to
         // carry the caller's identity, so this configured token is what the server forwards to the
         // backend. Forwarding the user's OWN token (instead of the shared AGENTWEAVER_API_KEY) makes
         // the API attribute calls to the real user and enforce project ownership, closing the
@@ -61,7 +39,7 @@ public sealed class McpProgram
                     Console.Error.WriteLine(
                         "[agentweaver-mcp] ERROR: Refusing to start stdio mode with the shared " +
                         "AGENTWEAVER_API_KEY. This bypasses project-ownership checks and exposes " +
-                        "all projects. Set AGENTWEAVER_TOKEN to your per-user token (e.g. `gh auth token`). " +
+                        "all projects. Set AGENTWEAVER_TOKEN to your Entra access token. " +
                         "To force the insecure fallback for a service account, set " +
                         "AGENTWEAVER_ALLOW_SHARED_KEY=true. See docs/guide/mcp-cli.md.");
                     return 1;
@@ -75,14 +53,14 @@ public sealed class McpProgram
                     "[agentweaver-mcp] WARNING: stdio mode is using the shared AGENTWEAVER_API_KEY. " +
                     "This is the internal service credential and bypasses project-ownership checks, " +
                     "giving this client access to ALL projects. Set AGENTWEAVER_TOKEN to your own " +
-                    "per-user token (e.g. `gh auth token`) so the backend enforces ownership. See " +
+                    "Entra access token so the backend enforces ownership. See " +
                     "docs/guide/mcp-cli.md.");
             }
             else if (string.IsNullOrWhiteSpace(userToken) && string.IsNullOrWhiteSpace(apiKey))
             {
                 Console.Error.WriteLine(
                     "[agentweaver-mcp] WARNING: no credential configured for stdio mode. Set " +
-                    "AGENTWEAVER_TOKEN to your own per-user token (e.g. `gh auth token`); backend " +
+                    "AGENTWEAVER_TOKEN to your Entra access token; backend " +
                     "calls will otherwise be rejected with 401.");
             }
         }
@@ -99,7 +77,6 @@ public sealed class McpProgram
         builder.Services.AddMemoryCache();
         builder.Services.AddHttpClient();
         builder.Services.AddHttpContextAccessor();
-        builder.Services.AddSingleton<McpAccessTokenValidator>();
         builder.Services.AddSingleton<McpEntraAccessTokenValidator>();
 
         var mcpBuilder = builder.Services.AddMcpServer().WithToolsFromAssembly();
@@ -121,29 +98,6 @@ public sealed class McpProgram
         if (!useStdio)
         {
             app.MapGet("/healthz", () => Results.Ok(new { status = "healthy" }));
-
-            // RFC 9728 §3a — Protected Resource Metadata. Served unauthenticated so MCP clients can
-            // discover the Authorization Server. Both the root and the resource-suffixed path are
-            // served because clients (Copilot CLI / VS Code) probe the suffixed form.
-            var protectedResourceMetadata = (HttpContext ctx) =>
-            {
-                var configuredIssuer = ctx.RequestServices
-                    .GetRequiredService<IConfiguration>()["Auth:Mcp:Issuer"];
-                var issuer = !string.IsNullOrWhiteSpace(configuredIssuer)
-                    ? configuredIssuer.TrimEnd('/')
-                    : $"{ctx.Request.Scheme}://{ctx.Request.Host.Value}";
-
-                return Results.Json(new Dictionary<string, object>
-                {
-                    ["resource"] = $"{issuer}/mcp",
-                    ["authorization_servers"] = new[] { issuer },
-                    ["bearer_methods_supported"] = new[] { "header" },
-                    ["scopes_supported"] = new[] { "mcp:invoke" },
-                    ["resource_documentation"] = $"{issuer}/docs",
-                });
-            };
-            app.MapGet("/.well-known/oauth-protected-resource", protectedResourceMetadata);
-            app.MapGet("/.well-known/oauth-protected-resource/mcp", protectedResourceMetadata);
 
             app.UseMiddleware<McpBearerTokenMiddleware>();
         }

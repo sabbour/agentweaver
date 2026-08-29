@@ -162,7 +162,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         var pid = projectId.ToString();
         var tid = id.ToString();
         var rows = await db.BacklogTasks
-            .Where(t => t.TaskId == tid && t.ProjectId == pid && t.ArchivedAt == null)
+            .Where(t => t.TaskId == tid && t.ProjectId == pid && t.ArchivedAt == null
+                && !t.IsAutomationInvocationPending)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.Title, title)
                 .SetProperty(t => t.Description, description), ct);
@@ -178,7 +179,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         var rows = await db.BacklogTasks
             .Where(t => t.TaskId == tid && t.ProjectId == pid
                 && (t.State == "backlog" || t.State == "ready")
-                && t.RunId == null && t.ArchivedAt == null)
+                && t.RunId == null && t.ArchivedAt == null && !t.IsAutomationInvocationPending)
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.WorkflowOverrideId, workflowId), ct);
         return rows > 0;
     }
@@ -194,7 +195,19 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         var rows = await db.BacklogTasks
             .Where(t => t.TaskId == tid && t.ProjectId == pid
                 && (t.State == "backlog" || t.State == "ready")
-                && t.RunId == null && t.ArchivedAt == null)
+                && t.RunId == null && t.ArchivedAt == null && !t.IsAutomationInvocationPending)
+            .ExecuteDeleteAsync(ct);
+        return rows > 0;
+    }
+
+    public async Task<bool> TryDeleteProvisionalAutomationTaskAsync(
+        ProjectId projectId, BacklogTaskId id, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rows = await db.BacklogTasks
+            .Where(t => t.TaskId == id.ToString() && t.ProjectId == projectId.ToString()
+                && t.State == "backlog" && t.RunId == null && t.ArchivedAt == null
+                && t.IsAutomationInvocationPending)
             .ExecuteDeleteAsync(ct);
         return rows > 0;
     }
@@ -209,7 +222,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         var tid = id.ToString();
 
         var task = await db.BacklogTasks
-            .FirstOrDefaultAsync(t => t.TaskId == tid && t.ProjectId == pid && t.ArchivedAt == null, ct);
+            .FirstOrDefaultAsync(t => t.TaskId == tid && t.ProjectId == pid && t.ArchivedAt == null
+                && !t.IsAutomationInvocationPending, ct);
         if (task is null)
         {
             await tx.RollbackAsync(ct);
@@ -238,11 +252,28 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             var pid = projectId.ToString();
             var tid = id.ToString();
             return await db.BacklogTasks
-                .Where(t => t.TaskId == tid && t.ProjectId == pid && t.State == "backlog" && t.ArchivedAt == null)
+                .Where(t => t.TaskId == tid && t.ProjectId == pid && t.State == "backlog"
+                    && t.ArchivedAt == null && !t.IsAutomationInvocationPending)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(t => t.State, "ready")
                     .SetProperty(t => t.OrderKey, key)
                     .SetProperty(t => t.CommittedAt, committedAt), c);
+        }, ct);
+
+    public Task<bool> TryPublishAutomationInvocationTaskAsync(
+        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt, CancellationToken ct = default) =>
+        RunWithOrderKeyRetryAsync(projectId, id, "ready", newOrderKey, async (db, key, c) =>
+        {
+            var pid = projectId.ToString();
+            var tid = id.ToString();
+            return await db.BacklogTasks
+                .Where(t => t.TaskId == tid && t.ProjectId == pid && t.State == "backlog"
+                    && t.ArchivedAt == null && t.IsAutomationInvocationPending)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(t => t.State, "ready")
+                    .SetProperty(t => t.OrderKey, key)
+                    .SetProperty(t => t.CommittedAt, committedAt)
+                    .SetProperty(t => t.IsAutomationInvocationPending, false), c);
         }, ct);
 
     public Task<bool> TryMoveToBacklogAsync(
@@ -253,7 +284,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             var tid = id.ToString();
             return await db.BacklogTasks
                 .Where(t => t.TaskId == tid && t.ProjectId == pid
-                    && t.State == "ready" && t.RunId == null && t.ArchivedAt == null)
+                    && t.State == "ready" && t.RunId == null && t.ArchivedAt == null
+                    && !t.IsAutomationInvocationPending)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(t => t.State, "backlog")
                     .SetProperty(t => t.OrderKey, key)
@@ -270,7 +302,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             var tid = id.ToString();
             return await db.BacklogTasks
                 .Where(t => t.TaskId == tid && t.ProjectId == pid
-                    && t.State == destState && t.RunId == null && t.ArchivedAt == null)
+                        && t.State == destState && t.RunId == null && t.ArchivedAt == null
+                        && !t.IsAutomationInvocationPending)
                 .ExecuteUpdateAsync(s => s.SetProperty(t => t.OrderKey, key), c);
         }, ct);
     }
@@ -285,7 +318,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
 
         // (a) Read Backlog tasks in order
         var backlogTasks = await db.BacklogTasks
-            .Where(t => t.ProjectId == pid && t.State == "backlog" && t.ArchivedAt == null)
+            .Where(t => t.ProjectId == pid && t.State == "backlog" && t.ArchivedAt == null
+                && !t.IsAutomationInvocationPending)
             .OrderBy(t => t.OrderKey).ThenBy(t => t.TaskId)
             .Select(t => new { t.TaskId, t.OrderKey })
             .ToListAsync(ct);
@@ -310,7 +344,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             var newKey = OrderKey.Between(lastKey, null);
             var rows = await db.BacklogTasks
                 .Where(t => t.TaskId == item.TaskId && t.ProjectId == pid
-                    && t.State == "backlog" && t.ArchivedAt == null)
+                    && t.State == "backlog" && t.ArchivedAt == null
+                    && !t.IsAutomationInvocationPending)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(t => t.State, "ready")
                     .SetProperty(t => t.OrderKey, newKey)
@@ -478,6 +513,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         ParentPrdRunId = t.ParentPrdRunId?.ToString(),
         PromotionKey = t.PromotionKey,
         PromotionReason = t.PromotionReason,
+        IsAutomationInvocationPending = t.IsAutomationInvocationPending,
     };
 
     private static BacklogTask FromRecord(BacklogTaskRecord r) => new()
@@ -500,5 +536,6 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         ParentPrdRunId = r.ParentPrdRunId is null ? null : RunId.Parse(r.ParentPrdRunId),
         PromotionKey = r.PromotionKey,
         PromotionReason = r.PromotionReason,
+        IsAutomationInvocationPending = r.IsAutomationInvocationPending,
     };
 }

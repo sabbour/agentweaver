@@ -106,7 +106,6 @@ public class EntraWebApplicationFactory : WebApplicationFactory<Program>
                 ["Worktrees:BasePath"] = _worktreesPath,
                 ["Checkpoints:Path"] = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
-                ["Auth:Mode"] = "Entra",
                 ["Auth:Entra:TenantId"] = TenantId,
                 ["Auth:Entra:ClientId"] = ClientId,
                 ["Auth:Entra:Issuer"] = Issuer,
@@ -129,8 +128,6 @@ public class EntraWebApplicationFactory : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
-            RemoveService<IGitHubTokenStore>(services);
-            services.AddSingleton<IGitHubTokenStore, InMemoryGitHubTokenStore>();
             RemoveService<ProjectGitInitializer>(services);
             services.AddSingleton<ProjectGitInitializer, NoOpProjectGitInitializer>();
         });

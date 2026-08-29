@@ -38,7 +38,8 @@ public sealed record WorkflowSelectionContext(
     IReadOnlyList<string> TeamRoles,
     IReadOnlyList<WorkflowDefinition> AvailableWorkflows,
     IReadOnlySet<string>? CustomWorkflowIds = null,
-    string? SubmittingUser = null);
+    string? SubmittingUser = null,
+    string? RunId = null);
 
 /// <summary>
 /// The outcome of a selection: the chosen workflow, a 1–2 sentence rationale, and whether the model

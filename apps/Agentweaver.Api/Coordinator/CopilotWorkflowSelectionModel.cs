@@ -7,7 +7,6 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
-using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -29,7 +28,7 @@ namespace Agentweaver.Api.Coordinator;
 /// falls back to the project default — workflow selection is an optimization, never a hard gate.
 /// </para>
 /// </summary>
-public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
+public class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
 {
     private const string SelectionCharter =
         "You are the Coordinator selecting the single best-fit functional workflow for a task. " +
@@ -40,18 +39,15 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
         "{\"selected\": \"bug-fix\", \"rationale\": \"A one-line null check is a targeted defect fix.\"}";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ILogger<CopilotWorkflowSelectionModel> _logger;
     private readonly string? _modelId;
 
     public CopilotWorkflowSelectionModel(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ILogger<CopilotWorkflowSelectionModel> logger,
         IConfiguration configuration)
     {
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _logger = logger;
         _modelId = configuration["Providers:GitHubCopilot:Model"];
     }
@@ -59,25 +55,37 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
     public async Task<string?> CompleteAsync(
         string prompt, WorkflowSelectionContext context, CancellationToken ct)
     {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(context.RunId))
+                throw new InvalidOperationException(
+                    "Workflow selection requires a run-bound Copilot capability snapshot.");
+
+            var result = await RunModelTurnAsync(context.RunId, prompt, ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "Workflow selection model completed for project {ProjectId}: {Length} chars. Raw response (truncated): {Response}",
+                context.ProjectId, result?.Length ?? 0, Truncate(result));
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Workflow selection model turn failed for project {ProjectId}; selector will use the default.",
+                context.ProjectId);
+            return null;
+        }
+    }
+
+    protected virtual async Task<string?> RunModelTurnAsync(
+        string runId,
+        string prompt,
+        CancellationToken ct)
+    {
         CopilotClient? client = null;
         AIAgent? agent = null;
         try
         {
-            // Copilot model turns require the submitting user's Copilot-entitled token. Do not fall
-            // back to the installation scope: GitHub App installation tokens are not Copilot model
-            // credentials and can yield empty/no-auth turns that look like parse failures.
-            if (string.IsNullOrWhiteSpace(context.SubmittingUser))
-                throw new InvalidOperationException(
-                    "Workflow selection requires a submitting user identity; installation-scope Copilot auth is not permitted.");
-
-            var scope = await _scopeProvider
-                .ResolveAsync(context.SubmittingUser, context.ProjectId, ct)
-                .ConfigureAwait(false);
-            if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-                throw new InvalidOperationException(
-                    "Workflow selection requires a user Copilot token scope; installation-scope Copilot auth is not permitted.");
-
-            client = await _copilotClientFactory.CreateClientAsync(scope, _modelId, ct).ConfigureAwait(false);
+            client = await _copilotClientFactory.CreateClientAsync(runId, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 
             // Minimal, tool-less session. SECURITY (XPIA): the model consumes user-controlled text
@@ -107,19 +115,8 @@ public sealed class CopilotWorkflowSelectionModel : IWorkflowSelectionModel
             agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
 
-            var result = await CaptureResponseTextAsync(
+            return await CaptureResponseTextAsync(
                 agent.RunStreamingAsync(prompt, session, options: null, ct), ct).ConfigureAwait(false);
-            _logger.LogInformation(
-                "Workflow selection model completed for project {ProjectId}: {Length} chars. Raw response (truncated): {Response}",
-                context.ProjectId, result?.Length ?? 0, Truncate(result));
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Workflow selection model turn failed for project {ProjectId}; selector will use the default.",
-                context.ProjectId);
-            return null;
         }
         finally
         {

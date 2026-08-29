@@ -5,12 +5,11 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { useAppVersion } from '../../hooks/useAppVersion';
-import { GitHubSignIn } from '../GitHubSignIn';
 import { StartOrchestrationFab } from '../StartOrchestrationFab';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
 // Top bar. Carries the project switcher, the API-reachability status dot,
-// and the GitHub sign-in. The brand mark lives in the left nav rail header.
+// The brand mark lives in the left nav rail header.
 
 const useStyles = makeStyles({
   topBar: {
@@ -91,7 +90,6 @@ export function TopBar({
       <div className={styles.end}>
         {!pageHasStartTaskAction && <StartOrchestrationFab currentProjectId={projectId} />}
         <StatusDot />
-        <GitHubSignIn projectId={projectId} />
       </div>
     </header>
   );

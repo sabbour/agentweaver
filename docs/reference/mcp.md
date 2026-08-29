@@ -132,7 +132,7 @@ All tools surface failures in a structured JSON shape:
 
 The MCP transport still raises a tool error, but the message is now actionable and consistent. Common mappings include:
 
-- `401` → `Not signed in.` with `Call github_signin then session_start before retrying.`
+- `401` → `Not signed in.` with `Sign in to Agentweaver, then retry.`
 - `404` project/run/file lookups → a resource-specific `error` plus the relevant list/read tool in `hint`
 - `409` review-state conflicts → `Call run_status to check current state.`
 - `-32001`, `408`, or `504` timeouts → `Call diagnostics_get to check health, then retry.`
@@ -171,18 +171,34 @@ Get a project by ID.
 
 ### `project_create`
 
-Create a new project, optionally linking a GitHub repository and applying a blueprint.
+Create a new project, optionally cloning a Repo App-authorized GitHub repository and applying a blueprint.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | yes | Project name |
 | `working_directory` | string | yes | Absolute path to the local working directory |
 | `origin` | string | no | Project origin: `blank` (default) or `github` |
-| `source_repository` | string | no | GitHub repository in `owner/repo` shorthand or full `https://github.com/owner/repo` HTTPS URL format (optional trailing `.git` accepted); required when `origin` is `github`. Shorthand is normalized to the full HTTPS URL before the MCP tool calls the API. |
+| `repository_selection_code` | string | no | Short-lived opaque code from `github_repository_selection_issue`; required when `origin` is `github`. Repository URLs and identifiers are not accepted. |
 | `blueprint_id` | string | no | Predefined blueprint ID to apply (exclusive with `blueprint`) |
 | `blueprint` | object | no | Inline blueprint JSON object to apply (exclusive with `blueprint_id`) |
 
 **Returns**: Created project object with assigned `id`.
+
+---
+
+### GitHub repository selection for `project_create`
+
+When creating a GitHub-origin project, keep the selection flow on the same authenticated MCP
+connection:
+
+1. Call `github_repository_selections_list`. Its redacted output supplies the selectable
+   `full_name` values only.
+2. Call `github_repository_selection_issue` with one returned `full_name`.
+3. Pass its `selection_code` as `repository_selection_code` to `project_create`.
+
+The code is bound to that caller, expires in five minutes, and is consumed once. The API resolves
+the clone metadata from its server-side authorization; do not send repository URLs, numeric IDs,
+installation IDs, permissions, tokens, or provider errors.
 
 ---
 
@@ -562,59 +578,89 @@ Get a team member's charter document.
 
 ---
 
-## GitHub authentication
+## GitHub App capabilities
 
-### `github_status`
+Microsoft Entra remains the Agentweaver product identity. These tools connect only the
+purpose-bound GitHub App capabilities. Browser handoffs and polling never return OAuth
+state, callback cookies, credentials, repositories, installations, or permissions.
 
-Check the current GitHub authentication status.
+### `github_repo_app_connect`
 
-**Parameters**: none
-
-**Returns**: Authenticated identity, or unauthenticated status.
-
----
-
-### `github_accounts_list`
-
-List the current GitHub user account plus the GitHub org accounts reachable through the current GitHub authorization context.
+Start the current human's Repo App authorization.
 
 **Parameters**: none
 
-**Returns**: Array of account objects such as the authenticated user and reachable orgs.
+**Returns**: `{ transaction_id, browser_url, expires_at }`. Open `browser_url` in a
+browser and poll the returned transaction ID.
 
 ---
 
-### `github_repos_list`
-
-List GitHub repositories for the current GitHub user or for one reachable org account.
+### `github_repo_app_authorization_status`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `account` | string | no | GitHub login to list repositories for. Omit to list the authenticated user's own repos. |
+| `transaction_id` | string | yes | Opaque ID returned by `github_repo_app_connect`. |
 
-**Returns**: Array of repository objects (`fullName`, `description`, `private`, `defaultBranch`).
-
----
-
-### `github_signin`
-
-Sign in to GitHub using the device flow. The tool initiates the flow and returns the user code and verification URL immediately. The user opens the URL in a browser and enters the code. The tool then polls until the browser step completes and returns a success confirmation, or times out after two minutes.
-
-**Parameters**: none
-
-**Returns**: On initiation: `{ user_code, verification_uri }`. On completion: authenticated identity.
-
-**Progress notifications** are emitted while polling: `"Waiting for browser authentication..."`.
+**Returns**: `{ status }`, where status is `pending`, `completed`, `failed`, or `expired`.
 
 ---
 
-### `github_signout`
+### `github_repo_app_disconnect`
 
-Sign out of GitHub.
+Disconnect the current human's Repo App authorization and invalidate its outstanding
+authorization transactions.
 
 **Parameters**: none
 
-**Returns**: Confirmation message.
+**Returns**: `{ status: "disconnected" }`.
+
+---
+
+### `project_copilot_app_connect`
+
+Start an Owner-authorized, project-pinned Copilot App connection.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project to bind. The backend derives current Owner authority. |
+
+**Returns**: `{ transaction_id, browser_url, expires_at }`.
+
+---
+
+### `project_copilot_app_authorization_status`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project originally passed to `project_copilot_app_connect`. |
+| `transaction_id` | string | yes | Opaque transaction ID. |
+
+**Returns**: `{ status }`, where status is `pending`, `completed`, `failed`, or `expired`.
+
+---
+
+### `project_copilot_app_disconnect`
+
+Disconnect a project Copilot binding. The API allows this de-privileging operation only
+to a human Project Owner or human platform administrator.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project whose binding will be disconnected. |
+
+**Returns**: `{ status: "disconnected" }`.
+
+---
+
+### `project_github_capability_status`
+
+Get the server-derived, redacted unattended capability readiness for a project.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project_id` | string | yes | Project to inspect; requires current Project Owner authority. |
+
+**Returns**: `{ status, reason_code, message, repo_app_installation_connected }`.
 
 ---
 

@@ -1,14 +1,11 @@
 import { apiClient } from './api/apiClient';
 import { ApiError } from './api/client';
-import { Button, FluentProvider, MessageBar, MessageBarBody, Spinner, makeStyles, tokens } from '@fluentui/react-components';
+import { FluentProvider } from '@fluentui/react-components';
 import { agentweaverLightTheme } from './theme';
 import { AppShell } from './components/shell/AppShell';
 import {
-  bindSessionLogin,
   captureSessionAuthFromUrl,
   clearSessionAuth,
-  getSessionLogin,
-  getSessionToken,
 } from './config';
 import { CastingWizardPage } from './pages/CastingWizardPage';
 import { ClusterPage } from './pages/ClusterPage';
@@ -38,31 +35,10 @@ import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { AssistantRoute } from './routes/AssistantRoute';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
-import type { AuthMode } from './api/types';
 
-const useAppLoadingStyles = makeStyles({
-  screen: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-});
-
-function Shell({ githubLinkRequired }: { githubLinkRequired: boolean }) {
-  const banner = githubLinkRequired ? (
-    <MessageBar intent="warning">
-      <MessageBarBody>
-        You are signed in to Agentweaver, but no GitHub account is linked yet. Link one in Account settings before importing repositories, connecting project repositories, or running GitHub/Copilot actions.
-      </MessageBarBody>
-      <Button appearance="secondary" as="a" href="/settings">
-        Open account settings
-      </Button>
-    </MessageBar>
-  ) : undefined;
+function Shell() {
   return (
-    <AppShell banner={banner}>
+    <AppShell>
       <Routes>
         {/* Global (non-project) destinations */}
         <Route path="/" element={<OverviewPage />} />
@@ -153,50 +129,24 @@ function describeSessionCheckError(err: unknown): string | null {
 function AuthGate() {
   const [authChecked, setAuthChecked] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
-  const [authMode, setAuthMode] = useState<AuthMode | undefined>(undefined);
-  const [githubLinkRequired, setGitHubLinkRequired] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     captureSessionAuthFromUrl()
       .then(() => apiClient.getServerInfo())
-      .then(async (serverInfo) => {
+      .then(async () => {
         if (cancelled) return;
-        const mode = serverInfo.auth_mode ?? 'github-legacy';
-        setAuthMode(mode);
         const session = await apiClient.getAuthSession();
         if (cancelled) return;
         setSessionError(null);
         if (!session.authenticated) {
           clearSessionAuth();
           setSignedIn(false);
-          setGitHubLinkRequired(false);
           setAuthChecked(true);
           return;
         }
-        if (mode === 'github-legacy') {
-          const storedLogin = getSessionLogin();
-          if (getSessionToken() && storedLogin && session.login && storedLogin !== session.login) {
-            clearSessionAuth();
-            setSignedIn(false);
-            setGitHubLinkRequired(false);
-            setAuthChecked(true);
-            return;
-          }
-          bindSessionLogin(session.login);
-        }
         setSignedIn(true);
-        if (mode === 'entra') {
-          try {
-            const accounts = await apiClient.listLinkedGitHubAccounts();
-            if (!cancelled) setGitHubLinkRequired(accounts.length === 0);
-          } catch {
-            if (!cancelled) setGitHubLinkRequired(false);
-          }
-        } else {
-          setGitHubLinkRequired(false);
-        }
         setAuthChecked(true);
       })
       .catch((err: unknown) => {
@@ -209,20 +159,15 @@ function AuthGate() {
     return () => { cancelled = true; };
   }, []);
 
-  const loadingStyles = useAppLoadingStyles();
   if (!authChecked) {
-    return authMode ? (
-      <div className={loadingStyles.screen}>
-        <Spinner size="large" />
-      </div>
-    ) : <SignInPageLoading />;
+    return <SignInPageLoading />;
   }
 
   if (!signedIn) {
-    return <SignInPage authMode={authMode} sessionError={sessionError} />;
+    return <SignInPage sessionError={sessionError} />;
   }
 
-  return <Shell githubLinkRequired={githubLinkRequired} />;
+  return <Shell />;
 }
 
 function App() {

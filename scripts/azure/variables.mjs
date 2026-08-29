@@ -8,8 +8,7 @@
 //   - KEYVAULT_NAME is the one deliberate exception: it has NO hardcoded
 //     default (see resolveKeyvaultName() below) -- a wrong-but-plausible
 //     name here doesn't just fail to find a resource, it silently redirects
-//     rendered Key Vault references (and the GitHub OAuth secret lookups
-//     that flow from them) at the wrong vault. Every caller MUST supply it
+//     rendered Key Vault references at the wrong vault. Every caller MUST supply it
 //     explicitly (env var, params file, or provision-infra's prompt).
 //   - TENANT_ID, IDENTITY_CLIENT_ID, APPINSIGHTS_WORKSPACE_ID are resolved
 //     LIVE from `az` only if not already supplied via env, and failures are
@@ -55,22 +54,14 @@ export const DEFAULTS = Object.freeze({
   // Deliberately NO default here (see resolveKeyvaultName() below): unlike
   // the other resource names, a wrong-but-plausible Key Vault name doesn't
   // just fail to find a resource -- it silently redirects the rendered
-  // ConfigMap/SecretProviderClass Key Vault references (and the GitHub OAuth
-  // secret lookups that flow from them) at a DIFFERENT vault, which can fail
+  // ConfigMap/SecretProviderClass Key Vault references at a DIFFERENT vault, which can fail
   // silently instead of loudly. Incident: a generic "agentweaver-kv" default
   // here was never a real vault in any provisioned subscription; see
   // scripts/harness-shared/learnings.md for the full writeup.
   NAMESPACE: "agentweaver",
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
-  GITHUB_ALLOWED_ORG: "microsoft",
-  // NOTE: this is the literal AuthModeResolver.Parse() recognizes for legacy GitHub auth
-  // (apps/Agentweaver.Api/Auth/AuthMode.cs) -- it must be exactly "GitHubLegacy", NOT "GitHub".
-  // Parse() treats any value other than a case-insensitive match of "GitHubLegacy" as Entra, and
-  // appsettings.json's own default is already "Auth:Mode": "Entra". Defaulting AUTH_MODE here to
-  // anything but the exact "GitHubLegacy" string would silently flip every deployment that doesn't
-  // set AUTH_MODE over to Entra mode instead of preserving today's GitHub sign-in behavior.
-  AUTH_MODE: "GitHubLegacy",
+  AUTH_MODE: "Entra",
 });
 
 /** Reject 'latest'/'latest-release'; accept a git short SHA (7-40 hex) or a 'v'-prefixed semver. */
@@ -224,7 +215,6 @@ export async function resolveVariables(options = {}) {
   const AGENTHOST_KEYVAULT_URI =
     env.AGENTHOST_KEYVAULT_URI || `https://${KEYVAULT_NAME}.vault.azure.net/`;
 
-  const GITHUB_ALLOWED_ORG = env.GITHUB_ALLOWED_ORG || DEFAULTS.GITHUB_ALLOWED_ORG;
   const IMAGE_API = env.IMAGE_API || "";
   const IMAGE_FRONTEND = env.IMAGE_FRONTEND || "";
   const IMAGE_MCP = env.IMAGE_MCP || "";
@@ -301,7 +291,6 @@ export async function resolveVariables(options = {}) {
     ACR_LOGIN_SERVER,
     KEYVAULT_NAME,
     AGENTHOST_KEYVAULT_URI,
-    GITHUB_ALLOWED_ORG,
     IMAGE_API,
     IMAGE_FRONTEND,
     IMAGE_MCP,

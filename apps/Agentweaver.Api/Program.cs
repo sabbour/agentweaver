@@ -24,6 +24,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Skills;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Model;
@@ -42,12 +43,6 @@ var builder = WebApplication.CreateBuilder(args);
 // Production. This runs before any service/pipeline setup so a misconfigured production deployment
 // fails fast at boot instead of serving traffic with GitHub token / org authorization disabled.
 Agentweaver.Api.Security.TestingBypassGuard.EnsureNotEnabledInProduction(
-    builder.Environment, builder.Configuration);
-
-// Fix 1 (Seraph T4–T7 review): OAuth issuer/audience must be pinned to the PUBLIC host in Production
-// so MCP->API JWT validation (audience = https://<HOST>/mcp) succeeds on internal calls. Fail fast at
-// boot if they are not configured, rather than serving traffic where every forwarded JWT 401s.
-Agentweaver.Api.Security.OAuthConfigGuard.EnsureProductionIssuerAudiencePinned(
     builder.Environment, builder.Configuration);
 
 // Assistant-chat-termination root-cause fix: pairs with k8s/api-deployment.yaml's
@@ -111,7 +106,15 @@ builder.Services.AddSingleton<SqliteDb>();
     if (!_isPostgres)
     {
         builder.Services.AddSingleton<SqliteRunStore>();
-        builder.Services.AddSingleton<IRunStore>(sp => sp.GetRequiredService<SqliteRunStore>());
+        // SQLite keeps run records and RunEvents/policy data in separate database files, so the
+        // active-run check a durable tool-approval scope persistence performs cannot share one
+        // ACID transaction with the run store the way Postgres's FOR UPDATE does. Wrapping the
+        // store in RunActiveClaimGuardedRunStore gives DurableToolApprovalGate a real in-process
+        // mutual-exclusion claim to close that gap instead of relying on another racy pre-read.
+        builder.Services.AddSingleton<RunActiveClaimGuard>();
+        builder.Services.AddSingleton<IRunStore>(sp => new RunActiveClaimGuardedRunStore(
+            sp.GetRequiredService<SqliteRunStore>(),
+            sp.GetRequiredService<RunActiveClaimGuard>()));
         builder.Services.AddSingleton<SqliteRunRevisionStore>();
         builder.Services.AddSingleton<IRunRevisionStore>(sp => sp.GetRequiredService<SqliteRunRevisionStore>());
         builder.Services.AddSingleton<SqliteWorkflowRunStore>();
@@ -201,52 +204,34 @@ builder.Services.AddSingleton<IOperatorAssistantAgent, Agentweaver.Api.Assistant
 builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(builder.Configuration.GetSection("Assistant"));
 builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Agentweaver.Api.Assistant.AssistantRunService>();
 
-// GitHub auth (token store + scope provider + device flow service)
-var tokenStoreProvider = builder.Configuration["Auth:TokenStore:Provider"];
-var kvUri = builder.Configuration["Auth:TokenStore:KeyVaultUri"];
-if (string.Equals(tokenStoreProvider, "keyvault", StringComparison.OrdinalIgnoreCase)
-    && !string.IsNullOrWhiteSpace(kvUri))
+// Two-App credentials stay in the server-side secret store. The legacy per-user token store is
+// deliberately absent: all GitHub authority is now pinned to a Repo App or Copilot App record.
+var kvUri = builder.Configuration["Auth:TwoApp:KeyVaultUri"];
+if (!string.IsNullOrWhiteSpace(kvUri))
 {
     var secretClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
     var kvSecretStore = new KeyVaultSecretStore(secretClient);
-    var diskFs = new FileSystemGitHubTokenStore(); // migration source only
-    var kvTokenStore = new KeyVaultGitHubTokenStore(kvSecretStore, diskFallback: diskFs, diskMirror: null);
-    var cachedTokenStore = new CachingGitHubTokenStore(kvTokenStore);
-    // Outermost decorator: rewrite legacy per-user scopes onto the caller's ACTIVE linked GitHub
-    // identity so Entra-signed-in users (whose credentials live under user-link:{oid}:{login})
-    // resolve a real token everywhere.
-    var linkedIdentityTokenStore = new LinkedIdentityGitHubTokenStore(cachedTokenStore);
     builder.Services.AddSingleton<ISecretStore>(kvSecretStore);
-    builder.Services.AddSingleton<IGitHubTokenStore>(linkedIdentityTokenStore);
-    builder.Services.AddSingleton<IEffectiveGitHubTokenScopeResolver>(linkedIdentityTokenStore);
-    builder.Services.AddSingleton<IGitHubDeviceFlowStore>(new SecretStoreGitHubDeviceFlowStore(kvSecretStore));
-    builder.Services.AddSingleton(secretClient); // exposed for SPC startup re-sync
+    builder.Services.AddSingleton(secretClient);
 }
 else
 {
-    var localTokenStore = new LinkedIdentityGitHubTokenStore(new OsCredentialStoreGitHubTokenStore());
-    builder.Services.AddSingleton<IGitHubTokenStore>(localTokenStore);
-    builder.Services.AddSingleton<IEffectiveGitHubTokenScopeResolver>(localTokenStore);
-    builder.Services.AddSingleton<IGitHubDeviceFlowStore, InMemoryGitHubDeviceFlowStore>();
-    // Provide an in-memory ISecretStore so replica-safe run-secret consumers (e.g. the per-run
-    // preview-runner credential — spec-006 decouple-preview) always resolve a store outside the
-    // Key Vault deployment. Harmless in single-node/local dev.
     builder.Services.AddSingleton<ISecretStore, InMemorySecretStore>();
 }
-builder.Services.AddSingleton<IGitHubTokenScopeProvider, CallerTokenScopeProvider>();
-builder.Services.AddSingleton<IGitHubAccessTokenProvider, GitHubTokenRefreshService>();
-builder.Services.AddSingleton<IGitHubAuthService, GitHubDeviceFlowAuthService>();
-builder.Services.AddHttpClient<GitHubDeviceFlowAuthService>();
-builder.Services.AddHttpClient("github-authz")
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddHttpClient("entra-oidc")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<EntraOnlyGitHubCredentialBoundary>();
+builder.Services.AddSingleton<Agentweaver.Domain.IGitHubTokenStore>(
+    sp => sp.GetRequiredService<EntraOnlyGitHubCredentialBoundary>());
+builder.Services.AddSingleton<Agentweaver.Domain.IGitHubTokenScopeProvider>(
+    sp => sp.GetRequiredService<EntraOnlyGitHubCredentialBoundary>());
+builder.Services.AddSingleton<Agentweaver.Domain.IGitHubAccessTokenProvider>(
+    sp => sp.GetRequiredService<EntraOnlyGitHubCredentialBoundary>());
+builder.Services.AddSingleton<CopilotAppRegistrationService>();
+builder.Services.AddHostedService<CopilotAppRegistrationStartupService>();
 builder.Services.AddSingleton<EntraAccessTokenValidator>();
-builder.Services.AddSingleton<AuthModeEpochService>();
-builder.Services.AddHostedService<AuthModeEpochStartupService>();
-builder.Services.AddHostedService<GitHubTokenProactiveRefreshService>();
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("PlatformAccess", policy =>
@@ -254,15 +239,19 @@ builder.Services.AddAuthorization(options =>
 });
 builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHandler>();
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
-builder.Services.AddSingleton<Agentweaver.Domain.IGitHubRepositoryClient, Agentweaver.Api.Github.GitHubRepositoryClient>();
-builder.Services.AddSingleton<GitHubOAuthRedirectService>();
 builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
-builder.Services.AddScoped<ProjectGitHubIdentityOverrideStore>();
-builder.Services.AddScoped<ProjectGitHubIdentityService>();
-builder.Services.AddScoped<LinkedGitHubAccountService>();
-builder.Services.AddSingleton<Agentweaver.Api.Webhooks.IGitHubWebhookProvisioningService,
-    Agentweaver.Api.Webhooks.GitHubWebhookProvisioningService>();
+builder.Services.AddScoped<TwoAppPersistenceStore>();
+builder.Services.AddScoped<AutomationActivationSnapshotService>();
+builder.Services.AddScoped<AutomationInvocationService>();
+builder.Services.AddScoped<IAutomationInvocationService>(sp => sp.GetRequiredService<AutomationInvocationService>());
+builder.Services.AddScoped<ITwoAppCredentialVault, TwoAppCredentialVault>();
+builder.Services.AddScoped<GitHubRepositorySelectionClient>();
+builder.Services.AddScoped<GitHubRepositorySelectionBroker>();
+builder.Services.AddScoped<Agentweaver.Api.Webhooks.RepoAppInstallationTokenService>();
+builder.Services.AddScoped<GitHubCapabilityBroker>();
+builder.Services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
+builder.Services.AddScoped<BrowserEntraSessionService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,
     Agentweaver.Api.Blueprints.HttpContextAuthenticatedOwnerContext>();
@@ -270,44 +259,7 @@ builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IGitHubBlueprint
     Agentweaver.Api.Blueprints.GitHubBlueprintPackageClient>();
 builder.Services.AddScoped<Agentweaver.Api.Blueprints.GitHubBlueprintPackageImportService>();
 
-// MCP OAuth 2.1 Authorization Server (Option C / Seraph design). T1-T3:
-//  - McpTokenService: signs short-lived (15m) audience-bound JWT access tokens; key from
-//    Auth:OAuth:SigningKey (Key Vault secret 'mcp-oauth-signing-key'), ephemeral dev fallback.
-//  - McpOAuthBrokerService: brokers GitHub login (reusing GitHubOAuthRedirectService) + enforces
-//    microsoft org membership, then issues PKCE-bound authorization codes.
-builder.Services.AddSingleton<Agentweaver.Api.Auth.OAuth.McpTokenService>();
-// Scoped: backed by the scoped MemoryDbContext so pending authorizations and issued authorization
-// codes are persisted (Postgres in prod) and the OAuth flow is replica-safe.
-builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpOAuthBrokerService>();
 builder.Services.AddSingleton<Agentweaver.Api.Auth.WebSessionExchangeService>();
-// T4: rotating refresh-token store + jti denylist (scoped: backed by the scoped MemoryDbContext).
-builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpRefreshTokenStore>();
-builder.Services.AddScoped<Agentweaver.Api.Auth.OAuth.McpClientStore>();
-
-// F3: rate-limit the public OAuth flow endpoints. /oauth/authorize triggers a GitHub API call and
-// /oauth/token can be probed at volume, so apply a fixed-window limiter (20 req/min per client IP).
-// Scoped to the "oauth" policy below — the .well-known metadata and JWKS are intentionally NOT
-// limited so discovery stays cheap and never throttles conformant clients.
-if (!isWorker)
-{
-    builder.Services.AddRateLimiter(options =>
-    {
-        options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-        options.AddPolicy(OAuthServerEndpoints.RateLimitPolicy, httpContext =>
-        {
-            var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            return System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
-                partitionKey,
-                _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
-                {
-                    PermitLimit = 20,
-                    Window = TimeSpan.FromMinutes(1),
-                    QueueLimit = 0,
-                    QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst,
-                });
-        });
-    });
-}
 
 // Project infrastructure (must be before AddAgentRuntime)
 // Provider-aware: Postgres uses EF stores; SQLite uses raw ADO.NET stores.
@@ -426,6 +378,8 @@ builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillMarketplaceRegistry>()
 builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogCache, Agentweaver.Api.Skills.MarketplaceCatalogCache>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogClassifier, Agentweaver.Api.Skills.CopilotMarketplaceCatalogClassifier>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.IMarketplaceCatalogIndexer, Agentweaver.Api.Skills.MarketplaceCatalogIndexer>();
+builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceCopilotCapabilityIssuer>();
+builder.Services.AddHostedService<MarketplaceCopilotCapabilityMaintenanceService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.MarketplaceSourceService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.SkillDefaultsService>();
 builder.Services.AddSingleton<Agentweaver.Api.Skills.ISkillGenerator, Agentweaver.Api.Skills.CopilotSkillGenerator>();
@@ -465,6 +419,7 @@ builder.Services.AddSingleton<DurableShellApprovalStore>();
 builder.Services.AddSingleton<IShellApprovalStore>(sp => sp.GetRequiredService<DurableShellApprovalStore>());
 builder.Services.AddSingleton<DurableToolApprovalGate>();
 builder.Services.AddSingleton<IToolApprovalGate>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
+builder.Services.AddSingleton<IAgentHostToolApprovalPersistence>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
 builder.Services.AddSingleton<DurableQuestionGate>();
 builder.Services.AddSingleton<IQuestionGate>(sp => sp.GetRequiredService<DurableQuestionGate>());
 builder.Services.AddSingleton<DurableRunOptionsStore>();
@@ -477,10 +432,16 @@ builder.Services.AddSingleton<IPodNameRegistry, PodNameRegistry>();
 builder.Services.AddSingleton<IAgentHostTurnTokenRegistry>(sp =>
     (PodNameRegistry)sp.GetRequiredService<IPodNameRegistry>());
 builder.Services.AddSingleton<IRunAuthorshipCapabilityStore, EfRunAuthorshipCapabilityStore>();
-// Resolves a run's submitting user (from IRunStore) so the pod-per-run executor can inject
-// AgentHost__UserId, scoping the in-pod GitHub Copilot auth to the user's Copilot-entitled token
-// instead of the installation token (which fails the first model turn).
+// Resolves submitting-user metadata needed for run/agent identity in the pod configuration.
 builder.Services.AddSingleton<IRunSubmittingUserResolver, RunStoreSubmittingUserResolver>();
+builder.Services.AddSingleton<RunRepositoryCredentialRegistry>();
+builder.Services.AddSingleton<RunGitHubCapabilityCredentialProvider>();
+builder.Services.AddSingleton<IGitHubCopilotCapabilityCredentialProvider>(sp =>
+    sp.GetRequiredService<RunGitHubCapabilityCredentialProvider>());
+builder.Services.AddSingleton<IGitHubRepositoryCapabilityCredentialProvider>(sp =>
+    sp.GetRequiredService<RunGitHubCapabilityCredentialProvider>());
+builder.Services.AddSingleton<IRunRepositoryCredentialLiveness, RunRepositoryCredentialLiveness>();
+builder.Services.AddHostedService<RunRepositoryCredentialReconciliationService>();
 builder.Services.AddSingleton<IRunAgentHostContextResolver>(sp =>
     new RunAgentHostContextResolver(
         sp.GetRequiredService<Agentweaver.Api.Infrastructure.IRunStore>(),
@@ -773,7 +734,6 @@ builder.Services.AddSingleton<IAppVersionProvider, AppVersionProvider>();
 
 // Authentication
 builder.Services.AddMemoryCache();
-builder.Services.AddSingleton<IGitHubOrgAuthorizationService, GitHubOrgAuthorizationService>();
 
 // Repository path validation (A2 security fix)
 builder.Services.AddSingleton<RepositoryRootValidator>();
@@ -903,6 +863,9 @@ builder.Services.AddSingleton<GitHubRepoBlueprintSuggestionService>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowGenerator, Agentweaver.Api.Workflows.CopilotWorkflowGenerator>();
 
 // Spec-to-backlog decomposition (Feature 014)
+builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogDecomposeCopilotCapabilityIssuer>();
+builder.Services.AddSingleton<Agentweaver.Api.Backlog.IBacklogDecomposeAgentRunner,
+    Agentweaver.Api.Backlog.CopilotBacklogDecomposeAgentRunner>();
 builder.Services.AddSingleton<Agentweaver.Api.Backlog.BacklogDecomposeService>();
 builder.Services.AddSingleton<Agentweaver.Api.Backlog.IBacklogDecomposeService>(
     sp => sp.GetRequiredService<Agentweaver.Api.Backlog.BacklogDecomposeService>());
@@ -1053,26 +1016,18 @@ else
     }));
 
     app.UseCors();
-    app.UseRateLimiter();
-    var authMode = AuthModeResolver.Resolve(app.Configuration);
-    app.Logger.LogInformation("Running in {AuthMode} auth mode.", authMode);
+    app.Logger.LogInformation("Running with Microsoft Entra authentication.");
     app.UseMiddleware<GitHubTokenAuthMiddleware>();
-    if (authMode == AuthMode.Entra)
-        app.UseMiddleware<PlatformRoleAuthorizationMiddleware>();
-    else
-        app.UseMiddleware<GitHubOrgAuthorizationMiddleware>();
+    app.UseMiddleware<PlatformRoleAuthorizationMiddleware>();
 
     // spec-006 (api-harness): serves the OpenAPI document at /openapi/v1.json describing every
     // minimal-API route mapped below (request/response shapes included), so the LLM-driven curl
     // harness can discover the contract instead of relying on hand-wrapped SDK-style subcommands.
-    // Exempt from GitHub org auth (see GitHubOrgAuthorizationMiddleware.ExemptPrefixes) since it is
-    // pure endpoint/schema metadata, not live data.
     app.MapOpenApi();
     app.MapOpenApi("/openapi/{documentName}.yaml");
 
     app.MapRunEndpoints();
     app.MapProjectEndpoints();
-    app.MapProjectGitHubIdentityEndpoints();
     app.MapProjectWorkspaceEndpoints();
     app.MapSkillEndpoints();
     app.MapBacklogEndpoints();
@@ -1083,7 +1038,7 @@ else
     app.MapBlueprintEndpoints();
     app.MapTeamEndpoints();
     app.MapAuthEndpoints();
-    app.MapOAuthServerEndpoints();
+    app.MapGitHubRepositorySelectionEndpoints();
     app.MapDecisionsEndpoints();
     app.MapMemoryEndpoints();
     app.MapWorkflowDefinitionEndpoints();

@@ -1,5 +1,5 @@
 export type ModelSource = 'github-copilot' | 'microsoft-foundry';
-export type AuthMode = 'entra' | 'github-legacy';
+export type AuthMode = 'entra';
 
 export interface ServerInfo {
   data_directory: string;
@@ -200,17 +200,6 @@ export interface Project {
   allowed_workflow_ids?: string[] | null;
 }
 
-export interface WebhookSecretRotationResponse {
-  secret: string;
-}
-
-export interface GitHubWebhookProvisioningResponse {
-  hook_id: number;
-  created: boolean;
-  repository: string;
-  payload_url: string;
-}
-
 export interface Blueprint {
   id: string;
   name: string;
@@ -262,7 +251,7 @@ export interface SuggestBlueprintResponse {
 export interface CreateProjectRequest {
   name: string;
   origin: ProjectOrigin;
-  source_repository?: string;
+  repository_selection_code?: string;
   working_directory: string;
   default_provider?: ModelSource;
   default_model_github_copilot?: string;
@@ -458,28 +447,6 @@ export interface GraphDescriptor {
   edges: GraphEdge[];
 }
 
-// GitHub auth
-export type GitHubAuthStatus = 'signed_in' | 'signed_out' | 'never_signed_in';
-
-export interface GitHubDeviceFlow {
-  user_code: string;
-  verification_uri: string;
-  expires_in: number;
-  interval: number;
-}
-
-export interface GitHubPollResult {
-  status: 'pending' | 'success' | 'expired' | 'denied';
-  login: string | null;
-}
-
-export interface GitHubAuthStatusResponse {
-  status: GitHubAuthStatus;
-  login: string | null;
-  avatar_url?: string;
-  token_action_required?: boolean;
-}
-
 export interface AuthSessionResponse {
   authenticated: boolean;
   auth_mode: AuthMode;
@@ -491,41 +458,21 @@ export interface AuthSessionResponse {
   platform_roles: string[];
 }
 
-export interface GitHubRepo {
-  fullName: string | null;
-  htmlUrl?: string | null;
-  description?: string | null;
+export interface GitHubRepositorySelectionCandidate {
+  full_name: string;
+  owner_login: string;
   private: boolean;
-  defaultBranch: string;
+  default_branch: string;
+  pushed_at: string | null;
 }
 
-export interface GitHubAccount {
-  login: string;
-  name: string | null;
-  avatar_url: string;
-  type: 'user' | 'org';
+export interface GitHubRepositorySelectionListResponse {
+  repositories: GitHubRepositorySelectionCandidate[];
 }
 
-export interface LinkedGitHubAccount {
-  login: string;
-  name: string | null;
-  avatar_url: string;
-  type: 'user' | 'org';
-  is_default: boolean;
-  copilot_entitled: boolean | null;
-  linked_at?: string | null;
-  default_for_project_count?: number | null;
-  override_project_count?: number | null;
-  dependent_project_names?: string[] | null;
-  unlink_warnings?: string[] | null;
-  can_unlink?: boolean;
-  token_valid?: boolean | null;
-}
-
-export interface AccessibleGitHubRepo extends GitHubRepo {
-  source_login: string;
-  source_avatar_url?: string | null;
-  source_is_default?: boolean;
+export interface GitHubRepositorySelectionCodeResponse {
+  selection_code: string;
+  expires_at: string;
 }
 
 /** One candidate owner for creating a new repository for a project (GET
@@ -582,15 +529,11 @@ export interface ProjectAccessOverview {
   github_identity_permissions?: ProjectGitHubIdentityPermission[] | null;
 }
 
-export interface ProjectGitHubIdentity {
-  project_id: string;
-  project_override_login: string | null;
-  effective_login: string | null;
-  effective_avatar_url: string | null;
-  copilot_entitled: boolean | null;
-  is_default: boolean | null;
-  linked_at: string | null;
-  resolution_source: string;
+export interface UnattendedReadiness {
+  status: 'ready' | 'not_ready';
+  reason_code: string;
+  message: string;
+  repo_app_installation_connected: boolean;
 }
 
 
@@ -1570,10 +1513,9 @@ export interface OverviewDto {
 }
 
 // ── #247 — Global notification center ─────────────────────────────────────────
-// GET /api/notifications — the signed-in user's pending Human Review requests across every
-// project/run they own. Tool Approval aggregation is a documented fast-follow (see
-// apps/Agentweaver.Api/Notifications/NotificationsService.cs), so `type` is currently always
-// "human_review", but the field is kept open-ended for that future addition.
+// GET /api/notifications — the signed-in user's pending Human Review and Tool Approval requests
+// across every project/run they own. The server includes a path for non-run notifications; run
+// notification routes are rebuilt from project_id + run_id so they always target that exact run.
 export interface NotificationDto {
   id: string;
   // Widened with `(string & {})` so the union still autocompletes known values while
@@ -1586,7 +1528,7 @@ export interface NotificationDto {
   agent_name: string | null;
   title: string;
   created_utc: string;
-  cta_path: string;
+  cta_path: string | null;
 }
 
 export interface NotificationsResponseDto {

@@ -8,7 +8,7 @@ active_issues: []
 
 Branch `003-projects`. Implementation plan complete:
 
-**Status:** 
+**Status:**
 - Spec 003-projects clarified and locked (commit pending from prior session)
 - Implementation plan authored, reviewed (4 rounds), and committed (b9061aa on branch 003-projects)
 - Dual-reviewer gatekeeping established; decision precedent locked

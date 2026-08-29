@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Coordinator;
@@ -20,18 +21,24 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<SubtaskDependency> SubtaskDependencies => Set<SubtaskDependency>();
     public DbSet<SteeringDirective> SteeringDirectives => Set<SteeringDirective>();
     public DbSet<SteeringRevisionExecution> SteeringRevisionExecutions => Set<SteeringRevisionExecution>();
-    public DbSet<McpRefreshToken> McpRefreshTokens => Set<McpRefreshToken>();
-    public DbSet<McpRevokedJti> McpRevokedJtis => Set<McpRevokedJti>();
-    public DbSet<McpClientRegistration> McpClientRegistrations => Set<McpClientRegistration>();
-    public DbSet<McpPendingAuthorization> McpPendingAuthorizations => Set<McpPendingAuthorization>();
-    public DbSet<McpAuthorizationCode> McpAuthorizationCodes => Set<McpAuthorizationCode>();
-    public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
     public DbSet<EntraOAuthState> EntraOAuthStates => Set<EntraOAuthState>();
-    public DbSet<AuthModeEpochRecord> AuthModeEpochs => Set<AuthModeEpochRecord>();
-    public DbSet<GitHubAccountLinkStateRecord> GitHubAccountLinkStates => Set<GitHubAccountLinkStateRecord>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
+    public DbSet<BrowserEntraSession> BrowserEntraSessions => Set<BrowserEntraSession>();
     public DbSet<IntegrationBuildLockRecord> IntegrationBuildLocks => Set<IntegrationBuildLockRecord>();
     public DbSet<DismissedNotification> DismissedNotifications => Set<DismissedNotification>();
+    public DbSet<GitHubAuthorizationRecord> GitHubAuthorizations => Set<GitHubAuthorizationRecord>();
+    public DbSet<GitHubAppAuthorizationRecord> GitHubAppAuthorizations => Set<GitHubAppAuthorizationRecord>();
+    public DbSet<GitHubInstallationRecord> GitHubInstallations => Set<GitHubInstallationRecord>();
+    public DbSet<GitHubRepositoryGrantRecord> GitHubRepositoryGrants => Set<GitHubRepositoryGrantRecord>();
+    public DbSet<GitHubRepositorySelectionCodeRecord> GitHubRepositorySelectionCodes => Set<GitHubRepositorySelectionCodeRecord>();
+    public DbSet<ProjectCopilotBindingRecord> ProjectCopilotBindings => Set<ProjectCopilotBindingRecord>();
+    public DbSet<AutomationActivationRecord> AutomationActivations => Set<AutomationActivationRecord>();
+    public DbSet<AutomationInvocationRecord> AutomationInvocations => Set<AutomationInvocationRecord>();
+    public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
+    public DbSet<RunGitHubIdentitySnapshotRecord> RunGitHubIdentitySnapshots => Set<RunGitHubIdentitySnapshotRecord>();
+    public DbSet<RunGitHubCapabilitySnapshotRecord> RunGitHubCapabilitySnapshots => Set<RunGitHubCapabilitySnapshotRecord>();
+    public DbSet<MarketplaceCopilotCapabilityRecord> MarketplaceCopilotCapabilities => Set<MarketplaceCopilotCapabilityRecord>();
+    public DbSet<GitHubAuditRecord> GitHubAuditRecords => Set<GitHubAuditRecord>();
 
     // Replica-safe per-pod / per-run singleton state moved out of process memory.
     public DbSet<PendingRequestRecord> PendingRequests => Set<PendingRequestRecord>();
@@ -47,7 +54,6 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<RunRecord> Runs => Set<RunRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
-    public DbSet<ProjectGitHubIdentityOverrideRecord> ProjectGitHubIdentityOverrides => Set<ProjectGitHubIdentityOverrideRecord>();
     public DbSet<ProjectRoleAssignmentRecord> ProjectRoleAssignments => Set<ProjectRoleAssignmentRecord>();
     public DbSet<BacklogTaskRecord> BacklogTasks => Set<BacklogTaskRecord>();
     public DbSet<BacklogTaskDependencyRecord> BacklogTaskDependencies => Set<BacklogTaskDependencyRecord>();
@@ -130,57 +136,16 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<SteeringDirective>().HasIndex(s => new { s.CoordinatorRunId, s.Status });
 
-        model.Entity<McpRefreshToken>().HasIndex(t => t.TokenHash).IsUnique();
-        model.Entity<McpRefreshToken>().HasIndex(t => t.ChainId);
-        model.Entity<McpRefreshToken>().HasIndex(t => new { t.Subject, t.ClientId });
-        model.Entity<McpRevokedJti>().HasIndex(j => j.Jti).IsUnique();
-        model.Entity<McpRevokedJti>().HasIndex(j => j.ExpiresAt);
-        model.Entity<McpClientRegistration>().HasIndex(c => c.ClientId).IsUnique();
-        model.Entity<McpPendingAuthorization>().HasIndex(p => p.State).IsUnique();
-        model.Entity<McpPendingAuthorization>().HasIndex(p => p.ExpiresAt);
-        model.Entity<McpAuthorizationCode>().HasIndex(c => c.Code).IsUnique();
-        model.Entity<McpAuthorizationCode>().HasIndex(c => c.ExpiresAt);
-
-        model.Entity<OAuthState>().HasKey(s => s.State);
-        model.Entity<OAuthState>().HasIndex(s => s.ExpiresAt);
-
         model.Entity<EntraOAuthState>().HasKey(s => s.State);
         model.Entity<EntraOAuthState>().HasIndex(s => s.ExpiresAt);
 
-        model.Entity<AuthModeEpochRecord>(e =>
-        {
-            e.ToTable("auth_mode_epochs");
-            e.HasKey(x => x.Key);
-            e.Property(x => x.Key).HasColumnName("key");
-            e.Property(x => x.AuthMode).HasColumnName("auth_mode");
-            e.Property(x => x.Epoch).HasColumnName("epoch");
-            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
-        });
-
-        model.Entity<GitHubAccountLinkStateRecord>(e =>
-        {
-            e.ToTable("github_account_link_states");
-            e.HasKey(s => s.State);
-            e.Property(s => s.State).HasColumnName("state");
-            e.Property(s => s.EntraUserId).HasColumnName("entra_user_id");
-            e.Property(s => s.ExpiresAt).HasColumnName("expires_at");
-            e.HasIndex(s => s.ExpiresAt);
-        });
-
         model.Entity<WebSessionExchangeCode>().HasKey(c => c.Code);
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
-
-        model.Entity<ProjectGitHubIdentityOverrideRecord>(e =>
-        {
-            e.ToTable("project_github_identity_overrides").HasKey(x => new { x.ProjectId, x.EntraUserId });
-            e.Property(x => x.ProjectId).HasColumnName("project_id");
-            e.Property(x => x.EntraUserId).HasColumnName("entra_user_id");
-            e.Property(x => x.GitHubLogin).HasColumnName("github_login");
-            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
-            e.HasIndex(x => new { x.EntraUserId, x.GitHubLogin }).HasDatabaseName("IX_project_github_identity_overrides_user_login");
-        });
+        model.Entity<BrowserEntraSession>().HasKey(s => s.Id);
+        model.Entity<BrowserEntraSession>().HasIndex(s => s.ExpiresAt);
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
+        ConfigureTwoAppPersistence(model);
         model.Entity<DismissedNotification>(e =>
         {
             e.ToTable("dismissed_notifications");
@@ -214,9 +179,16 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         // and EF does not report pending model changes for the memory.db migrations.
         if (!Database.IsNpgsql())
         {
+            // The SQLite companion database keeps a project projection solely as the principal
+            // for project-scoped durable two-App records, matching PostgreSQL FK semantics.
+            model.Entity<ProjectRecord>(e =>
+            {
+                e.ToTable("projects");
+                e.HasKey(x => x.ProjectId);
+                e.Property(x => x.ProjectId).HasColumnName("project_id");
+            });
             model.Ignore<RunRecord>();
             model.Ignore<RunRevisionRecord>();
-            model.Ignore<ProjectRecord>();
             model.Ignore<ProjectRoleAssignmentRecord>();
             model.Ignore<BacklogTaskRecord>();
             model.Ignore<BacklogTaskDependencyRecord>();
@@ -245,6 +217,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.Task).HasColumnName("task");
             e.Property(r => r.SubmittingUser).HasColumnName("submitting_user");
             e.Property(r => r.Status).HasColumnName("status");
+            e.Property(r => r.ApprovalGeneration).HasColumnName("approval_generation").HasDefaultValue(1);
             e.Property(r => r.StartedAt).HasColumnName("started_at");
             e.Property(r => r.EndedAt).HasColumnName("ended_at");
             e.Property(r => r.Result).HasColumnName("result");
@@ -408,6 +381,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.ParentPrdRunId).HasColumnName("parent_prd_run_id");
             e.Property(t => t.PromotionKey).HasColumnName("promotion_key");
             e.Property(t => t.PromotionReason).HasColumnName("promotion_reason");
+            e.Property(t => t.IsAutomationInvocationPending)
+                .HasColumnName("automation_invocation_pending")
+                .HasDefaultValue(false);
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })
                 .HasDatabaseName("IX_backlog_tasks_project_state_orderkey");
             e.HasIndex(t => new { t.ProjectId, t.State, t.OrderKey })
@@ -554,5 +530,265 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 .HasDatabaseName("IX_workflow_checkpoints_store_session");
         });
 
+    }
+
+    private void ConfigureTwoAppPersistence(ModelBuilder model)
+    {
+        model.Entity<GitHubAuthorizationRecord>(e =>
+        {
+            e.ToTable("github_authorizations").HasKey(x => x.State);
+            e.Property(x => x.State).HasColumnName("state");
+            e.Property(x => x.ExternalTransactionId).HasColumnName("external_transaction_id");
+            e.Property(x => x.AppKind).HasColumnName("app_kind");
+            e.Property(x => x.Purpose).HasColumnName("purpose");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.ExpiresAtUnixMilliseconds).HasColumnName("expires_at_unix_ms");
+            e.Property(x => x.ReturnRouteKey).HasColumnName("return_route_key");
+            e.Property(x => x.PkceVerifierProtected).HasColumnName("pkce_verifier_protected");
+            e.Property(x => x.CallbackCookieHash).HasColumnName("callback_cookie_hash");
+            e.Property(x => x.BrowserSessionId).HasColumnName("browser_session_id");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            e.HasIndex(x => new { x.EntraObjectId, x.State }).IsUnique();
+            e.HasIndex(x => x.ExternalTransactionId).IsUnique();
+            e.HasIndex(x => x.ExpiresAtUnixMilliseconds);
+            ConfigureProjectForeignKey(e, "FK_github_authorizations_projects_project_id");
+        });
+
+        model.Entity<GitHubAppAuthorizationRecord>(e =>
+        {
+            e.ToTable("github_app_authorizations").HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.AppKind).HasColumnName("app_kind");
+            e.Property(x => x.Purpose).HasColumnName("purpose");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.RevokedAt).HasColumnName("revoked_at");
+            e.HasIndex(x => new { x.EntraObjectId, x.AppKind, x.Purpose });
+        });
+
+        model.Entity<GitHubInstallationRecord>(e =>
+        {
+            e.ToTable("github_installations").HasKey(x => x.InstallationId);
+            e.Property(x => x.InstallationId).HasColumnName("installation_id").ValueGeneratedNever();
+            e.Property(x => x.AppKind).HasColumnName("app_kind");
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.Property(x => x.RevokedAt).HasColumnName("revoked_at");
+            ConfigureProjectForeignKey(e, "FK_github_installations_projects_project_id");
+        });
+
+        model.Entity<GitHubRepositoryGrantRecord>(e =>
+        {
+            e.ToTable("github_repository_grants").HasKey(x => new { x.InstallationId, x.RepositoryId });
+            e.Property(x => x.InstallationId).HasColumnName("installation_id");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.FullNameDisplay).HasColumnName("full_name_display");
+            e.Property(x => x.PermissionDigest).HasColumnName("permission_digest");
+            e.Property(x => x.GrantedAt).HasColumnName("granted_at");
+            e.Property(x => x.RevokedAt).HasColumnName("revoked_at");
+            e.HasIndex(x => new { x.InstallationId, x.RepositoryId }).IsUnique();
+            e.HasOne<GitHubInstallationRecord>().WithMany().HasForeignKey(x => x.InstallationId)
+                .OnDelete(DeleteBehavior.Cascade).HasConstraintName("FK_github_repository_grants_installations_installation_id");
+            ConfigureProjectForeignKey(e, "FK_github_repository_grants_projects_project_id");
+        });
+
+        model.Entity<GitHubRepositorySelectionCodeRecord>(e =>
+        {
+            e.ToTable("github_repository_selection_codes").HasKey(x => x.CodeHash);
+            e.Property(x => x.CodeHash).HasColumnName("code_hash");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.RepoAppAuthorizationId).HasColumnName("repo_app_authorization_id");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.ExpiresAtUnixMilliseconds).HasColumnName("expires_at_unix_ms");
+            e.Property(x => x.ConsumedAtUnixMilliseconds).HasColumnName("consumed_at_unix_ms");
+            e.Property(x => x.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(x => new { x.EntraObjectId, x.ExpiresAtUnixMilliseconds });
+            e.HasIndex(x => x.ExpiresAtUnixMilliseconds);
+        });
+
+        model.Entity<ProjectCopilotBindingRecord>(e =>
+        {
+            e.ToTable("project_copilot_bindings").HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.BoundAt).HasColumnName("bound_at");
+            e.Property(x => x.DeactivatedAt).HasColumnName("deactivated_at");
+            e.HasIndex(x => x.ProjectId).IsUnique().HasFilter("status = 0")
+                .HasDatabaseName("UX_project_copilot_bindings_active_project");
+            ConfigureProjectForeignKey(e, "FK_project_copilot_bindings_projects_project_id");
+        });
+
+        model.Entity<AutomationActivationRecord>(e =>
+        {
+            e.ToTable("automation_activations").HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.InstallationId).HasColumnName("installation_id");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.RepositoryGrantDigest).HasColumnName("repository_grant_digest");
+            e.Property(x => x.CopilotBindingId).HasColumnName("copilot_binding_id");
+            e.Property(x => x.CopilotBindingGrantDigest).HasColumnName("copilot_binding_grant_digest");
+            e.Property(x => x.AutomationKey).HasColumnName("automation_key");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.ActivatedAt).HasColumnName("activated_at");
+            e.Property(x => x.InvalidatedAt).HasColumnName("invalidated_at");
+            e.HasIndex(x => x.ProjectId).IsUnique().HasFilter("status = 0")
+                .HasDatabaseName("UX_automation_activations_active_project");
+            e.HasOne<GitHubRepositoryGrantRecord>().WithMany()
+                .HasForeignKey(x => new { x.InstallationId, x.RepositoryId })
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
+            ConfigureProjectForeignKey(e, "FK_automation_activations_projects_project_id");
+        });
+
+        model.Entity<AutomationInvocationRecord>(e =>
+        {
+            e.ToTable("automation_invocations").HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.ActivationId).HasColumnName("activation_id");
+            e.Property(x => x.BacklogTaskId).HasColumnName("backlog_task_id");
+            e.Property(x => x.PendingBacklogTaskId).HasColumnName("pending_backlog_task_id");
+            e.Property(x => x.OccurrenceKey).HasColumnName("occurrence_key");
+            e.Property(x => x.DeliveryId).HasColumnName("delivery_id");
+            e.Property(x => x.EventName).HasColumnName("event_name");
+            e.Property(x => x.InstallationId).HasColumnName("installation_id");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.Outcome).HasColumnName("outcome");
+            e.Property(x => x.ReceivedAt).HasColumnName("received_at");
+            e.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            e.HasIndex(x => new { x.ActivationId, x.OccurrenceKey }).IsUnique();
+            e.HasIndex(x => x.BacklogTaskId).IsUnique().HasFilter("backlog_task_id IS NOT NULL")
+                .HasDatabaseName("UX_automation_invocations_backlog_task_id");
+            e.HasIndex(x => x.PendingBacklogTaskId).IsUnique().HasFilter("pending_backlog_task_id IS NOT NULL")
+                .HasDatabaseName("UX_automation_invocations_pending_backlog_task_id");
+            e.HasIndex(x => x.DeliveryId).IsUnique().HasFilter("delivery_id IS NOT NULL")
+                .HasDatabaseName("UX_automation_invocations_delivery_id");
+            e.HasOne<AutomationActivationRecord>().WithMany().HasForeignKey(x => x.ActivationId)
+                .OnDelete(DeleteBehavior.Cascade).HasConstraintName("FK_automation_invocations_activations_activation_id");
+            ConfigureProjectForeignKey(e, "FK_automation_invocations_projects_project_id");
+        });
+
+        model.Entity<GitHubLifecycleDeliveryRecord>(e =>
+        {
+            e.ToTable("github_lifecycle_deliveries").HasKey(x => x.DeliveryId);
+            e.Property(x => x.DeliveryId).HasColumnName("delivery_id");
+            e.Property(x => x.EventName).HasColumnName("event_name");
+            e.Property(x => x.InstallationId).HasColumnName("installation_id");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.ReceivedAt).HasColumnName("received_at");
+        });
+
+        model.Entity<RunGitHubIdentitySnapshotRecord>(e =>
+        {
+            e.ToTable("run_github_identity_snapshots").HasKey(x => x.RunId);
+            e.Property(x => x.RunId).HasColumnName("run_id");
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.AppKind).HasColumnName("app_kind");
+            e.Property(x => x.Purpose).HasColumnName("purpose");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.InstallationId).HasColumnName("installation_id");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.CapturedAt).HasColumnName("captured_at");
+            ConfigureProjectForeignKey(e, "FK_run_github_identity_snapshots_projects_project_id");
+        });
+
+        model.Entity<RunGitHubCapabilitySnapshotRecord>(e =>
+        {
+            e.ToTable("run_github_capability_snapshots", table => table
+                .HasCheckConstraint(
+                    "CK_run_github_capability_snapshots_purpose_mapping",
+                    """
+                    (purpose = 0 AND app_kind = 0 AND source_kind = 0 AND entra_object_id IS NOT NULL AND source_authorization_id IS NOT NULL AND source_binding_id IS NULL AND installation_id IS NULL AND repository_id IS NOT NULL AND credential_reference IS NOT NULL AND credential_version IS NOT NULL)
+                    OR (purpose = 1 AND app_kind = 0 AND source_kind = 0 AND entra_object_id IS NOT NULL AND source_authorization_id IS NOT NULL AND source_binding_id IS NULL AND installation_id IS NULL AND repository_id IS NULL AND credential_reference IS NOT NULL AND credential_version IS NOT NULL)
+                    OR (purpose = 2 AND app_kind = 0 AND source_kind = 1 AND entra_object_id IS NULL AND source_authorization_id IS NULL AND source_binding_id IS NULL AND installation_id IS NOT NULL AND repository_id IS NOT NULL AND credential_reference IS NULL AND credential_version IS NULL)
+                    OR (purpose = 3 AND app_kind = 1 AND source_kind = 2 AND entra_object_id IS NULL AND source_authorization_id IS NULL AND source_binding_id IS NOT NULL AND installation_id IS NULL AND repository_id IS NULL AND credential_reference IS NOT NULL AND credential_version IS NOT NULL)
+                    """));
+            e.HasKey(x => x.SnapshotRef);
+            e.Property(x => x.SnapshotRef).HasColumnName("snapshot_ref");
+            e.Property(x => x.RunId).HasColumnName("run_id");
+            e.Property(x => x.Purpose).HasColumnName("purpose");
+            e.Property(x => x.AppKind).HasColumnName("app_kind");
+            e.Property(x => x.SourceKind).HasColumnName("source_kind");
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.SourceAuthorizationId).HasColumnName("source_authorization_id");
+            e.Property(x => x.SourceBindingId).HasColumnName("source_binding_id");
+            e.Property(x => x.InstallationId).HasColumnName("installation_id");
+            e.Property(x => x.RepositoryId).HasColumnName("repository_id");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.CapturedAt).HasColumnName("captured_at");
+            e.Property(x => x.SnapshotExpiresAt).HasColumnName("snapshot_expires_at");
+            e.HasIndex(x => new { x.RunId, x.Purpose }).IsUnique()
+                .HasDatabaseName("UX_run_github_capability_snapshots_run_purpose");
+            ConfigureProjectForeignKey(e, "FK_run_github_capability_snapshots_projects_project_id");
+        });
+
+        model.Entity<MarketplaceCopilotCapabilityRecord>(e =>
+        {
+            e.ToTable("marketplace_copilot_capabilities");
+            e.HasKey(x => x.CapabilityRef);
+            e.Property(x => x.CapabilityRef).HasColumnName("capability_ref");
+            e.Property(x => x.Purpose).HasColumnName("purpose").HasDefaultValue(0);
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.SourceBindingId).HasColumnName("source_binding_id");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.IssuedAt).HasColumnName("issued_at");
+            e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+            e.Property(x => x.ConsumedAt).HasColumnName("consumed_at");
+            e.Property(x => x.ClaimLeaseExpiresAt).HasColumnName("claim_lease_expires_at");
+            e.HasIndex(x => new { x.ProjectId, x.EntraObjectId, x.ExpiresAt })
+                .HasDatabaseName("IX_marketplace_copilot_capabilities_expiry");
+            e.HasIndex(x => x.ExpiresAt)
+                .HasDatabaseName("IX_marketplace_copilot_capabilities_expiry_cleanup");
+            ConfigureProjectForeignKey(e, "FK_marketplace_copilot_capabilities_projects_project_id");
+        });
+
+        model.Entity<GitHubAuditRecord>(e =>
+        {
+            e.ToTable("github_audit_records").HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id").ValueGeneratedOnAdd();
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.ActorKind).HasColumnName("actor_kind");
+            e.Property(x => x.Action).HasColumnName("action");
+            e.Property(x => x.ResourceId).HasColumnName("resource_id");
+            e.Property(x => x.AppKind).HasColumnName("app_kind");
+            e.Property(x => x.CapabilityPurpose).HasColumnName("capability_purpose");
+            e.Property(x => x.Outcome).HasColumnName("outcome");
+            e.Property(x => x.ReasonCode).HasColumnName("reason_code");
+            e.Property(x => x.CorrelationId).HasColumnName("correlation_id");
+            e.Property(x => x.OccurredAt).HasColumnName("occurred_at");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.HasIndex(x => x.OccurredAt);
+        });
+    }
+
+    private void ConfigureProjectForeignKey<TEntity>(
+        EntityTypeBuilder<TEntity> entity,
+        string constraintName)
+        where TEntity : class
+    {
+        entity.HasOne<ProjectRecord>().WithMany().HasForeignKey("ProjectId")
+            .OnDelete(DeleteBehavior.Cascade).HasConstraintName(constraintName);
     }
 }

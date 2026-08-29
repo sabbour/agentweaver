@@ -76,6 +76,12 @@ public static class OperatorToolApprovalPolicy
         "skill_marketplace_source_add",
         "skill_marketplace_source_remove",
         "workflow_save",
+        "github_repo_app_connect",
+        "github_repo_app_disconnect",
+        "project_copilot_app_connect",
+        "project_copilot_app_disconnect",
+        // Mints a caller-bound capability to select a GitHub repository for project creation.
+        "github_repository_selection_issue",
     };
 
     /// <summary>
@@ -129,12 +135,11 @@ public static class OperatorToolApprovalPolicy
         "list_project_workspace",
         "list_project_workspace_refs",
 
-        // GitHub auth status + read-only account/repo listing (session-scoped, no platform state mutation).
-        "github_accounts_list",
-        "github_repos_list",
-        "github_signin",
-        "github_signout",
-        "github_status",
+        // GitHub capability status is server-derived and read-only.
+        "github_repo_app_authorization_status",
+        "project_copilot_app_authorization_status",
+        "project_github_capability_status",
+        "github_repository_selections_list",
 
         // Memory: reads + record/export (import is gated).
         "memory_export",

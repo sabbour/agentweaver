@@ -160,8 +160,8 @@ of date.
 Also needed, not installable via a package manager:
 
 - An existing local Git repository that the agent can target
-- A GitHub account with an active GitHub Copilot subscription — the web UI signs you in via OAuth.
-- A **GitHub OAuth App** — needed so the API can perform the OAuth sign-in flow. [Create one](https://github.com/settings/developers) with callback URL `http://localhost:5000/auth/github/callback` for local dev. **Deploying to Azure instead?** The callback URL must match the Gateway's public host, not localhost — see the [callback URL note](#deploy-to-azure-one-command) below.
+- A Microsoft Entra application configured with `http://localhost:5000/auth/entra/callback` for local browser sign-in.
+- GitHub Repo and Copilot Apps when your projects require their respective GitHub capabilities.
 
 ---
 
@@ -284,33 +284,13 @@ subscription, resource group, location, cluster/ACR/Key Vault names, Postgres
 server/location/access-mode settings (smart defaults, all editable — navigate
 list prompts with the arrow keys and Enter, or type a digit; falls back to the
 classic numbered prompt automatically when raw-mode input isn't available),
-your GitHub OAuth App client ID + secret, and the GitHub org(s) allowed to
-sign in (comma-separated, default `microsoft`; invalid entries are rejected
-with a clear message and re-prompted rather than crashing the installer).
-Before asking for the OAuth credentials, it walks you through creating the
-OAuth App itself (with the [creation
-link](https://github.com/settings/applications/new) and the right callback URL
-for local vs. Azure). It then provisions AKS, PostgreSQL, Key Vault, ACR,
+your Microsoft Entra application (client) ID and tenant ID. It then provisions AKS,
+PostgreSQL, Key Vault, ACR,
 identity, and monitoring, builds and pushes images, and deploys and verifies
 the release. It prints an outputs summary at the end (cluster, ACR, gateway
-host, **GitHub OAuth callback URL**, **allowed GitHub org(s)**, verification
-pass/fail counts) and never prints the OAuth client secret.
-
-> **GitHub OAuth App callback URL — local vs. Azure.** The callback URL you
-> register on the GitHub OAuth App must match where the app is actually
-> running:
-> - **Local dev** → `http://localhost:5000/auth/github/callback`
-> - **Azure deployment** → `https://<gateway-host>/auth/github/callback` —
->   printed verbatim as **GitHub OAuth callback URL** in the outputs summary
->   above once the deploy finishes. It's only known *after* the AKS App
->   Routing managed certificate is provisioned on your first deploy — there's
->   no way to know it beforehand. So: deploy first with any placeholder
->   callback URL, then go back to the [OAuth App
->   settings](https://github.com/settings/developers) and paste in the
->   printed callback URL. GitHub OAuth Apps only support one callback URL
->   each — if you also do local dev, create a second OAuth App dedicated to
->   `localhost`, or swap the callback URL each time you switch between local
->   and Azure.
+host, and verification pass/fail counts). Register the matching Entra redirect
+URI for each environment, such as `https://<gateway-host>/auth/entra/callback`
+for Azure or `http://localhost:5000/auth/entra/callback` for local development.
 
 For non-interactive deploys (flags, environment variables, or a
 `--params-file`), upgrading an existing deployment (`npm run azure:deploy-from-local`),
@@ -368,7 +348,7 @@ required on any platform. The root `package.json` exposes these scripts:
 |---|---|
 | `npm start` / `npm run dev` | Local dev orchestration (API + web), browser auto-open disabled. Alias for `dev:open -- --no-browser`. |
 | `npm run setup` | Local dev environment setup only: checks prerequisites (git/.NET 10/Node 20+), installs `apps/web`'s npm deps, restores .NET packages — skips the Azure pipeline entirely. This is what the [local development quick start](#local-development-quick-start) uses. Alias for `dev -- --setup`. |
-| `npm run azure:provision-infra` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names/GitHub OAuth. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
+| `npm run azure:provision-infra` | The smart installer. With no flags **and** an interactive terminal, prompts you through subscription/resource group/location/cluster names and Entra configuration. With flags, env vars, or a params file (or no TTY), it runs non-interactively instead. Always deploys to Azure — for local-only setup use `npm run setup` instead. |
 | `npm run azure:deploy-from-local` | Builds a new immutable image tag (defaults to the current git HEAD short SHA), redeploys, and cycles the AgentHost warm pool. Refuses to run on a dirty working tree unless you pass `-- --allow-dirty`. |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Fetches and resolves an arbitrary committed ref, deploys it through a temporary detached worktree, and leaves the caller's checkout untouched. |
 | `npm run release:publish` | From a prepared exact-main checkout, creates the annotated tag and GitHub Release without deploying. |
@@ -382,7 +362,7 @@ required on any platform. The root `package.json` exposes these scripts:
 
 Every `azure:*` script (and `dev`/`setup`) accepts `-- --help` to print its full flag list, for example `npm run azure:provision-infra -- --help`. Useful flags across commands:
 
-- **`azure:provision-infra`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--monitoring-location`, `--node-vm-size`, `--keyvault-name`, `--postgres-server-name`, `--postgres-location`, `--postgres-ha-mode`, `--postgres-access-mode <private|public>`, `--namespace`, `--image-tag`, `--github-client-id`, `--github-client-secret`, `--skip-postgres`, `--skip-oauth-key`, and `--image-source <acr-build|ghcr|custom>`. `MONITORING_LOCATION` (or `--monitoring-location`) is the preferred location for new Log Analytics and Application Insights resources; it defaults to `LOCATION`, and the installer selects and logs a supported fallback if Azure does not offer all missing monitoring resource types there. Existing monitoring resources are never moved. `NODE_VM_SIZE` (or `--node-vm-size`) controls the AKS system/app/kata pool SKU for **new** clusters; the default is now `Standard_D4s_v6`, and existing clusters are unaffected because the installer skips `az aks create` / `az aks nodepool add` when those resources already exist. Set `PG_SERVER_NAME` (or pass `--postgres-server-name`) to route around the rare Azure-global Flexible Server name collision where the default `agentweaver-pg` is already reserved. Set `PG_HA_MODE` (or pass `--postgres-ha-mode`) to override the default `ZoneRedundant` with one of `ZoneRedundant` or `Disabled` in regions/environments where zone-redundant HA is unavailable, such as early-access/canary regions. Set `PG_LOCATION` (or pass `--postgres-location`) to keep Postgres in the same region as the main cluster by default, or to move it elsewhere when Azure capacity/policy requires it. Cross-region Postgres requires `PG_ACCESS_MODE=public` / `--postgres-access-mode public`; the default `private` mode intentionally errors out before any Azure calls because delegated subnet connectivity is single-region only. Public mode uses Azure's `0.0.0.0` "allow Azure services/resources" firewall rule rather than an unrestricted internet-open range. When using `--image-source ghcr`, pass `--ghcr-ref <ref>` and use only immutable refs (`vX.Y.Z` published releases or `sha-<hex>` tags); moving tags such as `dev`, `main`, `latest`, and `rc-*` are rejected. The GHCR owner/repository is always derived from the repo's GitHub origin remote, `--ghcr-token`/`GHCR_TOKEN` is available for private-package auth, and `--force` allows an intentional overwrite of a conflicting existing ACR tag. When using `--image-source custom`, pass all four fully-qualified refs together: `--image-api`, `--image-frontend`, `--image-mcp`, and `--image-agent-host`. Each ref must include an explicit registry and either a tag or digest. Custom mode is an explicit trust-boundary override: the installer imports exactly the images you specify, so use only registries and images you trust.
+- **`azure:provision-infra`**: `--params-file <path>` (or `--config <path>`) for non-interactive deploys driven by a JSON/JSONC file (see `scripts/azure/params.example.json`) — the config precedence is **flags > env vars > params file > detected defaults > interactive prompt**, so any flag always wins. Also: `--resource-group`, `--cluster-name`, `--acr-name`, `--location`, `--monitoring-location`, `--node-vm-size`, `--keyvault-name`, `--postgres-server-name`, `--postgres-location`, `--postgres-ha-mode`, `--postgres-access-mode <private|public>`, `--namespace`, `--image-tag`, `--entra-client-id`, `--entra-tenant-id`, `--skip-postgres`, `--skip-oauth-key`, and `--image-source <acr-build|ghcr|custom>`. `MONITORING_LOCATION` (or `--monitoring-location`) is the preferred location for new Log Analytics and Application Insights resources; it defaults to `LOCATION`, and the installer selects and logs a supported fallback if Azure does not offer all missing monitoring resource types there. Existing monitoring resources are never moved. `NODE_VM_SIZE` (or `--node-vm-size`) controls the AKS system/app/kata pool SKU for **new** clusters; the default is now `Standard_D4s_v6`, and existing clusters are unaffected because the installer skips `az aks create` / `az aks nodepool add` when those resources already exist. Set `PG_SERVER_NAME` (or pass `--postgres-server-name`) to route around the rare Azure-global Flexible Server name collision where the default `agentweaver-pg` is already reserved. Set `PG_HA_MODE` (or pass `--postgres-ha-mode`) to override the default `ZoneRedundant` with one of `ZoneRedundant` or `Disabled` in regions/environments where zone-redundant HA is unavailable, such as early-access/canary regions. Set `PG_LOCATION` (or pass `--postgres-location`) to keep Postgres in the same region as the main cluster by default, or to move it elsewhere when Azure capacity/policy requires it. Cross-region Postgres requires `PG_ACCESS_MODE=public` / `--postgres-access-mode public`; the default `private` mode intentionally errors out before any Azure calls because delegated subnet connectivity is single-region only. Public mode uses Azure's `0.0.0.0` "allow Azure services/resources" firewall rule rather than an unrestricted internet-open range. When using `--image-source ghcr`, pass `--ghcr-ref <ref>` and use only immutable refs (`vX.Y.Z` published releases or `sha-<hex>` tags); moving tags such as `dev`, `main`, `latest`, and `rc-*` are rejected. The GHCR owner/repository is always derived from the repo's GitHub origin remote, `--ghcr-token`/`GHCR_TOKEN` is available for private-package auth, and `--force` allows an intentional overwrite of a conflicting existing ACR tag. When using `--image-source custom`, pass all four fully-qualified refs together: `--image-api`, `--image-frontend`, `--image-mcp`, and `--image-agent-host`. Each ref must include an explicit registry and either a tag or digest. Custom mode is an explicit trust-boundary override: the installer imports exactly the images you specify, so use only registries and images you trust.
 - **`azure:deploy-from-local`**: `--allow-dirty` to bypass the clean-working-tree check (personal/throwaway testing only).
 - **`azure:deploy-from-commit`**: one required SHA or ref; no dirty-tree option because only committed source is eligible.
 - **`azure:deploy-from-release`**: positional existing `vX.Y.Z` tag; the checkout must be clean and at that tag commit.
@@ -400,9 +380,10 @@ non-secret local settings there:
 ```json
 {
   "Auth": {
-    "GitHub": {
-      "ClientId": "<your-oauth-app-client-id>",
-      "CallbackUrl": "http://localhost:5000/auth/github/callback",
+    "Entra": {
+      "ClientId": "<your-entra-application-client-id>",
+      "TenantId": "<your-entra-tenant-id>",
+      "RedirectUri": "http://localhost:5000/auth/entra/callback",
       "FrontendUrl": "http://localhost:5173"
     }
   },
@@ -414,16 +395,10 @@ non-secret local settings there:
 }
 ```
 
-The `ClientId` and `ClientSecret` come from your GitHub OAuth App settings
-page. `CallbackUrl` must exactly match its **Authorization callback URL**.
-Store secrets with .NET user-secrets, never in `appsettings*.json`:
-
-```powershell
-cd apps/Agentweaver.Api
-dotnet user-secrets set "Auth:GitHub:ClientSecret" "<your-oauth-app-client-secret>"
-dotnet user-secrets set "Providers:GitHubCopilot:GitHubToken" "<github-token-with-copilot-access>"
-cd ../..
-```
+Use an Entra app registration's application (client) and tenant IDs. Its
+redirect URI must exactly match `http://localhost:5000/auth/entra/callback`.
+Repository selection and Copilot access use their respective GitHub App
+browser handoffs; no legacy browser credential is configured for sign-in.
 
 ## 2. Start the local development loop
 
@@ -449,8 +424,8 @@ at a different API.
 
 ## 4. Create a project, run, and review
 
-1. **Sign in** with GitHub when the web UI loads.
-2. **Create a project** from the Project Gallery — blank or cloned from a GitHub repo.
+1. **Sign in** with Microsoft Entra ID when the web UI loads.
+2. **Create a project** from the Project Gallery — blank or through the Repo App authorization handoff.
 3. **Cast a team** (optional) or start straight away.
 4. **Start a task** from the project Board. The coordinator drafts an OutcomeSpec; confirm it to dispatch work.
 5. **Watch** the live topology and per-agent execution stream.

@@ -26,6 +26,7 @@ namespace Agentweaver.Tests.Api;
 /// No mocks — every test uses a real in-process server, a real SQLite database,
 /// and real git repositories constructed with LibGit2Sharp.
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebApplicationFactory>, IDisposable
 {
     private readonly ReviewWebApplicationFactory _factory;
@@ -805,6 +806,7 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         // GetTreeHash can compute the real tree SHA for validation.
         var repoPath = CreateTempGitRepo();
         var runId    = RunId.New();
+        var projectId = await CreateBlankProjectAsync(repoPath);
         var worktreeInfo = worktreeManager.AddWorktree(repoPath, "main", runId);
         _tempRepoDirs.Add(worktreeInfo.WorktreePath);
 
@@ -823,6 +825,7 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
             ModelSource       = ModelSource.GitHubCopilot,
             Task              = "recovery test task",
             SubmittingUser    = ReviewWebApplicationFactory.OwnerUser,
+            ProjectId         = projectId,
             Status            = RunStatus.InProgress,
             StartedAt         = DateTimeOffset.UtcNow,
             WorktreePath      = worktreeInfo.WorktreePath,
@@ -1214,6 +1217,30 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
     // =========================================================================
     // Helpers
     // =========================================================================
+
+    private async Task<ProjectId> CreateBlankProjectAsync(string workingDirectory)
+    {
+        var projectId = ProjectId.New();
+        var now = DateTimeOffset.UtcNow;
+        await _factory.Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
+        {
+            Id = projectId,
+            Name = $"Review test {Guid.NewGuid():N}",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = workingDirectory,
+            DefaultBranch = "main",
+            Owner = ReviewWebApplicationFactory.OwnerUser,
+            ProviderSettings = new ProjectProviderSettings
+            {
+                DefaultProvider = ModelSource.GitHubCopilot,
+            },
+            State = ProjectState.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        return projectId;
+    }
 
     /// <summary>
     /// Creates a run in AwaitingReview status with a real git repo where the

@@ -66,7 +66,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         new(StringComparer.OrdinalIgnoreCase) { "report_intent", "report_outcome", "glob" };
 
     private readonly GitHubCopilotClientFactory _factory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ISandboxExecutor _executor;
     private readonly ISandboxPolicyStore _sandboxPolicyStore;
     private readonly IShellApprovalStore _approvalStore;
@@ -74,6 +73,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly IQuestionGate? _questionGate;
     private readonly IRunOptionsStore? _runOptions;
     private readonly IEnumerable<IAgentRuntimeToolProvider> _toolProviders;
+    private readonly ISandboxRepositoryCredentialProvider? _repositoryCredentialProvider;
 
     // Names of tools built by an IAgentRuntimeToolProvider and wrapped in
     // InstrumentedCustomAIFunction (populated fresh on every RebuildInnerAgent call). The
@@ -125,7 +125,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     // session (see BuildSessionConfigTools) — gates whether the prompt tells the agent about
     // them (#268: prompt/tool mismatch caused hallucinated tool calls).
     private bool _includeTeamCoordinationPrompt;
-    private GitHubTokenScope? _tokenScope;
     private SessionConfig? _sessionConfig;
     private ShellExecutionTracker? _shellExecutionTracker;
     // Whether this run uses the controlled Build/Test shell surface (purpose == AssemblyBuildTest).
@@ -255,7 +254,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     public CopilotAIAgent(
         GitHubCopilotClientFactory factory,
-        IGitHubTokenScopeProvider scopeProvider,
         ISandboxExecutor executor,
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
@@ -263,10 +261,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         ILogger<CopilotAIAgent> logger,
         IQuestionGate? questionGate = null,
         IRunOptionsStore? runOptions = null,
-        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null)
+        IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
+        ISandboxRepositoryCredentialProvider? repositoryCredentialProvider = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
-        _scopeProvider = scopeProvider ?? throw new ArgumentNullException(nameof(scopeProvider));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         _sandboxPolicyStore = sandboxPolicyStore ?? throw new ArgumentNullException(nameof(sandboxPolicyStore));
         _approvalStore = approvalStore ?? throw new ArgumentNullException(nameof(approvalStore));
@@ -275,6 +273,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _questionGate = questionGate;
         _runOptions = runOptions;
         _toolProviders = toolProviders ?? [];
+        _repositoryCredentialProvider = repositoryCredentialProvider;
     }
 
     /// <summary>
@@ -377,9 +376,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _activeExecutor = executor;
         _governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        var scope = await ResolveTokenScopeAsync(_userId, _projectId, ct).ConfigureAwait(false);
-        _tokenScope = scope;
-        _client = await _factory.CreateClientAsync(scope, modelId, ct).ConfigureAwait(false);
+        _client = await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false);
         try
         {
             await _client.StartAsync(ct).ConfigureAwait(false);
@@ -406,6 +403,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 ? (int)TimeSpan.FromMinutes(10).TotalMilliseconds
                 : (int)TimeSpan.FromMinutes(5).TotalMilliseconds)
         {
+            RepositoryAccessToken = _repositoryCredentialProvider?.GetAccessToken(),
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
@@ -724,9 +722,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     {
         if (_inner is null)
         {
-            var scope = await ResolveTokenScopeAsync(_userId, _projectId, cancellationToken).ConfigureAwait(false);
-            _tokenScope = scope;
-            _client ??= await _factory.CreateClientAsync(scope, _modelId, cancellationToken).ConfigureAwait(false);
+            _client ??= await _factory.CreateClientAsync(_runId, _modelId, cancellationToken).ConfigureAwait(false);
             try
             {
                 await _client.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -748,35 +744,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 ownsClient: false, id: null, name: null, description: null);
         }
         return await _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<GitHubTokenScope> ResolveTokenScopeAsync(
-        string? userId,
-        string? projectId,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(userId))
-            throw new AgentProviderException(
-                ModelSource.GitHubCopilot,
-                AgentProviderFailureKind.Authorization,
-                "github_copilot_auth_required",
-                $"Run {_runId} cannot start: no submitting user identity is available. " +
-                "Pass the authenticated user's ID to SetupAsync so the correct Copilot-entitled " +
-                "token is resolved. Using the installation token is not permitted.",
-                isRetryable: false);
-
-        var scope = await _scopeProvider.ResolveAsync(userId, projectId, ct).ConfigureAwait(false);
-        if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-            throw new AgentProviderException(
-                ModelSource.GitHubCopilot,
-                AgentProviderFailureKind.Authorization,
-                "github_copilot_auth_required",
-                $"Run {_runId} cannot start: the token scope provider resolved the installation " +
-                "scope for a Copilot model turn. GitHub App installation tokens are not Copilot " +
-                "model credentials; configure a user-token scope provider and pass the submitting user.",
-                isRetryable: false);
-
-        return scope;
     }
 
     /// <summary>
@@ -907,22 +874,18 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 catch (Exception ex) when (IsMissingCopilotAuth(ex))
                 {
                     // Deliverable: replace the opaque SDK "Session was not created with authentication
-                    // info or custom provider" with a clear, actionable failure. This happens when the
-                    // pod resolved a non-Copilot token (typically the installation fallback because no
-                    // submitting user / AgentHost__UserId was available).
+                    // info or custom provider" with a clear, actionable failure.
                     _logger.LogError(
                         ex,
-                        "Run {RunId} could not authenticate to GitHub Copilot: the resolved GitHub token " +
-                        "is not Copilot-entitled (likely the installation fallback). Ensure the submitting " +
-                        "user is signed in and AgentHost__UserId is injected into the pod.",
+                        "Run {RunId} could not authenticate to GitHub Copilot: its run-bound Copilot " +
+                        "capability credential is unavailable or no longer Copilot-entitled.",
                         _runId);
                     var failure = new AgentProviderException(
                         ModelSource.GitHubCopilot,
                         AgentProviderFailureKind.Authorization,
                         "github_copilot_auth_required",
-                        $"Run {_runId} has no Copilot-entitled credentials: the resolved GitHub token is not " +
-                        "authorized for GitHub Copilot. Ensure the submitting user is signed in and " +
-                        "AgentHost__UserId is injected into the pod.",
+                        $"Run {_runId} has no live, run-bound Copilot capability credential authorized " +
+                        "for GitHub Copilot.",
                         isRetryable: false,
                         ex);
                     EmitProviderFailure(failure);
@@ -1245,10 +1208,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     private async Task<AgentSession> EnsureFreshClientForAiCallAsync(AgentSession session, CancellationToken ct)
     {
-        if (_tokenScope is null)
+        if (string.IsNullOrWhiteSpace(_runId))
             return session;
 
-        if (!await _factory.ShouldRefreshBeforeAiCallAsync(_tokenScope, ct).ConfigureAwait(false))
+        if (!await _factory.ShouldRefreshBeforeAiCallAsync(_runId, ct).ConfigureAwait(false))
             return session;
 
         _logger.LogInformation("GitHub Copilot token is expired or near expiry for run {RunId}; refreshing before streaming call", _runId);
@@ -1257,15 +1220,15 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
     private async Task<AgentSession> RecreateInnerAgentSessionAsync(CancellationToken ct)
     {
-        if (_tokenScope is null)
-            throw new InvalidOperationException("GitHub token scope is unavailable; SetupAsync must be called first.");
+        if (string.IsNullOrWhiteSpace(_runId))
+            throw new InvalidOperationException("Run identifier is unavailable; SetupAsync must be called first.");
         if (_sessionConfig is null)
             throw new InvalidOperationException("SessionConfig is unavailable; SetupAsync must be called first.");
 
         if (_client is not null)
             await _client.DisposeAsync().ConfigureAwait(false);
 
-        _client = await _factory.CreateClientAsync(_tokenScope, _modelId, ct).ConfigureAwait(false);
+        _client = await _factory.CreateClientAsync(_runId, _modelId, ct).ConfigureAwait(false);
         try
         {
             await _client.StartAsync(ct).ConfigureAwait(false);
@@ -1308,7 +1271,20 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     internal void EmitToolCallOnce(string callId, string toolName, object? arguments)
     {
         if (_emittedCalls.TryAdd(callId, 0))
-            Emit("tool.call", new { callId, toolName, arguments = SensitiveDataRedactor.RedactObject(arguments) });
+        {
+            var redacted = SensitiveDataRedactor.RedactObject(arguments);
+            Emit("tool.call", new { callId, toolName, arguments = redacted });
+            // Tag the still-open execute_tool OTel span with the arguments so that App Insights'
+            // Gen AI trace view can show them. The RunEvent path above feeds the Agentweaver UI;
+            // App Insights reads span attributes directly, and previously saw "No arguments
+            // recorded" because ConfigureToolSpanTags never set gen_ai.tool.call.arguments.
+            if (redacted is not null && _activeToolSpans.TryGetValue(callId, out var span))
+            {
+                var argsJson = redacted.ToJsonString();
+                if (!string.IsNullOrWhiteSpace(argsJson))
+                    span.SetTag("gen_ai.tool.call.arguments", argsJson);
+            }
+        }
     }
 
     internal void EmitToolResultOnce(string callId, string content)
@@ -1391,8 +1367,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     break;
                 if (complete.Data.Success)
                 {
-                    CompleteToolSpan(callId, success: true, error: null, endTime: complete.Timestamp);
-                    EmitToolResultOnce(callId, complete.Data.Result?.Content ?? string.Empty);
+                    var resultContent = complete.Data.Result?.Content ?? string.Empty;
+                    CompleteToolSpan(callId, success: true, error: null, endTime: complete.Timestamp, toolResult: SensitiveDataRedactor.RedactJsonStringIfApplicable(resultContent));
+                    EmitToolResultOnce(callId, resultContent);
                 }
                 else
                 {
@@ -1542,11 +1519,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// negative duration; if it would, we fall back to observation-time (Dispose default).
     /// </para>
     /// </summary>
-    private void CompleteToolSpan(string callId, bool success, string? error, DateTimeOffset? endTime = null)
+    private void CompleteToolSpan(string callId, bool success, string? error, DateTimeOffset? endTime = null, string? toolResult = null)
     {
         if (!_activeToolSpans.TryRemove(callId, out var activity))
             return;
-        CompleteToolSpanCore(activity, success, error, endTime);
+        CompleteToolSpanCore(activity, success, error, endTime, toolResult);
     }
 
     /// <summary>
@@ -1559,12 +1536,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// timestamp is absent, default, or would go backwards, the span falls back to
     /// observation-time bounding (the <see cref="Activity.Dispose"/> default).
     /// </summary>
-    internal static void CompleteToolSpanCore(Activity activity, bool success, string? error, DateTimeOffset? endTime)
+    internal static void CompleteToolSpanCore(Activity activity, bool success, string? error, DateTimeOffset? endTime, string? toolResult = null)
     {
         activity.SetTag("gen_ai.tool.call.success", success);
         activity.SetStatus(success ? ActivityStatusCode.Ok : ActivityStatusCode.Error, error);
         if (!success && !string.IsNullOrWhiteSpace(error))
             activity.SetTag("error.message", error);
+        // toolResult is expected to already be passed through
+        // SensitiveDataRedactor.RedactJsonStringIfApplicable, which is a no-op for content that
+        // isn't a JSON object/array (it can't safely redact free-form text). Plain-text results
+        // (file contents, shell output, etc.) are therefore not emitted to telemetry at all —
+        // only structured JSON results are tagged, matching that helper's safety guarantee that
+        // unredacted content never reaches App Insights, which has a broader read audience than
+        // the application DB. We only need a cheap prefix check here since the full parse already
+        // happened inside RedactJsonStringIfApplicable.
+        if (toolResult is not null && IsJsonObjectOrArray(toolResult))
+            activity.SetTag("gen_ai.tool.call.result", toolResult);
         if (endTime is { } ts && ts != default)
         {
             var endUtc = ts.UtcDateTime;
@@ -1572,6 +1559,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 activity.SetEndTime(endUtc);
         }
         activity.Dispose();
+    }
+
+    /// <summary>
+    /// Cheap structural check for whether <paramref name="value"/> looks like a JSON object or
+    /// array (i.e. its trimmed content starts with <c>{</c> or <c>[</c>). Used to decide whether
+    /// a tool result is safe to attach to a span tag: only JSON-structured content has already
+    /// been through <see cref="SensitiveDataRedactor.RedactJsonStringIfApplicable"/>'s redaction
+    /// logic, so plain text is deliberately excluded. This intentionally does not re-parse the
+    /// JSON — the caller is expected to have already run the value through
+    /// <see cref="SensitiveDataRedactor.RedactJsonStringIfApplicable"/>, which performs the real
+    /// parse/redaction; this is just a lightweight gate on the result of that call.
+    /// </summary>
+    internal static bool IsJsonObjectOrArray(string value)
+    {
+        var trimmed = value.AsSpan().Trim();
+        return trimmed.Length > 0 && (trimmed[0] == '{' || trimmed[0] == '[');
     }
 
     /// <summary>
@@ -2035,7 +2038,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         Action<string, string> emitToolResultOnce,
         Action<string, string> emitToolErrorOnce,
         Action<string, string, DateTimeOffset?> startToolSpan,
-        Action<string, bool, string?, DateTimeOffset?> completeToolSpan) : AIFunction
+        Action<string, bool, string?, DateTimeOffset?, string?> completeToolSpan) : AIFunction
     {
         public override string Name => inner.Name;
         public override string Description => inner.Description;
@@ -2064,13 +2067,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     string s => s,
                     _ => JsonSerializer.Serialize(result),
                 };
-                completeToolSpan(callId, true, null, DateTimeOffset.UtcNow);
+                completeToolSpan(callId, true, null, DateTimeOffset.UtcNow, SensitiveDataRedactor.RedactJsonStringIfApplicable(content));
                 emitToolResultOnce(callId, content);
                 return result;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                completeToolSpan(callId, false, ex.Message, DateTimeOffset.UtcNow);
+                completeToolSpan(callId, false, ex.Message, DateTimeOffset.UtcNow, null);
                 emitToolErrorOnce(callId, ex.Message);
                 throw;
             }

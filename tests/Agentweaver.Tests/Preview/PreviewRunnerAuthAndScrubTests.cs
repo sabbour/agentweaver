@@ -20,6 +20,7 @@ namespace Agentweaver.Tests.Preview;
 ///   preview-runner credential, and known secret env names.</item>
 /// </list>
 /// </summary>
+[Trait("Category", "ProcessEnvironment")]
 public sealed class PreviewRunnerAuthAndScrubTests
 {
     private const string TurnToken = "turn-token-abc";
@@ -28,7 +29,12 @@ public sealed class PreviewRunnerAuthAndScrubTests
     private static AgentHostRuntimeState Configured(string? turn, string? credential)
     {
         var state = new AgentHostRuntimeState();
-        state.TryConfigure("run-1", "user-1", turn ?? string.Empty, null, null, credential);
+        state.TryConfigure(
+            "run-1",
+            "user-1",
+            turn ?? string.Empty,
+            copilotCredential: null,
+            previewRunnerCredential: credential);
         return state;
     }
 

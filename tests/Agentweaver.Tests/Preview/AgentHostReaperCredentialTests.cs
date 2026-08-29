@@ -100,6 +100,55 @@ public sealed class AgentHostReaperCredentialTests
         reaped.Should().Be(1); // claim still reaped; credential delete is a best-effort no-op
     }
 
+    [Fact]
+    public async Task Sweep_OrphanCleanup_RetriesRetainedRepositoryRevocationAfterClaimDeletion()
+    {
+        const string runId = "run-retry-after-orphan-cleanup";
+        const string accessToken = "reaper-retry-sentinel-token";
+        var now = new DateTimeOffset(2026, 8, 27, 20, 0, 0, TimeSpan.Zero);
+        var clock = new MutableTimeProvider(now);
+        var minter = new StubCredentialMinter
+        {
+            Credential = new RepositoryCredential(accessToken, now.AddMinutes(5)),
+        };
+        minter.RevokeFailures.Enqueue(new HttpRequestException("temporary GitHub revoke failure"));
+        var registry = new RunRepositoryCredentialRegistry(minter, clock);
+        (await registry.MintAsync(runId)).Should().Be(accessToken);
+
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var initialHandler = new FakeKubeHandler();
+        initialHandler.OnGet(ListPath, ClaimsListJson(claimName, runId));
+        var initialReaper = new AgentHostReaperService(
+            ClientFor(initialHandler),
+            new EmptyRunStore(),
+            new KubernetesSandboxOptions { Namespace = Namespace },
+            NullLogger<AgentHostReaperService>.Instance,
+            repositoryCredentials: registry);
+
+        (await initialReaper.SweepOrphanedPodsAsync()).Should().Be(1);
+        initialHandler.Requests.Should().Contain(request =>
+            request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        minter.RevokedTokens.Should().ContainSingle().Which.Should().Be(accessToken);
+
+        var retryHandler = new FakeKubeHandler();
+        retryHandler.OnGet(ListPath, """{"items":[]}""");
+        var retryReaper = new AgentHostReaperService(
+            ClientFor(retryHandler),
+            new EmptyRunStore(),
+            new KubernetesSandboxOptions { Namespace = Namespace },
+            NullLogger<AgentHostReaperService>.Instance,
+            repositoryCredentials: registry);
+
+        (await retryReaper.SweepOrphanedPodsAsync()).Should().Be(0);
+        minter.RevokedTokens.Should().ContainSingle("the retry honors its initial backoff");
+
+        clock.Advance(RunRepositoryCredentialRegistry.InitialRevocationRetryDelay);
+        (await retryReaper.SweepOrphanedPodsAsync()).Should().Be(0);
+        minter.RevokedTokens.Should().HaveCount(2,
+            "the reaper retries retained state even though the original orphaned claim is gone");
+        minter.RevokedTokens.Should().OnlyContain(token => token == accessToken);
+    }
+
     // Issue #542: a completed subtask's claim is an "orphan" per the active-run map the instant its
     // turn ends. The reaper must NOT reap it while the run still has a live preview (that would 404 the
     // preview URL), but MUST reap it once no preview is active (bounded eventual teardown — no leak).
@@ -366,6 +415,24 @@ public sealed class AgentHostReaperCredentialTests
         public override DateTimeOffset GetUtcNow() => _utcNow;
 
         public void Advance(TimeSpan duration) => _utcNow += duration;
+    }
+
+    private sealed class StubCredentialMinter : IRunRepositoryCredentialMinter
+    {
+        public RepositoryCredential? Credential { get; init; }
+        public Queue<Exception> RevokeFailures { get; } = new();
+        public List<string> RevokedTokens { get; } = [];
+
+        public Task<RepositoryCredential?> MintAsync(string runId, CancellationToken ct) =>
+            Task.FromResult(Credential);
+
+        public Task RevokeAsync(string accessToken, CancellationToken ct)
+        {
+            RevokedTokens.Add(accessToken);
+            if (RevokeFailures.TryDequeue(out var failure))
+                throw failure;
+            return Task.CompletedTask;
+        }
     }
 
     // Minimal ISandboxPreviewService test double for the reaper defer path (#542): only lifecycle

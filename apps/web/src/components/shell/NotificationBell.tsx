@@ -16,6 +16,7 @@ import { useNotifications } from '../../notifications/notificationsContext';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { NotificationTypeBadge } from './NotificationTypeBadge';
+import { notificationTargetPath, unavailableNotificationTargetMessage } from '../../notifications/notificationTarget';
 // #247 — persistent bell + unread badge, rendered in the left-nav chrome (this app has no
 // separate top bar — see LeftNav.tsx's own header comment), so it is visible on every page
 // regardless of collapsed state.
@@ -135,38 +136,62 @@ export function NotificationBell() {
             <Caption1 className={styles.empty}>Nothing needs your attention right now.</Caption1>
           )}
           {notifications.map((notification) => (
-            <div
+            <NotificationItem
               key={notification.id}
-              role="listitem"
-              className={styles.item}
-              tabIndex={0}
-              onClick={() => goTo(notification.cta_path)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  goTo(notification.cta_path);
-                }
-              }}
-            >
-              <NotificationTypeBadge type={notification.type} />
-              <Text weight="semibold">{notification.title}</Text>
-              <Caption1>{notification.project_name ?? 'Unknown project'}</Caption1>
-              <Button
-                appearance="subtle"
-                size="small"
-                icon={<DismissRegular />}
-                aria-label={`Dismiss notification: ${notification.title}`}
-                className={styles.dismiss}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  dismissNotification(notification.id);
-                }}
-                onKeyDown={(event) => event.stopPropagation()}
-              />
-            </div>
+              notification={notification}
+              onNavigate={goTo}
+              onDismiss={dismissNotification}
+            />
           ))}
         </div>
       </PopoverSurface>
     </Popover>
+  );
+}
+
+function NotificationItem({
+  notification,
+  onNavigate,
+  onDismiss,
+}: {
+  notification: import('../../api/types').NotificationDto;
+  onNavigate: (path: string) => void;
+  onDismiss: (id: string) => void;
+}) {
+  const styles = useStyles();
+  const targetPath = notificationTargetPath(notification);
+
+  return (
+    <div
+      role="listitem"
+      className={styles.item}
+      tabIndex={targetPath ? 0 : undefined}
+      onClick={targetPath ? () => onNavigate(targetPath) : undefined}
+      onKeyDown={targetPath
+        ? (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onNavigate(targetPath);
+          }
+        }
+        : undefined}
+    >
+      <NotificationTypeBadge type={notification.type} />
+      <Text weight="semibold">{notification.title}</Text>
+      <Caption1>{notification.project_name ?? 'Unknown project'}</Caption1>
+      {!targetPath && <Caption1>{unavailableNotificationTargetMessage(notification)}</Caption1>}
+      <Button
+        appearance="subtle"
+        size="small"
+        icon={<DismissRegular />}
+        aria-label={`Dismiss notification: ${notification.title}`}
+        className={styles.dismiss}
+        onClick={(event) => {
+          event.stopPropagation();
+          onDismiss(notification.id);
+        }}
+        onKeyDown={(event) => event.stopPropagation()}
+      />
+    </div>
   );
 }

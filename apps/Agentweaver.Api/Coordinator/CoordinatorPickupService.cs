@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 using Run = Agentweaver.Domain.Run;
@@ -21,17 +24,20 @@ public sealed class CoordinatorPickupService
     private readonly IRunStore _runStore;
     private readonly CoordinatorRunService _coordinatorRunService;
     private readonly ILogger<CoordinatorPickupService> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public CoordinatorPickupService(
         IBacklogTaskStore backlogStore,
         IRunStore runStore,
         CoordinatorRunService coordinatorRunService,
-        ILogger<CoordinatorPickupService> logger)
+        ILogger<CoordinatorPickupService> logger,
+        IServiceScopeFactory scopeFactory)
     {
         _backlogStore = backlogStore;
         _runStore = runStore;
         _coordinatorRunService = coordinatorRunService;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     /// <summary>
@@ -130,6 +136,20 @@ public sealed class CoordinatorPickupService
                     project.Id, task.Id, runId, blockedReason);
             }
             return;
+        }
+
+        if (WorkflowTriggerBacklogFactory.IsTrustedAutomationTask(task))
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var invocationService = scope.ServiceProvider.GetRequiredService<IAutomationInvocationService>();
+            if (!await invocationService.TryPrepareRunAsync(project.Id, task.Id, runId.ToString(), ct).ConfigureAwait(false))
+            {
+                await _runStore.TrySetTerminalStatusAsync(
+                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, "automation_invocation_unavailable", ct)
+                    .ConfigureAwait(false);
+                _logger.LogWarning("Pickup refused unavailable automation invocation for task {TaskId} and run {RunId}", task.Id, runId);
+                return;
+            }
         }
 
         // Reservation committed. Activate the coordinator workflow + unattended confirm post-commit.

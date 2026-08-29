@@ -53,6 +53,8 @@ const VARS = {
   SANDBOX_PREVIEW_ENABLED: "true",
   SANDBOX_PREVIEW_ZONE_SUFFIX: "abc123def456.westus2.staging.aksapp.io",
   APPINSIGHTS_WORKSPACE_ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
+  ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
 };
 
 test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IMAGE_TAG/AGENTHOST_IMAGE_TAG", () => {
@@ -77,14 +79,8 @@ test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IM
   );
 });
 
-test("buildRuntimeConfigLiterals() composites full URLs from HOST and passes through the rest", () => {
+test("buildRuntimeConfigLiterals() passes through deployment values without retired OAuth metadata", () => {
   const literals = buildRuntimeConfigLiterals(VARS);
-  assert.equal(literals.OAUTH_ISSUER, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
-  assert.equal(literals.OAUTH_AUDIENCE, "https://agentweaver.abc123def456.westus2.staging.aksapp.io/mcp");
-  assert.equal(
-    literals.GITHUB_CALLBACK_URL,
-    "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/github/callback",
-  );
   assert.equal(literals.TOKEN_STORE_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net");
   assert.equal(literals.AGENTHOST_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net/");
   assert.equal(literals.IDENTITY_CLIENT_ID, "11111111-2222-3333-4444-555555555555");
@@ -93,21 +89,11 @@ test("buildRuntimeConfigLiterals() composites full URLs from HOST and passes thr
   assert.equal(literals.SANDBOX_PREVIEW_ZONE_SUFFIX, "abc123def456.westus2.staging.aksapp.io");
 });
 
-test("buildRuntimeConfigLiterals() passes GITHUB_ALLOWED_ORG through, defaulting to microsoft", () => {
-  // Config-driven, non-committed value: falls back to the committed default when unset...
-  assert.equal(buildRuntimeConfigLiterals(VARS).GITHUB_ALLOWED_ORG, "microsoft");
-  // ...and passes a supplied (possibly multi-org) value through verbatim.
-  assert.equal(
-    buildRuntimeConfigLiterals({ ...VARS, GITHUB_ALLOWED_ORG: "microsoft,contoso" }).GITHUB_ALLOWED_ORG,
-    "microsoft,contoso",
-  );
-});
-
-test("buildRuntimeConfigLiterals() derives ENTRA_REDIRECT_URI from HOST and defaults AUTH_MODE to GitHubLegacy", () => {
+test("buildRuntimeConfigLiterals() derives ENTRA_REDIRECT_URI from HOST and defaults AUTH_MODE to Entra", () => {
   const literals = buildRuntimeConfigLiterals(VARS);
-  assert.equal(literals.AUTH_MODE, "GitHubLegacy");
-  assert.equal(literals.ENTRA_CLIENT_ID, "");
-  assert.equal(literals.ENTRA_TENANT_ID, "");
+  assert.equal(literals.AUTH_MODE, "Entra");
+  assert.equal(literals.ENTRA_CLIENT_ID, VARS.ENTRA_CLIENT_ID);
+  assert.equal(literals.ENTRA_TENANT_ID, VARS.ENTRA_TENANT_ID);
   assert.equal(
     literals.ENTRA_REDIRECT_URI,
     "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/entra/callback",
@@ -140,9 +126,10 @@ test("buildRuntimeConfigLiterals() throws when AUTH_MODE=Entra but ENTRA_TENANT_
   );
 });
 
-test("buildRuntimeConfigLiterals() does NOT throw when AUTH_MODE=GitHubLegacy with empty Entra fields", () => {
-  assert.doesNotThrow(
-    () => buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "GitHubLegacy", ENTRA_CLIENT_ID: "", ENTRA_TENANT_ID: "" }),
+test("buildRuntimeConfigLiterals() requires Entra configuration", () => {
+  assert.throws(
+    () => buildRuntimeConfigLiterals({ ...VARS, ENTRA_CLIENT_ID: "", ENTRA_TENANT_ID: "" }),
+    /ENTRA_CLIENT_ID or ENTRA_TENANT_ID is empty/,
   );
 });
 
@@ -158,9 +145,9 @@ test("rewriteOverlayKustomization() rewrites every images: entry and configMapGe
   assert.match(rewritten, /- "IDENTITY_CLIENT_ID=11111111-2222-3333-4444-555555555555"/);
   assert.match(rewritten, /- "AGENTHOST_IDENTITY_CLIENT_ID=99999999-8888-7777-6666-555555555555"/);
   assert.match(rewritten, /- "TENANT_ID=66666666-7777-8888-9999-000000000000"/);
-  assert.match(rewritten, /- "AUTH_MODE=GitHubLegacy"/);
-  assert.match(rewritten, /- "ENTRA_CLIENT_ID="/);
-  assert.match(rewritten, /- "ENTRA_TENANT_ID="/);
+  assert.match(rewritten, /- "AUTH_MODE=Entra"/);
+  assert.match(rewritten, /- "ENTRA_CLIENT_ID=11111111-2222-3333-4444-555555555555"/);
+  assert.match(rewritten, /- "ENTRA_TENANT_ID=66666666-7777-8888-9999-000000000000"/);
   assert.match(
     rewritten,
     /- "ENTRA_REDIRECT_URI=https:\/\/agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io\/auth\/entra\/callback"/,
@@ -198,6 +185,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.doesNotMatch(builtYaml, /name: Auth__Entra__ClientSecret/);
   assert.doesNotMatch(builtYaml, /changeme/);
   assert.doesNotMatch(builtYaml, /example\.com/);
+  assert.doesNotMatch(builtYaml, /mcp-oauth-signing-key|Auth__OAuth__|OAUTH_ISSUER|OAUTH_AUDIENCE/);
 
   const docs = parseBuiltDocs(builtYaml);
   // issue #471: the AgentHost ServiceAccount must be wired to the DEDICATED KV-less identity, while
@@ -219,9 +207,13 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
     /name: NODE_OPTIONS\s*\n\s*value: --max-old-space-size=1024[\s\S]*?name: agentweaver-agent-host[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 800m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 2Gi\s*\n\s*requests:\s*\n\s*cpu: 300m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 1Gi/,
     "AgentHost must pass the preview Node heap cap and retain its explicit resource reservation",
   );
+  // Pre-existing drift (unrelated to this branch): dev's PR #931 ("raise agentweaver-exec memory
+  // limit 2Gi→4Gi to prevent preview server OOM") bumped the exec container's memory request/limit
+  // to 2Gi/4Gi in k8s/base/sandbox-template-agenthost.yaml without syncing this assertion. Updating
+  // the expectation here to match the shipped template rather than touching production config.
   assert.match(
     sandboxTemplate,
-    /name: agentweaver-exec[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 1200m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 2Gi\s*\n\s*requests:\s*\n\s*cpu: 700m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 1Gi/,
+    /name: agentweaver-exec[\s\S]*?resources:\s*\n\s*limits:\s*\n\s*cpu: 1200m\s*\n\s*ephemeral-storage: 4Gi\s*\n\s*memory: 4Gi\s*\n\s*requests:\s*\n\s*cpu: 700m\s*\n\s*ephemeral-storage: 1Gi\s*\n\s*memory: 2Gi/,
     "The executor that runs previews must retain explicit resource reservation and limits",
   );
   const mcpDeployment = manifestForFilename(docs, "mcp-deployment.yaml");
@@ -297,6 +289,34 @@ test("manifestForFilename() throws a clear error for an unknown filename (fail-f
 test("manifestForFilename() throws when a resource is missing from the build (fail-fast)", () => {
   const docs = [{ kind: "Namespace", name: "wrong-name", text: "kind: Namespace\nmetadata:\n  name: wrong-name\n" }];
   assert.throws(() => manifestForFilename(docs, "namespace.yaml"), /did not produce Namespace\/agentweaver/);
+});
+
+test("active deployment sources contain no retired MCP OAuth signing artifacts", () => {
+  const retired = [
+    ["mcp", "oauth", "signing", "key"].join("-"),
+    ["Auth", "OAuth"].join("__") + "__",
+    ["OAUTH", "ISSUER"].join("_"),
+    ["OAUTH", "AUDIENCE"].join("_"),
+    ["16", "provision", "oauth", "signing", "key"].join("-"),
+  ];
+  const roots = [
+    path.join(DEFAULT_REPO_ROOT, "k8s", "base"),
+    path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production"),
+    path.join(DEFAULT_REPO_ROOT, "scripts", "azure"),
+  ];
+  const files = roots.flatMap(function collect(directory) {
+    return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? entry.name === "tests" || entry.name.startsWith(".") ? [] : collect(path.join(directory, entry.name))
+        : [path.join(directory, entry.name)]);
+  });
+
+  for (const file of files) {
+    const text = fs.readFileSync(file, "utf8");
+    for (const artifact of retired) {
+      assert.ok(!text.includes(artifact), `${path.relative(DEFAULT_REPO_ROOT, file)} must not contain retired artifact ${artifact}`);
+    }
+  }
 });
 
 // --- Postgres egress policy access-mode branching (bug found live in v0.16.0) ---

@@ -97,3 +97,5 @@ recordings/final/*
 
 # Demo recording authentication and disposable Edge profile data.
 scripts/demo-recording/.auth/
+# Squad: local config (machine-specific, never commit)
+.squad/config.json

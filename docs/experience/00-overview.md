@@ -180,7 +180,7 @@ The tool catalog is broad because it mirrors the product model. It contains 79 t
 | **Catalog** | Discover reusable agent roles and casting scenarios. | `catalog_list_roles`, `catalog_list_scenarios` |
 | **Coordinator** | Drive multi-agent work from a plain-language goal through outcome spec, work plan, child runs, topology, and steering. | `coordinator_start`, `coordinator_outcome_spec_confirm`, `coordinator_work_plan_get`, `coordinator_children_get`, `coordinator_steer`, `orchestration_topology` |
 | **Diagnostics** | Inspect system health and background heartbeat state. | `diagnostics_get`, `heartbeat_status` |
-| **GitHubAuth** | Check or manage GitHub authentication for the caller. | `github_status`, `github_signin`, `github_signout` |
+| **GitHub capability** | Connect or remove a caller's Repo App and an Owner-authorized project's Copilot App capabilities. | `github_repo_app_connect`, `github_repo_app_authorization_status`, `github_repo_app_disconnect`, `project_copilot_app_connect`, `project_copilot_app_authorization_status`, `project_copilot_app_disconnect`, `project_github_capability_status` |
 | **Memory** | Capture and govern decisions, inbox entries, agent memory, session context, and file import/export. | `decision_inbox_submit`, `decision_inbox_merge`, `decision_list`, `memory_record`, `memory_search`, `session_start`, `memory_export` |
 | **Project** | List, create, inspect, configure, rename, delete projects, and list project runs. | `project_list`, `project_create`, `project_get`, `project_configure`, `project_list_runs` |
 | **Run** | Submit, watch, review, inspect artifacts, retry, and archive runs. | `run_submit`, `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_get_file`, `run_retry` |
@@ -254,7 +254,7 @@ The table below maps major user goals to where a person goes in the web UI and w
 | **Manage backlog** | **Board** kanban columns and **Workspace** spec decomposition. | `backlog_capture_task`, `backlog_edit_task`, `backlog_delete_task`, `backlog_get_board`, `backlog_move_to_ready`, `backlog_move_to_backlog`, `backlog_reorder_task`, `send_all_backlog_to_ready`, `backlog_get_workflow_stages`, `backlog_get_settings`, `backlog_set_settings`, `backlog_decompose_spec`. |
 | **Browse workspace files** | **Workspace** page: select base branch or active run worktree, open file tree, inspect file content. | `list_project_workspace_refs`, `list_project_workspace`, `get_project_workspace_file`. |
 | **Operate and diagnose** | **Diagnostics** and **Heartbeat**. | `diagnostics_get`, `heartbeat_status`. |
-| **Manage GitHub auth** | Top bar sign-in/sign-out and project creation from GitHub. | `github_status`, `github_signin`, `github_signout`. |
+| **Manage GitHub capability** | Connect the Repo App in a browser; Project Owners can also connect the project Copilot App. | `github_repo_app_connect`, `github_repo_app_authorization_status`, `github_repo_app_disconnect`, `project_copilot_app_connect`, `project_copilot_app_authorization_status`, `project_copilot_app_disconnect`, `project_github_capability_status`. |
 
 ## Which surface should I use?
 

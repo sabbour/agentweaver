@@ -8,10 +8,10 @@ The Agentweaver MCP server is **experimental**. Tool names, parameters, and beha
 
 Agentweaver hosts a thin OAuth 2.1 Authorization Server (AS) inside `Agentweaver.Api`. It lets MCP
 clients (GitHub Copilot CLI, Claude Desktop, etc.) discover the AS, run a PKCE authorization-code
-flow themselves, and obtain short-lived JWT access tokens bound to the MCP resource. The AS brokers
-the actual login to GitHub using the existing confidential GitHub OAuth app, enforces `microsoft`
-organization membership, and mints its own tokens. The GitHub `client_secret` and the user's GitHub
-token never leave the server — the client only ever receives Agentweaver-minted artifacts.
+flow themselves, and obtain short-lived JWT access tokens bound to the MCP resource. The AS uses the
+authenticated Microsoft Entra session for platform authorization and mints its own tokens. Repo App
+and Copilot App browser handoffs remain capability-specific; the client only receives
+Agentweaver-minted MCP artifacts.
 
 The MCP server itself stays a pure OAuth Resource Server (it validates these tokens; it never issues
 them). Resource-Server changes — the `WWW-Authenticate` 401 challenge, the
@@ -81,9 +81,8 @@ Unauthenticated. Begins the authorization-code flow. Query parameters:
 | `state` | no | Opaque client value, echoed back on the redirect. |
 | `resource` | no | RFC 8707 resource indicator. |
 
-On success the endpoint redirects the user agent to GitHub to log in. After GitHub returns to the
-server callback and org membership is confirmed, the server redirects an authorization `code` (and the
-client's `state`) back to `redirect_uri`.
+On success the endpoint uses the current Entra session. After platform authorization is confirmed,
+the server redirects an authorization `code` (and the client's `state`) back to `redirect_uri`.
 
 Validation failures return `400` with an OAuth error body
 (`{"error": "...", "error_description": "..."}`) and **never** redirect, to avoid open redirects.
@@ -123,10 +122,8 @@ Signed JWT (RS256). Claims:
 |---|---|
 | `iss` | `https://HOST` (the resolved issuer) |
 | `aud` | `https://HOST/mcp` (the MCP resource, RFC 8707 binding) |
-| `sub` | GitHub login of the authenticated user |
-| `gh_login` | GitHub login |
+| `sub` | Entra object ID of the authenticated user |
 | `scope` | `mcp:invoke` |
-| `org` | `microsoft` (informational; authoritative check is at issuance) |
 | `iat`, `nbf`, `exp` | issued-at, not-before, expiry (15 minutes) |
 | `jti` | unique token id (used by the T4 denylist) |
 
@@ -134,21 +131,14 @@ Signed JWT (RS256). Claims:
 
 | Key | Purpose |
 |---|---|
-| `Auth:OAuth:SigningKey` | RSA private key (PEM or bare base64 PKCS#8). Bound to the Key Vault secret **`mcp-oauth-signing-key`**. |
-| `Auth:OAuth:Issuer` | Optional issuer override. When empty, the issuer is derived from the request host. |
-| `Auth:OAuth:Audience` | Optional audience override. Defaults to `{issuer}/mcp`. |
-| `Auth:GitHub:ClientId` / `ClientSecret` / `CallbackUrl` / `Scopes` | Existing confidential GitHub OAuth app (reused for the broker leg). |
+| `Auth:ApiKey` | Required API authentication key. Bound to the Key Vault CSI secret **`mcp-api-key`**. |
+| `Auth:Mcp:Issuer` | Public MCP issuer. |
+| `Auth:Mcp:Audience` | Public MCP resource audience. |
+| `Auth:Entra:ClientId` / `TenantId` / `RedirectUri` | Microsoft Entra browser sign-in and platform authorization. |
 
 For AKS production, run `npm run azure:provision-infra` before the first release
-deployment; it provisions the signing key together with the required cluster
-identity and secrets. The installer's `--skip-oauth-key` flag is only safe when that
-Key Vault secret already exists; otherwise cluster diagnostics report
-`key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
-| `Auth:GitHub:AllowedOrg` | Organization enforced at token issuance (`microsoft`). |
-
-If `Auth:OAuth:SigningKey` is not set, the service generates an **ephemeral** RSA key at startup for
-local development only (a warning is logged). Ephemeral keys do not survive a restart and must not be
-used in any shared or hosted deployment.
+deployment so the required `mcp-api-key` CSI secret is present. If it is missing,
+cluster diagnostics report `key_vault: critical: secret 'mcp-api-key' not found`.
 
 ## Security properties
 

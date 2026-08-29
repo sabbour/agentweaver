@@ -29,11 +29,11 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             INSERT INTO backlog_tasks (task_id, project_id, title, description, state, order_key,
                                        captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                                        workflow_override_id, archived_at, source_file_path,
-                                       parent_prd_run_id, promotion_key, promotion_reason)
+                                       parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending)
             VALUES ($taskId, $projectId, $title, $description, $state, $orderKey,
                     $capturedBy, $capturedByUserId, $createdAt, $committedAt, $claimedAt, $runId,
                     $workflowOverrideId, $archivedAt, $sourceFilePath,
-                    $parentPrdRunId, $promotionKey, $promotionReason);
+                    $parentPrdRunId, $promotionKey, $promotionReason, $automationInvocationPending);
             """;
         BindFullRow(command, task);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -230,7 +230,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             """
             UPDATE backlog_tasks SET title = $title, description = $description
              WHERE task_id = $taskId AND project_id = $projectId
-               AND archived_at IS NULL;
+               AND archived_at IS NULL AND automation_invocation_pending = 0;
             """;
         command.Parameters.AddWithValue("$title", title);
         command.Parameters.AddWithValue("$description", (object?)description ?? DBNull.Value);
@@ -255,7 +255,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             """
             UPDATE backlog_tasks SET workflow_override_id = $workflowOverrideId
              WHERE task_id = $taskId AND project_id = $projectId
-               AND state IN ('backlog','ready') AND run_id IS NULL AND archived_at IS NULL;
+               AND state IN ('backlog','ready') AND run_id IS NULL AND archived_at IS NULL
+               AND automation_invocation_pending = 0;
             """;
         command.Parameters.AddWithValue("$workflowOverrideId", (object?)workflowId ?? DBNull.Value);
         command.Parameters.AddWithValue("$taskId", id.ToString());
@@ -271,7 +272,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             """
             DELETE FROM backlog_tasks
              WHERE task_id = $taskId AND project_id = $projectId
-               AND state IN ('backlog','ready') AND run_id IS NULL AND archived_at IS NULL;
+               AND state IN ('backlog','ready') AND run_id IS NULL AND archived_at IS NULL
+               AND automation_invocation_pending = 0;
             """;
         command.Parameters.AddWithValue("$taskId", id.ToString());
         command.Parameters.AddWithValue("$projectId", projectId.ToString());
@@ -283,6 +285,23 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         {
             throw new BacklogTaskDependencyException("task_is_dependency");
         }
+    }
+
+    public async Task<bool> TryDeleteProvisionalAutomationTaskAsync(
+        ProjectId projectId, BacklogTaskId id, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM backlog_tasks
+             WHERE task_id = $taskId AND project_id = $projectId
+               AND state = 'backlog' AND run_id IS NULL AND archived_at IS NULL
+               AND automation_invocation_pending = 1;
+            """;
+        command.Parameters.AddWithValue("$taskId", id.ToString());
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
     }
 
     public async Task<bool> TryArchiveAsync(
@@ -298,7 +317,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             read.CommandText =
                 """
                 SELECT run_id FROM backlog_tasks
-                 WHERE task_id = $taskId AND project_id = $projectId AND archived_at IS NULL;
+                 WHERE task_id = $taskId AND project_id = $projectId AND archived_at IS NULL
+                   AND automation_invocation_pending = 0;
                 """;
             read.Parameters.AddWithValue("$taskId", id.ToString());
             read.Parameters.AddWithValue("$projectId", projectId.ToString());
@@ -361,7 +381,29 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 UPDATE backlog_tasks
                    SET state = 'ready', order_key = $orderKey, committed_at = $committedAt
                  WHERE task_id = $taskId AND project_id = $projectId
-                   AND state = 'backlog' AND archived_at IS NULL;
+                   AND state = 'backlog' AND archived_at IS NULL
+                   AND automation_invocation_pending = 0;
+                """;
+            command.Parameters.AddWithValue("$orderKey", key);
+            command.Parameters.AddWithValue("$committedAt", Ts(committedAt));
+            command.Parameters.AddWithValue("$taskId", id.ToString());
+            command.Parameters.AddWithValue("$projectId", projectId.ToString());
+            return await command.ExecuteNonQueryAsync(c).ConfigureAwait(false);
+        }, ct);
+
+    public Task<bool> TryPublishAutomationInvocationTaskAsync(
+        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt, CancellationToken ct = default) =>
+        RunWithOrderKeyRetryAsync(projectId, id, "ready", newOrderKey, async (conn, key, c) =>
+        {
+            await using var command = conn.CreateCommand();
+            command.CommandText =
+                """
+                UPDATE backlog_tasks
+                   SET state = 'ready', order_key = $orderKey, committed_at = $committedAt,
+                       automation_invocation_pending = 0
+                 WHERE task_id = $taskId AND project_id = $projectId
+                   AND state = 'backlog' AND archived_at IS NULL
+                   AND automation_invocation_pending = 1;
                 """;
             command.Parameters.AddWithValue("$orderKey", key);
             command.Parameters.AddWithValue("$committedAt", Ts(committedAt));
@@ -380,7 +422,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 UPDATE backlog_tasks
                    SET state = 'backlog', order_key = $orderKey, committed_at = NULL
                  WHERE task_id = $taskId AND project_id = $projectId
-                   AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL;
+                   AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL
+                   AND automation_invocation_pending = 0;
                 """;
             command.Parameters.AddWithValue("$orderKey", key);
             command.Parameters.AddWithValue("$taskId", id.ToString());
@@ -400,7 +443,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 UPDATE backlog_tasks
                    SET order_key = $orderKey
                  WHERE task_id = $taskId AND project_id = $projectId
-                   AND state = $expectedState AND run_id IS NULL AND archived_at IS NULL;
+                   AND state = $expectedState AND run_id IS NULL AND archived_at IS NULL
+                   AND automation_invocation_pending = 0;
                 """;
             command.Parameters.AddWithValue("$orderKey", key);
             command.Parameters.AddWithValue("$taskId", id.ToString());
@@ -426,6 +470,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 """
                 SELECT task_id FROM backlog_tasks
                  WHERE project_id = $projectId AND state = 'backlog' AND archived_at IS NULL
+                   AND automation_invocation_pending = 0
                  ORDER BY order_key ASC, task_id ASC;
                 """;
             read.Parameters.AddWithValue("$projectId", projectId.ToString());
@@ -473,7 +518,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 UPDATE backlog_tasks
                    SET state = 'ready', order_key = $orderKey, committed_at = $committedAt
                  WHERE task_id = $taskId AND project_id = $projectId
-                   AND state = 'backlog' AND archived_at IS NULL;
+                   AND state = 'backlog' AND archived_at IS NULL
+                   AND automation_invocation_pending = 0;
                 """;
             update.Parameters.AddWithValue("$orderKey", newKey);
             update.Parameters.AddWithValue("$committedAt", Ts(committedAt));
@@ -692,18 +738,19 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$parentPrdRunId", (object?)task.ParentPrdRunId?.ToString() ?? DBNull.Value);
         command.Parameters.AddWithValue("$promotionKey", (object?)task.PromotionKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$promotionReason", (object?)task.PromotionReason ?? DBNull.Value);
+        command.Parameters.AddWithValue("$automationInvocationPending", task.IsAutomationInvocationPending ? 1 : 0);
     }
 
     // Ordinals: 0=task_id 1=project_id 2=title 3=description 4=state 5=order_key
     //           6=captured_by 7=captured_by_user_id 8=created_at 9=committed_at 10=claimed_at
     //           11=run_id 12=workflow_override_id 13=archived_at 14=source_file_path
-    //           15=parent_prd_run_id 16=promotion_key 17=promotion_reason
+    //           15=parent_prd_run_id 16=promotion_key 17=promotion_reason 18=automation_invocation_pending
     private const string SelectSql =
         """
         SELECT task_id, project_id, title, description, state, order_key,
               captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
               workflow_override_id, archived_at, source_file_path,
-              parent_prd_run_id, promotion_key, promotion_reason
+              parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending
           FROM backlog_tasks
         """;
 
@@ -727,6 +774,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         ParentPrdRunId = r.IsDBNull(15) ? null : RunId.Parse(r.GetString(15)),
         PromotionKey = r.IsDBNull(16) ? null : r.GetString(16),
         PromotionReason = r.IsDBNull(17) ? null : r.GetString(17),
+        IsAutomationInvocationPending = r.GetInt64(18) != 0,
     };
 
     private static string AddTaskIdParameters(SqliteCommand command, IReadOnlyCollection<BacklogTaskId> taskIds)

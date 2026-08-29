@@ -2,19 +2,16 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Backlog;
 
 /// <summary>
-/// HTTP integration tests for the Feature 009 backlog endpoints that exercise behaviour the
-/// store-level tests cannot: the capture handler resolving the signed-in GitHub login as CapturedBy,
-/// and the bulk "send all to Ready" endpoint. Runs against a real in-process API host
-/// (<see cref="ProjectsWebApplicationFactory"/>) with the sanctioned in-memory
-/// <see cref="Agentweaver.Api.Auth.InMemoryGitHubTokenStore"/> (a real component, not a mock —
-/// Principle VII). The default scope provider is the fixed installation scope, so the caller's token
-/// lives under <see cref="GitHubTokenScope.Installation"/>.
+/// HTTP integration tests for the backlog endpoints that exercise behavior the store-level tests
+/// cannot, including protected automation-invocation handoffs. Runs against a real in-process API
+/// host (<see cref="ProjectsWebApplicationFactory"/>).
 /// </summary>
 public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplicationFactory>
 {
@@ -27,36 +24,41 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
         _client = factory.CreateAuthenticatedClient();
     }
 
-    // =========================================================================
-    // CAPTURE: persist the signed-in GitHub login as CapturedBy (falls back to caller.User).
-    // =========================================================================
-    [Fact]
-    public async Task Capture_WhenSignedIn_PersistsGitHubLoginAsCapturedBy()
+    [Theory]
+    [InlineData("external_id", "automation-invocation:forged")]
+    [InlineData("client_request_id", "workflow-event-trigger:forged")]
+    public async Task Capture_ReservedAutomationExternalIds_AreRejected(string propertyName, string externalId)
     {
-        // Sign the installation scope in as GitHub login "sabbour".
-        await _factory.TokenStore.SetAsync(
-            GitHubTokenScope.Installation,
-            new GitHubToken("access-tok", null, null, "sabbour", null, Array.Empty<string>()));
-
         var projectId = await CreateProjectAsync();
-        var task = await CaptureAsync(projectId, "Signed-in capture");
+        var body = propertyName == "external_id"
+            ? new Dictionary<string, string> { ["title"] = "forged automation", ["external_id"] = externalId }
+            : new Dictionary<string, string> { ["title"] = "forged automation", ["client_request_id"] = externalId };
 
-        task.GetProperty("captured_by").GetString().Should().Be(
-            "sabbour", "the signed-in GitHub login must be stored as who captured the task");
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/backlog/tasks", body);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "only the server-side trusted trigger path may associate a task with automation");
     }
 
     [Fact]
-    public async Task Capture_WhenSignedOut_FallsBackToCallerUser()
+    public async Task Capture_IgnoresClientSuppliedProvisionalAutomationMarker()
     {
-        // Explicit signed-out tombstone for the installation scope.
-        await _factory.TokenStore.SignOutAsync(GitHubTokenScope.Installation);
-
         var projectId = await CreateProjectAsync();
-        var task = await CaptureAsync(projectId, "Signed-out capture");
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/backlog/tasks", new
+        {
+            title = "ordinary task",
+            is_automation_invocation_pending = true,
+        });
 
-        task.GetProperty("captured_by").GetString().Should().Be(
-            ProjectsWebApplicationFactory.TestUser,
-            "with no signed-in GitHub identity, CapturedBy falls back to the API-key Auth:User");
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var taskId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("task_id").GetString()!;
+        var task = await _factory.Services.GetRequiredService<IBacklogTaskStore>()
+            .GetAsync(ProjectId.Parse(projectId), BacklogTaskId.Parse(taskId));
+        task!.IsAutomationInvocationPending.Should().BeFalse(
+            "the provisional marker is never accepted from a contributor request");
+        (await _client.PostAsync($"/api/projects/{projectId}/backlog/tasks/{taskId}/ready", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.OK,
+                "ordinary contributor backlog work must remain promotable");
     }
 
     // =========================================================================
@@ -89,6 +91,44 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
         var resp = await _client.PostAsync($"/api/projects/{projectId}/backlog/ready-all", content: null);
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("moved").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Ready_ProvisionalAutomationTask_IsNotPromotedByContributorEndpoint()
+    {
+        var projectId = await CreateProjectAsync();
+        var provisional = await CreateProvisionalAutomationTaskAsync(projectId);
+
+        var response = await _client.PostAsync(
+            $"/api/projects/{projectId}/backlog/tasks/{provisional.Id}/ready", content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var persisted = await _factory.Services.GetRequiredService<IBacklogTaskStore>()
+            .GetAsync(ProjectId.Parse(projectId), provisional.Id);
+        persisted.Should().NotBeNull();
+        persisted!.State.Should().Be(BacklogTaskState.Backlog);
+        persisted.IsAutomationInvocationPending.Should().BeTrue(
+            "only the trusted trigger publication path may release its provisional task");
+    }
+
+    [Fact]
+    public async Task ReadyAll_LeavesProvisionalAutomationTaskInBacklog()
+    {
+        var projectId = await CreateProjectAsync();
+        var provisional = await CreateProvisionalAutomationTaskAsync(projectId);
+        await CaptureAsync(projectId, "ordinary contributor task");
+
+        var response = await _client.PostAsync($"/api/projects/{projectId}/backlog/ready-all", content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("moved").GetInt32().Should().Be(1);
+        var tasks = await _factory.Services.GetRequiredService<IBacklogTaskStore>()
+            .ListByProjectAsync(ProjectId.Parse(projectId));
+        tasks.Should().ContainSingle(t => t.Id == provisional.Id
+            && t.State == BacklogTaskState.Backlog
+            && t.IsAutomationInvocationPending);
+        tasks.Should().ContainSingle(t => t.Title == "ordinary contributor task"
+            && t.State == BacklogTaskState.Ready);
     }
 
     [Fact]
@@ -149,6 +189,23 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
             $"/api/projects/{projectId}/backlog/tasks", new { title });
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "capturing a task must return 201");
         return await resp.Content.ReadFromJsonAsync<JsonElement>();
+    }
+
+    private async Task<BacklogTask> CreateProvisionalAutomationTaskAsync(string projectId)
+    {
+        var task = new BacklogTask
+        {
+            Id = BacklogTaskId.New(),
+            ProjectId = ProjectId.Parse(projectId),
+            Title = "trusted automation invocation",
+            State = BacklogTaskState.Backlog,
+            OrderKey = "n",
+            CapturedBy = "automation:test",
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsAutomationInvocationPending = true,
+        };
+        await _factory.Services.GetRequiredService<IBacklogTaskStore>().InsertAsync(task);
+        return task;
     }
 
     private static int CountCardsInColumn(JsonElement board, string columnId) =>

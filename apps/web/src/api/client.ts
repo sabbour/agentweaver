@@ -1,8 +1,11 @@
 import { getSessionToken } from '../config';
+import {
+  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+  isGitHubCopilotConnectionRequirement,
+} from './githubConnectionRequirement';
 import { isSkillProvenance } from './types';
 import type {
   AddMemberRequest,
-  AccessibleGitHubRepo,
   ApplyBlueprintSkillDefaultsResponse,
   AmendProposalRequest,
   AnswerQuestionResponse,
@@ -32,11 +35,8 @@ import type {
   DecomposeResponse,
   DetailedSystemDiagnosticsDto,
   GenerateBlueprintResponse,
-  GitHubAccount,
-  GitHubAuthStatusResponse,
-  GitHubDeviceFlow,
-  GitHubPollResult,
-  GitHubRepo,
+  GitHubRepositorySelectionCodeResponse,
+  GitHubRepositorySelectionListResponse,
   GraphDescriptor,
   HeartbeatStatusDto,
   HistoryDto,
@@ -48,7 +48,6 @@ import type {
   PagedResult,
   Project,
   ProjectAccessOverview,
-  ProjectGitHubIdentity,
   RequestChangesResponse,
   RepositoryOwner,
   ReroleRequest,
@@ -91,7 +90,7 @@ import type {
   WorkspaceFileNode,
   WorkspaceNode,
   WorkspaceRefsResponse,
-  LinkedGitHubAccount,
+  UnattendedReadiness,
 } from './types';
 /** A skill file paired with the folder-relative path it should keep on the server (folder drag-and-drop). */
 export interface SkillUploadItem {
@@ -380,6 +379,16 @@ export class AgentweaverApiClient {
     return this.request<Project>('POST', '/projects', req);
   }
 
+  listGitHubRepositorySelections(): Promise<GitHubRepositorySelectionListResponse> {
+    return this.request<GitHubRepositorySelectionListResponse>('GET', '/github/repository-selections');
+  }
+
+  issueGitHubRepositorySelection(fullName: string): Promise<GitHubRepositorySelectionCodeResponse> {
+    return this.request<GitHubRepositorySelectionCodeResponse>('POST', '/github/repository-selections', {
+      full_name: fullName,
+    });
+  }
+
   listBlueprints(): Promise<Blueprint[]> {
     return this.request<Blueprint[] | ListBlueprintsResponse>('GET', '/blueprints')
       .then(normalizeBlueprintList);
@@ -415,20 +424,19 @@ export class AgentweaverApiClient {
     );
   }
 
-  rotateProjectWebhookSecret(projectId: string): Promise<import('./types').WebhookSecretRotationResponse> {
-    return this.request<import('./types').WebhookSecretRotationResponse>(
-      'POST',
-      `/projects/${encodeURIComponent(projectId)}/webhook-secret/rotate`,
-      {},
+  getUnattendedReadiness(projectId: string): Promise<UnattendedReadiness> {
+    return this.request<UnattendedReadiness>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/github/unattended-readiness`,
     );
   }
 
-  autoCreateProjectWebhook(projectId: string): Promise<import('./types').GitHubWebhookProvisioningResponse> {
-    return this.request<import('./types').GitHubWebhookProvisioningResponse>(
-      'POST',
-      `/projects/${encodeURIComponent(projectId)}/webhooks/github/provision`,
-      {},
-    );
+  beginProjectCopilotAuthorization(projectId: string): Promise<{
+    authorization_url: string;
+    transaction_id: string;
+    expires_at: string;
+  }> {
+    return this.request('POST', `/projects/${encodeURIComponent(projectId)}/github/copilot/authorizations`, {});
   }
 
   deleteProject(projectId: string): Promise<void> {
@@ -489,85 +497,16 @@ export class AgentweaverApiClient {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/archive`, {});
   }
 
-  // GitHub auth
   getServerInfo(): Promise<ServerInfo> {
     return this.request<ServerInfo>('GET', '/server/info');
   }
 
-  startGitHubDeviceFlow(): Promise<GitHubDeviceFlow> {
-    return this.request<GitHubDeviceFlow>('POST', '/api/auth/github/device', {});
+  getAuthSession(): Promise<AuthSessionResponse> {
+    return this.request<AuthSessionResponse>('GET', '/auth/session');
   }
 
-  pollGitHubAuth(): Promise<GitHubPollResult> {
-    return this.request<GitHubPollResult>('POST', '/api/auth/github/poll', {});
-  }
-
-  getGitHubAuthStatus(): Promise<GitHubAuthStatusResponse> {
-    return this.request<GitHubAuthStatusResponse>('GET', '/api/auth/github');
-  }
-
-  async getAuthSession(): Promise<AuthSessionResponse> {
-    try {
-      return await this.request<AuthSessionResponse>('GET', '/auth/session');
-    } catch (err) {
-      if (!(err instanceof ApiError) || err.status !== 404) throw err;
-      const legacy = await this.getGitHubAuthStatus();
-      return {
-        authenticated: legacy.status === 'signed_in',
-        auth_mode: 'github-legacy',
-        display_name: legacy.login,
-        email: null,
-        login: legacy.login,
-        avatar_url: legacy.avatar_url ?? null,
-        entra_object_id: null,
-        platform_roles: [],
-      };
-    }
-  }
-
-  signOutGitHub(): Promise<void> {
-    return this.request<void>('POST', '/api/auth/github/sign-out', {});
-  }
-
-  async signOutSession(): Promise<void> {
-    try {
-      await this.request<void>('POST', '/auth/session/sign-out', {});
-    } catch (err) {
-      if (!(err instanceof ApiError) || err.status !== 404) throw err;
-      await this.signOutGitHub();
-    }
-  }
-
-  listGitHubAccounts(): Promise<GitHubAccount[]> {
-    return this.request<GitHubAccount[]>('GET', '/github/accounts');
-  }
-
-  listGitHubRepos(account?: string): Promise<GitHubRepo[]> {
-    const path = account ? `/github/repos?account=${encodeURIComponent(account)}` : '/github/repos';
-    return this.request<GitHubRepo[]>('GET', path);
-  }
-
-  // NOTE: these four paths/verbs must match Endpoints/AuthEndpoints.cs's `/api/auth/github-accounts*`
-  // routes exactly -- they previously pointed at `/auth/github/linked-accounts*` and `/github/repos/accessible`,
-  // which never existed server-side, so every linked-GitHub-account operation 404'd silently.
-  listLinkedGitHubAccounts(): Promise<LinkedGitHubAccount[]> {
-    return this.request<LinkedGitHubAccount[]>('GET', '/auth/github-accounts');
-  }
-
-  beginLinkGitHubAccount(): Promise<{ authorize_url: string }> {
-    return this.request<{ authorize_url: string }>('POST', '/auth/github-accounts/link', {});
-  }
-
-  setDefaultLinkedGitHubAccount(login: string): Promise<void> {
-    return this.request<void>('PUT', `/auth/github-accounts/${encodeURIComponent(login)}/default`, {});
-  }
-
-  unlinkLinkedGitHubAccount(login: string): Promise<void> {
-    return this.request<void>('DELETE', `/auth/github-accounts/${encodeURIComponent(login)}`);
-  }
-
-  listAccessibleGitHubRepos(): Promise<AccessibleGitHubRepo[]> {
-    return this.request<AccessibleGitHubRepo[]>('GET', '/auth/github-accounts/accessible-repos');
+  signOutSession(): Promise<void> {
+    return this.request<void>('POST', '/auth/session/sign-out', {});
   }
 
   // Post-creation GitHub connection for a currently-unconnected (blank-origin) project.
@@ -583,22 +522,12 @@ export class AgentweaverApiClient {
     return this.request<ProjectAccessOverview>('GET', `/projects/${encodeURIComponent(projectId)}/access`);
   }
 
-  getProjectGitHubIdentity(projectId: string): Promise<ProjectGitHubIdentity> {
-    return this.request<ProjectGitHubIdentity>('GET', `/projects/${encodeURIComponent(projectId)}/github-identity`);
-  }
-
   createProjectRoleAssignment(projectId: string, req: CreateProjectRoleAssignmentRequest): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/role-assignments`, req);
   }
 
   deleteProjectRoleAssignment(projectId: string, assignmentId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/role-assignments/${encodeURIComponent(assignmentId)}`);
-  }
-
-  setProjectGitHubIdentityOverride(projectId: string, githubLogin: string | null): Promise<void> {
-    return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/github-identity`, {
-      github_login: githubLogin,
-    });
   }
 
   // Catalog
@@ -821,7 +750,7 @@ export class AgentweaverApiClient {
       body: form,
     });
     const text = typeof response.text === 'function' ? await response.text() : '';
-    if (!response.ok) throw new ApiError(response.status, text);
+    if (!response.ok) throw this.createApiError(response.status, text);
     return text ? JSON.parse(text) as import('./types').SkillAcquisitionResponse : { results: [], marked_missing: [] };
   }
 
@@ -1332,7 +1261,7 @@ export class AgentweaverApiClient {
     const headers = this.authHeaders();
     const response = await fetch(this.apiUrl(keepaliveUrl), { method: 'POST', headers, credentials: 'include' });
     const text = typeof response.text === 'function' ? await response.text() : '';
-    if (!response.ok) throw new ApiError(response.status, text);
+    if (!response.ok) throw this.createApiError(response.status, text);
   }
 
   async listPortForwards(runId: string): Promise<PortForwardSessionDto[]> {
@@ -1360,7 +1289,7 @@ export class AgentweaverApiClient {
     });
 
     const text = typeof response.text === 'function' ? await response.text() : '';
-    if (!response.ok) throw new ApiError(response.status, text);
+    if (!response.ok) throw this.createApiError(response.status, text);
     if (text) return JSON.parse(text) as T;
     if (typeof response.json === 'function') {
       try {
@@ -1370,6 +1299,17 @@ export class AgentweaverApiClient {
       }
     }
     return null as T;
+  }
+
+  private createApiError(status: number, body: string): ApiError {
+    const error = new ApiError(status, body);
+    if (typeof window !== 'undefined' && isGitHubCopilotConnectionRequirement(error.payload)) {
+      window.dispatchEvent(new CustomEvent(
+        GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+        { detail: error.payload },
+      ));
+    }
+    return error;
   }
 
   private apiUrl(pathOrUrl: string): string {

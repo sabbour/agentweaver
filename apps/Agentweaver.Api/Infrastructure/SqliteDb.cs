@@ -81,6 +81,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN subtask_id TEXT;", ct);
 
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN review_ready_at TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approval_generation INTEGER NOT NULL DEFAULT 1;", ct);
 
         // Durable run-origin marker for backlog-pickup coordinator runs (Feature 009). Existing rows
         // default to 'interactive'; only the claim+reserve transaction writes 'backlog_pickup'.
@@ -170,6 +171,8 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN parent_prd_run_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN promotion_key TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN promotion_reason TEXT;", ct);
+        await TryAlterAsync(connection,
+            "ALTER TABLE backlog_tasks ADD COLUMN automation_invocation_pending INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection,
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_parent_promotion_key
@@ -559,7 +562,8 @@ public sealed class SqliteDb
             task               TEXT NOT NULL,
             submitting_user    TEXT NOT NULL,
             status             TEXT NOT NULL,
-            started_at         TEXT NOT NULL,
+            approval_generation INTEGER NOT NULL DEFAULT 1,
+            started_at      TEXT NOT NULL,
             ended_at           TEXT,
             result             TEXT,
             worktree_path      TEXT,
@@ -661,6 +665,7 @@ public sealed class SqliteDb
             parent_prd_run_id TEXT,
             promotion_key TEXT,
             promotion_reason TEXT,
+            automation_invocation_pending INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
         );
 

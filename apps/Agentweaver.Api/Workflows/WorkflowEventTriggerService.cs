@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 using Agentweaver.Api.Webhooks;
 
@@ -28,16 +30,19 @@ public sealed class WorkflowEventTriggerService
     private readonly WorkflowRegistry _registry;
     private readonly ILogger<WorkflowEventTriggerService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public WorkflowEventTriggerService(
         IBacklogTaskStore backlogStore,
         WorkflowRegistry registry,
         ILogger<WorkflowEventTriggerService> logger,
+        IServiceScopeFactory scopeFactory,
         TimeProvider? timeProvider = null)
     {
         _backlogStore = backlogStore;
         _registry = registry;
         _logger = logger;
+        _scopeFactory = scopeFactory;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -60,6 +65,8 @@ public sealed class WorkflowEventTriggerService
         var set = _registry.GetOrLoad(project);
         var now = _timeProvider.GetUtcNow();
         var fired = new List<string>();
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var invocations = scope.ServiceProvider.GetRequiredService<IAutomationInvocationService>();
 
         foreach (var result in set.Available)
         {
@@ -79,23 +86,34 @@ public sealed class WorkflowEventTriggerService
 
             if (!string.IsNullOrWhiteSpace(dedupeKey))
             {
-                var alreadyFired = await _backlogStore
-                    .GetExistingTitlesFromSourceAsync(project.Id, idempotencyKey, ct)
-                    .ConfigureAwait(false);
-                if (alreadyFired.Count > 0)
-                    continue;   // already fired for this dedupe key
+                var alreadyPublished = (await _backlogStore.ListByProjectAsync(project.Id, ct).ConfigureAwait(false))
+                    .Any(task => string.Equals(task.SourceFilePath, idempotencyKey, StringComparison.Ordinal) &&
+                                 task.State == BacklogTaskState.Ready &&
+                                 !task.IsAutomationInvocationPending);
+                if (alreadyPublished)
+                    continue;
             }
 
-            var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
-                _backlogStore,
-                project,
-                def,
+            var invocation = await invocations.TryClaimForProjectAsync(
+                project.Id, idempotencyKey, dedupeKey, eventName, ct).ConfigureAwait(false);
+            if (invocation is null)
+            {
+                invocation = await invocations.TryGetClaimedInvocationForProjectAsync(
+                    project.Id, idempotencyKey, dedupeKey, eventName, ct).ConfigureAwait(false);
+                if (invocation is null)
+                {
+                    _logger.LogWarning(
+                        "Workflow event trigger refused workflow {WorkflowId} for project {ProjectId}: automation activation unavailable",
+                        def.Id, project.Id);
+                    continue;
+                }
+            }
+
+            var task = await WorkflowTriggerBacklogFactory.RecoverAndPublishAutomationTaskAsync(
+                _backlogStore, invocations, invocation, project, def,
                 title: $"Event run: {def.Name}",
                 description: $"Automatically triggered by event '{eventName}' for the '{def.Id}' workflow.",
-                capturedBy: CapturedBy,
-                idempotencyKey: idempotencyKey,
-                now: now,
-                ct: ct).ConfigureAwait(false);
+                capturedBy: CapturedBy, idempotencyKey: idempotencyKey, now: now, ct: ct).ConfigureAwait(false);
 
             _logger.LogInformation(
                 "Workflow event trigger: fired workflow {WorkflowId} for project {ProjectId} on event {EventName} (task {TaskId})",

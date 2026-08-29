@@ -667,7 +667,7 @@ app.MapGet("/api/runs/{id}/history", async (
     // Resume the session in read-only mode (DisableResume=true suppresses the resume event)
     // to retrieve persisted events without re-executing.
     var sessionId = $"agentweaver-run-{runId}";
-    await using var client = copilotClientFactory.CreateClient();
+    await using var client = await copilotClientFactory.CreateClientAsync(run.Id.ToString(), modelId: null, ct).ConfigureAwait(false);
     await client.StartAsync(ct);
 
     GitHub.Copilot.CopilotSession? session = null;
@@ -1643,6 +1643,7 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
     ToolApprovalRequest body,
     IRunStore runStore,
     IToolApprovalGate approvalGate,
+    IAgentHostToolApprovalPersistence durableApprovalGate,
     IAgentHostApprovalHttpClient agentHostApprovalClient,
     IOptions<SandboxRuntimeOptions> sandboxRuntime,
     RunStreamStore streamStore,
@@ -1690,6 +1691,11 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
         && targetRun.ProjectId is null
         && !ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(targetRun.SubmittingUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
+    if (approvalScope != ApprovalScope.Once
+        && !ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(targetRun.SubmittingUser))
+    {
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+    }
 
     // #349: only apply the run-active guard when there is a genuinely backend-tracked PENDING
     // request to protect. The frontend optimistically renders one HITL card per approval-gated
@@ -1726,16 +1732,187 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
 
         if (state is ToolApprovalRequestState.Unknown)
         {
-            var podOutcome = await TryResolveAgentHostApprovalAsync(
-                approve: true,
-                targetRunId,
-                body.RequestId,
-                body.Scope,
-                sandboxRuntime.Value,
-                agentHostApprovalClient,
-                secretStore,
-                streamStore,
-                ct).ConfigureAwait(false);
+            AgentHostApprovalOutcome? podOutcome;
+            if (approvalScope == ApprovalScope.Once)
+            {
+                podOutcome = await TryResolveAgentHostApprovalAsync(
+                    approve: true,
+                    targetRunId,
+                    body.RequestId,
+                    body.Scope,
+                    sandboxRuntime.Value,
+                    agentHostApprovalClient,
+                    secretStore,
+                    streamStore,
+                    ct).ConfigureAwait(false);
+            }
+            else if (!sandboxRuntime.Value.IsPodPerRun)
+            {
+                podOutcome = null;
+            }
+            else
+            {
+                var contextOutcome = await agentHostApprovalClient.GetPendingContextAsync(
+                    targetRunId,
+                    body.RequestId,
+                    await GetAgentHostApprovalBearerAsync(
+                        targetRunId,
+                        sandboxRuntime.Value,
+                        secretStore,
+                        ct).ConfigureAwait(false),
+                    ct).ConfigureAwait(false);
+                if (contextOutcome.Unreachable)
+                    return MapAgentHostApprovalOutcome(contextOutcome, targetRunId, body.RequestId, approve: true);
+                if (!string.Equals(contextOutcome.State, "pending", StringComparison.OrdinalIgnoreCase)
+                    || string.IsNullOrWhiteSpace(contextOutcome.ToolName))
+                {
+                    return MapAgentHostApprovalOutcome(contextOutcome, targetRunId, body.RequestId, approve: true);
+                }
+
+                // AgentHost-owned requests are Unknown to this API replica. Its non-mutating
+                // context probe proves a real pod request exists, but the target can still have
+                // terminalized while that probe was in flight. Keep phantom cards on their
+                // accurate Unknown path above, while requiring an active target immediately
+                // before a scoped grant can release a reachable pod.
+                if (!await IsActiveToolApprovalTargetAsync(runStore, targetRun, ct).ConfigureAwait(false))
+                    return Results.Conflict(new { error = "Run is not active." });
+
+                var provisionalScopeGrantId = Guid.NewGuid().ToString("N");
+                var provisionalScopeExpiresAt = DateTimeOffset.UtcNow
+                    + ToolApprovalScopeProtocol.ProvisionalScopeLifetime;
+                podOutcome = await TryResolveAgentHostApprovalAsync(
+                    approve: true,
+                    targetRunId,
+                    body.RequestId,
+                    scope: body.Scope,
+                    sandboxRuntime.Value,
+                    agentHostApprovalClient,
+                    secretStore,
+                    streamStore,
+                    ct,
+                    provisionalScopeGrantId,
+                    provisionalScopeExpiresAt).ConfigureAwait(false);
+
+                // The AgentHost applies the scoped policy before releasing the pending tool call,
+                // which deliberately bridges the current pod until its durable counterpart wins.
+                // A durable failure must synchronously revoke that *exact* provisional policy
+                // before returning an error. The opaque grant id means this rollback cannot
+                // remove an equivalent scope that a different approval subsequently granted.
+                var appliedProvisionalScope = podOutcome is { Resolved: true, Applied: true, Unreachable: false }
+                    && string.Equals(podOutcome.State, "approved", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        podOutcome.ScopeGrantId,
+                        provisionalScopeGrantId,
+                        StringComparison.Ordinal);
+                if (appliedProvisionalScope)
+                {
+                    var persisted = false;
+                    try
+                    {
+                        persisted = await durableApprovalGate.PersistAgentHostApprovalAsync(
+                            targetRunId,
+                            body.RequestId,
+                            contextOutcome.ToolName,
+                            contextOutcome.Url,
+                            approvalScope).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        persisted = false;
+                    }
+
+                    if (!persisted)
+                    {
+                        var rolledBack = await TryRollbackAgentHostScopeAsync(
+                            targetRunId,
+                            body.RequestId,
+                            provisionalScopeGrantId,
+                            sandboxRuntime.Value,
+                            agentHostApprovalClient,
+                            secretStore,
+                            CancellationToken.None).ConfigureAwait(false);
+                        if (!rolledBack)
+                        {
+                            // #972 finding 1: an immediate rollback failure must not surface a 503
+                            // while the exact provisional scope could still authorize the pod for
+                            // up to ProvisionalScopeLifetime. Reuse the same close-or-expire helper
+                            // relied on for dropped/unproven AgentHost forwards below: it retries
+                            // the rollback and, if that also fails, blocks until the API-stamped
+                            // lease elapses -- so the scope is guaranteed inert (removed or
+                            // expired) before this endpoint responds.
+                            await EnsureProvisionalAgentHostScopeClosedAsync(
+                                targetRunId,
+                                body.RequestId,
+                                provisionalScopeGrantId,
+                                provisionalScopeExpiresAt,
+                                sandboxRuntime.Value,
+                                agentHostApprovalClient,
+                                secretStore).ConfigureAwait(false);
+
+                            if (!await IsActiveToolApprovalTargetAsync(runStore, targetRun, ct).ConfigureAwait(false))
+                                return Results.Conflict(new { error = "Run is not active." });
+
+                            return Results.Problem(
+                                "The AgentHost approved this request, durable scope persistence failed, and the provisional pod-local scope could not be immediately removed. It has since been removed or its lease has elapsed.",
+                                statusCode: StatusCodes.Status503ServiceUnavailable);
+                        }
+
+                        if (!await IsActiveToolApprovalTargetAsync(runStore, targetRun, ct).ConfigureAwait(false))
+                            return Results.Conflict(new { error = "Run is not active." });
+
+                        return Results.Problem(
+                            "The AgentHost approved this request, but the selected scope could not be persisted. The provisional pod-local scope was removed.",
+                            statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
+
+                    // Finalization only retires the rollback handle. Every subsequent scoped
+                    // authorization consults the lifecycle-aware durable policy, so an
+                    // unconfirmed finalization cannot leave the provisional local policy as a
+                    // bypass while preserving the committed policy for an active run.
+                    await TryFinalizeAgentHostScopeAsync(
+                        targetRunId,
+                        body.RequestId,
+                        provisionalScopeGrantId,
+                        sandboxRuntime.Value,
+                        agentHostApprovalClient,
+                        secretStore,
+                        ct).ConfigureAwait(false);
+                }
+                else if (podOutcome is { Unreachable: true })
+                {
+                    // The pod can apply a scope and lose its response. Roll back the request-bound
+                    // provisional grant when it is reachable; otherwise wait for the API-stamped
+                    // lease to make it unusable before reporting the transport failure.
+                    await EnsureProvisionalAgentHostScopeClosedAsync(
+                        targetRunId,
+                        body.RequestId,
+                        provisionalScopeGrantId,
+                        provisionalScopeExpiresAt,
+                        sandboxRuntime.Value,
+                        agentHostApprovalClient,
+                        secretStore).ConfigureAwait(false);
+                }
+                else if (podOutcome is { Resolved: true, Applied: true }
+                    && string.Equals(podOutcome.State, "approved", StringComparison.OrdinalIgnoreCase))
+                {
+                    // A response that cannot prove the API-created provisional id must never
+                    // publish durable policy. Wait through the lease before reporting the error,
+                    // rather than allowing an old or malformed pod to retain a local scope.
+                    await EnsureProvisionalAgentHostScopeClosedAsync(
+                        targetRunId,
+                        body.RequestId,
+                        provisionalScopeGrantId,
+                        provisionalScopeExpiresAt,
+                        sandboxRuntime.Value,
+                        agentHostApprovalClient,
+                        secretStore,
+                        scopeGrantIdProven: false).ConfigureAwait(false);
+                    return Results.Problem(
+                        "The AgentHost approval response could not prove the provisional scope was committed. The local scope was removed or expired.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            }
+
             if (podOutcome is not null)
                 return MapAgentHostApprovalOutcome(podOutcome, targetRunId, body.RequestId, approve: true);
 
@@ -1851,6 +2028,46 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
     }
 
     return Results.Ok(new { run_id = targetRunId, request_id = body.RequestId, denied = true });
+});
+
+app.MapGet("/api/runs/{id}/tool-approval-policies/{toolName}", async (
+    HttpContext httpContext,
+    string id,
+    string toolName,
+    IRunStore runStore,
+    IToolApprovalGate approvalGate,
+    IRunAuthorshipCapabilityStore capabilityStore,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId) || string.IsNullOrWhiteSpace(toolName))
+        return Results.BadRequest(new { error = "Invalid run id or tool name." });
+
+    var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+    if (run is null)
+        return Results.NotFound();
+
+    if (httpContext.User.HasClaim("agentweaver_internal", "true"))
+    {
+        var capabilityRunId = httpContext.Request.Headers[RunAuthorshipHeaders.RunId].ToString();
+        var capabilityToken = httpContext.Request.Headers[RunAuthorshipHeaders.RunToken].ToString();
+        if (!string.Equals(capabilityRunId, id, StringComparison.Ordinal)
+            || !await capabilityStore.ValidateAsync(id, capabilityToken, ct).ConfigureAwait(false))
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+    }
+    else if (await EndpointHelpers.RequireRunAccessAsync(
+            httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+    {
+        return denied;
+    }
+
+    return Results.Ok(new
+    {
+        run_id = id,
+        tool_name = toolName,
+        auto_approved = approvalGate.IsAutoApproved(id, toolName, url: null),
+    });
 });
 
 app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
@@ -2757,34 +2974,149 @@ internal static async Task<AgentHostApprovalOutcome?> TryResolveAgentHostApprova
     IAgentHostApprovalHttpClient agentHostApprovalClient,
     ISecretStore? secretStore,
     RunStreamStore streamStore,
-    CancellationToken ct)
+    CancellationToken ct,
+    string? scopeGrantId = null,
+    DateTimeOffset? scopeExpiresAt = null)
 {
     if (!sandboxRuntime.IsPodPerRun)
         return null;
 
-    string? bearer = null;
-    if (secretStore is not null)
-    {
-        try
-        {
-            var secret = await secretStore.GetSecretAsync(
-                PreviewRunnerCredential.SecretKey(targetRunId), ct).ConfigureAwait(false);
-            bearer = secret.Found ? secret.Value : null;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            bearer = null;
-        }
-    }
+    var bearer = await GetAgentHostApprovalBearerAsync(
+        targetRunId,
+        sandboxRuntime,
+        secretStore,
+        ct).ConfigureAwait(false);
 
     var outcome = approve
-        ? await agentHostApprovalClient.GrantAsync(targetRunId, requestId, scope, bearer, ct).ConfigureAwait(false)
+        ? scopeGrantId is not null && scopeExpiresAt is not null
+            ? await agentHostApprovalClient.GrantScopedAsync(
+                targetRunId,
+                requestId,
+                scope,
+                scopeGrantId,
+                scopeExpiresAt.Value,
+                bearer,
+                ct).ConfigureAwait(false)
+            : await agentHostApprovalClient.GrantAsync(targetRunId, requestId, scope, bearer, ct).ConfigureAwait(false)
         : await agentHostApprovalClient.DenyAsync(targetRunId, requestId, bearer, ct).ConfigureAwait(false);
 
     if (!outcome.Unreachable && (outcome.Resolved || IsTerminalApprovalState(outcome.State)))
         EmitAgentHostApprovalResolved(streamStore, targetRunId, requestId, outcome.State);
 
     return outcome;
+}
+
+private static async Task<bool> IsActiveToolApprovalTargetAsync(
+    IRunStore runStore,
+    Run targetRun,
+    CancellationToken ct)
+{
+    var refreshed = await runStore.GetAsync(targetRun.Id, ct).ConfigureAwait(false);
+    return refreshed?.Status == RunStatus.InProgress;
+}
+
+private static async Task<bool> TryRollbackAgentHostScopeAsync(
+    string targetRunId,
+    string requestId,
+    string scopeGrantId,
+    SandboxRuntimeOptions sandboxRuntime,
+    IAgentHostApprovalHttpClient agentHostApprovalClient,
+    ISecretStore? secretStore,
+    CancellationToken ct,
+    bool scopeGrantIdProven = true)
+{
+    if (!sandboxRuntime.IsPodPerRun)
+        return false;
+
+    try
+    {
+        var bearer = await GetAgentHostApprovalBearerAsync(
+            targetRunId, sandboxRuntime, secretStore, ct).ConfigureAwait(false);
+        var outcome = await agentHostApprovalClient.RollbackScopeAsync(
+            targetRunId, requestId, scopeGrantId, bearer, ct).ConfigureAwait(false);
+        return !outcome.Unreachable
+            && (outcome.RolledBack
+                || (scopeGrantIdProven
+                    && string.Equals(outcome.State, "scope_not_found", StringComparison.OrdinalIgnoreCase)));
+    }
+    catch (Exception)
+    {
+        return false;
+    }
+}
+
+private static async Task EnsureProvisionalAgentHostScopeClosedAsync(
+    string targetRunId,
+    string requestId,
+    string scopeGrantId,
+    DateTimeOffset scopeExpiresAt,
+    SandboxRuntimeOptions sandboxRuntime,
+    IAgentHostApprovalHttpClient agentHostApprovalClient,
+    ISecretStore? secretStore,
+    bool scopeGrantIdProven = true)
+{
+    if (await TryRollbackAgentHostScopeAsync(
+            targetRunId,
+            requestId,
+            scopeGrantId,
+            sandboxRuntime,
+            agentHostApprovalClient,
+            secretStore,
+            CancellationToken.None,
+            scopeGrantIdProven).ConfigureAwait(false))
+    {
+        return;
+    }
+
+    var remaining = scopeExpiresAt - DateTimeOffset.UtcNow;
+    if (remaining > TimeSpan.Zero)
+        await Task.Delay(remaining, CancellationToken.None).ConfigureAwait(false);
+}
+
+private static async Task TryFinalizeAgentHostScopeAsync(
+    string targetRunId,
+    string requestId,
+    string scopeGrantId,
+    SandboxRuntimeOptions sandboxRuntime,
+    IAgentHostApprovalHttpClient agentHostApprovalClient,
+    ISecretStore? secretStore,
+    CancellationToken ct)
+{
+    if (!sandboxRuntime.IsPodPerRun)
+        return;
+
+    try
+    {
+        var bearer = await GetAgentHostApprovalBearerAsync(
+            targetRunId, sandboxRuntime, secretStore, ct).ConfigureAwait(false);
+        await agentHostApprovalClient.FinalizeScopeAsync(
+            targetRunId, requestId, scopeGrantId, bearer, ct).ConfigureAwait(false);
+    }
+    catch (Exception)
+    {
+        // The durable policy has committed; finalization only discards the local rollback handle.
+    }
+}
+
+private static async Task<string?> GetAgentHostApprovalBearerAsync(
+    string targetRunId,
+    SandboxRuntimeOptions sandboxRuntime,
+    ISecretStore? secretStore,
+    CancellationToken ct)
+{
+    if (!sandboxRuntime.IsPodPerRun || secretStore is null)
+        return null;
+
+    try
+    {
+        var secret = await secretStore.GetSecretAsync(
+            PreviewRunnerCredential.SecretKey(targetRunId), ct).ConfigureAwait(false);
+        return secret.Found ? secret.Value : null;
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException)
+    {
+        return null;
+    }
 }
 
 private static IResult MapAgentHostApprovalOutcome(
@@ -2810,6 +3142,7 @@ private static IResult MapAgentHostApprovalOutcome(
                 request_id = requestId,
                 approved,
                 resolved = true,
+                applied = outcome.Applied,
                 expired,
                 state = outcome.State,
             });

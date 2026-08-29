@@ -92,6 +92,7 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var repo = CreateTempGitRepo();
         var runId = RunId.New();
+        var projectId = await CreateBlankProjectAsync(repo);
 
         await runStore.InsertAsync(new Run
         {
@@ -101,6 +102,7 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
             ModelSource       = ModelSource.GitHubCopilot,
             Task              = "retry test task",
             SubmittingUser    = ProjectsWebApplicationFactory.TestUser,
+            ProjectId         = projectId,
             Status            = RunStatus.Failed,
             StartedAt         = DateTimeOffset.UtcNow,
             EndedAt           = DateTimeOffset.UtcNow,
@@ -141,5 +143,28 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
         await act.Should().ThrowAsync<McpApiException>()
             .Where(ex => ex.StatusCode == 409);
     }
-}
 
+    private async Task<ProjectId> CreateBlankProjectAsync(string workingDirectory)
+    {
+        var projectId = ProjectId.New();
+        var now = DateTimeOffset.UtcNow;
+        await _factory.Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
+        {
+            Id = projectId,
+            Name = $"MCP retry test {Guid.NewGuid():N}",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = workingDirectory,
+            DefaultBranch = "main",
+            Owner = ProjectsWebApplicationFactory.TestUser,
+            ProviderSettings = new ProjectProviderSettings
+            {
+                DefaultProvider = ModelSource.GitHubCopilot,
+            },
+            State = ProjectState.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        return projectId;
+    }
+}

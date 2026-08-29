@@ -12,7 +12,7 @@ namespace Agentweaver.Tests.Helpers;
 
 /// <summary>
 /// Web application factory for blueprint integration tests. Mirrors the project test factory
-/// (in-memory token store, no-op git, isolated temp paths) and additionally replaces the model-backed
+/// (no-op git, isolated temp paths) and additionally replaces the model-backed
 /// <see cref="IBlueprintGenerator"/> with <see cref="StubBlueprintGenerator"/> so the generate
 /// endpoint can be exercised without the live model.
 /// </summary>
@@ -27,7 +27,6 @@ public sealed class BlueprintsWebApplicationFactory : WebApplicationFactory<Prog
     private readonly string _checkpointsPath;
     private readonly string _coordinatorCheckpointsPath;
 
-    public InMemoryGitHubTokenStore TokenStore { get; } = new();
     public StubBlueprintGenerator Generator { get; } = new();
 
     public BlueprintsWebApplicationFactory()
@@ -60,9 +59,7 @@ public sealed class BlueprintsWebApplicationFactory : WebApplicationFactory<Prog
                 ["Worktrees:BasePath"]                    = _worktreesPath,
                 ["Checkpoints:Path"]                      = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"]          = _coordinatorCheckpointsPath,
-                ["Testing:BypassGitHubOrgAuthorization"] = "true",
                 ["Testing:BypassGitHubTokenAuth"]        = "true",
-                ["Auth:Mode"] = "GitHubLegacy",
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"]                             = TestUser,
                 ["Auth:GitHub:ClientId"]                  = "test-github-client-id",
@@ -82,9 +79,6 @@ public sealed class BlueprintsWebApplicationFactory : WebApplicationFactory<Prog
 
         builder.ConfigureServices(services =>
         {
-            RemoveService<IGitHubTokenStore>(services);
-            services.AddSingleton<IGitHubTokenStore>(TokenStore);
-
             RemoveService<ProjectGitInitializer>(services);
             services.AddSingleton<ProjectGitInitializer, NoOpProjectGitInitializer>();
 

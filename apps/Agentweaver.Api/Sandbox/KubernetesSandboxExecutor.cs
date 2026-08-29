@@ -6,11 +6,13 @@ using System.Net.Sockets;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using k8s;
 using k8s.Autorest;
 using Agentweaver.SandboxExec;
+using Agentweaver.SandboxExec.PodExec;
 using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Sandbox;
@@ -102,7 +104,12 @@ public sealed class KubernetesSandboxOptions
     /// (Option C). Sourced from the API's own KV config (<c>Auth:TokenStore:KeyVaultUri</c>). When
     /// null/empty the env var is omitted and the pod falls back to the CSI file-mount path.
     /// </summary>
-    public string? KvUri { get; init; }
+
+    /// <summary>
+    /// Internal API base URL delivered to a warm AgentHost for its per-run approval-policy reader.
+    /// The matching credential is the run's capability token, not a static service credential.
+    /// </summary>
+    public string? ToolApprovalApiBaseUrl { get; init; }
 }
 
 /// <summary>
@@ -188,22 +195,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Used to POST /configure to the warm pod after bind (warm-pool deferred-config path). Null in
     // unit tests → the /configure call is skipped (same null-skip convention as the readiness probe).
     private readonly IHttpClientFactory? _httpClientFactory;
-    // Resolves the run owner's GitHub token so the API can pass it in /configure, avoiding the need
-    // for the kata VM pod to call Azure AD or Key Vault (blocked by Cilium FQDN policies).
-    private readonly IGitHubTokenStore? _tokenStore;
-    private readonly IGitHubTokenScopeProvider? _tokenScopeProvider;
-    // Refresh-aware token accessor (issue #523): a Build & Test gate can launch its AgentHost pod for
-    // the FIRST time (a fresh pod, not yet /configure'd for this run) many minutes after the run's
-    // earlier subtask stages — long enough for the submitting user's Copilot-entitled OAuth access
-    // token to cross its expiry skew window. Reading the raw entry via IGitHubTokenStore.GetAsync (as
-    // ResolveGitHubAccessTokenAsync previously did) can hand a stale/expired access token to the pod,
-    // which the pod then trusts unconditionally (its "fast path" skips its own Key Vault fetch
-    // whenever a pre-resolved token arrives) — producing GitHubCopilotUnauthorizedException at
-    // /configure. Routing through the same GetValidAccessTokenAsync used by GitHubCopilotClientFactory
-    // ensures a near-expiry token is transparently rotated before being handed to a newly-launched pod.
-    // Null in unit tests → falls back to the raw (non-refreshing) token store read. When present,
-    // it is authoritative: a null/failed refresh must never fall back to the rejected raw token.
-    private readonly IGitHubAccessTokenProvider? _accessTokenProvider;
+    // Redeems the run-bound Copilot snapshot for the AgentHost /configure call.
+    private readonly IGitHubCopilotCapabilityCredentialProvider? _copilotCredentials;
     // Replica-safe run secret store used to persist the per-run preview-runner credential so a
     // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
     // release (spec-006 decouple-preview, BLOCKER A / RESIDUAL). Null in unit tests → no minting.
@@ -216,10 +209,18 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Source of the per-run AutoApproveTools flag propagated to the warm pod via /configure (bug
     // #221). Null in unit tests → the flag defaults false (same null-skip convention as above).
     private readonly IRunOptionsStore? _runOptions;
+    private readonly RunRepositoryCredentialRegistry? _repositoryCredentials;
     // First-class preview lifecycle reconciler. ReleaseAgentHostPodAsync derives durable
     // Previewable/PreviewActive state and applies all retention or cleanup effects before deciding
     // whether to delete the claim.
     private readonly Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? _previewService;
+    // Persists the AUTHORITATIVE AgentHost claim name (LaunchAgentHostPodAsync's own
+    // SandboxClaimConventions.DeriveAgentHostClaimName derivation) into Run.SandboxClaimName as soon
+    // as the claim is created/reclaimed — before any repository credential can be minted — so
+    // cross-replica liveness reconciliation (RunRepositoryCredentialLiveness) can always resolve this
+    // run's real cluster claim. Null in unit tests → the persistence is skipped (same null-skip
+    // convention as the other optional collaborators above).
+    private readonly IRunStore? _runStore;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -237,14 +238,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IAgentHostReadinessProbe? readinessProbe = null,
         IRunSubmittingUserResolver? submittingUserResolver = null,
         IHttpClientFactory? httpClientFactory = null,
-        IGitHubTokenStore? tokenStore = null,
         ISecretStore? secretStore = null,
         IRunEventStream? runEventStream = null,
         IRunOptionsStore? runOptions = null,
-        IGitHubAccessTokenProvider? accessTokenProvider = null,
+        RunRepositoryCredentialRegistry? repositoryCredentials = null,
+        IGitHubCopilotCapabilityCredentialProvider? copilotCredentials = null,
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
-        IGitHubTokenScopeProvider? tokenScopeProvider = null,
-        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null)
+        Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
+        IRunStore? runStore = null)
     {
         _client = client;
         _options = options;
@@ -254,14 +255,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _readinessProbe = readinessProbe;
         _submittingUserResolver = submittingUserResolver;
         _httpClientFactory = httpClientFactory;
-        _tokenStore = tokenStore;
-        _tokenScopeProvider = tokenScopeProvider;
         _secretStore = secretStore;
         _runEventStream = runEventStream;
         _runOptions = runOptions;
-        _accessTokenProvider = accessTokenProvider;
+        _repositoryCredentials = repositoryCredentials;
+        _copilotCredentials = copilotCredentials;
         _previewService = previewService;
         _authorshipCapabilityStore = authorshipCapabilityStore;
+        _runStore = runStore;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -405,18 +406,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
             : (null, null);
 
-        // ghtok-user--{base32(userId)} — the SAME mapping the API uses when persisting the token to KV.
-        // With Entra sign-in the user's credentials live under the ACTIVE linked GitHub identity's
-        // scope (user-link:{oid}:{login}), so resolve the effective scope rather than assuming the
-        // legacy per-user scope, which is never written in that mode.
-        var effectiveScope = _tokenScopeProvider is not null
-            ? await _tokenScopeProvider
-                .ResolveAsync(submittingUser!, configProjectId, ct)
-                .ConfigureAwait(false)
-            : _tokenStore is IEffectiveGitHubTokenScopeResolver scopeResolver
-                ? await scopeResolver.ResolveEffectiveScopeAsync(submittingUser!, ct).ConfigureAwait(false)
-                : GitHubTokenScope.ForUser(submittingUser!);
-        var kvUserSecretName = KeyVaultSecretStore.SanitizeKey(effectiveScope.Key);
+        var copilotCredential = _copilotCredentials is null
+            ? null
+            : await _copilotCredentials.GetCredentialAsync(runId, ct).ConfigureAwait(false);
+        if (copilotCredential is null)
+            throw new InvalidOperationException(
+                $"Cannot launch AgentHost pod for run '{runId}' without a live run-bound Copilot capability snapshot.");
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
         try
@@ -496,6 +491,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 }
             }
 
+            // The claim now definitely exists on the cluster — either just created or reclaimed
+            // (reused) above. Persist ITS OWN authoritative claim name into Run.SandboxClaimName
+            // right now, before anything below can mint a repository credential, so cross-replica
+            // liveness reconciliation always has a real claim to check (issue: kata-exec-sidecar
+            // AgentHost runs previously left SandboxClaimName unset, so a replica that minted a
+            // repository credential could never learn that another replica deleted the claim).
+            await PersistAgentHostClaimNameAsync(runId, claimName, ct).ConfigureAwait(false);
+
             var podName = await WaitForBoundWithProvisioningHeartbeatAsync(runId, claimName, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
@@ -558,10 +561,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // immutable source refs; AgentHost creates their effective root inside execution-scratch.
             if (claimCreated)
             {
+                var repositoryAccessToken = _repositoryCredentials is null
+                    ? null
+                    : await _repositoryCredentials.MintAsync(runId, ct).ConfigureAwait(false);
                 var effectiveWorkingDirectory = await CallAgentHostConfigureAsync(
-                    podIp, _options.AgentHostPort, runId, submittingUser, turnToken, kvUserSecretName,
-                    effectiveScope,
-                    await ResolveGitHubAccessTokenAsync(effectiveScope, submittingUser, ct).ConfigureAwait(false),
+                    podIp, _options.AgentHostPort, runId, submittingUser, turnToken, copilotCredential,
+                    repositoryAccessToken,
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
                     configProjectId,
@@ -600,8 +605,53 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // Crash/timeout during launch: delete any credential minted before the failure so it is
             // never left behind (spec-006 decouple-preview, RESIDUAL rev3 gap).
             await DeletePreviewRunnerCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            await RevokeRepositoryCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Persists <see cref="LaunchAgentHostPodAsync(string,AgentHostLaunchContext,CancellationToken)"/>'s
+    /// own authoritative <paramref name="claimName"/> (the SAME value it just created or reclaimed on
+    /// the cluster) into <c>Run.SandboxClaimName</c>/<c>SandboxBackend</c>/<c>SandboxNamespace</c>.
+    ///
+    /// <para>
+    /// This is the ONLY place that should ever write the AgentHost claim identity for a run:
+    /// <see cref="RunRepositoryCredentialLiveness"/> later reads it back from the shared run store to
+    /// confirm a non-terminal run's claim is still present in the cluster's SandboxClaim inventory.
+    /// Without this write (the PR #968 gap), <c>kata-exec-sidecar</c> AgentHost runs never had a
+    /// persisted claim name, so a replica that minted a repository credential could never learn that
+    /// another replica later deleted the claim, and the credential was never revoked.
+    /// </para>
+    ///
+    /// <para>
+    /// Deliberately fails the launch (rather than degrading silently, unlike the other optional
+    /// collaborators in this class) when the run id cannot be parsed: minting a repository credential
+    /// for a run whose claim identity can never be resolved back would make that credential
+    /// unrevocable via cross-replica reconciliation. A null <see cref="_runStore"/> (unit tests) still
+    /// degrades to a no-op, matching this class's established null-skip convention.
+    /// </para>
+    /// </summary>
+    private async Task PersistAgentHostClaimNameAsync(string runId, string claimName, CancellationToken ct)
+    {
+        if (_runStore is null)
+            return;
+
+        if (!RunId.TryParse(runId, out var parsedRunId))
+        {
+            throw new InvalidOperationException(
+                $"Cannot persist AgentHost claim '{claimName}' for run '{runId}': the run id does not " +
+                "parse as a RunId, so cross-replica credential-liveness reconciliation could never " +
+                "resolve this run's claim back from the shared run store.");
+        }
+
+        await _runStore.SetSandboxInfoAsync(
+            parsedRunId,
+            PodExecSandboxClient.ExecutorBackendName,
+            claimName,
+            podName: null,
+            @namespace: _options.Namespace,
+            ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -634,6 +684,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         if (_authorshipCapabilityStore is not null)
             await _authorshipCapabilityStore.RemoveAsync(runId, ct).ConfigureAwait(false);
         await DeletePreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
+        await RevokeRepositoryCredentialAsync(runId, ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: AgentHost pod released for run {RunId}", runId);
@@ -867,71 +918,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <summary>
-    /// Resolves the run owner's GitHub access token from the API-side token store so it can be
-    /// forwarded in the /configure body. The kata VM pod cannot reach Azure AD or Key Vault
-    /// (Cilium FQDN policies use eBPF interception that doesn't cross the guest kernel boundary).
-    /// Never throws — a lookup failure degrades gracefully: the pod will attempt the KV fetch itself
-    /// (which may fail) rather than causing a hard launch failure here.
-    /// </summary>
-    private async Task<string?> ResolveGitHubAccessTokenAsync(
-        GitHubTokenScope scope,
-        string userId,
-        CancellationToken ct)
-    {
-        // Prefer the refresh-aware provider (issue #523): a fresh AgentHost pod launched late in a
-        // long-running assembly (e.g. the Build & Test gate, well after the run's earlier subtask
-        // stages) can be handed a near-expiry or already-expired access token if we only ever read
-        // the raw stored entry — the pod's "fast path" trusts a pre-resolved token unconditionally
-        // and never re-validates it against Key Vault or GitHub. Routing through
-        // GetValidAccessTokenAsync mirrors GitHubCopilotClientFactory.CreateClientAsync and
-        // transparently rotates the token before it is handed to the pod.
-        if (_accessTokenProvider is not null)
-        {
-            try
-            {
-                var refreshed = await _accessTokenProvider.GetValidAccessTokenAsync(scope, ct)
-                    .ConfigureAwait(false);
-                if (string.IsNullOrEmpty(refreshed))
-                {
-                    _logger.LogWarning(
-                        "KubernetesSandboxExecutor: refresh-aware GitHub token provider returned no valid credential " +
-                        "for {UserId} (scope {Scope}); refusing raw-token fallback.",
-                        userId,
-                        scope.Key);
-                }
-                return refreshed;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogWarning(ex,
-                    "KubernetesSandboxExecutor: failed to resolve/refresh GitHub token for {UserId} via " +
-                    "IGitHubAccessTokenProvider (scope {Scope}); refusing raw-token fallback.",
-                    userId,
-                    scope.Key);
-                return null;
-            }
-        }
-
-        if (_tokenStore is null)
-            return null;
-
-        try
-        {
-            var entry = await _tokenStore.GetAsync(scope, ct).ConfigureAwait(false);
-            if (entry.Status == GitHubTokenStatus.SignedIn && !string.IsNullOrEmpty(entry.AccessToken))
-                return entry.AccessToken;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "KubernetesSandboxExecutor: failed to pre-resolve GitHub token for {UserId} — pod will fall back to KV.",
-                userId);
-        }
-
-        return null;
-    }
-
-    /// <summary>
     /// Injects the per-run context into an already-warm AgentHost pod via its one-time
     /// <c>POST /configure</c> endpoint. The pod then fetches ONLY <paramref name="kvUserSecretName"/>
     /// from Key Vault (its configured user's token) and runs SetupAsync. The endpoint is guarded by
@@ -941,7 +927,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// </summary>
     private async Task<string?> CallAgentHostConfigureAsync(
         string podIp, int port, string runId, string userId, string turnBearerToken,
-        string kvUserSecretName, GitHubTokenScope tokenScope, string? gitHubAccessToken,
+        GitHubCapabilitySnapshotCredential copilotCredential, string? repositoryAccessToken,
         string? sharedWorkingDirectory,
         AgentHostLaunchContext launchContext,
         string? projectId,
@@ -972,9 +958,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             runId,
             userId,
             turnBearerToken,
-            kvUserSecretName,
-            gitHubAccessToken,
+            copilotCredential,
+            repositoryAccessToken,
             callerBearerToken = launchContext.CallerBearerToken,
+            toolApprovalApiBaseUrl = _options.ToolApprovalApiBaseUrl,
             // Keep the legacy property during rolling upgrades; new AgentHosts prefer the explicit
             // sharedWorkingDirectory descriptor and create any local workspace inside the pod.
             workingDirectory = sharedWorkingDirectory,
@@ -1024,39 +1011,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             catch (JsonException)
             {
                 // Plain-text legacy errors keep the generic typed reason.
-            }
-
-            if (string.Equals(
-                    reason,
-                    "agenthost_configure_copilot_unauthorized",
-                    StringComparison.Ordinal) &&
-                _accessTokenProvider is not null)
-            {
-                var refreshed = await _accessTokenProvider
-                    .RefreshAfterUnauthorizedAsync(tokenScope, gitHubAccessToken, ct)
-                    .ConfigureAwait(false);
-                if (!string.IsNullOrWhiteSpace(refreshed) &&
-                    !string.Equals(refreshed, gitHubAccessToken, StringComparison.Ordinal))
-                {
-                    _logger.LogWarning(
-                        "KubernetesSandboxExecutor: AgentHost /configure rejected the Copilot credential for run {RunId}; " +
-                        "scope {Scope} was refreshed and the pod must be recreated (recoveryAttempt=1, maxRecoveryAttempts=1).",
-                        runId,
-                        tokenScope.Key);
-                    throw new AgentHostConfigureException(
-                        "agenthost_configure_copilot_token_refreshed",
-                        $"AgentHost /configure rejected the Copilot credential for run '{runId}'. " +
-                        "The credential was refreshed; recreate the one-time-configured pod and retry once.",
-                        (int)response.StatusCode,
-                        retryable: true,
-                        recoveryAction: "recreate_pod_with_refreshed_credential");
-                }
-
-                _logger.LogWarning(
-                    "KubernetesSandboxExecutor: AgentHost /configure rejected the Copilot credential for run {RunId}; " +
-                    "scope {Scope} could not produce a different refreshed credential, so the failure is not retryable.",
-                    runId,
-                    tokenScope.Key);
             }
 
             throw new AgentHostConfigureException(
@@ -1143,6 +1097,24 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             _logger.LogWarning(ex,
                 "KubernetesSandboxExecutor: failed to delete preview-runner credential for run {RunId} (best-effort)",
+                runId);
+        }
+    }
+
+    private async Task RevokeRepositoryCredentialAsync(string runId, CancellationToken ct)
+    {
+        if (_repositoryCredentials is null)
+            return;
+
+        try
+        {
+            await _repositoryCredentials.RevokeAsync(runId, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "KubernetesSandboxExecutor: failed to revoke repository credential for run {RunId}",
                 runId);
         }
     }
@@ -1360,11 +1332,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     {
         const int maxOutputBytes = 4 * 1024 * 1024;
 
-        var shellScript = BuildShellScript(command, podWorkingDirectory);
+        var execCommand = BuildExecCommand(command, podWorkingDirectory);
 
         var ws = await _client.WebSocketNamespacedPodExecAsync(
             podName, _options.Namespace,
-            new[] { "/bin/sh", "-c", shellScript },
+            execCommand,
             container: ContainerName,
             stdin: false, stdout: true, stderr: true, tty: false,
             cancellationToken: ct);
@@ -1503,6 +1475,33 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
         sb.Append(command.CommandLine);
         return sb.ToString();
+    }
+
+    private static string[] BuildExecCommand(SandboxCommand command, string podWorkingDirectory)
+    {
+        if (command.DirectExecution is not { } directExecution)
+            return ["/bin/sh", "-c", BuildShellScript(command, podWorkingDirectory)];
+
+        var environment = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (command.Environment is { Count: > 0 })
+        {
+            foreach (var (key, value) in command.Environment)
+                environment[key] = value;
+        }
+        if (directExecution.Environment is { Count: > 0 })
+        {
+            foreach (var (key, value) in directExecution.Environment)
+                environment[key] = value;
+        }
+
+        if (environment.Count == 0)
+            return [directExecution.Executable, .. directExecution.Arguments];
+
+        var execCommand = new List<string> { "/usr/bin/env", "-i", "PATH=/usr/local/bin:/usr/bin:/bin" };
+        execCommand.AddRange(environment.Select(pair => $"{pair.Key}={pair.Value}"));
+        execCommand.Add(directExecution.Executable);
+        execCommand.AddRange(directExecution.Arguments);
+        return [.. execCommand];
     }
 
     private static string ShellSingleQuote(string s) =>

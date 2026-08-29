@@ -51,7 +51,10 @@ public sealed class EfRunStore : IRunStore
             .Where(r => r.RunId == id)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, statusStr)
-                .SetProperty(r => r.EndedAt, endedAt), ct);
+                .SetProperty(r => r.EndedAt, endedAt)
+                .SetProperty(r => r.ApprovalGeneration,
+                    r => r.Status == RunStatus.InProgress.ToApiString() && statusStr != RunStatus.InProgress.ToApiString()
+                        ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
         WarnIfNoRows(rows, runId, $"update status to {statusStr}");
     }
 
@@ -65,7 +68,10 @@ public sealed class EfRunStore : IRunStore
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, statusStr)
                 .SetProperty(r => r.EndedAt, (DateTimeOffset?)endedAt)
-                .SetProperty(r => r.Result, result), ct);
+                .SetProperty(r => r.Result, result)
+                .SetProperty(r => r.ApprovalGeneration,
+                    r => r.Status == RunStatus.InProgress.ToApiString() && statusStr != RunStatus.InProgress.ToApiString()
+                        ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
         WarnIfNoRows(rows, runId, $"update result to {statusStr}");
     }
 
@@ -83,7 +89,9 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.TreeHash, treeHash)
                 .SetProperty(r => r.Diff, diff)
                 .SetProperty(r => r.Status, RunStatus.AwaitingReview.ToApiString())
-                .SetProperty(r => r.ReviewReadyAt, ts), ct);
+                .SetProperty(r => r.ReviewReadyAt, ts)
+                .SetProperty(r => r.ApprovalGeneration,
+                    r => r.Status == RunStatus.InProgress.ToApiString() ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
         WarnIfNoRows(rows, runId, "mark review ready");
     }
 
@@ -220,7 +228,9 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.TreeHash, treeHash)
                 .SetProperty(r => r.WorktreeBranch, worktreeBranch)
                 .SetProperty(r => r.Diff, diff)
-                .SetProperty(r => r.EndedAt, (DateTimeOffset?)endedAt), ct);
+                .SetProperty(r => r.EndedAt, (DateTimeOffset?)endedAt)
+                .SetProperty(r => r.ApprovalGeneration,
+                    r => r.Status == RunStatus.InProgress.ToApiString() ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
         return rows > 0;
     }
 
@@ -236,7 +246,9 @@ public sealed class EfRunStore : IRunStore
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, toStr)
                 .SetProperty(r => r.EndedAt, (DateTimeOffset?)endedAt)
-                .SetProperty(r => r.Result, result), ct);
+                .SetProperty(r => r.Result, result)
+                .SetProperty(r => r.ApprovalGeneration,
+                    r => r.Status == RunStatus.InProgress.ToApiString() ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
         WarnIfNoRows(rows, runId, $"set terminal status to {toStr}");
         return rows > 0;
     }
@@ -253,7 +265,8 @@ public sealed class EfRunStore : IRunStore
         var rows = await db.Runs
             .Where(r => r.RunId == id && r.Status == inProgressStr)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(r => r.Status, idleStr), ct);
+                .SetProperty(r => r.Status, idleStr)
+                .SetProperty(r => r.ApprovalGeneration, r => r.ApprovalGeneration + 1), ct);
         return rows > 0;
     }
 
@@ -457,6 +470,7 @@ public sealed class EfRunStore : IRunStore
         Task = r.Task,
         SubmittingUser = r.SubmittingUser,
         Status = r.Status.ToApiString(),
+        ApprovalGeneration = r.ApprovalGeneration,
         StartedAt = r.StartedAt,
         EndedAt = r.EndedAt,
         Result = r.Result,
@@ -494,6 +508,7 @@ public sealed class EfRunStore : IRunStore
         Task = r.Task,
         SubmittingUser = r.SubmittingUser,
         Status = RunStatusExtensions.ParseStatus(r.Status),
+        ApprovalGeneration = r.ApprovalGeneration,
         StartedAt = r.StartedAt,
         EndedAt = r.EndedAt,
         Result = r.Result,

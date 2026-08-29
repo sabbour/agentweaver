@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **102 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **106 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -25,7 +25,7 @@ All MCP tool failures surface a structured JSON message:
 }
 ```
 
-Common mappings include auth-first guidance (`github_signin` → `session_start`), resource-specific list/read hints for `404`s, review-state guidance for `409`s, and `diagnostics_get` retry guidance for timeouts.
+Common mappings include Agentweaver sign-in guidance for `401`s, resource-specific list/read hints for `404`s, review-state guidance for `409`s, and `diagnostics_get` retry guidance for timeouts.
 
 ## Backlog
 
@@ -85,11 +85,13 @@ Common mappings include auth-first guidance (`github_signin` → `session_start`
 
 | Tool | Description |
 | --- | --- |
-| `github_accounts_list` | List the current GitHub user account plus the GitHub org accounts reachable through the current GitHub authorization context. |
-| `github_repos_list` | List GitHub repositories for the current GitHub user or for one reachable org account. Omit account to list the authenticated user's repos; pass account to list that org's repos. |
-| `github_signin` | Sign in to GitHub using the device flow. Returns a user code and verification URL. The user must visit the URL and enter the code. Polls until authentication completes or times out. |
-| `github_signout` | Sign out of GitHub authentication. |
-| `github_status` | Check the current GitHub authentication status. |
+| `github_repo_app_authorization_status` | Poll the current human's Repo App browser authorization transaction. Returns only pending, completed, failed, or expired. |
+| `github_repo_app_connect` | Begin the current human's Repo App authorization. Returns an opaque transaction ID, a browser URL, and expiry. Open browser_url in a browser already signed in to Agentweaver as the initiating Entra user, then poll github_repo_app_authorization_status. No credential, OAuth state, or callback cookie is returned. |
+| `github_repo_app_disconnect` | Disconnect the current human's Repo App authorization. This de-privileges the current human and invalidates outstanding authorization transactions. |
+| `project_copilot_app_authorization_status` | Poll the initiating human's project-bound Copilot App browser authorization. Returns only pending, completed, failed, or expired. |
+| `project_copilot_app_connect` | Begin an Owner-authorized, project-bound Copilot App connection. Returns an opaque transaction ID, browser URL, and expiry. Open browser_url in a browser already signed in to Agentweaver as the initiating Entra user, then poll project_copilot_app_authorization_status. No credential, OAuth state, callback cookie, repository, installation, or permission data is returned. |
+| `project_copilot_app_disconnect` | Disconnect a project Copilot App binding. The backend allows this de-privileging operation only to an authorized human project Owner or platform administrator. |
+| `project_github_capability_status` | Get the server-derived, redacted unattended GitHub capability readiness for a project. No GitHub identities, credentials, installations, repositories, or permissions are returned. |
 
 ## Memory
 
@@ -117,8 +119,10 @@ Common mappings include auth-first guidance (`github_signin` → `session_start`
 
 | Tool | Description |
 | --- | --- |
+| `github_repository_selection_issue` | Mint a short-lived, single-use repository selection code for one full_name returned by github_repository_selections_list. Pass only the returned code to project_create; never pass a repository URL or identifier. |
+| `github_repository_selections_list` | List the signed-in caller's authorized GitHub repositories as bounded, redacted metadata. Choose one full_name from this result, then call github_repository_selection_issue before project_create with origin 'github'. |
 | `project_configure` | Configure the AI model provider settings for a project. |
-| `project_create` | Create a new Agentweaver project. When origin is 'github', source_repository is required. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
+| `project_create` | Create a new Agentweaver project. When origin is 'github', repository_selection_code is required; first use github_repository_selections_list and github_repository_selection_issue with the same caller. Supply blueprint_id to apply a predefined blueprint, or supply blueprint to apply an inline blueprint; the two options are mutually exclusive. |
 | `project_delete` | Delete a project by ID. |
 | `project_get` | Get a project by ID. |
 | `project_list` | List all Agentweaver projects. |
@@ -198,4 +202,3 @@ Common mappings include auth-first guidance (`github_signin` → `session_start`
 | `get_project_workspace_file` | Get the content of a file in a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace` | List the flat file tree for a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace_refs` | List the browsable git refs for a project workspace: the base branch and any active run worktrees. |
-

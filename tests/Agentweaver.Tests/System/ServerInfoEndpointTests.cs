@@ -34,21 +34,6 @@ public sealed class ServerInfoEndpointTests
     }
 
     [Fact]
-    public async Task GetServerInfo_InGitHubLegacyMode_IsAnonymousAndReportsGitHubLegacy()
-    {
-        using var factory = new ServerInfoWebApplicationFactory("GitHubLegacy");
-        using var client = factory.CreateClient();
-
-        var response = await client.GetAsync("/api/server/info");
-
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("auth_mode").GetString().Should().Be("github-legacy");
-        body.GetProperty("auth_mode_label").GetString().Should().Be("GitHub");
-        body.GetProperty("auth_mode_recommended").GetBoolean().Should().BeFalse();
-    }
-
-    [Fact]
     public async Task GetServerInfo_WithBogusBearerToken_StillSucceeds()
     {
         using var factory = new ServerInfoWebApplicationFactory("Entra");
