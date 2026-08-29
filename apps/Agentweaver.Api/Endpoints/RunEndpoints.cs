@@ -2245,6 +2245,12 @@ app.MapGet("/api/runs/{id}/files", async (
     if (run.Status is RunStatus.Pending or RunStatus.Failed)
         return Results.Json(Array.Empty<WorkspaceFileEntry>());
 
+    // Coordinator runs never own a worktree. Their collective output is available through
+    // /assembly/files once assembly begins, so the ordinary per-run artifact collection is
+    // legitimately empty while outcome planning and dispatch are in progress.
+    if (run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+        return Results.Json(Array.Empty<WorkspaceFileEntry>());
+
     bool isTerminal = run.Status is RunStatus.Merged or RunStatus.Declined or RunStatus.MergeFailed or RunStatus.Completed or RunStatus.AssembleReady;
 
     if (isTerminal)
@@ -2253,11 +2259,14 @@ app.MapGet("/api/runs/{id}/files", async (
         return Results.Json(entries);
     }
 
+    // Worktree provisioning is asynchronous. An active child can be visible before its sandbox
+    // has published the worktree location, which is a valid empty-artifact state rather than an
+    // API failure.
     if (string.IsNullOrEmpty(run.WorktreePath) || string.IsNullOrEmpty(run.WorktreeBranch))
-        return Results.Conflict(new { error = "Worktree not available." });
+        return Results.Json(Array.Empty<WorkspaceFileEntry>());
 
     if (!Directory.Exists(run.WorktreePath))
-        return Results.Conflict(new { error = "Worktree not available." });
+        return Results.Json(Array.Empty<WorkspaceFileEntry>());
 
     try
     {

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,7 +54,8 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
         RunStatus status = RunStatus.Pending,
         string? diff = null,
         string? worktreePath = null,
-        string? worktreeBranch = null)
+        string? worktreeBranch = null,
+        string? agentName = null)
     {
         var store = _factory.Services.GetRequiredService<SqliteRunStore>();
         var run = new Run
@@ -69,6 +71,7 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             Diff              = diff,
             WorktreePath      = worktreePath,
             WorktreeBranch    = worktreeBranch,
+            AgentName         = agentName,
         };
         await store.InsertAsync(run);
         if (diff is not null)
@@ -129,6 +132,34 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             "the response body must be a JSON array");
         parsed.RootElement.GetArrayLength().Should().Be(0,
             "a pending run with no worktree has no changed files");
+    }
+
+    [Fact]
+    public async Task InProgressRun_BeforeWorktreeProvisioning_Returns200WithEmptyArray()
+    {
+        var runId = await InsertOwnerRunAsync(RunStatus.InProgress);
+
+        var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=all");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "a visible run can legitimately precede asynchronous worktree provisioning");
+        var files = await response.Content.ReadFromJsonAsync<JsonElement>();
+        files.ValueKind.Should().Be(JsonValueKind.Array);
+        files.GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CoordinatorRun_Returns200WithEmptyArrayFromOrdinaryFilesEndpoint()
+    {
+        var runId = await InsertOwnerRunAsync(RunStatus.InProgress, agentName: "Coordinator");
+
+        var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=all");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "coordinator artifacts are collective and appear at /assembly/files, not in a coordinator worktree");
+        var files = await response.Content.ReadFromJsonAsync<JsonElement>();
+        files.ValueKind.Should().Be(JsonValueKind.Array);
+        files.GetArrayLength().Should().Be(0);
     }
 
     // =========================================================================

@@ -83,6 +83,28 @@ public sealed class CoordinatorAssemblyFilesTests : IDisposable
         body.GetProperty("diff").GetString().Should().Contain("feature contents");
     }
 
+    [Fact]
+    public async Task AssemblyFiles_BeforeIntegrationBranchExists_ReturnsEmptyArray()
+    {
+        var runId = RunId.New();
+        await InsertCoordinatorRunAsync(
+            runId,
+            _factory.NewWorkingDirectory(),
+            "main",
+            RunStatus.InProgress,
+            "unused",
+            string.Empty,
+            "planning");
+
+        var response = await _owner.GetAsync($"/api/runs/{runId}/assembly/files");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "assembly is not an error while planning or dispatch has not produced an integration branch");
+        var files = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+        files.Should().NotBeNull();
+        files.Should().BeEmpty();
+    }
+
     private async Task InsertCoordinatorRunAsync(
         RunId runId,
         string repoPath,
