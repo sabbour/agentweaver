@@ -168,7 +168,7 @@ public sealed class SkillMarketplaceCatalogTests
             ProjectRef.Id, "github", "marketplace", "main", query: null, page: 1, pageSize: 25, Caller, CancellationToken.None);
 
         outcome.Should().Be(SkillOutcome.GitHubConnectionRequired);
-        error.Should().Be(SkillCatalogService.MarketplaceGitHubConnectionRequiredMessage);
+        error.Should().Be(GitHubCopilotConnectionRequirement.RequirementMessage);
         page.Should().BeNull();
         classifier.Invocations.Should().Be(0, "no capability must never dispatch a model turn");
     }

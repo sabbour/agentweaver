@@ -1,6 +1,11 @@
 import './shell.css';
 import { ProjectListProvider } from '../../hooks/useProjectList';
 import { StartOrchestrationFab } from '../StartOrchestrationFab';
+import { GitHubCopilotConnectionRequiredAction } from '../GitHubCopilotConnectionRequiredAction';
+import {
+  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+  isGitHubCopilotConnectionRequirement,
+} from '../../api/githubConnectionRequirement';
 import { LeftNav } from './LeftNav';
 import { NotificationsProvider } from '../../notifications/NotificationsProvider';
 import { resolveActiveKey } from './navConfig';
@@ -9,6 +14,7 @@ import { clearLastActiveProjectId, getLastActiveProjectId, setLastActiveProjectI
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
+import type { GitHubCopilotConnectionRequirement } from '../../api/githubConnectionRequirement';
 // Spec 011 — the persistent navigation shell (FR-001). Native FluentUI rebuild:
 // a full-height flex row [left rail | main canvas]. The canvas hosts a lighter
 // rounded floating panel (Copilot "content floats on the sidebar" look). No
@@ -21,6 +27,17 @@ export interface AppShellProps {
 
 export function AppShell({ children, banner }: AppShellProps) {
   const location = useLocation();
+  const [connectionRequirement, setConnectionRequirement] =
+    useState<GitHubCopilotConnectionRequirement | null>(null);
+
+  useEffect(() => {
+    const showConnectionRequirement = (event: Event) => {
+      if (event instanceof CustomEvent && isGitHubCopilotConnectionRequirement(event.detail))
+        setConnectionRequirement(event.detail);
+    };
+    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, showConnectionRequirement);
+    return () => window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, showConnectionRequirement);
+  }, []);
 
   // The project id actually present in the route (undefined on global pages).
   const routeProjectId = useMemo(
@@ -86,6 +103,12 @@ export function AppShell({ children, banner }: AppShellProps) {
                 <StartOrchestrationFab currentProjectId={effectiveProjectId} />
               </div>
               <div className="aw-shell-scroll">
+                {connectionRequirement && (
+                  <GitHubCopilotConnectionRequiredAction
+                    requirement={connectionRequirement}
+                    onDismiss={() => setConnectionRequirement(null)}
+                  />
+                )}
                 {banner}
                 {children}
               </div>

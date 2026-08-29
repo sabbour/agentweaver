@@ -1,4 +1,8 @@
 import { AgentweaverApiClient, ApiError } from '../client';
+import {
+  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+  GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
+} from '../githubConnectionRequirement';
 import type { SkillProvenance } from '../types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -117,6 +121,45 @@ describe('AgentweaverApiClient keepalive', () => {
     const error = new ApiError(422, JSON.stringify(payload));
 
     expect(error.payload).toEqual(payload);
+  });
+
+  it('broadcasts the shared Copilot connection action for every typed requirement response', async () => {
+    const requirement = {
+      code: 'github_copilot_connection_required',
+      message: GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
+      action: { type: 'connect_project_copilot_app', project_id: 'project-1' },
+    };
+    const received = vi.fn();
+    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify(requirement),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await expect(client.getProject('project-1')).rejects.toMatchObject({ status: 401, payload: requirement });
+
+    expect(received).toHaveBeenCalledTimes(1);
+    expect((received.mock.calls[0]![0] as CustomEvent).detail).toEqual(requirement);
+    window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+  });
+
+  it('does not broadcast a connection action for an untyped 401 response', async () => {
+    const received = vi.fn();
+    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify({ error: 'Unauthorized.' }),
+    }));
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await expect(client.getProject('project-1')).rejects.toMatchObject({ status: 401 });
+
+    expect(received).not.toHaveBeenCalled();
+    window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
   });
 });
 
