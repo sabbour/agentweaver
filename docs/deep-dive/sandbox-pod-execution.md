@@ -208,14 +208,14 @@ Within that structure:
   is not merely hidden but **absent from the namespace**;
 - the child environment is cleared and rebuilt from a minimal baseline plus explicitly supplied
   values; and
-- the sidecar runs a real bwrap capability probe **before it binds its socket** — if bubblewrap
+- the sidecar runs a real bwrap capability probe **before it binds its transport endpoint** — if bubblewrap
   cannot build the mount namespace the daemon exits and the container never serves, so there is no
   window in which a command could run unisolated; and
-- AgentHost runs a **one-shot startup probe** against that socket and refuses to start unless the
+- AgentHost runs a **one-shot startup probe** against that endpoint and refuses to start unless the
   sidecar answers, proving it is reachable, isolated (the probe re-runs the bwrap capability check
   server-side on every request), and in a *different* PID namespace than AgentHost. It is a startup
   gate, not a periodic health check: afterwards each individual command still fails closed with exit
-  126 if the socket ever stops answering. There is no passthrough fallback in Kata mode.
+  126 if the endpoint ever stops answering. There is no passthrough fallback in Kata mode.
 
 #### Why a sidecar and not a nested PID namespace
 
@@ -237,12 +237,16 @@ runtime creates the PID namespace and the matching procfs itself — no capabili
 host namespace. Bubblewrap keeps doing the per-run mount scoping it *can* still do, with
 `--bind /proc /proc` and no PID claim it cannot back.
 
-The AgentHost↔sidecar channel is a Unix domain socket on a pod-private `emptyDir` mounted into only
-those two containers, never bound into a sandboxed child's mount namespace, and guarded by a 32-byte
-token written mode-0600 next to it and compared in constant time. Long-lived preview processes are
-supervised by a relay child of AgentHost that holds the connection: if the relay or AgentHost dies,
-the sidecar sees the disconnect and terminates the sandboxed process group, preserving
-die-with-parent semantics across the container boundary.
+The AgentHost↔sidecar channel is selected by the pod manifest. Existing non-Kata deployments retain
+the Unix domain socket on a pod-private `emptyDir`; Kata uses TCP bound *only* to `127.0.0.1:18081`
+because its runtime cannot connect to an AF_UNIX listener across containers even when its inode is
+visible on the shared `emptyDir` (#1008). The TCP listener is neither a container port nor exposed
+by a Service, host port, or NetworkPolicy. Both transports require the same random 32-byte token,
+written mode-0600 in the pod-private `emptyDir`, and compare it in constant time; that directory is
+never bound into a sandboxed child's mount namespace. Long-lived preview processes are supervised by
+a relay child of AgentHost that holds the connection: if the relay or AgentHost dies, the sidecar
+sees the disconnect and terminates the sandboxed process group, preserving die-with-parent semantics
+across the container boundary.
 
 `ShellCommandValidator` and `SharedWorkspacePathGuard` remain compounding controls, but the security
 claim for #476 no longer depends on command text.

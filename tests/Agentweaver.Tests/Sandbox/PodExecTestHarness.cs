@@ -3,9 +3,9 @@ using Agentweaver.SandboxExec.PodExec;
 namespace Agentweaver.Tests.Sandbox;
 
 /// <summary>
-/// Starts a real <see cref="PodExecServer"/> over a temporary Unix domain socket so tests exercise
-/// the same NDJSON protocol, token check, and bubblewrap boundary the executor sidecar uses in the
-/// pod. Nothing here is a stub: only the container boundary (which the pod spec provides) is absent,
+/// Starts a real <see cref="PodExecServer"/> over the selected local transport so tests exercise the
+/// same NDJSON protocol, token check, and bubblewrap boundary the executor sidecar uses in the pod.
+/// Nothing here is a stub: only the container boundary (which the pod spec provides) is absent,
 /// which is exactly why the server's own probe reports a shared PID namespace in-process.
 /// </summary>
 internal sealed class PodExecTestHarness : IAsyncDisposable
@@ -22,8 +22,17 @@ internal sealed class PodExecTestHarness : IAsyncDisposable
     }
 
     public string SocketPath { get; }
+    public PodExecTransport Transport => _server.Transport;
+    public int TcpPort => _server.TcpPort;
+    public int ActiveConnectionCount => _server.ActiveConnectionCount;
 
-    public static PodExecTestHarness StartServer(string root)
+    public static PodExecTestHarness StartServer(
+        string root,
+        PodExecTransport transport = PodExecTransport.UnixDomainSocket,
+        int? tcpPort = null,
+        int maxConcurrentConnections = 16,
+        TimeSpan? initialRequestTimeout = null,
+        int maxRequestFrameBytes = 128 * 1024)
     {
         // AF_UNIX paths are capped at ~108 bytes, so keep the directory short and outside the
         // per-test workspace tree.
@@ -32,7 +41,14 @@ internal sealed class PodExecTestHarness : IAsyncDisposable
             $"awx-{Guid.NewGuid().ToString("n")[..8]}");
         Directory.CreateDirectory(socketDirectory);
         var socketPath = Path.Combine(socketDirectory, PodExecEndpoint.SocketFileName);
-        var server = new PodExecServer(socketPath);
+        var server = new PodExecServer(
+            socketPath,
+            logger: null,
+            transport,
+            tcpPort,
+            maxConcurrentConnections,
+            initialRequestTimeout ?? TimeSpan.FromSeconds(5),
+            maxRequestFrameBytes);
         server.Start();
         return new PodExecTestHarness(server, socketPath);
     }
