@@ -30,6 +30,7 @@ public enum SkillOutcome
     NotFound,
     Invalid,
     SourceUnavailable,
+    GitHubConnectionRequired,
 }
 
 /// <summary>Per-skill outcome of an acquisition (import/sync/upload) operation.</summary>
@@ -149,6 +150,10 @@ public sealed class SkillCatalogService
     /// <summary>Message surfaced when a curated marketplace source is unreachable or misconfigured.</summary>
     internal const string MarketplaceUnavailableMessage =
         "Could not reach the marketplace source. Check network/GitHub access and try again.";
+
+    /// <summary>Message returned when a non-run Copilot classifier needs an explicit GitHub capability.</summary>
+    internal const string MarketplaceGitHubConnectionRequiredMessage =
+        "Connect a GitHub account with GitHub Copilot access to classify this marketplace source, then try again.";
 
     /// <summary>Hard ceiling on how long a marketplace browse/import may spend fetching from GitHub.</summary>
     private static readonly TimeSpan MarketplaceFetchTimeout = TimeSpan.FromSeconds(60);
@@ -614,11 +619,15 @@ public sealed class SkillCatalogService
                 branch,
                 blobs,
                 // Auto-browse has no associated run or explicitly issued Copilot capability. It must
-                // remain on the deterministic SKILL.md/empty path rather than use caller identity.
+                // not use caller identity; if model classification is needed, the indexer returns a
+                // user-facing connection requirement.
                 capabilityRunId: null,
                 parseStrategy: parseStrategy,
                 cts.Token,
                 projectId: project.Id).ConfigureAwait(false);
+
+            if (index.RequiresGitHubConnection)
+                return (SkillOutcome.GitHubConnectionRequired, MarketplaceGitHubConnectionRequiredMessage, null);
 
             if (index.Entries.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);

@@ -276,12 +276,22 @@ public static class SkillEndpoints
             var page = body?.Page ?? 1;
             var pageSize = body?.PageSize ?? SkillCatalogService.DefaultMarketplacePageSize;
 
-            // A URL source with no configured subpath auto-detects its layout (heuristic + LLM fallback);
-            // config definitions keep the existing hardcoded-subpath browse path unchanged.
+            // A URL source with no configured subpath auto-detects its layout (heuristic, then a
+            // capability-gated LLM classifier); config definitions keep the existing hardcoded-subpath
+            // browse path unchanged.
             var (outcome, error, result) = source.IsAuto
                 ? await svc.BrowseMarketplaceAutoAsync(projectId, source.Owner, source.Repo, source.Branch, body?.Query, page, pageSize, caller, ct, source.ParseStrategy)
                 : await svc.BrowseMarketplaceAsync(projectId, source.Owner, source.Repo, source.Branch, source.Subpath!, body?.Query, page, pageSize, caller, ct);
-            if (outcome != SkillOutcome.Ok) return outcome == SkillOutcome.NotFound ? Results.NotFound() : Results.UnprocessableEntity(new { error });
+            if (outcome != SkillOutcome.Ok)
+            {
+                return outcome switch
+                {
+                    SkillOutcome.NotFound => Results.NotFound(),
+                    SkillOutcome.GitHubConnectionRequired =>
+                        Results.Json(new { error }, statusCode: StatusCodes.Status401Unauthorized),
+                    _ => Results.UnprocessableEntity(new { error }),
+                };
+            }
             return Results.Ok(new
             {
                 marketplace = source.Name,
