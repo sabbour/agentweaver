@@ -231,9 +231,9 @@ PVC: agentweaver-workspace (Azure Files, RWX)
 
 ### EF Core migrations
 
-On startup, the API runs schema migrations via an **init container** (`migrate-memory-db`) that executes the EF bundle (`/app/efbundle`) against the Postgres connection string. This runs before the main API container starts, ensuring the schema is always current before the application accepts traffic.
+On startup, the API and worker run schema migrations via their **init containers** (`migrate-memory-db`). They execute the EF bundle as `/app/efbundle --verbose -- --postgres-migrations`, which selects the Postgres migrations assembly and reads the production connection string from the injected configuration. This runs before the main container starts, ensuring the schema is always current before the application accepts traffic.
 
-The init container uses the same image as the API (`agentweaver-api:${IMAGE_TAG}`) and reads `ConnectionStrings__MemoryDb` + `ConnectionStrings__Postgres` from the `agentweaver-postgres` Secret.
+The init container uses the same image as the API (`agentweaver-api:${IMAGE_TAG}`) and reads `ConnectionStrings__MemoryDb` + `ConnectionStrings__Postgres` from the `agentweaver-postgres` Secret. No connection string is embedded in the image or manifest. Local design-time commands remain SQLite by default; use `--postgres-migrations` only when a Postgres connection string is supplied through configuration, environment variables, or Development user secrets.
 
 ### Ephemeral storage for testing
 
