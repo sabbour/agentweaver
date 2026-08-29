@@ -157,6 +157,7 @@ internal sealed class RepoAppCredentialLease(
 /// </remarks>
 public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? projectStore = null)
 {
+    private const int MarketplaceCapabilityCleanupBatchSize = 100;
     private static readonly Regex CredentialPattern = new(
         @"(?:gh[ups]_|github_pat_|-----BEGIN [A-Z ]+-----|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1077,6 +1078,21 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
         return capability;
     }
 
+    internal Task<bool> HasActiveMarketplaceCopilotBindingAsync(
+        string projectId,
+        string entraObjectId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(entraObjectId))
+            return Task.FromResult(false);
+
+        return db.ProjectCopilotBindings.AsNoTracking().AnyAsync(x =>
+            x.ProjectId == projectId &&
+            x.EntraObjectId == entraObjectId &&
+            x.Status == GitHubBindingStatus.Active &&
+            x.DeactivatedAt == null, ct);
+    }
+
     /// <summary>
     /// Atomically consumes an unexpired caller- and project-bound marketplace capability. The
     /// broker re-fences its exact Copilot binding after the vault read before exposing a credential.
@@ -1123,6 +1139,47 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             CredentialLocator = TwoAppCredentialLocator.ForCopilotProject(capability.CredentialReference),
         };
     }
+
+    /// <summary>
+    /// Deletes a bounded set of expired marketplace capabilities. Claimed records are deleted by the
+    /// broker after their terminal outcome; excluding live claims prevents cleanup racing redemption.
+    /// </summary>
+    internal async Task<int> PruneMarketplaceCopilotCapabilitiesAsync(
+        DateTimeOffset now,
+        CancellationToken ct = default)
+    {
+        // DateTimeOffset comparisons are not translatable by the SQLite provider. The parameterized
+        // statement below is portable to SQLite and PostgreSQL and limits every maintenance pass.
+        return await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+             DELETE FROM marketplace_copilot_capabilities
+             WHERE capability_ref IN (
+                 SELECT capability_ref
+                 FROM marketplace_copilot_capabilities
+                 WHERE expires_at <= {now}
+                 ORDER BY expires_at, capability_ref
+                 LIMIT {MarketplaceCapabilityCleanupBatchSize}
+             )
+             """,
+            ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes a capability once its claim has reached a terminal broker outcome. The compare-and-delete
+    /// predicate preserves caller/project fencing and cannot remove an unclaimed live capability.
+    /// </summary>
+    internal Task<int> DeleteClaimedMarketplaceCopilotCapabilityAsync(
+        SnapshotRef capabilityReference,
+        string projectId,
+        string entraObjectId,
+        CancellationToken ct = default) =>
+        db.MarketplaceCopilotCapabilities
+            .Where(x => x.CapabilityRef == capabilityReference.Value &&
+                        x.ProjectId == projectId &&
+                        x.EntraObjectId == entraObjectId &&
+                        x.ConsumedAt != null)
+            .ExecuteDeleteAsync(ct);
 
     internal Task<bool> IsClaimedMarketplaceCopilotCapabilityLiveAsync(
         FencedMarketplaceCopilotCapability capability,
