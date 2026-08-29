@@ -10,6 +10,15 @@ The A2A turn endpoint has a separate per-run bearer token. `KubernetesSandboxExe
 
 The warm AgentHost pool starts with no run identity or GitHub credential. The executor claims a pod, requires a live credential for that exact run, and sends the opaque snapshot reference, token, and expiry in memory. `AgentHostGitHubCapabilityCredentialProvider` permits the runtime to use that value only if its run ID matches the configured run and it remains unexpired. Missing, revoked, mismatched, and expired credentials fail closed. Credentials must never be logged or persisted.
 
+## Classifier capability requirement
+
+Copilot-backed classifiers use the same explicit run-bound Copilot capability. A connected GitHub
+identity or installation scope is not classifier authorization. Classifiers with no associated,
+explicitly issued capability do not create an `unbound` run or consult ambient credentials: they
+return unavailable and their callers use the documented deterministic fallback. For example,
+marketplace auto-browse remains on SKILL.md discovery (or an empty catalog) unless a trusted caller
+supplies an explicit capability.
+
 ## `/configure` request body
 
 | Field | Required | Meaning |
