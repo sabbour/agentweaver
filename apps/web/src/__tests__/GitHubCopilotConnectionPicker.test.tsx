@@ -1,7 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { GitHubCopilotConnectionPicker } from '../components/GitHubCopilotConnectionPicker';
 import { AzureFluentProvider } from '../copilot-fluent-system';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -27,6 +27,38 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('GitHubCopilotConnectionPicker', () => {
+  it('keeps the new project connection when route navigation finishes an older request late', async () => {
+    let resolveOldConnection: (connection: { status: 'connected'; github_login: string }) => void;
+    const oldConnection = new Promise<{ status: 'connected'; github_login: string }>((resolve) => {
+      resolveOldConnection = resolve;
+    });
+    vi.mocked(apiClient.getProjectCopilotConnection)
+      .mockImplementationOnce(() => oldConnection)
+      .mockResolvedValueOnce({ status: 'connected', github_login: 'project-b' });
+
+    const { rerender } = render(
+      <Wrapper>
+        <GitHubCopilotConnectionPicker projectId="project-a" showConnectionStatus />
+      </Wrapper>,
+    );
+    await waitFor(() => expect(apiClient.getProjectCopilotConnection).toHaveBeenCalledWith('project-a'));
+
+    rerender(
+      <Wrapper>
+        <GitHubCopilotConnectionPicker projectId="project-b" showConnectionStatus />
+      </Wrapper>,
+    );
+    expect(await screen.findByText('GitHub Copilot is connected as @project-b.')).toBeDefined();
+
+    await act(async () => {
+      resolveOldConnection!({ status: 'connected', github_login: 'project-a' });
+      await oldConnection;
+    });
+
+    expect(screen.getByText('GitHub Copilot is connected as @project-b.')).toBeDefined();
+    expect(screen.queryByText('GitHub Copilot is connected as @project-a.')).toBeNull();
+  });
+
   it('shows an explicit, accessible connection picker when no account is connected', async () => {
     render(
       <Wrapper>

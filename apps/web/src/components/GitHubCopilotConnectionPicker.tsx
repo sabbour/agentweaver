@@ -11,7 +11,7 @@ import {
   MessageBarBody,
   Spinner,
 } from '@fluentui/react-components';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectCopilotConnection } from '../api/types';
 
 const CONNECTION_LOAD_ERROR = 'Could not load this project’s GitHub Copilot connection. Refresh and try again.';
@@ -31,23 +31,36 @@ export function GitHubCopilotConnectionPicker({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const refreshGeneration = useRef(0);
 
   const refreshConnection = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     setLoading(true);
     setLoadError(null);
     try {
       const nextConnection = await apiClient.getProjectCopilotConnection(projectId);
+      if (generation !== refreshGeneration.current) return;
       setConnection(nextConnection);
     } catch {
+      if (generation !== refreshGeneration.current) return;
       setConnection(null);
       setLoadError(CONNECTION_LOAD_ERROR);
     } finally {
-      setLoading(false);
+      if (generation === refreshGeneration.current) setLoading(false);
     }
   }, [projectId]);
 
   useEffect(() => {
-    if (showConnectionStatus || open) queueMicrotask(() => { void refreshConnection(); });
+    let cancelled = false;
+    if (showConnectionStatus || open) {
+      queueMicrotask(() => {
+        if (!cancelled) void refreshConnection();
+      });
+    }
+    return () => {
+      cancelled = true;
+      refreshGeneration.current += 1;
+    };
   }, [open, refreshConnection, showConnectionStatus]);
 
   const connect = async () => {
