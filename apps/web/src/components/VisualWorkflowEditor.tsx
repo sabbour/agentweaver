@@ -89,7 +89,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentType } from 'react';
 import type { GraphNodeType, WorkflowDetailDto } from '../api/types';
-import type { WfModel, WfNode } from '../utils/workflowYaml';
+import type { WfEdge, WfModel, WfNode } from '../utils/workflowYaml';
 import type { WorkflowNodeData } from './WorkflowGraphPanel';
 import type { Connection, Edge, Node, NodeChange, OnSelectionChangeParams } from '@xyflow/react';
 // US8 — visual execution-graph workflow editor. Extends the read-only ReactFlow
@@ -218,6 +218,34 @@ const NODE_TYPE_META: Record<string, { Icon: ComponentType; description: string;
 function gateKey(node: WfNode): string | null {
   if (node.type === 'build_test') return 'build-test';
   if (node.type === 'check' && node.gate_kind) return node.gate_kind;
+  return null;
+}
+
+interface EdgeSelection extends WfEdge {
+  occurrence: number;
+}
+
+function sameEdge(left: WfEdge, right: WfEdge): boolean {
+  return left.from === right.from && left.to === right.to && left.when === right.when;
+}
+
+function edgeSelectionAt(edges: WfEdge[], index: number): EdgeSelection | null {
+  const edge = edges[index];
+  if (!edge) return null;
+  const occurrence = edges
+    .slice(0, index)
+    .filter((candidate) => sameEdge(candidate, edge))
+    .length;
+  return { ...edge, occurrence };
+}
+
+function edgeIndexForSelection(edges: WfEdge[], selection: EdgeSelection): number | null {
+  let occurrence = 0;
+  for (const [index, edge] of edges.entries()) {
+    if (!sameEdge(edge, selection)) continue;
+    if (occurrence === selection.occurrence) return index;
+    occurrence += 1;
+  }
   return null;
 }
 
@@ -509,7 +537,7 @@ export function VisualWorkflowEditor({
   const [parseError, setParseError] = useState<string | null>(null);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [selectedEdgeIndex, setSelectedEdgeIndex] = useState<number | null>(null);
+  const [selectedEdgeSelection, setSelectedEdgeSelection] = useState<EdgeSelection | null>(null);
   const [rightMode, setRightMode] = useState<'inspector' | 'yaml'>('inspector');
   const [scheduleOpen, setScheduleOpen] = useState(false);
 
@@ -520,7 +548,7 @@ export function VisualWorkflowEditor({
   // React Flow owns visual selection, but the inspector needs a stable semantic
   // selection while YAML-derived node and edge objects are replaced.
   const selectedNodeIdRef = useRef(selectedNodeId);
-  const selectedEdgeIndexRef = useRef(selectedEdgeIndex);
+  const selectedEdgeSelectionRef = useRef(selectedEdgeSelection);
   const isDirty = yamlText !== initialYaml;
   const isDirtyRef = useRef(isDirty);
   useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
@@ -539,16 +567,19 @@ export function VisualWorkflowEditor({
       if (parsed) {
         const selectedNodeStillExists = !selectedNodeIdRef.current
           || parsed.nodes.some((node) => node.id === selectedNodeIdRef.current);
-        const selectedEdgeStillExists = selectedEdgeIndexRef.current == null
-          || parsed.edges[selectedEdgeIndexRef.current] != null;
+        const selectedEdgeIndex = selectedEdgeSelectionRef.current
+          ? edgeIndexForSelection(parsed.edges, selectedEdgeSelectionRef.current)
+          : null;
+        const selectedEdgeStillExists = selectedEdgeSelectionRef.current == null
+          || selectedEdgeIndex != null;
 
         if (!selectedNodeStillExists) {
           selectedNodeIdRef.current = null;
           setSelectedNodeId(null);
         }
         if (!selectedEdgeStillExists) {
-          selectedEdgeIndexRef.current = null;
-          setSelectedEdgeIndex(null);
+          selectedEdgeSelectionRef.current = null;
+          setSelectedEdgeSelection(null);
         }
 
         setModel(parsed);
@@ -556,7 +587,7 @@ export function VisualWorkflowEditor({
           parsed,
           positionsRef.current,
           selectedNodeIdRef.current,
-          selectedEdgeIndexRef.current,
+          selectedEdgeIndex,
         );
         setNodes(rfNodes);
         setEdges(rfEdges);
@@ -592,12 +623,14 @@ export function VisualWorkflowEditor({
   const onSelectionChange = useCallback((params: OnSelectionChangeParams) => {
     const nodeId = params.nodes[0]?.id ?? null;
     const idx = (params.edges[0]?.data as { index?: number } | undefined)?.index;
-    const edgeIndex = typeof idx === 'number' ? idx : null;
+    const edgeSelection = typeof idx === 'number' && model
+      ? edgeSelectionAt(model.edges, idx)
+      : null;
     selectedNodeIdRef.current = nodeId;
-    selectedEdgeIndexRef.current = edgeIndex;
+    selectedEdgeSelectionRef.current = edgeSelection;
     setSelectedNodeId(nodeId);
-    setSelectedEdgeIndex(edgeIndex);
-  }, []);
+    setSelectedEdgeSelection(edgeSelection);
+  }, [model]);
 
   const handleAddNode = useCallback((type: string) => {
     setYamlText((t) => {
@@ -606,9 +639,9 @@ export function VisualWorkflowEditor({
       let id = `${type}-${i}`;
       while (existing.has(id)) { i += 1; id = `${type}-${i}`; }
       selectedNodeIdRef.current = id;
-      selectedEdgeIndexRef.current = null;
+      selectedEdgeSelectionRef.current = null;
       setSelectedNodeId(id);
-      setSelectedEdgeIndex(null);
+      setSelectedEdgeSelection(null);
       setRightMode('inspector');
       return addNode(t, { id, type });
     });
@@ -621,9 +654,9 @@ export function VisualWorkflowEditor({
       let id = `${gate.key}-${i}`;
       while (existing.has(id)) { i += 1; id = `${gate.key}-${i}`; }
       selectedNodeIdRef.current = id;
-      selectedEdgeIndexRef.current = null;
+      selectedEdgeSelectionRef.current = null;
       setSelectedNodeId(id);
-      setSelectedEdgeIndex(null);
+      setSelectedEdgeSelection(null);
       setRightMode('inspector');
       return addNode(t, {
         id,
@@ -641,6 +674,12 @@ export function VisualWorkflowEditor({
   const selectedNode = useMemo(
     () => model?.nodes.find((n) => n.id === selectedNodeId) ?? null,
     [model, selectedNodeId],
+  );
+  const selectedEdgeIndex = useMemo(
+    () => model && selectedEdgeSelection
+      ? edgeIndexForSelection(model.edges, selectedEdgeSelection)
+      : null,
+    [model, selectedEdgeSelection],
   );
   const selectedEdge = useMemo(
     () => (selectedEdgeIndex != null ? model?.edges[selectedEdgeIndex] ?? null : null),
@@ -685,19 +724,29 @@ export function VisualWorkflowEditor({
     const id = selectedNodeId;
     positionsRef.current.delete(id);
     selectedNodeIdRef.current = null;
+    selectedEdgeSelectionRef.current = null;
     setSelectedNodeId(null);
+    setSelectedEdgeSelection(null);
     setYamlText((t) => removeNode(t, id));
   }, [selectedNodeId]);
 
   const handleEdgeField = useCallback((index: number, field: string, value: string) => {
+    const edge = model?.edges[index];
+    if (edge && field === 'when') {
+      const updatedEdges = [...model.edges];
+      updatedEdges[index] = { ...edge, when: value || undefined };
+      const selection = edgeSelectionAt(updatedEdges, index);
+      selectedEdgeSelectionRef.current = selection;
+      setSelectedEdgeSelection(selection);
+    }
     setYamlText((t) => setEdgeFieldAt(t, index, field, value));
-  }, []);
+  }, [model]);
 
   const handleDeleteSelectedEdge = useCallback(() => {
     if (selectedEdgeIndex == null) return;
     const idx = selectedEdgeIndex;
-    selectedEdgeIndexRef.current = null;
-    setSelectedEdgeIndex(null);
+    selectedEdgeSelectionRef.current = null;
+    setSelectedEdgeSelection(null);
     setYamlText((t) => removeEdgeAt(t, idx));
   }, [selectedEdgeIndex]);
 
