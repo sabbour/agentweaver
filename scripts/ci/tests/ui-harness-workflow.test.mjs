@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { TEST_SHARDS } from "../dotnet-test-shards.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WORKFLOW = (await readFile(path.join(HERE, "..", "..", "..", ".github", "workflows", "ci.yml"), "utf8"))
@@ -62,7 +63,10 @@ test(".NET tests run as stable independent shards", () => {
   const jobs = workflowSection("  dotnet-test-plan:\n", "\n  node-toolchain-tests:\n");
   const dotnetFilter = workflowSection("            dotnet:\n", "            web:\n");
 
-  assert.match(jobs, /if: needs\.changes\.outputs\.dotnet == 'true'/);
+  assert.match(
+    jobs,
+    /if: \(github\.event_name == 'pull_request' && github\.base_ref == 'dev'\) \|\| needs\.changes\.outputs\.dotnet == 'true'/,
+  );
   assert.doesNotMatch(
     jobs,
     /github\.event\.pull_request\.draft/,
@@ -77,4 +81,53 @@ test(".NET tests run as stable independent shards", () => {
   assert.match(jobs, /name: \.NET tests/);
   assert.match(jobs, /--logger "trx;LogFileName=\$\{\{ matrix\.id \}\}\.trx"/);
   assert.doesNotMatch(jobs, /Run full \.NET test suite/);
+});
+
+test("every dev PR produces the seven required .NET shard contexts", () => {
+  const requiredContexts = [
+    ".NET test shard (orchestration)",
+    ".NET test shard (application and authorization)",
+    ".NET test shard (runtime and sandbox)",
+    ".NET test shard (catalog and integrations)",
+    ".NET test shard (PostgreSQL Testcontainers)",
+    ".NET test shard (process-global environment)",
+    ".NET test shard (Kata runtime)",
+  ];
+  const jobs = workflowSection("  dotnet-test-plan:\n", "\n  node-toolchain-tests:\n");
+
+  assert.deepEqual(
+    TEST_SHARDS.map(({ name }) => `.NET test shard (${name})`),
+    requiredContexts,
+    "the unchanged matrix must exactly match the dev ruleset contexts",
+  );
+  assert.match(
+    jobs,
+    /if: \(github\.event_name == 'pull_request' && github\.base_ref == 'dev'\) \|\| needs\.changes\.outputs\.dotnet == 'true'/,
+    "the matrix plan must run for every dev PR, not just .NET path changes",
+  );
+  assert.match(
+    jobs,
+    /dotnet-test-shards:\n\s+name: \.NET test shard \(\$\{\{ matrix\.name \}\}\)\n\s+needs: dotnet-test-plan\n\s+if: needs\.dotnet-test-plan\.result == 'success'/,
+    "each rendered context must run the real shard job after a successful plan",
+  );
+  assert.match(jobs, /dotnet test tests\/Agentweaver\.Tests\/Agentweaver\.Tests\.csproj/);
+});
+
+test("source, metadata-only, and draft dev PRs all run the real shard matrix", () => {
+  const matrixRuns = ({ eventName, baseRef, dotnetChanged }) => (
+    (eventName === "pull_request" && baseRef === "dev") || dotnetChanged
+  );
+  const devPrScenarios = [
+    { name: ".NET source", eventName: "pull_request", baseRef: "dev", dotnetChanged: true },
+    { name: "docs/metadata-only", eventName: "pull_request", baseRef: "dev", dotnetChanged: false },
+    { name: "draft", eventName: "pull_request", baseRef: "dev", dotnetChanged: false, draft: true },
+  ];
+
+  for (const scenario of devPrScenarios) {
+    assert.equal(
+      matrixRuns(scenario),
+      true,
+      `${scenario.name} dev PR must execute all required .NET shard jobs`,
+    );
+  }
 });

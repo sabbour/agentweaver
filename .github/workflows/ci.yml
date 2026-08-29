@@ -11,15 +11,16 @@ name: CI
 #   - node scripts/ci/validate.mjs --profile ci --area web
 #   - node scripts/ci/validate.mjs --profile ci --area docs
 # .NET tests are split by stable product namespaces and explicit isolation categories. This keeps
-# the required `.NET tests` check stable while parallelizing the real work.
+# the seven required shard contexts stable while parallelizing the real work.
 #
-# A `changes` job classifies the PR/push diff by path group first, and every
-# suite job below only runs `if:` its group actually changed (a change to this
-# file, `.github/workflows/ci.yml`, always trips every group). A job whose `if:`
-# is false is reported to GitHub as "skipped", which required-status-checks
-# rulesets treat as passing, so this stays safe for branch protection while
-# saving CI minutes on diffs (e.g. docs-only PRs) that can't affect the skipped
-# suites.
+# A `changes` job classifies the PR/push diff by path group first. The seven
+# .NET shard jobs are the exception: `dev`'s ruleset requires their individual
+# names, so every PR targeting `dev` runs the unchanged shard matrix. This
+# prevents path-inapplicable PRs from reporting a skipped matrix placeholder
+# instead of the required contexts. Other suite jobs run only when their path
+# group changed (a change to this file, `.github/workflows/ci.yml`, always trips
+# every group). A job whose `if:` is false is reported to GitHub as "skipped",
+# which required-status-checks rulesets treat as passing.
 # `Changeset advisory` always runs regardless of paths, since it must evaluate
 # every PR for whether a changeset was needed.
 # .NET checks run for draft PRs too: stacked draft layers need a real validation
@@ -111,7 +112,7 @@ jobs:
   dotnet-test-plan:
     name: Plan .NET test shards
     needs: changes
-    if: needs.changes.outputs.dotnet == 'true'
+    if: (github.event_name == 'pull_request' && github.base_ref == 'dev') || needs.changes.outputs.dotnet == 'true'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.shards.outputs.matrix }}
