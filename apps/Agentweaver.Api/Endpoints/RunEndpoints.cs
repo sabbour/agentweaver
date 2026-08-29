@@ -1317,7 +1317,7 @@ app.MapPost("/api/runs/{id}/retry", async (
         // An in-place retry only launches AgentHost in pod-per-run mode. Fence the AgentHost
         // capability before the recovery service writes its synthetic directive or mutates work.
         if (sandboxRuntime.Value.IsPodPerRun
-            && !await capabilitySnapshots.PrepareForAgentHostLaunchAsync(run, ct).ConfigureAwait(false))
+            && !await capabilitySnapshots.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
         {
             return Results.Json(
                 GitHubCopilotConnectionRequirement.ForProject(run.ProjectId!.Value),

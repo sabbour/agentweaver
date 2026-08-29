@@ -125,7 +125,7 @@ public sealed class RunRetryTests : IDisposable
     public async Task InPlaceCoordinatorRetry_PodPerRunWithRevokedOrExpiredCopilotSnapshot_ReturnsRedacted409_WithoutResuming(
         bool expiredSnapshot)
     {
-        using var factory = new CoordinatorWebApplicationFactory(agentExecutionMode: "pod-per-run");
+        using var factory = CoordinatorWebApplicationFactory.CreatePodPerRun();
         using var owner = factory.CreateOwnerClient();
         var projectId = ProjectId.Parse(await CreateProjectAsync(factory, owner));
         var source = await SeedRunAsync(
@@ -165,7 +165,7 @@ public sealed class RunRetryTests : IDisposable
     [Fact]
     public async Task InPlaceCoordinatorRetry_PodPerRunWithFencedCopilotSnapshot_Resumes()
     {
-        using var factory = new CoordinatorWebApplicationFactory(agentExecutionMode: "pod-per-run");
+        using var factory = CoordinatorWebApplicationFactory.CreatePodPerRun();
         using var owner = factory.CreateOwnerClient();
         var projectId = ProjectId.Parse(await CreateProjectAsync(factory, owner));
         var source = await SeedRunAsync(
@@ -205,17 +205,18 @@ public sealed class RunRetryTests : IDisposable
         (await Runs.GetAsync(source.Id))!.Status.Should().Be(RunStatus.InProgress);
     }
 
-    [Theory]
-    [InlineData("in-api", false)]
-    [InlineData("pod-per-run", true)]
-    public void CoordinatorWebApplicationFactory_SelectsConfiguredAgentExecutionMode(
-        string agentExecutionMode, bool isPodPerRun)
+    [Fact]
+    public void CoordinatorWebApplicationFactory_SelectsConfiguredAgentExecutionMode()
     {
-        using var factory = new CoordinatorWebApplicationFactory(agentExecutionMode);
-        using var client = factory.CreateOwnerClient();
+        using var inApi = new CoordinatorWebApplicationFactory();
+        using var inApiClient = inApi.CreateOwnerClient();
+        inApi.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Agentweaver.Api.Sandbox.SandboxRuntimeOptions>>()
+            .Value.IsPodPerRun.Should().BeFalse();
 
-        factory.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Agentweaver.Api.Sandbox.SandboxRuntimeOptions>>()
-            .Value.IsPodPerRun.Should().Be(isPodPerRun);
+        using var podPerRun = CoordinatorWebApplicationFactory.CreatePodPerRun();
+        using var podPerRunClient = podPerRun.CreateOwnerClient();
+        podPerRun.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Agentweaver.Api.Sandbox.SandboxRuntimeOptions>>()
+            .Value.IsPodPerRun.Should().BeTrue();
     }
 
     // =========================================================================

@@ -310,7 +310,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
         await using var scope = _scopeFactory.CreateAsyncScope();
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
-        if (!await lifecycle.PrepareForAgentHostLaunchAsync(run, ct).ConfigureAwait(false))
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
             throw new GitHubCopilotConnectionRequiredException(projectId);
     }
 

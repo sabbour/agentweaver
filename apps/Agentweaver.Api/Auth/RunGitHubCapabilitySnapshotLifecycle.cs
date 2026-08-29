@@ -95,12 +95,11 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
     }
 
     /// <summary>
-    /// Prepares the normal immutable snapshot set, then proves that the particular capability
-    /// AgentHost redeems during <c>/configure</c> is present and still fenced. A partial snapshot
-    /// set is not sufficient: accepting it would defer a missing Copilot binding until after a pod
-    /// claim has been created.
+    /// Prepares the normal immutable snapshot set, then proves that the unattended Copilot
+    /// capability is present and still fenced. A partial snapshot set is not sufficient: accepting
+    /// it would defer a missing Copilot binding until after execution has started.
     /// </summary>
-    internal async Task<bool> PrepareForAgentHostLaunchAsync(Run run, CancellationToken ct)
+    internal async Task<bool> PrepareForUnattendedCopilotLaunchAsync(Run run, CancellationToken ct)
     {
         if (!await PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
             return false;

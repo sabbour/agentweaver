@@ -43,7 +43,13 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
     private readonly string _coordinatorCheckpointsPath;
     private readonly string _agentExecutionMode;
 
-    public CoordinatorWebApplicationFactory(string agentExecutionMode = "in-api")
+    public CoordinatorWebApplicationFactory() : this("in-api")
+    {
+    }
+
+    public static CoordinatorWebApplicationFactory CreatePodPerRun() => new("pod-per-run");
+
+    private CoordinatorWebApplicationFactory(string agentExecutionMode)
     {
         var unique = Guid.NewGuid().ToString("N");
         _dbPath                     = Path.Combine(Path.GetTempPath(), $"agentweaver-coord-{unique}.db");

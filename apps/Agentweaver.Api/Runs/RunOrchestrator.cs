@@ -667,7 +667,7 @@ public sealed class RunOrchestrator
             "pod-per-run",
             StringComparison.OrdinalIgnoreCase);
         var prepared = requiresAgentHost
-            ? await lifecycle.PrepareForAgentHostLaunchAsync(run, ct).ConfigureAwait(false)
+            ? await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false)
             : await lifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false);
         if (!prepared)
         {

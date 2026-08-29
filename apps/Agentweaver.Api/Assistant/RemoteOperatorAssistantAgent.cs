@@ -195,7 +195,7 @@ public sealed class RemoteOperatorAssistantAgent(
             throw new InvalidOperationException($"Operator run '{runId}' has no project capability binding.");
 
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
-        if (!await lifecycle.PrepareForAgentHostLaunchAsync(run, ct).ConfigureAwait(false))
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
             throw new GitHubCopilotConnectionRequiredException(projectId);
     }
 
