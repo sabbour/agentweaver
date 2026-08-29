@@ -93,6 +93,9 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         var resp = await _owner.GetAsync($"/api/runs/{runId}/work-plan");
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound,
             "a run with no persisted work plan must 404 from the work-plan endpoint");
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("work_plan_not_found",
+            "the pre-decomposition state is typed so clients can distinguish it from a missing run");
     }
 
     [Fact]
