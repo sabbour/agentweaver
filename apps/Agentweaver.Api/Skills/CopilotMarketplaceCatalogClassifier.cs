@@ -9,6 +9,7 @@ using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Generation;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Skills;
@@ -38,10 +39,11 @@ public interface IMarketplaceCatalogClassifier
         string repo,
         string branch,
         IReadOnlyList<string> treePaths,
-        string? capabilityRunId,
+        string? capabilityReference,
         CancellationToken ct,
-        ProjectId? projectId = null) =>
-        ClassifyAsync(owner, repo, branch, treePaths, capabilityRunId, ct);
+        ProjectId? projectId = null,
+        CallerContext? caller = null) =>
+        ClassifyAsync(owner, repo, branch, treePaths, capabilityReference, ct);
 }
 
 /// <summary>
@@ -94,21 +96,23 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
         string repo,
         string branch,
         IReadOnlyList<string> treePaths,
-        string? capabilityRunId,
+        string? capabilityReference,
         CancellationToken ct) =>
         ClassifyForProjectAsync(
-            owner, repo, branch, treePaths, capabilityRunId, ct, projectId: null);
+            owner, repo, branch, treePaths, capabilityReference, ct, projectId: null);
 
     public async Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyForProjectAsync(
         string owner,
         string repo,
         string branch,
         IReadOnlyList<string> treePaths,
-        string? capabilityRunId,
+        string? capabilityReference,
         CancellationToken ct,
-        ProjectId? projectId = null)
+        ProjectId? projectId = null,
+        CallerContext? caller = null)
     {
-        if (treePaths.Count == 0 || string.IsNullOrWhiteSpace(capabilityRunId))
+        if (treePaths.Count == 0 || string.IsNullOrWhiteSpace(capabilityReference) ||
+            (projectId is not null && string.IsNullOrWhiteSpace(caller?.EntraObjectId)))
             return null;
 
         try
@@ -119,7 +123,11 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
             timeoutCts.CancelAfter(ClassificationTimeout);
             try
             {
-                var raw = await RunModelTurnAsync(capabilityRunId, prompt, timeoutCts.Token).ConfigureAwait(false);
+                var raw = projectId is null
+                    ? await RunModelTurnAsync(capabilityReference, prompt, timeoutCts.Token).ConfigureAwait(false)
+                    : await RunMarketplaceModelTurnAsync(
+                        capabilityReference, projectId!.Value.ToString(), caller!.EntraObjectId!, prompt, timeoutCts.Token)
+                        .ConfigureAwait(false);
                 var parsed = ParseResult(raw);
                 _logger.LogInformation(
                     "Marketplace catalog classification for {Owner}/{Repo} produced {Count} candidate(s).",
@@ -177,6 +185,45 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
                 InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
             };
 
+            agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
+            var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
+            return await CopilotWorkflowSelectionModel.CaptureResponseTextAsync(
+                agent.RunStreamingAsync(prompt, session, options: null, ct), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (agent is IAsyncDisposable disposableAgent)
+                await disposableAgent.DisposeAsync().ConfigureAwait(false);
+            if (client is IAsyncDisposable disposableClient)
+                await disposableClient.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    protected virtual async Task<string?> RunMarketplaceModelTurnAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        string prompt,
+        CancellationToken ct)
+    {
+        CopilotClient? client = null;
+        AIAgent? agent = null;
+        try
+        {
+            client = await _copilotClientFactory
+                .CreateMarketplaceClientAsync(capabilityReference, projectId, entraObjectId, _modelId, ct)
+                .ConfigureAwait(false);
+            await client.StartAsync(ct).ConfigureAwait(false);
+            var sessionConfig = new SessionConfig
+            {
+                SystemMessage = new SystemMessageConfig { Mode = SystemMessageMode.Append, Content = ClassifierCharter },
+                Tools = [],
+                Model = _modelId,
+                EnableConfigDiscovery = false,
+                Streaming = true,
+                EnableSessionStore = false,
+                InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
+            };
             agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
             return await CopilotWorkflowSelectionModel.CaptureResponseTextAsync(

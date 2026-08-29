@@ -168,6 +168,6 @@ described above.
 |---|---|
 | Gateway not programmed | `kubectl describe gateway agentweaver-gateway -n agentweaver` |
 | ImagePullBackOff | confirm ACR attach and the selected deployment command pushed the image tag |
-| API/MCP auth failures | confirm the Entra client and tenant configuration plus `mcp-oauth-signing-key` are present |
+| API/MCP auth failures | confirm the Entra client and tenant configuration plus `mcp-api-key` are present |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |

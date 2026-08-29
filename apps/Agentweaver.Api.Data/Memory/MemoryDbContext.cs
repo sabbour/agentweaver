@@ -37,6 +37,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
     public DbSet<RunGitHubIdentitySnapshotRecord> RunGitHubIdentitySnapshots => Set<RunGitHubIdentitySnapshotRecord>();
     public DbSet<RunGitHubCapabilitySnapshotRecord> RunGitHubCapabilitySnapshots => Set<RunGitHubCapabilitySnapshotRecord>();
+    public DbSet<MarketplaceCopilotCapabilityRecord> MarketplaceCopilotCapabilities => Set<MarketplaceCopilotCapabilityRecord>();
     public DbSet<GitHubAuditRecord> GitHubAuditRecords => Set<GitHubAuditRecord>();
 
     // Replica-safe per-pod / per-run singleton state moved out of process memory.
@@ -725,6 +726,25 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasIndex(x => new { x.RunId, x.Purpose }).IsUnique()
                 .HasDatabaseName("UX_run_github_capability_snapshots_run_purpose");
             ConfigureProjectForeignKey(e, "FK_run_github_capability_snapshots_projects_project_id");
+        });
+
+        model.Entity<MarketplaceCopilotCapabilityRecord>(e =>
+        {
+            e.ToTable("marketplace_copilot_capabilities");
+            e.HasKey(x => x.CapabilityRef);
+            e.Property(x => x.CapabilityRef).HasColumnName("capability_ref");
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.SourceBindingId).HasColumnName("source_binding_id");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.IssuedAt).HasColumnName("issued_at");
+            e.Property(x => x.ExpiresAt).HasColumnName("expires_at");
+            e.Property(x => x.ConsumedAt).HasColumnName("consumed_at");
+            e.HasIndex(x => new { x.ProjectId, x.EntraObjectId, x.ExpiresAt })
+                .HasDatabaseName("IX_marketplace_copilot_capabilities_expiry");
+            ConfigureProjectForeignKey(e, "FK_marketplace_copilot_capabilities_projects_project_id");
         });
 
         model.Entity<GitHubAuditRecord>(e =>

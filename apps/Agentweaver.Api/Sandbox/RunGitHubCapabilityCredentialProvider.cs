@@ -23,6 +23,34 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
         CancellationToken ct) =>
         GetCredentialAsync(runId, GitHubCapabilityPurpose.UnattendedRepository, ct);
 
+    async Task<GitHubCapabilitySnapshotCredential?> IGitHubCopilotCapabilityCredentialProvider.GetMarketplaceCredentialAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(capabilityReference) ||
+            string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId))
+            return null;
+
+        GitHubCapabilitySnapshotCredential? credential = null;
+        using var scope = scopeFactory.CreateScope();
+        var broker = scope.ServiceProvider.GetRequiredService<GitHubCapabilityBroker>();
+        var outcome = await broker.TryUseMarketplaceCopilotCredentialAsync(
+            new SnapshotRef(capabilityReference),
+            projectId,
+            entraObjectId,
+            DateTimeOffset.UtcNow,
+            (token, expiresAt) =>
+            {
+                credential = new GitHubCapabilitySnapshotCredential(capabilityReference, token, expiresAt);
+                return Task.CompletedTask;
+            },
+            ct).ConfigureAwait(false);
+        return outcome == GitHubCapabilityBrokerOutcome.Issued ? credential : null;
+    }
+
     private async Task<GitHubCapabilitySnapshotCredential?> GetCredentialAsync(
         string runId,
         GitHubCapabilityPurpose purpose,

@@ -59,6 +59,23 @@ public sealed record FencedGitHubCapabilitySnapshot(
 }
 
 /// <summary>
+/// Broker-only metadata recovered from a claimed marketplace capability. It deliberately excludes
+/// the caller-visible opaque reference and all credential material.
+/// </summary>
+internal sealed record FencedMarketplaceCopilotCapability(
+    SnapshotRef CapabilityReference,
+    string ProjectId,
+    string EntraObjectId,
+    DateTimeOffset ExpiresAt,
+    string SourceBindingId,
+    string CredentialReference,
+    string CredentialVersion,
+    string GrantDigest)
+{
+    internal TwoAppCredentialLocator? CredentialLocator { get; init; }
+}
+
+/// <summary>
 /// Server-only repository scope recovered by atomically consuming a selection code.
 /// It deliberately excludes the code, credential reference, and display metadata.
 /// </summary>
@@ -861,6 +878,115 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
                     _ => null,
                 },
             };
+    }
+
+    /// <summary>
+    /// Issues a new capability only for the active Copilot binding owned by the current human
+    /// subject. This is intentionally a project operation, not a synthetic run snapshot.
+    /// </summary>
+    internal async Task<SnapshotRef?> TryIssueMarketplaceCopilotCapabilityAsync(
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        DateTimeOffset expiresAt,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(projectId) ||
+            string.IsNullOrWhiteSpace(entraObjectId) ||
+            expiresAt <= now)
+            return null;
+
+        var binding = await db.ProjectCopilotBindings.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.ProjectId == projectId &&
+                                       x.EntraObjectId == entraObjectId &&
+                                       x.Status == GitHubBindingStatus.Active &&
+                                       x.DeactivatedAt == null, ct)
+            .ConfigureAwait(false);
+        if (binding is null)
+            return null;
+
+        var capability = SnapshotRef.Create();
+        var record = new MarketplaceCopilotCapabilityRecord
+        {
+            CapabilityRef = capability.Value,
+            ProjectId = projectId,
+            EntraObjectId = entraObjectId,
+            SourceBindingId = binding.Id,
+            CredentialReference = binding.CredentialReference,
+            CredentialVersion = binding.CredentialVersion,
+            GrantDigest = binding.GrantDigest,
+            IssuedAt = now,
+            ExpiresAt = expiresAt,
+        };
+        EnsureSafe(record);
+        db.MarketplaceCopilotCapabilities.Add(record);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return capability;
+    }
+
+    /// <summary>
+    /// Atomically consumes an unexpired caller- and project-bound marketplace capability. The
+    /// broker re-fences its exact Copilot binding after the vault read before exposing a credential.
+    /// </summary>
+    internal async Task<FencedMarketplaceCopilotCapability?> TryClaimMarketplaceCopilotCapabilityAsync(
+        SnapshotRef capabilityReference,
+        string projectId,
+        string entraObjectId,
+        DateTimeOffset now,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(projectId) || string.IsNullOrWhiteSpace(entraObjectId))
+            return null;
+
+        // ExecuteUpdate cannot translate DateTimeOffset updates for SQLite. Parameterized SQL keeps
+        // the atomic compare-and-set predicate identical across SQLite and PostgreSQL.
+        var changed = await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+             UPDATE marketplace_copilot_capabilities
+             SET consumed_at = {now}
+             WHERE capability_ref = {capabilityReference.Value}
+               AND project_id = {projectId}
+               AND entra_object_id = {entraObjectId}
+               AND consumed_at IS NULL
+               AND expires_at > {now}
+             """,
+            ct).ConfigureAwait(false);
+        if (changed != 1)
+            return null;
+
+        var capability = await db.MarketplaceCopilotCapabilities.AsNoTracking()
+            .SingleAsync(x => x.CapabilityRef == capabilityReference.Value, ct)
+            .ConfigureAwait(false);
+        return new(
+            capabilityReference,
+            projectId,
+            entraObjectId,
+            capability.ExpiresAt,
+            capability.SourceBindingId,
+            capability.CredentialReference,
+            capability.CredentialVersion,
+            capability.GrantDigest)
+        {
+            CredentialLocator = TwoAppCredentialLocator.ForCopilotProject(capability.CredentialReference),
+        };
+    }
+
+    internal Task<bool> IsClaimedMarketplaceCopilotCapabilityLiveAsync(
+        FencedMarketplaceCopilotCapability capability,
+        CancellationToken ct = default)
+    {
+        if (capability.ExpiresAt <= DateTimeOffset.UtcNow)
+            return Task.FromResult(false);
+
+        return db.ProjectCopilotBindings.AsNoTracking().AnyAsync(binding =>
+            binding.Id == capability.SourceBindingId &&
+            binding.ProjectId == capability.ProjectId &&
+            binding.EntraObjectId == capability.EntraObjectId &&
+            binding.CredentialReference == capability.CredentialReference &&
+            binding.CredentialVersion == capability.CredentialVersion &&
+            binding.GrantDigest == capability.GrantDigest &&
+            binding.Status == GitHubBindingStatus.Active &&
+            binding.DeactivatedAt == null, ct);
     }
 
     internal Task<List<RunGitHubCapabilitySnapshotRecord>> GetCapabilitySnapshotsAsync(

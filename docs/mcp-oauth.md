@@ -131,20 +131,14 @@ Signed JWT (RS256). Claims:
 
 | Key | Purpose |
 |---|---|
-| `Auth:OAuth:SigningKey` | RSA private key (PEM or bare base64 PKCS#8). Bound to the Key Vault secret **`mcp-oauth-signing-key`**. |
-| `Auth:OAuth:Issuer` | Optional issuer override. When empty, the issuer is derived from the request host. |
-| `Auth:OAuth:Audience` | Optional audience override. Defaults to `{issuer}/mcp`. |
+| `Auth:ApiKey` | Required API authentication key. Bound to the Key Vault CSI secret **`mcp-api-key`**. |
+| `Auth:Mcp:Issuer` | Public MCP issuer. |
+| `Auth:Mcp:Audience` | Public MCP resource audience. |
 | `Auth:Entra:ClientId` / `TenantId` / `RedirectUri` | Microsoft Entra browser sign-in and platform authorization. |
 
 For AKS production, run `npm run azure:provision-infra` before the first release
-deployment; it provisions the signing key together with the required cluster
-identity and secrets. The installer's `--skip-oauth-key` flag is only safe when that
-Key Vault secret already exists; otherwise cluster diagnostics report
-`key_vault: critical: secret 'mcp-oauth-signing-key' not found`.
-
-If `Auth:OAuth:SigningKey` is not set, the service generates an **ephemeral** RSA key at startup for
-local development only (a warning is logged). Ephemeral keys do not survive a restart and must not be
-used in any shared or hosted deployment.
+deployment so the required `mcp-api-key` CSI secret is present. If it is missing,
+cluster diagnostics report `key_vault: critical: secret 'mcp-api-key' not found`.
 
 ## Security properties
 

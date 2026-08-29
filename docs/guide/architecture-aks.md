@@ -161,7 +161,7 @@ One static `SecretProviderClass` object syncs app secrets from Key Vault into th
 
 | Key Vault secret | File in `/mnt/secrets-store/` | Used for |
 |-----------------|------------------------------|----------|
-| `mcp-oauth-signing-key` | `mcp-oauth-signing-key` | ECDSA P-256 key for signing Agentweaver OAuth tokens → `Auth__OAuth__SigningKey` |
+| `mcp-api-key` | `mcp-api-key` | API authentication and worker loopback calls → `Auth__ApiKey` |
 
 The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough).
 
