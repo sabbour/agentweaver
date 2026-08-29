@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Security;
@@ -121,6 +122,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     private readonly IOperatorAssistantAgent _assistant;
     private readonly IToolApprovalGate _approvalGate;
     private readonly AssistantRunOptions _options;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly bool _agentHostEnabled;
     private readonly ILogger<AssistantRunService> _logger;
 
     /// <summary>How long a gated tool call waits for an operator decision before it is treated as
@@ -142,6 +145,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         IOperatorAssistantAgent assistant,
         IToolApprovalGate approvalGate,
         IOptions<AssistantRunOptions> options,
+        IServiceScopeFactory scopeFactory,
+        IConfiguration configuration,
         ILogger<AssistantRunService> logger)
     {
         _runStore = runStore;
@@ -149,6 +154,11 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         _assistant = assistant;
         _approvalGate = approvalGate;
         _options = options.Value;
+        _scopeFactory = scopeFactory;
+        _agentHostEnabled = string.Equals(
+            configuration["Sandbox:AgentExecutionMode"],
+            "pod-per-run",
+            StringComparison.OrdinalIgnoreCase);
         _logger = logger;
 
         var interval = _options.SweepInterval > TimeSpan.Zero ? _options.SweepInterval : TimeSpan.FromMinutes(1);
@@ -259,6 +269,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 SubtaskId = null,
             };
 
+            await PrepareAgentHostCapabilityAsync(run, ct).ConfigureAwait(false);
             await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
         }
         catch
@@ -283,6 +294,24 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 .ConfigureAwait(false);
 
         return new StartAssistantRunResult(runId, RunStatus.InProgress, firstTurn);
+    }
+
+    private async Task PrepareAgentHostCapabilityAsync(Run run, CancellationToken ct)
+    {
+        if (!_agentHostEnabled)
+            return;
+        if (run.ProjectId is not { } projectId)
+        {
+            throw new AssistantRunHttpException(
+                StatusCodes.Status400BadRequest,
+                "project_context_required",
+                "Choose a project before starting an AgentHost assistant session.");
+        }
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
+            throw new GitHubCopilotConnectionRequiredException(projectId);
     }
 
     public Task<OperatorAssistantResponse> SendMessageAsync(

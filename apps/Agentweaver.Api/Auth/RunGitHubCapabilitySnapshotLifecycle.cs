@@ -1,4 +1,5 @@
 using Agentweaver.Domain;
+using Agentweaver.Api.Memory;
 
 
 
@@ -91,7 +92,27 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
 
         return true;
+    }
 
+    /// <summary>
+    /// Prepares the normal immutable snapshot set, then proves that the unattended Copilot
+    /// capability is present and still fenced. A partial snapshot set is not sufficient: accepting
+    /// it would defer a missing Copilot binding until after execution has started.
+    /// </summary>
+    internal async Task<bool> PrepareForUnattendedCopilotLaunchAsync(Run run, CancellationToken ct)
+    {
+        if (!await PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+            return false;
+
+        var copilotSnapshot = (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString(), ct)
+            .ConfigureAwait(false))
+            .SingleOrDefault(snapshot => snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot);
+        return copilotSnapshot is not null &&
+            await broker.TryFenceAsync(
+                GitHubCapabilityPurpose.UnattendedCopilot,
+                new SnapshotRef(copilotSnapshot.SnapshotRef),
+                DateTimeOffset.UtcNow,
+                ct).ConfigureAwait(false) is not null;
     }
 
 }

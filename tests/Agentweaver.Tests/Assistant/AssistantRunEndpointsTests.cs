@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Assistant;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -48,6 +49,44 @@ public sealed class AssistantRunEndpointsTests
         run.SubmittingUser.Should().Be(AgentweaverWebApplicationFactory.TestUser);
         run.ParentRunId.Should().BeNull("an operator run has no parent and no work plan");
         run.Status.Should().Be(RunStatus.InProgress);
+    }
+
+    [Fact]
+    public async Task StartRun_AgentHostWithoutCopilotBinding_ReturnsRedactedConnectionRequirement()
+    {
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        var client = AuthedClient(factory);
+        var projectDirectory = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-project-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectDirectory);
+        try
+        {
+            var projectResponse = await client.PostAsJsonAsync("/api/projects", new
+            {
+                name = "Assistant capability requirement",
+                origin = "blank",
+                working_directory = projectDirectory,
+            });
+            projectResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+            var projectId = (await projectResponse.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("project_id").GetString();
+
+            var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+            {
+                project_id = projectId,
+                message = "Start an AgentHost assistant session",
+            });
+
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var requirement = await response.Content.ReadFromJsonAsync<GitHubCopilotConnectionRequirement>();
+            requirement.Should().BeEquivalentTo(
+                GitHubCopilotConnectionRequirement.ForProject(ProjectId.Parse(projectId!)));
+            factory.Agent.Requests.Should().BeEmpty(
+                "the AgentHost path must stop before any assistant/pod work can use an ambient credential");
+        }
+        finally
+        {
+            try { Directory.Delete(projectDirectory, recursive: true); } catch { /* best effort */ }
+        }
     }
 
     [Fact]
@@ -443,6 +482,8 @@ public sealed class AssistantRunEndpointsTests
         using var serviceB = new AssistantRunService(
             runStore, eventStream, factory.Agent, gate,
             Microsoft.Extensions.Options.Options.Create(new AssistantRunOptions()),
+            factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            factory.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AssistantRunService>.Instance);
         var caller = new Agentweaver.Api.Security.CallerContext { User = AssistantWebApplicationFactory.TestUser };
         await serviceB.SendMessageAsync(caller, "token", runId, "still here?", CancellationToken.None);
@@ -861,6 +902,7 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
 
     public FakeOperatorAssistantAgent Agent { get; } = new();
     public int MaxConcurrentRunsPerUser { get; set; } = 3;
+    public bool UseAgentHost { get; set; }
 
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-{Guid.NewGuid():N}.db");
     private readonly string _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-wt-{Guid.NewGuid():N}");
@@ -897,6 +939,7 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["RunBounds:MaxSteps"] = "50",
                 ["RunBounds:MaxMinutes"] = "10",
                 ["Assistant:MaxConcurrentRunsPerUser"] = MaxConcurrentRunsPerUser.ToString(),
+                ["Sandbox:AgentExecutionMode"] = UseAgentHost ? "pod-per-run" : "in-api",
             });
         });
 

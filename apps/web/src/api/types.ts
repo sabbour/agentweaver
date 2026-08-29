@@ -45,8 +45,10 @@ export interface SubmitRunResponse {
 
 export interface RetryRunResponse {
   run_id: string;
-  retried_from: string;
+  retried_from: string | null;
   status: string;
+  /** True when the failed coordinator resumed under the same run id. */
+  resumed?: boolean;
 }
 
 export interface RunDetail {

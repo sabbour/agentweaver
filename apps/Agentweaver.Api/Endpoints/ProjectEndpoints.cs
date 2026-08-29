@@ -1036,6 +1036,10 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             logger.LogError(ex, "Failed to read dispatchable team roster for project {ProjectId}", projectId);
             return Results.UnprocessableEntity(new { error = InvalidTeamException.ErrorCode, message = InvalidTeamException.DefaultMessage });
         }
+        catch (GitHubCopilotConnectionRequiredException ex)
+        {
+            return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
+        }
 
         return Results.Created(
             $"/api/runs/{runId}",

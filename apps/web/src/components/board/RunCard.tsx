@@ -160,9 +160,16 @@ export function RunCard({ card, projectId, onMutated }: RunCardProps) {
     e.stopPropagation();
     if (retrying) return;
     setRetrying(true);
+    setError(null);
     try {
       const res = await apiClient.retryRun(card.run_id);
       navigate(`/projects/${projectId}/orchestrations/${res.run_id}`);
+    } catch (err) {
+      setError(err instanceof ApiError
+        ? `Retry failed: API error ${err.status}: ${err.body}`
+        : err instanceof Error
+          ? `Retry failed: ${err.message}`
+          : `Retry failed: ${String(err)}`);
     } finally {
       setRetrying(false);
     }

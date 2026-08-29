@@ -163,6 +163,30 @@ describe('AgentweaverApiClient keepalive', () => {
     window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
   });
 
+  it('broadcasts the shared Copilot connection action when an in-place retry is fenced', async () => {
+    const requirement = {
+      code: 'github_copilot_connection_required',
+      message: GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
+      action: { type: 'connect_project_copilot_app', project_id: 'project-1' },
+    };
+    const received = vi.fn();
+    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      text: async () => JSON.stringify(requirement),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await expect(client.retryRun('run/1')).rejects.toMatchObject({ status: 409, payload: requirement });
+
+    expect(fetchMock.mock.calls[0][0])
+      .toBe('https://api.example.test/api/runs/run%2F1/retry');
+    expect((received.mock.calls[0]![0] as CustomEvent).detail).toEqual(requirement);
+    window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+  });
+
   it('does not broadcast a connection action for an untyped 401 response', async () => {
     const received = vi.fn();
     window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);

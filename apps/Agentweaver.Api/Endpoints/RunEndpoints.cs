@@ -1247,6 +1247,8 @@ app.MapPost("/api/runs/{id}/retry", async (
     IRunStore runStore,
     CoordinatorRunService coordinator,
     CoordinatorSteeringService steering,
+    RunGitHubCapabilitySnapshotLifecycle capabilitySnapshots,
+    IOptions<SandboxRuntimeOptions> sandboxRuntime,
     IRunOptionsStore runOptions,
     RunOrchestrator orchestrator,
     IProjectStore projectStore,
@@ -1312,12 +1314,29 @@ app.MapPost("/api/runs/{id}/retry", async (
     // fresh full-restart mint below.
     if (isCoordinatorRun)
     {
+        // An in-place retry only launches AgentHost in pod-per-run mode. Fence the AgentHost
+        // capability before the recovery service writes its synthetic directive or mutates work.
+        if (sandboxRuntime.Value.IsPodPerRun
+            && !await capabilitySnapshots.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
+        {
+            return Results.Json(
+                GitHubCopilotConnectionRequirement.ForProject(run.ProjectId!.Value),
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
         bool resumed;
         try
         {
             resumed = await steering
-                .TryResumeFailedCoordinatorRunForRetryAsync(run.Id.ToString(), run.SubmittingUser, ct)
+                .TryResumeFailedCoordinatorRunForRetryAsync(
+                    run.Id.ToString(),
+                    run.SubmittingUser,
+                    ct)
                 .ConfigureAwait(false);
+        }
+        catch (GitHubCopilotConnectionRequiredException ex)
+        {
+            return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
         }
         catch (SteeringRecoveryExhaustedException ex)
         {
@@ -1413,6 +1432,10 @@ app.MapPost("/api/runs/{id}/retry", async (
     {
         logger.LogError(ex, "Failed to read dispatchable team roster while retrying source run {RunId}", runId);
         return Results.UnprocessableEntity(new { error = InvalidTeamException.ErrorCode, message = InvalidTeamException.DefaultMessage });
+    }
+    catch (GitHubCopilotConnectionRequiredException ex)
+    {
+        return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
     }
     catch (Exception ex)
     {

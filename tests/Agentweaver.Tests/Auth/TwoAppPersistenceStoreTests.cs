@@ -486,6 +486,28 @@ public sealed class TwoAppPersistenceStoreTests
     }
 
     [Fact]
+    public async Task CapabilitySnapshotLifecycle_AgentHostRequiresFencedUnattendedCopilotSnapshot()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        await db.ProjectCopilotBindings.ExecuteDeleteAsync();
+
+        var persistence = new TwoAppPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var run = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForLaunchAsync(run, CancellationToken.None)).Should().BeTrue(
+            "other valid snapshots may still be captured for an interactive run");
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeFalse(
+            "AgentHost /configure redeems the unattended Copilot capability and cannot use an ambient or partial fallback");
+    }
+
+    [Fact]
     public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenGitHubOriginProjectHasNoHistoryAtAll()
     {
         // Smith's proven defect: a GitHub-origin project that has never recorded ANY GitHub App

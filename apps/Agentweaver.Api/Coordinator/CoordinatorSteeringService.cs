@@ -621,7 +621,9 @@ public sealed class CoordinatorSteeringService
     /// </para>
     /// </summary>
     public async Task<bool> TryResumeFailedCoordinatorRunForRetryAsync(
-        string coordinatorRunId, string createdBy, CancellationToken ct)
+        string coordinatorRunId,
+        string createdBy,
+        CancellationToken ct)
     {
         const string kind = SteeringKind.Redirect;
         const string instruction =
