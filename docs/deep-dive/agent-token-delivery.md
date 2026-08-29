@@ -18,7 +18,10 @@ classification but lacks an explicitly issued capability does not create an `unb
 ambient credentials, call a model, choose a default, or silently degrade. It returns a clear
 connect-GitHub requirement instead. Marketplace auto-browse can still list a repository's directly
 discoverable `SKILL.md` files; when it requires model classification, it asks the user to connect a
-GitHub account with Copilot access.
+project's GitHub Copilot App. Every surface uses the same redacted
+`github_copilot_connection_required` contract and its `connect_project_copilot_app` action, which starts
+the existing Entra-authenticated, project-bound Copilot App browser handoff. The contract never contains
+a credential, OAuth URL, transaction ID, callback state, repository, or installation data.
 
 ## `/configure` request body
 

@@ -1,4 +1,8 @@
 import { getSessionToken } from '../config';
+import {
+  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+  isGitHubCopilotConnectionRequirement,
+} from './githubConnectionRequirement';
 import { isSkillProvenance } from './types';
 import type {
   AddMemberRequest,
@@ -746,7 +750,7 @@ export class AgentweaverApiClient {
       body: form,
     });
     const text = typeof response.text === 'function' ? await response.text() : '';
-    if (!response.ok) throw new ApiError(response.status, text);
+    if (!response.ok) throw this.createApiError(response.status, text);
     return text ? JSON.parse(text) as import('./types').SkillAcquisitionResponse : { results: [], marked_missing: [] };
   }
 
@@ -1257,7 +1261,7 @@ export class AgentweaverApiClient {
     const headers = this.authHeaders();
     const response = await fetch(this.apiUrl(keepaliveUrl), { method: 'POST', headers, credentials: 'include' });
     const text = typeof response.text === 'function' ? await response.text() : '';
-    if (!response.ok) throw new ApiError(response.status, text);
+    if (!response.ok) throw this.createApiError(response.status, text);
   }
 
   async listPortForwards(runId: string): Promise<PortForwardSessionDto[]> {
@@ -1285,7 +1289,7 @@ export class AgentweaverApiClient {
     });
 
     const text = typeof response.text === 'function' ? await response.text() : '';
-    if (!response.ok) throw new ApiError(response.status, text);
+    if (!response.ok) throw this.createApiError(response.status, text);
     if (text) return JSON.parse(text) as T;
     if (typeof response.json === 'function') {
       try {
@@ -1295,6 +1299,17 @@ export class AgentweaverApiClient {
       }
     }
     return null as T;
+  }
+
+  private createApiError(status: number, body: string): ApiError {
+    const error = new ApiError(status, body);
+    if (typeof window !== 'undefined' && isGitHubCopilotConnectionRequirement(error.payload)) {
+      window.dispatchEvent(new CustomEvent(
+        GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+        { detail: error.payload },
+      ));
+    }
+    return error;
   }
 
   private apiUrl(pathOrUrl: string): string {
