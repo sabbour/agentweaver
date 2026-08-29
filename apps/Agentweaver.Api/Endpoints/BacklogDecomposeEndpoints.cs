@@ -222,13 +222,20 @@ public static class BacklogDecomposeEndpoints
             DecomposeAgentResult agentResult;
             try
             {
-                agentResult = await decomposeService.DecomposeAsync(project, fileContent, caller.User, ct);
+                agentResult = await decomposeService.DecomposeAsync(project, fileContent, caller, ct);
             }
             catch (Exception ex)
             {
                 return Results.Problem(
                     $"Decomposition failed: {ex.Message}",
                     statusCode: 500);
+            }
+
+            if (agentResult.ConnectionRequirement is not null)
+            {
+                return Results.Json(
+                    agentResult.ConnectionRequirement,
+                    statusCode: StatusCodes.Status401Unauthorized);
             }
 
             // Idempotency: collect titles that already exist for this (project, source file).

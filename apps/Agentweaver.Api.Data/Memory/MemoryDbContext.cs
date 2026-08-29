@@ -746,6 +746,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.ToTable("marketplace_copilot_capabilities");
             e.HasKey(x => x.CapabilityRef);
             e.Property(x => x.CapabilityRef).HasColumnName("capability_ref");
+            e.Property(x => x.Purpose).HasColumnName("purpose").HasDefaultValue(0);
             e.Property(x => x.ProjectId).HasColumnName("project_id");
             e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
             e.Property(x => x.SourceBindingId).HasColumnName("source_binding_id");

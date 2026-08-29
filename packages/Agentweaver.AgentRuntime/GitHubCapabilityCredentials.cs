@@ -1,3 +1,5 @@
+using Agentweaver.Domain;
+
 namespace Agentweaver.AgentRuntime;
 
 /// <summary>
@@ -29,6 +31,21 @@ public interface IGitHubCopilotCapabilityCredentialProvider
         string entraObjectId,
         CancellationToken ct = default) =>
         Task.FromResult<GitHubCapabilitySnapshotCredential?>(null);
+
+    /// <summary>
+    /// Redeems a purpose-, caller-, and project-bound non-run Copilot capability. Implementations
+    /// must fail closed for a capability issued for another purpose or caller, or one that has
+    /// expired or already been consumed.
+    /// </summary>
+    Task<GitHubCapabilitySnapshotCredential?> GetProjectOperationCredentialAsync(
+        string capabilityReference,
+        string projectId,
+        string entraObjectId,
+        GitHubProjectCopilotCapabilityPurpose purpose,
+        CancellationToken ct = default) =>
+        purpose == GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification
+            ? GetMarketplaceCredentialAsync(capabilityReference, projectId, entraObjectId, ct)
+            : Task.FromResult<GitHubCapabilitySnapshotCredential?>(null);
 }
 
 /// <summary>
