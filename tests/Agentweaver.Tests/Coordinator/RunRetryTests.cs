@@ -122,17 +122,19 @@ public sealed class RunRetryTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task InPlaceCoordinatorRetry_WithRevokedOrExpiredCopilotSnapshot_ReturnsRedacted409_WithoutResuming(
+    public async Task InPlaceCoordinatorRetry_PodPerRunWithRevokedOrExpiredCopilotSnapshot_ReturnsRedacted409_WithoutResuming(
         bool expiredSnapshot)
     {
-        var projectId = ProjectId.Parse(await CreateProjectAsync());
+        using var factory = new CoordinatorWebApplicationFactory(agentExecutionMode: "pod-per-run");
+        using var owner = factory.CreateOwnerClient();
+        var projectId = ProjectId.Parse(await CreateProjectAsync(factory, owner));
         var source = await SeedRunAsync(
             RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
-            agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: projectId);
-        var (planId, subtaskId) = await SeedRecoverablePlanAsync(source);
-        await SeedUnattendedCopilotSnapshotAsync(source, expiredSnapshot, revokeBinding: !expiredSnapshot);
+            agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: projectId, factory: factory);
+        var (planId, subtaskId) = await SeedRecoverablePlanAsync(source, factory);
+        await SeedUnattendedCopilotSnapshotAsync(source, expiredSnapshot, revokeBinding: !expiredSnapshot, factory: factory);
 
-        var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+        var resp = await owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
 
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
@@ -146,8 +148,8 @@ public sealed class RunRetryTests : IDisposable
 
         // Capability fencing happens before recovery can reopen the run stream, reset the failed
         // subtask, un-terminalize the run, or hand work back to coordinator dispatch.
-        (await Runs.GetAsync(source.Id))!.Status.Should().Be(RunStatus.Failed);
-        await using var scope = _factory.Services.CreateAsyncScope();
+        (await factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(source.Id))!.Status.Should().Be(RunStatus.Failed);
+        await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         (await db.WorkPlans.AsNoTracking().SingleAsync(plan => plan.Id == planId)).Status
             .Should().Be(WorkPlanStatus.AssemblyFailed);
@@ -156,21 +158,24 @@ public sealed class RunRetryTests : IDisposable
         (await db.SteeringDirectives.AsNoTracking()
             .Where(directive => directive.CoordinatorRunId == source.Id.ToString())
             .ToListAsync()).Should().BeEmpty("a rejected retry must not consume the retry's idempotency slot");
-        _factory.Services.GetRequiredService<RunStreamStore>().Get(source.Id.ToString()).Should().BeNull(
+        factory.Services.GetRequiredService<RunStreamStore>().Get(source.Id.ToString()).Should().BeNull(
             "a rejected retry must not reopen or create a coordinator stream");
     }
 
     [Fact]
-    public async Task InPlaceCoordinatorRetry_WithFencedCopilotSnapshot_Resumes()
+    public async Task InPlaceCoordinatorRetry_PodPerRunWithFencedCopilotSnapshot_Resumes()
     {
-        var projectId = ProjectId.Parse(await CreateProjectAsync());
+        using var factory = new CoordinatorWebApplicationFactory(agentExecutionMode: "pod-per-run");
+        using var owner = factory.CreateOwnerClient();
+        var projectId = ProjectId.Parse(await CreateProjectAsync(factory, owner));
         var source = await SeedRunAsync(
             RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
-            agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: projectId);
-        await SeedRecoverablePlanAsync(source);
-        await SeedUnattendedCopilotSnapshotAsync(source, expiredSnapshot: false, revokeBinding: false);
+            agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: projectId, factory: factory);
+        await SeedRecoverablePlanAsync(source, factory);
+        await SeedUnattendedCopilotSnapshotAsync(
+            source, expiredSnapshot: false, revokeBinding: false, factory: factory);
 
-        var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+        var resp = await owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
 
         var responseBody = await resp.Content.ReadAsStringAsync();
         resp.StatusCode.Should().Be(HttpStatusCode.OK, responseBody);
@@ -178,7 +183,39 @@ public sealed class RunRetryTests : IDisposable
         body.GetProperty("run_id").GetString().Should().Be(source.Id.ToString());
         body.GetProperty("resumed").GetBoolean().Should().BeTrue();
         body.GetProperty("status").GetString().Should().Be("in_progress");
+        (await factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(source.Id))!.Status
+            .Should().Be(RunStatus.InProgress);
+    }
+
+    [Fact]
+    public async Task InPlaceCoordinatorRetry_InApiBlankProject_ResumesWithoutAgentHostCapability()
+    {
+        var projectId = ProjectId.Parse(await CreateProjectAsync());
+        var source = await SeedRunAsync(
+            RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
+            agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: projectId);
+        await SeedRecoverablePlanAsync(source);
+
+        var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+
+        var responseBody = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, responseBody);
+        var body = JsonSerializer.Deserialize<JsonElement>(responseBody);
+        body.GetProperty("resumed").GetBoolean().Should().BeTrue();
         (await Runs.GetAsync(source.Id))!.Status.Should().Be(RunStatus.InProgress);
+    }
+
+    [Theory]
+    [InlineData("in-api", false)]
+    [InlineData("pod-per-run", true)]
+    public void CoordinatorWebApplicationFactory_SelectsConfiguredAgentExecutionMode(
+        string agentExecutionMode, bool isPodPerRun)
+    {
+        using var factory = new CoordinatorWebApplicationFactory(agentExecutionMode);
+        using var client = factory.CreateOwnerClient();
+
+        factory.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Agentweaver.Api.Sandbox.SandboxRuntimeOptions>>()
+            .Value.IsPodPerRun.Should().Be(isPodPerRun);
     }
 
     // =========================================================================
@@ -332,11 +369,13 @@ public sealed class RunRetryTests : IDisposable
         string? repoPath = null,
         string? branch = null,
         string task = "do the thing",
-        string? modelId = "gpt-4o")
+        string? modelId = "gpt-4o",
+        CoordinatorWebApplicationFactory? factory = null)
     {
+        factory ??= _factory;
         if (repoPath is null && projectId is not null)
         {
-            var project = await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(projectId.Value);
+            var project = await factory.Services.GetRequiredService<IProjectStore>().GetAsync(projectId.Value);
             repoPath = project?.WorkingDirectory;
         }
 
@@ -359,14 +398,18 @@ public sealed class RunRetryTests : IDisposable
             Origin = origin,
             RetriedFrom = retriedFrom,
         };
-        await Runs.InsertAsync(run);
+        await factory.Services.GetRequiredService<SqliteRunStore>().InsertAsync(run);
         return run;
     }
 
-    private async Task<string> CreateProjectAsync()
+    private async Task<string> CreateProjectAsync(
+        CoordinatorWebApplicationFactory? factory = null,
+        HttpClient? owner = null)
     {
-        var dir = _factory.NewWorkingDirectory();
-        var resp = await _owner.PostAsJsonAsync("/api/projects", new
+        factory ??= _factory;
+        owner ??= _owner;
+        var dir = factory.NewWorkingDirectory();
+        var resp = await owner.PostAsJsonAsync("/api/projects", new
         {
             name = $"Retry Test {Guid.NewGuid():N}",
             origin = "blank",
@@ -377,9 +420,11 @@ public sealed class RunRetryTests : IDisposable
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
     }
 
-    private async Task<(int PlanId, int SubtaskId)> SeedRecoverablePlanAsync(Run run)
+    private async Task<(int PlanId, int SubtaskId)> SeedRecoverablePlanAsync(
+        Run run, CoordinatorWebApplicationFactory? factory = null)
     {
-        await using var scope = _factory.Services.CreateAsyncScope();
+        factory ??= _factory;
+        await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         var spec = new OutcomeSpec
@@ -429,9 +474,11 @@ public sealed class RunRetryTests : IDisposable
     }
 
     private async Task SeedUnattendedCopilotSnapshotAsync(
-        Run run, bool expiredSnapshot, bool revokeBinding = true)
+        Run run, bool expiredSnapshot, bool revokeBinding = true,
+        CoordinatorWebApplicationFactory? factory = null)
     {
-        await using var scope = _factory.Services.CreateAsyncScope();
+        factory ??= _factory;
+        await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var bindingId = SnapshotRef.Create().Value;
         if (!await db.Projects.AnyAsync(project => project.ProjectId == run.ProjectId!.Value.ToString()))

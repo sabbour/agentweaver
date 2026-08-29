@@ -1248,6 +1248,7 @@ app.MapPost("/api/runs/{id}/retry", async (
     CoordinatorRunService coordinator,
     CoordinatorSteeringService steering,
     RunGitHubCapabilitySnapshotLifecycle capabilitySnapshots,
+    IOptions<SandboxRuntimeOptions> sandboxRuntime,
     IRunOptionsStore runOptions,
     RunOrchestrator orchestrator,
     IProjectStore projectStore,
@@ -1313,6 +1314,16 @@ app.MapPost("/api/runs/{id}/retry", async (
     // fresh full-restart mint below.
     if (isCoordinatorRun)
     {
+        // An in-place retry only launches AgentHost in pod-per-run mode. Fence the AgentHost
+        // capability before the recovery service writes its synthetic directive or mutates work.
+        if (sandboxRuntime.Value.IsPodPerRun
+            && !await capabilitySnapshots.PrepareForAgentHostLaunchAsync(run, ct).ConfigureAwait(false))
+        {
+            return Results.Json(
+                GitHubCopilotConnectionRequirement.ForProject(run.ProjectId!.Value),
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
         bool resumed;
         try
         {
@@ -1320,12 +1331,7 @@ app.MapPost("/api/runs/{id}/retry", async (
                 .TryResumeFailedCoordinatorRunForRetryAsync(
                     run.Id.ToString(),
                     run.SubmittingUser,
-                    ct,
-                    async (candidate, fenceCt) =>
-                    {
-                        if (!await capabilitySnapshots.PrepareForAgentHostLaunchAsync(candidate, fenceCt).ConfigureAwait(false))
-                            throw new GitHubCopilotConnectionRequiredException(candidate.ProjectId!.Value);
-                    })
+                    ct)
                 .ConfigureAwait(false);
         }
         catch (GitHubCopilotConnectionRequiredException ex)
