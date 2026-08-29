@@ -377,7 +377,7 @@ public sealed class CoordinatorOrchestratorExecutor
                 .Select(r => r.Definition!.Id)
                 .ToHashSet(StringComparer.Ordinal);
             var context = new WorkflowSelectionContext(
-                input.ProjectId, spec.Goal, roles, available, customWorkflowIds, input.SubmittingUser);
+                input.ProjectId, spec.Goal, roles, available, customWorkflowIds, input.SubmittingUser, input.RunId);
 
             _logger.LogInformation(
                 "Coordinator workflow selection for run {RunId}: invoking selector with {WorkflowCount} workflows ({WorkflowIds}).",
@@ -457,7 +457,8 @@ public sealed class CoordinatorOrchestratorExecutor
                 roles,
                 compatible,
                 selection.CustomWorkflowIds,
-                input.SubmittingUser),
+                input.SubmittingUser,
+                input.RunId),
             ct).ConfigureAwait(false);
         var rationale =
             $"Re-selected '{result.Selected.Name}' after decomposition identified code-producing work; " +

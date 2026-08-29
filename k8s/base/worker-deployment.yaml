@@ -71,17 +71,6 @@ spec:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
-            # OAuthConfigGuard fires in Production during efbundle host build.
-            - name: Auth__OAuth__Issuer
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_ISSUER
-            - name: Auth__OAuth__Audience
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_AUDIENCE
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -100,8 +89,7 @@ spec:
             - -c
             - |
               set -eu
-              # OAuth signing key and Auth:ApiKey are required for agent tool loopback calls.
-              export Auth__OAuth__SigningKey="$(cat /mnt/secrets-store/mcp-oauth-signing-key)"
+              # Auth:ApiKey is required for agent tool loopback calls.
               export Auth__ApiKey="$(cat /mnt/secrets-store/mcp-api-key)"
               exec dotnet Agentweaver.Api.dll
           ports:
@@ -152,17 +140,6 @@ spec:
             # Mirror api-deployment.yaml: worker launches Phase-3 Build/Test AgentHost pods and must use the same plain-http healthz scheme.
             - name: Sandbox__AgentHost__RequireMtls
               value: "false"
-            # OAuth AS metadata — worker may need to validate inbound tokens.
-            - name: Auth__OAuth__Issuer
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_ISSUER
-            - name: Auth__OAuth__Audience
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: OAUTH_AUDIENCE
             # Postgres (worker always uses Postgres — it is the run-state owner).
             # Flip Database__Provider to "sqlite" ONLY as an emergency rollback; doing so
             # will break run leasing since the lease schema is Postgres-specific.

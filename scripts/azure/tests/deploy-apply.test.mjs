@@ -49,6 +49,8 @@ const CFG = {
   AGENTHOST_KEYVAULT_URI: `https://${TEST_KEYVAULT_NAME}.vault.azure.net/`,
   TENANT_ID: "66666666-7777-8888-9999-000000000000",
   IDENTITY_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
+  ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
+  ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
   APPINSIGHTS_WORKSPACE_ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 };
 
@@ -229,7 +231,7 @@ test("run(): applied manifests carry real kustomize-resolved values, not the com
 
   const runtimeConfig = writtenFiles.get("agentweaver-runtime-config.yaml");
   assert.ok(runtimeConfig, "expected the synthetic runtime-config ConfigMap to have been written before apply");
-  assert.match(runtimeConfig, /OAUTH_ISSUER: https:\/\/agentweaver\.6a3de4fe60529400010f3fba\.westus2\.staging\.aksapp\.io/);
+  assert.doesNotMatch(runtimeConfig, /mcp-oauth-signing-key|Auth__OAuth__|OAUTH_ISSUER|OAUTH_AUDIENCE/);
 
   const secretProviderClass = writtenFiles.get("secret-provider-class.yaml");
   assert.ok(secretProviderClass);

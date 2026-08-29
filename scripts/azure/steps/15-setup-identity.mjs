@@ -404,8 +404,6 @@ export async function run(cfg, opts = {}) {
   log.info("The AgentHost identity has NO Key Vault role assignments (issue #471): the run owner's");
   log.info("GitHub token is brokered per-run through the API /configure call, not a direct vault fetch.");
   log.info("");
-  log.info("NOTE: Run scripts/azure/steps/16-provision-oauth-signing-key.mjs before the first");
-  log.info("      deploy to provision the mcp-oauth-signing-key secret in Key Vault.");
 
   return {
     IDENTITY_CLIENT_ID,

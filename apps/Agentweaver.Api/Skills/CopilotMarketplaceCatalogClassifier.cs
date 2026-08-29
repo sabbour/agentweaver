@@ -22,7 +22,7 @@ public interface IMarketplaceCatalogClassifier
 {
     /// <summary>
     /// Returns the classifier's proposed catalog entries, or <c>null</c> on any failure/timeout/missing
-    /// Copilot scope. The indexer validates every returned <c>location</c> against the real tree before
+    /// explicit run capability. The indexer validates every returned <c>location</c> against the real tree before
     /// use, so an inaccurate response can only shrink the catalog, never inject an unreachable skill.
     /// </summary>
     Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
@@ -30,7 +30,7 @@ public interface IMarketplaceCatalogClassifier
         string repo,
         string branch,
         IReadOnlyList<string> treePaths,
-        string? submittingUser,
+        string? capabilityRunId,
         CancellationToken ct);
 
     Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyForProjectAsync(
@@ -38,10 +38,10 @@ public interface IMarketplaceCatalogClassifier
         string repo,
         string branch,
         IReadOnlyList<string> treePaths,
-        string? submittingUser,
+        string? capabilityRunId,
         CancellationToken ct,
         ProjectId? projectId = null) =>
-        ClassifyAsync(owner, repo, branch, treePaths, submittingUser, ct);
+        ClassifyAsync(owner, repo, branch, treePaths, capabilityRunId, ct);
 }
 
 /// <summary>
@@ -49,12 +49,12 @@ public interface IMarketplaceCatalogClassifier
 /// <see cref="CopilotWorkflowSelectionModel"/> (empty <c>Tools</c> list so the model physically cannot
 /// emit tool calls, streaming, no session store, no config discovery, JSON-only charter, dual-path text
 /// capture) and on <see cref="CopilotStoryIndependenceClassifier"/>'s bounded-timeout + fail-closed
-/// discipline. Requires the submitting user's Copilot-entitled token scope — installation scope is
-/// rejected (installation tokens are not Copilot model credentials), so anonymous / no-Copilot callers
-/// simply fall back to the heuristic/empty ladder. This is a constrained classifier completion, NOT the
+/// discipline. It accepts only an explicit, run-bound Copilot capability; no ambient user or
+/// installation token scope is available. When no capability is supplied it falls back to the
+/// heuristic/empty ladder. This is a constrained classifier completion, NOT the
 /// agentic assistant loop, so it lives in-process in the API alongside the other classifier precedents.
 /// </summary>
-public sealed class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
+public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
 {
     internal static readonly TimeSpan ClassificationTimeout = TimeSpan.FromSeconds(30);
 
@@ -74,19 +74,16 @@ public sealed class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogCla
         "If you cannot identify any skills, return {\"skills\":[]}.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly IGitHubTokenScopeProvider _scopeProvider;
     private readonly ILogger<CopilotMarketplaceCatalogClassifier> _logger;
     private readonly string? _modelId;
 
     public CopilotMarketplaceCatalogClassifier(
         GitHubCopilotClientFactory copilotClientFactory,
-        IGitHubTokenScopeProvider scopeProvider,
         ILogger<CopilotMarketplaceCatalogClassifier> logger,
         IConfiguration configuration,
         IOptions<GenerationModelOptions>? generationOptions = null)
     {
         _copilotClientFactory = copilotClientFactory;
-        _scopeProvider = scopeProvider;
         _logger = logger;
         _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveReplyClassificationModel();
@@ -97,41 +94,32 @@ public sealed class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogCla
         string repo,
         string branch,
         IReadOnlyList<string> treePaths,
-        string? submittingUser,
+        string? capabilityRunId,
         CancellationToken ct) =>
         ClassifyForProjectAsync(
-            owner, repo, branch, treePaths, submittingUser, ct, projectId: null);
+            owner, repo, branch, treePaths, capabilityRunId, ct, projectId: null);
 
     public async Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyForProjectAsync(
         string owner,
         string repo,
         string branch,
         IReadOnlyList<string> treePaths,
-        string? submittingUser,
+        string? capabilityRunId,
         CancellationToken ct,
         ProjectId? projectId = null)
     {
-        if (treePaths.Count == 0 || string.IsNullOrWhiteSpace(submittingUser))
+        if (treePaths.Count == 0 || string.IsNullOrWhiteSpace(capabilityRunId))
             return null;
 
         try
         {
-            // Copilot model turns require the submitting user's Copilot-entitled token. Installation
-            // scope is not a Copilot model credential and would yield empty/no-auth turns.
-            var scope = await _scopeProvider
-                .ResolveAsync(submittingUser, projectId?.ToString(), ct)
-                .ConfigureAwait(false);
-            if (string.Equals(scope.Key, GitHubTokenScope.Installation.Key, StringComparison.Ordinal))
-                throw new InvalidOperationException(
-                    "Marketplace catalog classification requires a user Copilot token scope; installation scope is not permitted.");
-
             var prompt = BuildPrompt(owner, repo, branch, treePaths);
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(ClassificationTimeout);
             try
             {
-                var raw = await RunModelTurnAsync(scope, prompt, timeoutCts.Token).ConfigureAwait(false);
+                var raw = await RunModelTurnAsync(capabilityRunId, prompt, timeoutCts.Token).ConfigureAwait(false);
                 var parsed = ParseResult(raw);
                 _logger.LogInformation(
                     "Marketplace catalog classification for {Owner}/{Repo} produced {Count} candidate(s).",
@@ -159,13 +147,13 @@ public sealed class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogCla
         }
     }
 
-    private async Task<string?> RunModelTurnAsync(GitHubTokenScope scope, string prompt, CancellationToken ct)
+    protected virtual async Task<string?> RunModelTurnAsync(string capabilityRunId, string prompt, CancellationToken ct)
     {
         CopilotClient? client = null;
         AIAgent? agent = null;
         try
         {
-            client = await _copilotClientFactory.CreateClientAsync("unbound", _modelId, ct).ConfigureAwait(false);
+            client = await _copilotClientFactory.CreateClientAsync(capabilityRunId, _modelId, ct).ConfigureAwait(false);
             await client.StartAsync(ct).ConfigureAwait(false);
 
             var sessionConfig = new SessionConfig

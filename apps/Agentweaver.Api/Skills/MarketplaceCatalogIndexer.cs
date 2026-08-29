@@ -195,7 +195,10 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
     {
         var treePaths = blobs.Select(b => b.Path).ToList();
         var proposed = await _classifier!
-            .ClassifyForProjectAsync(owner, repo, branch, treePaths, submittingUser, ct, projectId)
+            // Marketplace browse has no associated run. Do not reinterpret the caller identity as a
+            // run capability: without an explicitly issued capability, the model tier must fail closed.
+            .ClassifyForProjectAsync(
+                owner, repo, branch, treePaths, capabilityRunId: null, ct: ct, projectId: projectId)
             .ConfigureAwait(false);
         if (proposed is null || proposed.Count == 0)
             return Array.Empty<MarketplaceCatalogEntry>();

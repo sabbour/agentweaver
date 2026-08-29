@@ -17,7 +17,6 @@
 //              10-create-cluster
 //              -> 15-setup-identity
 //              -> 15-provision-monitoring
-//              -> 16-provision-oauth-signing-key (unless --skip-oauth-key)
 //              -> 17-provision-postgres          (unless --skip-postgres)
 //              -> 20-build-push-images
 //              -> 25-verify-image-provenance
@@ -58,7 +57,6 @@ import { resolveVariables, DEFAULTS, DEFAULT_REPO_ROOT, validateQualifiedImageRe
 import * as createClusterDefault from "./steps/10-create-cluster.mjs";
 import * as setupIdentityDefault from "./steps/15-setup-identity.mjs";
 import * as provisionMonitoringDefault from "./steps/15-provision-monitoring.mjs";
-import * as oauthSigningKeyDefault from "./steps/16-provision-oauth-signing-key.mjs";
 import * as provisionPostgresDefault from "./steps/17-provision-postgres.mjs";
 import * as buildImagesDefault from "./steps/20-build-push-images.mjs";
 import * as verifyProvenanceDefault from "./steps/25-verify-image-provenance.mjs";
@@ -77,7 +75,7 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
 
 /**
  * Parses `provision-infra` subcommand argv into a flags object plus a paramsFile path.
- * Recognizes: --skip-postgres, --skip-oauth-key, --force,
+ * Recognizes: --skip-postgres, --force,
  * --image-tag <tag>, --image-source <acr-build|ghcr|custom>, --ghcr-ref <ref>,
  * --ghcr-token <token>, --image-api <ref>, --image-frontend <ref>,
  * --image-mcp <ref>, --image-agent-host <ref> (or =value forms),
@@ -103,8 +101,6 @@ export function parseArgs(argv = []) {
     const arg = argv[i];
     if (arg === "--skip-postgres") {
       flags.SKIP_POSTGRES = true;
-    } else if (arg === "--skip-oauth-key") {
-      flags.SKIP_OAUTH_KEY = true;
     } else if (arg === "--force") {
       flags.FORCE = true;
     } else if (arg === "-h" || arg === "--help") {
@@ -220,7 +216,6 @@ Local dev environment setup (no Azure) lives under 'dev --setup' instead:
 
 Flags:
   --skip-postgres             Skip Postgres provisioning (17-provision-postgres).
-  --skip-oauth-key            Skip MCP OAuth signing key provisioning (16-provision-oauth-signing-key).
   --force                     Allow GHCR/custom import to overwrite an existing target ACR tag if the digest differs.
   --image-tag <tag>           Use this image tag instead of the derived default.
   --image-source <source>     Image source: 'ghcr' (default), 'acr-build', or 'custom'.
@@ -632,7 +627,7 @@ export function shouldRunInteractiveInstaller(argv, { prompt = promptDefault } =
  * @param {typeof execDefault} [opts.exec]
  * @param {typeof logDefault} [opts.log]
  * @param {typeof resolveVariables} [opts.resolveVariables]
- * @param {object} [opts.steps] Injectable step modules for testing (createCluster, setupIdentity, provisionMonitoring, oauthSigningKey, provisionPostgres, buildImages, verifyProvenance, genA2aMtlsCerts, deployStep, verifyStep).
+ * @param {object} [opts.steps] Injectable step modules for testing (createCluster, setupIdentity, provisionMonitoring, provisionPostgres, buildImages, verifyProvenance, genA2aMtlsCerts, deployStep, verifyStep).
  */
 export async function run(opts = {}) {
   const {
@@ -650,7 +645,6 @@ export async function run(opts = {}) {
   const createCluster = steps.createCluster ?? createClusterDefault;
   const setupIdentity = steps.setupIdentity ?? setupIdentityDefault;
   const provisionMonitoring = steps.provisionMonitoring ?? provisionMonitoringDefault;
-  const oauthSigningKey = steps.oauthSigningKey ?? oauthSigningKeyDefault;
   const provisionPostgres = steps.provisionPostgres ?? provisionPostgresDefault;
   const buildImages = steps.buildImages ?? buildImagesDefault;
   const verifyProvenance = steps.verifyProvenance ?? verifyProvenanceDefault;
@@ -757,10 +751,10 @@ export async function run(opts = {}) {
     repoRoot,
   };
 
-  log.step(1, 10, "Creating cluster (ACR + AKS)");
+  log.step(1, 9, "Creating cluster (ACR + AKS)");
   await createCluster.run(cfg, { exec, log });
 
-  log.step(2, 10, "Setting up identity");
+  log.step(2, 9, "Setting up identity");
   await setupIdentity.run(cfg, { exec, log, az, prompt });
 
   // Re-resolve variables so IDENTITY_CLIENT_ID (populated live by az after
@@ -784,24 +778,17 @@ export async function run(opts = {}) {
     repoRoot,
   };
 
-  log.step(3, 10, "Provisioning monitoring");
+  log.step(3, 9, "Provisioning monitoring");
   await provisionMonitoring.run(cfg, { exec, log });
 
-  if (!flags.SKIP_OAUTH_KEY) {
-    log.step(4, 10, "Provisioning MCP OAuth signing key");
-    await oauthSigningKey.run(cfg, { exec, log, repoRoot });
-  } else {
-    log.skip("Skipping 16-provision-oauth-signing-key (--skip-oauth-key)");
-  }
-
   if (!flags.SKIP_POSTGRES) {
-    log.step(5, 10, "Provisioning Postgres");
+    log.step(4, 9, "Provisioning Postgres");
     await provisionPostgres.run(cfg, { exec, log, repoRoot });
   } else {
     log.skip("Skipping 17-provision-postgres (--skip-postgres)");
   }
 
-  log.step(6, 10, "Building and pushing images");
+  log.step(5, 9, "Building and pushing images");
   const buildResult = await buildImages.run(cfg, { exec });
   cfg = {
     ...cfg,
@@ -809,10 +796,10 @@ export async function run(opts = {}) {
     IMPORTED_IMAGE_SOURCES: buildResult.importedImageSources ?? undefined,
   };
 
-  log.step(7, 10, "Ensuring A2A mTLS certificates");
+  log.step(6, 9, "Ensuring A2A mTLS certificates");
   await genA2aMtlsCerts.run(cfg, { exec, log, repoRoot });
 
-  log.step(8, 10, "Deploying manifests");
+  log.step(7, 9, "Deploying manifests");
   const deployResult = await deployStep.run(cfg, { run: exec.run, capture: exec.capture, log, repoRoot });
 
   // Provenance verification is a POST-DEPLOY safety net: it inspects the image
@@ -821,10 +808,10 @@ export async function run(opts = {}) {
   // provision, non-existent) pods -- the latter fails hard with "could not
   // determine desired replica count". This mirrors deploy-from-local's
   // build -> deploy -> verify-provenance order.
-  log.step(9, 10, "Verifying image provenance");
+  log.step(8, 9, "Verifying image provenance");
   const provenanceResult = await verifyProvenance.run(cfg, { exec });
 
-  log.step(10, 10, "Verifying deployment");
+  log.step(9, 9, "Verifying deployment");
   const verifyResult = await verifyStep.run(cfg, { exec, log });
 
   log.info("");

@@ -83,8 +83,6 @@ configMapGenerator:
       - "AGENTHOST_IDENTITY_CLIENT_ID=changeme"
       - "KEYVAULT_NAME=changeme"
       - "TENANT_ID=changeme"
-      - "OAUTH_ISSUER=https://agentweaver.example.com"
-      - "OAUTH_AUDIENCE=https://agentweaver.example.com/mcp"
       - "AUTH_MODE=Entra"
       - "ENTRA_CLIENT_ID="
       - "ENTRA_TENANT_ID="
