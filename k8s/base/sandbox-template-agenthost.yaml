@@ -377,8 +377,25 @@ spec:
         # sandboxed child's mount namespace); exec-tmp/exec-home are the sidecar's own writable
         # scratch and HOME, deliberately NOT shared with AgentHost so model-controlled code cannot
         # read or tamper with AgentHost's git credentials/caches.
+        #
+        # medium: Memory is REQUIRED (issue #1008). This volume was a default emptyDir from #757
+        # until the AKS katapool node image was upgraded on 2026-08-27T17:41:48Z, which brought
+        # Kata Containers 3.32.0. Upstream flipped `disable_guest_empty_dir` false -> true, so a
+        # default emptyDir stopped being a directory the guest agent creates and became a host
+        # directory re-exported over virtio-fs with a PER-CONTAINER share path (measured on the
+        # node: `disable_guest_empty_dir = true`, `emptydir_mode = "shared-fs"`,
+        # `shared_fs = "virtio-fs"`). A pathname AF_UNIX socket is matched by inode identity in the
+        # connecting task's own kernel, so AgentHost now sees the socket file with S_ISSOCK set and
+        # every connect() returns ECONNREFUSED — and the AgentHost container fails closed.
+        #
+        # `medium: Memory` restores the previous semantics for this one volume: Kata takes the
+        # `IsTmpFSEmptyDir` branch BEFORE and independently of `disable_guest_empty_dir` and
+        # `emptydir_mode`, creating one guest tmpfs bind-mounted into both containers. That is a
+        # single real inode, so the rendezvous works again — and it stays working when upstream
+        # removes the `disable_guest_empty_dir` knob entirely.
         - name: exec-ipc
           emptyDir:
+            medium: Memory
             sizeLimit: "1Mi"
         - name: exec-tmp
           emptyDir:

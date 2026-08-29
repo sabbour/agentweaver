@@ -54,6 +54,12 @@ public sealed class PodExecServer : IAsyncDisposable
         if (!KataBwrapExecutor.TryProbeAvailability(out var reason))
             throw new InvalidOperationException($"Executor sidecar isolation is unavailable: {reason}");
 
+        // Regression guard for #1008: on a shared filesystem the bind below succeeds, the socket
+        // file is visible to AgentHost, and every connect() still returns ECONNREFUSED. Fail here,
+        // naming the remediation, instead of coming up healthy and never dispatching a command.
+        if (!PodExecEndpoint.CanHostCrossContainerRendezvous(_socketPath, out var rendezvous))
+            throw new InvalidOperationException($"Executor sidecar cannot publish its endpoint: {rendezvous}");
+
         var directory = Path.GetDirectoryName(Path.GetFullPath(_socketPath))
             ?? throw new InvalidOperationException($"Executor socket path '{_socketPath}' has no directory.");
         Directory.CreateDirectory(directory);
@@ -70,9 +76,11 @@ public sealed class PodExecServer : IAsyncDisposable
         TrySetOwnerOnlyFileMode(_socketPath);
 
         _logger?.LogInformation(
-            "Executor sidecar listening on {SocketPath} (backend={Backend}, pidNamespace={PidNamespace}, uid={Uid}).",
+            "Executor sidecar listening on {SocketPath} (backend={Backend}, filesystem={Filesystem}, "
+            + "pidNamespace={PidNamespace}, uid={Uid}).",
             _socketPath,
             _executor.BackendName,
+            string.IsNullOrEmpty(rendezvous) ? "unknown" : rendezvous,
             KataBwrapExecutor.TryReadPidNamespace(),
             OperatingSystem.IsLinux() ? Environment.GetEnvironmentVariable("UID") ?? "n/a" : "n/a");
     }

@@ -56,6 +56,24 @@ public sealed class KubernetesRemoteApiManifestTests
     }
 
     /// <summary>
+    /// Issue #1008. This volume was a default <c>emptyDir</c> from #757 until the AKS katapool node
+    /// image upgrade on 2026-08-27 brought Kata 3.32.0, where upstream flipped
+    /// <c>disable_guest_empty_dir</c> to <c>true</c> — turning it into a per-container virtio-fs
+    /// share, on which a cross-container AF_UNIX <c>connect()</c> returns <c>ECONNREFUSED</c>.
+    /// <c>medium: Memory</c> takes Kata's tmpfs branch, which is evaluated independently of that
+    /// setting, so this line is what keeps the executor reachable.
+    /// </summary>
+    [Fact]
+    public void AgentHostTemplate_KeepsTheExecutorIpcVolumeOnAGuestOwnedTmpfs()
+    {
+        var template = ReadManifest("sandbox-template-agenthost.yaml");
+
+        template.Should().MatchRegex(
+            @"(?m)^\s+- name: exec-ipc\s*\r?\n\s+emptyDir:\s*\r?\n\s+medium: Memory\s*$",
+            "a default emptyDir reaches the Kata guest over virtio-fs and cannot host the socket");
+    }
+
+    /// <summary>
     /// The sidecar's value is its own PID namespace. Every one of these settings would either merge
     /// the namespaces again or hand the sandbox host-level reach, so their absence is the invariant.
     /// </summary>
