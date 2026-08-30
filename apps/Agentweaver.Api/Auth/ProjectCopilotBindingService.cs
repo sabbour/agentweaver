@@ -57,7 +57,8 @@ public sealed class ProjectCopilotBindingService(
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
-    CopilotAppRegistrationService registration)
+    CopilotAppRegistrationService registration,
+    ILogger<ProjectCopilotBindingService> logger)
 {
     private const string CookieName = "__Host-agentweaver-copilot-app-auth";
     private static readonly TimeSpan TransactionLifetime = TimeSpan.FromMinutes(10);
@@ -280,7 +281,12 @@ public sealed class ProjectCopilotBindingService(
         var secret = await secretStore.GetSecretAsync(binding.CredentialReference, ct).ConfigureAwait(false);
         var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
         if (credential is null || !string.Equals(credential.Status, "signed-in", StringComparison.Ordinal))
+        {
+            logger.LogWarning(
+                "Copilot App connection for project {ProjectId} has an active binding record but its credential secret is {SecretState}.",
+                projectId, !secret.Found ? "missing" : credential is null ? "unparseable" : $"status={credential.Status}");
             return new(CopilotBindingOutcome.GitHubBindingUnavailable, false, null);
+        }
 
         var login = IsGitHubLogin(credential.GitHubLogin)
             ? credential.GitHubLogin
@@ -400,8 +406,12 @@ public sealed class ProjectCopilotBindingService(
             return claimed == AuthorizationClaimResult.Consumed
                 ? CopilotBindingOutcome.AuthorizationTransactionConsumed
                 : CopilotBindingOutcome.AuthorizationTransactionInvalid;
-        if (await registration.ValidateAsync(ct).ConfigureAwait(false) != CopilotAppRegistrationState.Ready)
+        var registrationState = await registration.ValidateAsync(ct).ConfigureAwait(false);
+        if (registrationState != CopilotAppRegistrationState.Ready)
         {
+            logger.LogWarning(
+                "Copilot App binding failed for project {ProjectId}: registration validation returned {RegistrationState} instead of Ready.",
+                projectId, registrationState);
             await WriteTombstoneAsync(transaction.PkceVerifierProtected, CancellationToken.None).ConfigureAwait(false);
             await CompleteFailureAsync(transaction, projectId, GitHubAuditReasonCode.BindingUnavailable, CancellationToken.None)
                 .ConfigureAwait(false);
@@ -417,14 +427,14 @@ public sealed class ProjectCopilotBindingService(
         try
         {
             if (string.IsNullOrWhiteSpace(code))
-                throw new InvalidOperationException();
+                throw new InvalidOperationException("Callback did not include an authorization code.");
             var verifier = await secretStore.GetSecretAsync(transaction.PkceVerifierProtected, ct).ConfigureAwait(false);
             if (!verifier.Found || string.IsNullOrWhiteSpace(verifier.Value))
-                throw new InvalidOperationException();
+                throw new InvalidOperationException("PKCE verifier secret was not found or had expired.");
             var credential = await ExchangeCodeAsync(code, verifier.Value, ct).ConfigureAwait(false);
             await WriteTombstoneAsync(transaction.PkceVerifierProtected, ct).ConfigureAwait(false);
             if (credential is null || string.IsNullOrWhiteSpace(credential.GitHubLogin))
-                throw new InvalidOperationException();
+                throw new InvalidOperationException("Token exchange with GitHub did not return a usable credential or login.");
 
             var version = CreateRandomValue();
             credentialReference = $"copilot-app-project-{projectId}-{version}";
@@ -448,11 +458,12 @@ public sealed class ProjectCopilotBindingService(
                 CreateAudit(transaction.EntraObjectId, projectId, GitHubAuditOutcome.Succeeded, GitHubAuditReasonCode.None, version),
                 ct).ConfigureAwait(false);
             if (!completed)
-                throw new InvalidOperationException();
+                throw new InvalidOperationException("Persisting the Copilot binding record failed.");
             return CopilotBindingOutcome.Success;
         }
-        catch
+        catch (Exception ex)
         {
+            logger.LogWarning(ex, "Copilot App binding failed to complete for project {ProjectId}.", projectId);
             if (!string.IsNullOrWhiteSpace(credentialReference))
                 await WriteTombstoneAsync(credentialReference, CancellationToken.None).ConfigureAwait(false);
             await WriteTombstoneAsync(transaction.PkceVerifierProtected, CancellationToken.None).ConfigureAwait(false);
