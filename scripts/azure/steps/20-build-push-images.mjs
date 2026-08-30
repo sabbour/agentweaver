@@ -803,9 +803,21 @@ function frontendNodeModulesPaths(repoRoot) {
   return { nodeModulesDir, backupDir };
 }
 
+function removeStaleFrontendNodeModulesStashes(repoRoot, backupDir, fsImpl) {
+  const parentDir = path.dirname(repoRoot);
+  const prefix = `${path.basename(repoRoot)}.frontend-node_modules.`;
+  for (const entry of fsImpl.readdirSync(parentDir, { withFileTypes: true })) {
+    const candidate = path.join(parentDir, entry.name);
+    if (entry.isDirectory() && entry.name.startsWith(prefix) && candidate !== backupDir) {
+      fsImpl.rmSync(candidate, { recursive: true, force: true });
+    }
+  }
+}
+
 /** Moves apps/web/node_modules out of the ACR build context (repo root). */
 export function stashFrontendNodeModules(repoRoot, { fsImpl = fs } = {}) {
   const { nodeModulesDir, backupDir } = frontendNodeModulesPaths(repoRoot);
+  removeStaleFrontendNodeModulesStashes(repoRoot, backupDir, fsImpl);
   if (!fsImpl.existsSync(nodeModulesDir)) return;
   fsImpl.rmSync(backupDir, { recursive: true, force: true });
   fsImpl.renameSync(nodeModulesDir, backupDir);
