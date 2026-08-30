@@ -37,6 +37,30 @@ function mergeParamsIntoEnv(baseEnv, paramsFile) {
   return { ...paramsFile, ...baseEnv };
 }
 
+/**
+ * Resolves the env a deploy subcommand should use: explicit `--params-file` flag
+ * takes precedence over auto-discovered `params.<username>.json`; explicit process
+ * env vars always win over params-file values (see mergeParamsIntoEnv). Shared by
+ * every subcommand that deploys real infrastructure (deploy-from-local,
+ * deploy-from-commit, deploy-from-release) so none of them silently fall back to
+ * requiring every variable to be set by hand in the shell.
+ */
+async function resolveDeployEnv(rest, { importFn, modules, log }) {
+  const { loadParamsFile } = modules.config ?? (await importFn("./lib/config.mjs"));
+  const paramsFileIdx = rest.findIndex((a) => a === "--params-file" || a.startsWith("--params-file="));
+  let paramsFilePath = null;
+  if (paramsFileIdx !== -1) {
+    paramsFilePath = rest[paramsFileIdx].includes("=")
+      ? rest[paramsFileIdx].split("=").slice(1).join("=")
+      : rest[paramsFileIdx + 1];
+  } else {
+    paramsFilePath = findUserParamsFile();
+    if (paramsFilePath) log.info(`[params] Auto-loading ${paramsFilePath}`);
+  }
+  const paramsFile = loadParamsFile(paramsFilePath);
+  return mergeParamsIntoEnv(process.env, paramsFile);
+}
+
 const SUBCOMMANDS = Object.freeze([
   "provision-infra",
   "setup-entra-app",
@@ -146,23 +170,22 @@ export async function run(argv = [], opts = {}) {
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const { loadParamsFile } = modules.config ?? (await importFn("./lib/config.mjs"));
-    // Explicit --params-file flag takes precedence; otherwise auto-discover params.<username>.json
-    const paramsFileIdx = rest.findIndex((a) => a === "--params-file" || a.startsWith("--params-file="));
-    let paramsFilePath = null;
-    if (paramsFileIdx !== -1) {
-      paramsFilePath = rest[paramsFileIdx].includes("=")
-        ? rest[paramsFileIdx].split("=").slice(1).join("=")
-        : rest[paramsFileIdx + 1];
-    } else {
-      paramsFilePath = findUserParamsFile();
-      if (paramsFilePath) log.info(`[params] Auto-loading ${paramsFilePath}`);
-    }
-    const paramsFile = loadParamsFile(paramsFilePath);
-    const env = mergeParamsIntoEnv(process.env, paramsFile);
+    const env = await resolveDeployEnv(rest, { importFn, modules, log });
     const cfg = await resolveVariables({ env });
     const allowDirty = rest.includes("--allow-dirty");
     return mod.run(cfg, { log, allowDirty });
+  }
+
+  if (command === "deploy-from-commit" || command === "deploy-from-release") {
+    if (rest.includes("-h") || rest.includes("--help")) {
+      log.info(mod.HELP_TEXT ?? HELP_TEXT);
+      return { ok: true, help: true };
+    }
+    // Same per-user params.<username>.json auto-load as deploy-from-local -- these
+    // subcommands also deploy real infrastructure and previously required every
+    // variable (e.g. KEYVAULT_NAME) to be set by hand in the shell.
+    const env = await resolveDeployEnv(rest, { importFn, modules, log });
+    return mod.run({ argv: rest, log, env });
   }
 
   return mod.run({ argv: rest, log });

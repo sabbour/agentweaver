@@ -1,5 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, openSync as fsOpenSync, closeSync as fsCloseSync, statSync as fsStatSync } from 'node:fs';
+import {
+  existsSync,
+  openSync as fsOpenSync,
+  closeSync as fsCloseSync,
+  statSync as fsStatSync,
+  readdirSync,
+  rmSync,
+} from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -889,5 +896,36 @@ export function closeRecordingSession(session) {
   const sessions = listPlaywrightSessions();
   if (sessions.get(session)?.status === 'open') {
     runPlaywrightCli(sessionArgs(session, 'close'));
+  }
+  pruneCacheDirectories(path.join(process.cwd(), '.auth', 'sessions', session));
+}
+
+// playwright-cli manages its own persistent browser profile per session under
+// `.auth/sessions/<session>` (relative to this package's cwd) and never cleans it up itself.
+// Once the browser has released the profile (after the `close` command above returns), it is
+// safe to prune the same known-safe cache directories we already exclude when copying Edge
+// profiles elsewhere in this file (see PROFILE_COPY_EXCLUDED_DIRECTORIES). This keeps the
+// persistent profile working (auth/cookies are preserved) while discarding regenerable cache
+// data that otherwise accumulates unbounded (tens of MB per session).
+export function pruneCacheDirectories(root) {
+  if (!existsSync(root)) return;
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const entryPath = path.join(dir, entry.name);
+      if (PROFILE_COPY_EXCLUDED_DIRECTORIES.has(entry.name)) {
+        rmSync(entryPath, { recursive: true, force: true });
+      } else {
+        stack.push(entryPath);
+      }
+    }
   }
 }

@@ -189,9 +189,10 @@ export async function run(opts = {}) {
     steps = {},
     readFile = fs.readFileSync,
     validatedRelease,
+    env: baseEnv = process.env,
   } = opts;
   const parsed = parseArgs(argv);
-  const dryRun = parsed.dryRun || process.env.DRY_RUN === "true";
+  const dryRun = parsed.dryRun || baseEnv.DRY_RUN === "true";
 
   if (parsed.help) {
     log.info(HELP_TEXT);
@@ -215,7 +216,7 @@ export async function run(opts = {}) {
       capture: exec.capture,
     });
     const releaseEnv = {
-      ...process.env,
+      ...baseEnv,
       IMAGE_TAG: tag,
       AGENTHOST_IMAGE_TAG: tag,
       TARGET_GIT_REF: release.commit ?? tag,
@@ -245,7 +246,7 @@ export async function run(opts = {}) {
             GHCR_REF: tag,
             GHCR_OWNER: ghcrOwner,
             GHCR_REPOSITORY: ghcrRepository,
-            GHCR_TOKEN: parsed.ghcrToken || process.env.GHCR_TOKEN,
+            GHCR_TOKEN: parsed.ghcrToken || baseEnv.GHCR_TOKEN,
           }
         : {}),
       repoRoot,
