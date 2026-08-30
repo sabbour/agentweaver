@@ -149,3 +149,49 @@ working).
 - PR #1018 (Kata executor transport) — separate issue, not part of this session's GitHub-auth focus.
 - Distinguishing "create new repo" vs "connect existing repo" for the add-repo flow, if the user's reported case
   turns out to be the latter.
+
+## 2026-08-30 (live user testing round): two more real bugs found and fixed via direct user feedback
+
+After the second deploy, the user tested live and found two more concrete, reproducible bugs — this is the
+process working as intended (deploy → user tests → report exact symptom → root-cause → fix → redeploy):
+
+**Bug #5 — Copilot App OAuth callback URL was registered with a typo on GitHub's side (user-side fix, not code):**
+User hit "Be careful! redirect_uri is not associated with this application" on the GitHub OAuth authorize page.
+Root cause: the Copilot App's registered callback URL on GitHub was
+`.../auth/github-copilot-app/callback` (hyphenated, no slash) but the server's actual route is
+`.../auth/github/copilot-app/callback` (slash-separated — confirmed via `git grep` on `origin/dev` against
+`ProjectEndpoints.cs:142` and `ProjectCopilotBindingService.cs`). The Repo App's registered callback was already
+correct. **This was a GitHub App admin-console setting, not something fixable via code, API, or `kubectl`** — the
+user corrected it directly on https://github.com/settings/apps/agentweaver-orchestrator-copilot.
+
+**Bug #6 — post-auth browser redirect fell back to localhost (real code/infra bug, fixed in PR #1033):**
+After bug #5 was corrected, the user got further — GitHub's authorize page succeeded, but the API then redirected
+the browser to `http://localhost:5173/projects?copilot_app_auth=authorization_transaction_invalid...` instead of
+the deployed production frontend. Root cause: both `ProjectCopilotBindingService.GetCallbackRedirectAsync` and
+the equivalent method in `RepoAppUserAuthorizationService.cs` read `Auth:CopilotApp:FrontendUrl` /
+`Auth:RepoApp:FrontendUrl` from configuration and fall back to `http://localhost:5173` (the local dev default)
+when unset. The k8s manifest (`k8s/base/api-deployment.yaml`) wired every other Copilot/Repo App setting
+(client id/secret, callback URL, slug/app id, private key secret name) but never set these two — a gap in the
+same PR #1026 that did the original wiring. Fixed in **PR #1033**: added `Auth__CopilotApp__FrontendUrl` and
+`Auth__RepoApp__FrontendUrl` env vars, both reusing the existing `ENTRA_FRONTEND_URL` configmap value (the same
+production frontend URL Entra already uses — no new configmap key needed). Added two new assertions to
+`scripts/azure/tests/deploy-render.test.mjs` confirming the rendered manifest wires both correctly; 21/21 tests
+pass. **Deployed to production at commit `2e2e1a9b`** — confirmed via `kubectl exec ... printenv` that both new
+env vars now correctly resolve to `https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io` on the
+running pods; both API pods `1/1 Running`, 0 restarts, clean startup logs; 4/4 images provenance-verified against
+commit `2e2e1a9b`.
+
+**The `authorization_transaction_invalid` outcome code in the URL was a secondary symptom, not a separate bug**:
+`GetCallbackRedirectAsync` builds `{frontend}{route}?copilot_app_auth={outcome}` — since `frontend` resolved to
+`localhost:5173` (unreachable in the user's context) the browser never got far enough to show what the real
+outcome would have been on the correct frontend; the `authorization_transaction_invalid` in the URL was likely a
+downstream effect of the transaction/state cookie not surviving the redirect to the wrong origin, not evidence of
+yet another distinct bug. **Follow-up for the user's next live test**: after PR #1033's redeploy, if
+`authorization_transaction_invalid` still appears on the *correct* production frontend URL, that would indicate a
+genuinely separate transaction/state-handling bug worth investigating next — flag if seen again.
+
+**Process note reinforced this round**: this exact live-test-first workflow (deploy → user reproduces exact
+symptom with a screenshot → agent traces to precise code location → small targeted PR → redeploy) found two real,
+previously-invisible-to-code-review bugs in under an hour, validating the user's original request to avoid
+"overengineering reviews" and instead get agents working, review for correctness, commit, and move to the next
+concrete symptom.
