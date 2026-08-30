@@ -195,3 +195,41 @@ symptom with a screenshot → agent traces to precise code location → small ta
 previously-invisible-to-code-review bugs in under an hour, validating the user's original request to avoid
 "overengineering reviews" and instead get agents working, review for correctness, commit, and move to the next
 concrete symptom.
+
+## 2026-08-30 (later): "Copilot App connection is currently unavailable" — diagnosability fix (PR #1035)
+
+After bug #6's redeploy, the user reported yet another new error: **"The Copilot App connection is currently
+unavailable. Try again later."** — the UI message for `CopilotBindingOutcome.GitHubBindingUnavailable`
+(`apps/web/src/components/CopilotAuthorizationResultNotice.tsx`).
+
+**Investigation found no root cause could be pinned down from logs, because there were no logs at all.**
+`ProjectCopilotBindingService.ClaimAndCompleteAsync` (the OAuth-callback-completion path) had a bare `catch { }`
+block with **no exception variable whatsoever** — every distinct failure inside it (missing authorization code,
+expired/missing PKCE verifier secret, failed GitHub token exchange, missing GitHub login from the exchange,
+failed persistence write) silently collapsed into the same generic `GitHubBindingUnavailable` outcome with zero
+diagnostic information ever written anywhere. `GetConnectionAsync` (the settings-page connection-status-poll path)
+had the identical silent-failure gap for its own distinct failure condition (stored credential secret missing, or
+found but not exactly `Status == "signed-in"`).
+
+Live-tested two candidate causes and ruled them out as the *current* explanation: (1) `kubectl exec` into a live
+API pod and `curl https://api.github.com/apps/agentweaver-orchestrator-copilot` returned `200` in ~135ms — egress
+to GitHub's API works fine, ruling out a network/rate-limit explanation for right now; (2) the same live call's
+JSON body showed `"permissions": {}`, matching the exact shape `CopilotAppRegistrationService.ValidateAsync()`
+(fixed in PR #1028) expects as "Ready" — ruling out a regression of that earlier fix.
+
+**Fix (PR #1035, merged, deployed):** rather than guess further, added an `ILogger<ProjectCopilotBindingService>`
+dependency (threaded through all 7 minimal-API endpoint handlers in `ProjectEndpoints.cs` that construct this
+service directly — it is not DI-registered) and logged the actual reason with a descriptive message at every
+failure branch in both `ClaimAndCompleteAsync` and `GetConnectionAsync`, without logging any secrets/tokens. This
+is a pure diagnostics change — no behavior or response-code change. 8/8 targeted tests + 273/273 broader Auth
+suite pass (10 skipped, pre-existing). Changeset included.
+
+**Deployed to production at commit `5e62974c`** (through PR #1035). 4/4 images provenance-verified, both API
+pods `1/1 Running`, 0 restarts.
+
+**Next step for the user**: retry the failing Copilot App connect flow one more time. This is the first time this
+failure path will actually produce a log line — check `kubectl logs -n agentweaver -l app=agentweaver-api -c api`
+for a `LogWarning` from `ProjectCopilotBindingService` immediately after the next attempt, which will show the
+real underlying reason (e.g. "PKCE verifier secret was not found or had expired", "Token exchange with GitHub did
+not return a usable credential or login", etc.) instead of the current dead end. Whatever that reveals should be
+the next concrete fix target — this PR intentionally does not guess at a fix without evidence.
