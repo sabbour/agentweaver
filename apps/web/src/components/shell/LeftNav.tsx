@@ -11,6 +11,7 @@ import { useAppVersion } from '../../hooks/useAppVersion';
 import { NotificationBell } from './NotificationBell';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
+import { GitHubIdentityBadge } from '../GitHubIdentityBadge';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
@@ -306,8 +307,9 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
         ))}
       </div>
 
-      {/* Footer: status dot + version badge */}
+      {/* Footer: signed-in identity, status dot + version badge */}
       <div className="aw-rail-footer">
+        <GitHubIdentityBadge projectId={projectId} collapsed={collapsed} />
         <div className="aw-rail-footer__meta">
           <StatusDot />
           <Badge
