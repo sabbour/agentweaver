@@ -222,6 +222,10 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__Entra__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__CopilotApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: COPILOT_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__RepoApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: REPO_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
+  // Post-authorization browser redirect target for both GitHub Apps must reuse the same
+  // production frontend URL as Entra, or the code falls back to its localhost:5173 default.
+  assert.match(builtYaml, /name: Auth__CopilotApp__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__RepoApp__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__CopilotApp__Slug\s*\n\s*value: agentweaver-orchestrator-copilot/);
   assert.match(builtYaml, /name: Auth__RepoApp__PrivateKeySecretName\s*\n\s*value: repo-app-private-key/);
   assert.match(builtYaml, /name: Auth__CopilotApp__ClientId\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: copilot-app-client-id\s*\n\s*name: agentweaver-secrets/);

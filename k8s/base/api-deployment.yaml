@@ -196,6 +196,15 @@ spec:
                   key: COPILOT_APP_CALLBACK_URL
             - name: Auth__CopilotApp__Slug
               value: agentweaver-orchestrator-copilot
+            # Browser redirect target after the OAuth callback completes. Without this,
+            # ProjectCopilotBindingService.GetCallbackRedirectAsync falls back to its
+            # http://localhost:5173 development default, sending production users to
+            # their own machine instead of back to the deployed frontend.
+            - name: Auth__CopilotApp__FrontendUrl
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: ENTRA_FRONTEND_URL
             # The Repo App holds repository access and fetches its PEM at runtime
             # from Key Vault using this secret name rather than mounting the PEM.
             - name: Auth__RepoApp__ClientId
@@ -213,6 +222,14 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: REPO_APP_CALLBACK_URL
+            # Browser redirect target after the OAuth callback completes; same rationale
+            # as Auth__CopilotApp__FrontendUrl above (RepoAppUserAuthorizationService has
+            # the identical http://localhost:5173 fallback).
+            - name: Auth__RepoApp__FrontendUrl
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: ENTRA_FRONTEND_URL
             - name: Auth__RepoApp__AppId
               valueFrom:
                 secretKeyRef:
