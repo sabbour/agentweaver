@@ -9,6 +9,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -213,7 +214,8 @@ public sealed class ProjectCopilotBindingServiceTests
         }).Build();
         var httpClientFactory = new StubHttpClientFactory(provider);
         return new(configuration, new TwoAppPersistenceStore(db), secrets, httpClientFactory, roles,
-            new CopilotAppRegistrationService(configuration, httpClientFactory));
+            new CopilotAppRegistrationService(configuration, httpClientFactory),
+            NullLogger<ProjectCopilotBindingService>.Instance);
     }
     private static CallerContext Human(string id) => new() { User = id, EntraObjectId = id };
     private static ClaimsPrincipal HumanPrincipal() => new(new ClaimsIdentity([new Claim("oid", "owner")], "test"));
