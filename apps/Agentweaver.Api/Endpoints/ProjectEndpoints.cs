@@ -542,6 +542,76 @@ app.MapPut("/api/projects/{id}/preview-settings", async (
     .WithName("UpdateProjectPreviewSettings")
     .WithTags("Projects");
 
+app.MapGet("/api/projects/{id}/github/repository-owners", async (
+    HttpContext httpContext,
+    string id,
+    ProjectService projectService,
+    GitHubRepositorySelectionBroker credentials,
+    GitHubRepositorySelectionClient repositories,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var view = await projectService.GetViewAsync(projectId, ct).ConfigureAwait(false);
+    if (view is null) return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbidden)
+        return forbidden;
+
+    var owners = await credentials.TryUseCredentialAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext),
+        token => repositories.ListOwnersAsync(token, ct),
+        ct).ConfigureAwait(false);
+    return owners is null
+        ? Results.Conflict(new { error = "github_binding_unavailable" })
+        : Results.Ok(owners.Select(owner => new { login = owner.Login, type = owner.IsUser ? "user" : "org" }));
+})
+    .WithName("ListProjectRepositoryOwners")
+    .WithTags("Projects", "GitHub");
+
+app.MapPost("/api/projects/{id}/github/repository", async (
+    HttpContext httpContext,
+    string id,
+    CreateProjectRepositoryRequest request,
+    ProjectService projectService,
+    GitHubRepositorySelectionBroker credentials,
+    GitHubRepositorySelectionClient repositories,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    if (string.IsNullOrWhiteSpace(request.Owner))
+        return Results.BadRequest(new { error = "owner is required." });
+    var view = await projectService.GetViewAsync(projectId, ct).ConfigureAwait(false);
+    if (view is null) return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbidden)
+        return forbidden;
+    if (view.Project.Origin.Kind != ProjectOriginKind.Blank)
+        return Results.Conflict(new { error = "project_repository_already_connected" });
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var connected = await credentials.TryUseCredentialAsync(
+        caller,
+        async token =>
+        {
+            var repository = await repositories.CreateAsync(
+                request.Owner.Trim(),
+                string.IsNullOrWhiteSpace(request.Name) ? SlugifyRepositoryName(view.Project.Name) : request.Name.Trim(),
+                request.Private ?? true,
+                token,
+                ct).ConfigureAwait(false);
+            return repository is null
+                ? null
+                : await projectService.ConnectCreatedRepositoryAsync(
+                    projectId, repository.FullName, repository.CloneUrl, token, ct).ConfigureAwait(false);
+        },
+        ct).ConfigureAwait(false);
+    return connected is null
+        ? Results.Conflict(new { error = "github_repository_creation_unavailable" })
+        : Results.Ok(new { source_repository = connected.Origin.SourceRepository, html_url = $"https://github.com/{connected.Origin.SourceRepository}" });
+})
+    .WithName("CreateProjectRepository")
+    .WithTags("Projects", "GitHub");
+
 // DELETE /api/projects/{id}?confirm=true — record-only delete
 app.MapDelete("/api/projects/{id}", async (
     HttpContext httpContext,
@@ -1198,5 +1268,15 @@ private static IResult CopilotBindingFailure(CopilotBindingOutcome outcome)
         ? StatusCodes.Status403Forbidden
         : StatusCodes.Status409Conflict;
     return Results.Json(new { error = ProjectCopilotBindingService.ToStateCode(outcome) }, statusCode: statusCode);
+}
+
+private static string SlugifyRepositoryName(string value)
+{
+    var slug = string.Concat(value.Trim().ToLowerInvariant()
+        .Select(character => char.IsLetterOrDigit(character) ? character : '-'))
+        .Trim('-');
+    while (slug.Contains("--", StringComparison.Ordinal))
+        slug = slug.Replace("--", "-", StringComparison.Ordinal);
+    return string.IsNullOrEmpty(slug) ? "project" : slug;
 }
 }
