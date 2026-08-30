@@ -88,6 +88,8 @@ configMapGenerator:
       - "ENTRA_TENANT_ID="
       - "ENTRA_REDIRECT_URI=https://agentweaver.example.com/auth/entra/callback"
       - "ENTRA_FRONTEND_URL=https://agentweaver.example.com"
+      - "COPILOT_APP_CALLBACK_URL=https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/auth/github/copilot-app/callback"
+      - "REPO_APP_CALLBACK_URL=https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/auth/github/repo-app/callback"
       - "TOKEN_STORE_KEYVAULT_URI=https://changeme.vault.azure.net"
       - "AGENTHOST_KEYVAULT_URI=https://changeme.vault.azure.net/"
       - "APPINSIGHTS_WORKSPACE_ID="

@@ -177,6 +177,49 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: ENTRA_FRONTEND_URL
+            # GitHub Copilot App OAuth credentials. Its private key must remain unset:
+            # this App uses the OAuth flow and is intentionally distinct from the Repo App.
+            - name: Auth__CopilotApp__ClientId
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: copilot-app-client-id
+            - name: Auth__CopilotApp__ClientSecret
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: copilot-app-client-secret
+            - name: Auth__CopilotApp__CallbackUrl
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: COPILOT_APP_CALLBACK_URL
+            - name: Auth__CopilotApp__Slug
+              value: agentweaver-orchestrator-copilot
+            # The Repo App holds repository access and fetches its PEM at runtime
+            # from Key Vault using this secret name rather than mounting the PEM.
+            - name: Auth__RepoApp__ClientId
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: repo-app-client-id
+            - name: Auth__RepoApp__ClientSecret
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: repo-app-client-secret
+            - name: Auth__RepoApp__CallbackUrl
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: REPO_APP_CALLBACK_URL
+            - name: Auth__RepoApp__AppId
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: repo-app-id
+            - name: Auth__RepoApp__PrivateKeySecretName
+              value: repo-app-private-key
             # Backward-compat: allow raw GitHub tokens while clients migrate to the new flow.
             # Flip to "false" once all MCP clients are using Agentweaver-minted tokens.
             - name: Auth__Mcp__AllowGitHubPassthrough
