@@ -46,6 +46,7 @@ internal sealed class GitHubRepositorySelectionBroker(
     GitHubRepositorySelectionClient repositories)
 {
     internal static readonly TimeSpan SelectionCodeLifetime = TimeSpan.FromMinutes(5);
+    private static readonly JsonSerializerOptions CredentialJsonOptions = new(JsonSerializerDefaults.Web);
 
     internal async Task<(GitHubRepositorySelectionOutcome Outcome, IReadOnlyList<GitHubRepositorySelectionCandidate> Candidates)>
         ListAsync(CallerContext caller, CancellationToken ct)
@@ -242,13 +243,11 @@ internal sealed class GitHubRepositorySelectionBroker(
             return false;
         try
         {
-            using var document = JsonDocument.Parse(value);
-            if (!document.RootElement.TryGetProperty("status", out var status) ||
-                !string.Equals(status.GetString(), "signed-in", StringComparison.Ordinal) ||
-                !document.RootElement.TryGetProperty("accessToken", out var token) ||
-                string.IsNullOrWhiteSpace(token.GetString()))
+            var credential = JsonSerializer.Deserialize<Credential>(value, CredentialJsonOptions);
+            if (!string.Equals(credential?.Status, "signed-in", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(credential?.AccessToken))
                 return false;
-            accessToken = token.GetString();
+            accessToken = credential!.AccessToken;
             return true;
         }
         catch (JsonException)
@@ -256,6 +255,8 @@ internal sealed class GitHubRepositorySelectionBroker(
             return false;
         }
     }
+
+    private sealed record Credential(string? Status, string? AccessToken);
 
     private static string CreateCode() =>
         Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))

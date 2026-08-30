@@ -24,6 +24,7 @@ internal sealed class GitHubCapabilityBroker(
     RepoAppInstallationTokenService installationTokens)
 {
     internal static readonly TimeSpan MaximumCapabilityLifetime = TimeSpan.FromMinutes(10);
+    private static readonly JsonSerializerOptions CredentialJsonOptions = new(JsonSerializerDefaults.Web);
 
     public Task<FencedGitHubCapabilitySnapshot?> TryFenceAsync(
         GitHubCapabilityPurpose purpose,
@@ -258,16 +259,11 @@ internal sealed class GitHubCapabilityBroker(
             return false;
         try
         {
-            using var document = JsonDocument.Parse(value);
-            if (!document.RootElement.TryGetProperty("status", out var status) ||
-                !string.Equals(status.GetString(), "signed-in", StringComparison.Ordinal) ||
-                !document.RootElement.TryGetProperty("accessToken", out var token) ||
-                string.IsNullOrWhiteSpace(token.GetString()))
+            var credential = JsonSerializer.Deserialize<Credential>(value, CredentialJsonOptions);
+            if (!string.Equals(credential?.Status, "signed-in", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(credential?.AccessToken))
                 return false;
-            if (document.RootElement.TryGetProperty("expiresAt", out var expiry) &&
-                expiry.ValueKind == JsonValueKind.String &&
-                DateTimeOffset.TryParse(expiry.GetString(), out var parsed))
-                expiresAt = parsed;
+            expiresAt = credential!.ExpiresAt;
             return true;
         }
         catch (JsonException)
@@ -288,23 +284,17 @@ internal sealed class GitHubCapabilityBroker(
             return false;
         try
         {
-            using var document = JsonDocument.Parse(value);
-            if (!document.RootElement.TryGetProperty("status", out var status) ||
-                !string.Equals(status.GetString(), "signed-in", StringComparison.Ordinal) ||
-                !document.RootElement.TryGetProperty("accessToken", out var token) ||
-                string.IsNullOrWhiteSpace(token.GetString()))
+            var credential = JsonSerializer.Deserialize<Credential>(value, CredentialJsonOptions);
+            if (!string.Equals(credential?.Status, "signed-in", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(credential?.AccessToken))
             {
                 return false;
             }
 
-            if (document.RootElement.TryGetProperty("expiresAt", out var expiry) &&
-                (expiry.ValueKind != JsonValueKind.String ||
-                 !DateTimeOffset.TryParse(expiry.GetString(), out expiresAt)))
-            {
-                return false;
-            }
+            if (credential!.ExpiresAt is { } expiry)
+                expiresAt = expiry;
 
-            accessToken = token.GetString()!;
+            accessToken = credential.AccessToken!;
             return true;
         }
         catch (JsonException)
@@ -312,4 +302,6 @@ internal sealed class GitHubCapabilityBroker(
             return false;
         }
     }
+
+    private sealed record Credential(string? Status, string? AccessToken, DateTimeOffset? ExpiresAt);
 }
