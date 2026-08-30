@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.4
+
+### Patch Changes
+
+- 9cd9274: Clean up stale frontend dependency stashes before Azure image builds so interrupted builds do not leave large folders beside the repository.
+- 8ee1970: Fix GitHub App credentials being rejected after a successful connection because their stored JSON property casing differed from the capability broker's reader.
+- 8ee1970: Restore connecting a blank project to a newly created GitHub repository through the active Repo App authorization.
+
 ## 0.21.3
 
 ### Patch Changes
