@@ -61,14 +61,14 @@ function fakeExec({ captureImpl, runImpl, dryRun = false } = {}) {
 }
 
 test("stashFrontendNodeModules: removes stale sibling stashes but preserves this process's stash", () => {
-  const repoRoot = "C:\\fake\\repo";
+  const repoRoot = path.join("fake", "repo");
   const currentStash = `${repoRoot}.frontend-node_modules.${process.pid}`;
   const staleStash = `${repoRoot}.frontend-node_modules.12345`;
   const removed = [];
   const renamed = [];
   const fsImpl = {
     readdirSync: (directory, options) => {
-      assert.equal(directory, "C:\\fake");
+      assert.equal(directory, path.dirname(repoRoot));
       assert.deepEqual(options, { withFileTypes: true });
       return [
         { name: "repo.frontend-node_modules.12345", isDirectory: () => true },
