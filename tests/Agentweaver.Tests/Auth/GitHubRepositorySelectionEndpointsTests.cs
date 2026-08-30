@@ -125,6 +125,31 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         reusedBody.GetRawText().Should().NotContain("repository_id");
     }
 
+    [Fact]
+    public async Task ListRepositoryOwners_ForBlankProjectUsesTheRepoAppCredential()
+    {
+        const string subject = "selection-subject";
+        using var factory = new RepositorySelectionWebApplicationFactory();
+        await factory.SeedRepoAppAuthorizationAsync(subject);
+        var client = factory.CreateAuthenticatedClientForObjectId(subject, PlatformRoles.ProjectCreator);
+        var created = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Blank project",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await created.Content.ReadFromJsonAsync<JsonElement>();
+
+        var response = await client.GetAsync(
+            $"/api/projects/{project.GetProperty("project_id").GetString()}/github/repository-owners");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var owners = await response.Content.ReadFromJsonAsync<JsonElement>();
+        owners.EnumerateArray().Select(owner => owner.GetProperty("login").GetString())
+            .Should().Contain("octo");
+    }
+
     private sealed class RepositorySelectionWebApplicationFactory : EntraWebApplicationFactory
     {
         private readonly HttpMessageHandler _handler = new RepositoryHandler();
@@ -175,10 +200,15 @@ public sealed class GitHubRepositorySelectionEndpointsTests
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    """[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main"}]""",
-                    Encoding.UTF8,
-                    "application/json"),
-            });
+                    request.RequestUri!.AbsolutePath switch
+                    {
+                        "/user" => """{"login":"octo"}""",
+                        "/user/orgs" => """[{"login":"octo-org"}]""",
+                        _ => """[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main"}]""",
+                    },
+                        Encoding.UTF8,
+                        "application/json"),
+                });
     }
 
 }

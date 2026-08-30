@@ -107,6 +107,37 @@ internal sealed class GitHubRepositorySelectionBroker(
             fullName,
             ct);
 
+    /// <summary>Uses the caller's live Repo App credential only inside a server-side operation.</summary>
+    internal async Task<T> TryUseCredentialAsync<T>(
+        CallerContext caller,
+        Func<string, Task<T>> operation,
+        CancellationToken ct)
+    {
+        var subject = GetCallerSubject(caller);
+        var credential = await persistence.GetLiveRepoAppCredentialAsync(subject, ct).ConfigureAwait(false);
+        if (credential is null)
+            return default!;
+
+        SecretGetResult secret;
+        try
+        {
+            secret = await vault.ReadCurrentAsync(
+                TwoAppCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
+        }
+        catch (ArgumentException)
+        {
+            return default!;
+        }
+
+        if (!secret.Found || !TryGetUsableAccessToken(secret.Value, out var token))
+            return default!;
+
+        var result = await operation(token!).ConfigureAwait(false);
+        return await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false)
+            ? result
+            : default!;
+    }
+
     /// <summary>
     /// The code is bound to the caller, expires strictly, and is consumed by the conditional
     /// persistence update before its server-only scope is returned.

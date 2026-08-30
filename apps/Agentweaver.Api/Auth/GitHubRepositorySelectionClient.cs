@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -55,6 +56,64 @@ internal sealed class GitHubRepositorySelectionClient(IHttpClientFactory httpCli
         return candidates;
     }
 
+    internal async Task<IReadOnlyList<GitHubRepositoryOwner>?> ListOwnersAsync(string accessToken, CancellationToken ct)
+    {
+        using var http = httpClientFactory.CreateClient("github");
+        using var userRequest = CreateRequest(HttpMethod.Get, "https://api.github.com/user", accessToken);
+        using var userResponse = await http.SendAsync(userRequest, ct).ConfigureAwait(false);
+        if (!userResponse.IsSuccessStatusCode)
+            return null;
+        var user = await userResponse.Content.ReadFromJsonAsync<GitHubRepositoryOwnerResponse>(ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(user?.Login))
+            return null;
+
+        var owners = new List<GitHubRepositoryOwner> { new(user.Login, true) };
+        using var orgsRequest = CreateRequest(HttpMethod.Get, "https://api.github.com/user/orgs", accessToken);
+        using var orgsResponse = await http.SendAsync(orgsRequest, ct).ConfigureAwait(false);
+        if (orgsResponse.IsSuccessStatusCode)
+        {
+            var orgs = await orgsResponse.Content.ReadFromJsonAsync<List<GitHubRepositoryOwnerResponse>>(ct).ConfigureAwait(false);
+            owners.AddRange((orgs ?? []).Where(org => !string.IsNullOrWhiteSpace(org.Login))
+                .Select(org => new GitHubRepositoryOwner(org.Login!, false)));
+        }
+        return owners;
+    }
+
+    internal async Task<GitHubCreatedRepository?> CreateAsync(
+        string owner, string name, bool isPrivate, string accessToken, CancellationToken ct)
+    {
+        using var http = httpClientFactory.CreateClient("github");
+        using var userRequest = CreateRequest(HttpMethod.Get, "https://api.github.com/user", accessToken);
+        using var userResponse = await http.SendAsync(userRequest, ct).ConfigureAwait(false);
+        var user = userResponse.IsSuccessStatusCode
+            ? await userResponse.Content.ReadFromJsonAsync<GitHubRepositoryOwnerResponse>(ct).ConfigureAwait(false)
+            : null;
+        if (string.IsNullOrWhiteSpace(user?.Login))
+            return null;
+
+        var endpoint = string.Equals(user.Login, owner, StringComparison.OrdinalIgnoreCase)
+            ? "https://api.github.com/user/repos"
+            : $"https://api.github.com/orgs/{Uri.EscapeDataString(owner)}/repos";
+        using var request = CreateRequest(HttpMethod.Post, endpoint, accessToken);
+        request.Content = JsonContent.Create(new { name, @private = isPrivate });
+        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        if (response.StatusCode != System.Net.HttpStatusCode.Created)
+            return null;
+        var repository = await response.Content.ReadFromJsonAsync<GitHubCreatedRepositoryResponse>(ct).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(repository?.FullName) || string.IsNullOrWhiteSpace(repository.CloneUrl)
+            ? null
+            : new GitHubCreatedRepository(repository.FullName, repository.CloneUrl);
+    }
+
+    private static HttpRequestMessage CreateRequest(HttpMethod method, string url, string accessToken)
+    {
+        var request = new HttpRequestMessage(method, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("Agentweaver", "1.0"));
+        return request;
+    }
+
     private static async Task<List<GitHubRepositoryResponse>?> ReadBoundedJsonAsync(
         HttpContent content,
         CancellationToken ct)
@@ -95,4 +154,13 @@ internal sealed class GitHubRepositorySelectionClient(IHttpClientFactory httpCli
     {
         [JsonPropertyName("login")] public string? Login { get; init; }
     }
+
+    private sealed class GitHubCreatedRepositoryResponse
+    {
+        [JsonPropertyName("full_name")] public string? FullName { get; init; }
+        [JsonPropertyName("clone_url")] public string? CloneUrl { get; init; }
+    }
 }
+
+internal sealed record GitHubRepositoryOwner(string Login, bool IsUser);
+internal sealed record GitHubCreatedRepository(string FullName, string CloneUrl);
