@@ -67,11 +67,16 @@ public sealed class CopilotAppRegistrationService(
 
     private static bool HasOnlyMandatoryMetadataReadPermission(JsonElement permissions)
     {
-        var properties = permissions.EnumerateObject().ToArray();
-        return properties.Length == 1 &&
-            properties[0].NameEquals("metadata") &&
-            properties[0].Value.ValueKind == JsonValueKind.String &&
-            string.Equals(properties[0].Value.GetString(), "read", StringComparison.Ordinal);
+        // GitHub's public /apps/{slug} endpoint omits implicit metadata: read when no extra permissions exist.
+        foreach (var property in permissions.EnumerateObject())
+        {
+            if (!property.NameEquals("metadata") ||
+                property.Value.ValueKind != JsonValueKind.String ||
+                !string.Equals(property.Value.GetString(), "read", StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
     }
 
     private static async Task<byte[]> ReadBoundedAsync(HttpContent content, CancellationToken ct)

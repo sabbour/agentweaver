@@ -18,8 +18,17 @@ public sealed class CopilotAppRegistrationServiceTests
         result.Should().Be(CopilotAppRegistrationState.Ready);
     }
 
+    [Fact]
+    public async Task ValidateAsync_ReturnsReadyWhenRegistrationHasNoAdditionalPermissions()
+    {
+        var registration = CreateRegistration("""{"permissions":{}}""");
+
+        var result = await registration.ValidateAsync();
+
+        result.Should().Be(CopilotAppRegistrationState.Ready);
+    }
+
     [Theory]
-    [InlineData("""{"permissions":{}}""")]
     [InlineData("""{"permissions":{"metadata":"write"}}""")]
     [InlineData("""{"permissions":{"metadata":"read","contents":"read"}}""")]
     public async Task ValidateAsync_FailsClosedWhenRegistrationHasUnexpectedOrAdditionalPermissions(string payload)
@@ -35,6 +44,17 @@ public sealed class CopilotAppRegistrationServiceTests
     public async Task Startup_AllowsOnlyMandatoryMetadataReadPermission()
     {
         var registration = CreateRegistration("""{"permissions":{"metadata":"read"}}""");
+        var startup = new CopilotAppRegistrationStartupService(
+            registration,
+            NullLogger<CopilotAppRegistrationStartupService>.Instance);
+
+        await startup.StartAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Startup_AllowsRegistrationWithNoAdditionalPermissions()
+    {
+        var registration = CreateRegistration("""{"permissions":{}}""");
         var startup = new CopilotAppRegistrationStartupService(
             registration,
             NullLogger<CopilotAppRegistrationStartupService>.Instance);
