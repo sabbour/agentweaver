@@ -99,6 +99,14 @@ test("buildRuntimeConfigLiterals() derives public Entra URLs from HOST and defau
     "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/entra/callback",
   );
   assert.equal(literals.ENTRA_FRONTEND_URL, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
+  assert.equal(
+    literals.COPILOT_APP_CALLBACK_URL,
+    "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/github/copilot-app/callback",
+  );
+  assert.equal(
+    literals.REPO_APP_CALLBACK_URL,
+    "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/github/repo-app/callback",
+  );
 });
 
 test("buildRuntimeConfigLiterals() passes AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID through when set", () => {
@@ -173,6 +181,14 @@ test("rewriteOverlayKustomization() rewrites every images: entry and configMapGe
     rewritten,
     /- "ENTRA_FRONTEND_URL=https:\/\/agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io"/,
   );
+  assert.match(
+    rewritten,
+    /- "COPILOT_APP_CALLBACK_URL=https:\/\/agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io\/auth\/github\/copilot-app\/callback"/,
+  );
+  assert.match(
+    rewritten,
+    /- "REPO_APP_CALLBACK_URL=https:\/\/agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io\/auth\/github\/repo-app\/callback"/,
+  );
   // Untouched structural content (resources:/replacements: blocks) should survive verbatim.
   assert.match(rewritten, /resources:\s*\n\s*- \.\.\/\.\.\/base/);
   assert.match(rewritten, /replacements:/);
@@ -204,6 +220,14 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__Entra__TenantId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_TENANT_ID\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__RedirectUri\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_REDIRECT_URI\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__CopilotApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: COPILOT_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__RepoApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: REPO_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__CopilotApp__Slug\s*\n\s*value: agentweaver-orchestrator-copilot/);
+  assert.match(builtYaml, /name: Auth__RepoApp__PrivateKeySecretName\s*\n\s*value: repo-app-private-key/);
+  assert.match(builtYaml, /name: Auth__CopilotApp__ClientId\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: copilot-app-client-id\s*\n\s*name: agentweaver-secrets/);
+  assert.match(builtYaml, /name: Auth__RepoApp__AppId\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: repo-app-id\s*\n\s*name: agentweaver-secrets/);
+  assert.match(builtYaml, /objectName: copilot-app-client-id[\s\S]*?objectName: copilot-app-client-secret[\s\S]*?objectName: repo-app-client-id[\s\S]*?objectName: repo-app-client-secret[\s\S]*?objectName: repo-app-id/);
+  assert.doesNotMatch(builtYaml, /objectName: repo-app-private-key|objectName: copilot-app-app-id/);
   assert.doesNotMatch(builtYaml, /name: Auth__Entra__ClientSecret/);
   assert.doesNotMatch(builtYaml, /changeme/);
   assert.doesNotMatch(builtYaml, /example\.com/);
