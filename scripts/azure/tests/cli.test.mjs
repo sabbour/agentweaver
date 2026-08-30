@@ -113,6 +113,7 @@ test("run: routes commit, publication, and release deployment commands with argv
     "deploy-from-commit": { run: async (opts) => { received.push(["commit", opts.argv]); return { ok: true }; } },
     "publish-release": { run: async (opts) => { received.push(["publish", opts.argv]); return { ok: true }; } },
     "deploy-from-release": { run: async (opts) => { received.push(["deploy", opts.argv]); return { ok: true }; } },
+    config: { loadParamsFile: () => ({}) },
   };
   await run(["deploy-from-commit", "origin/feature"], { log: noopLog(), modules });
   await run(["publish-release", "--dry-run"], { log: noopLog(), modules });
@@ -122,6 +123,38 @@ test("run: routes commit, publication, and release deployment commands with argv
     ["publish", ["--dry-run"]],
     ["deploy", ["v1.2.3"]],
   ]);
+});
+
+test("run: 'deploy-from-commit' and 'deploy-from-release' auto-load the params file into opts.env", async () => {
+  let receivedCommitOpts;
+  let receivedReleaseOpts;
+  const modules = {
+    "deploy-from-commit": { run: async (opts) => { receivedCommitOpts = opts; return { ok: true }; } },
+    "deploy-from-release": { run: async (opts) => { receivedReleaseOpts = opts; return { ok: true }; } },
+    config: { loadParamsFile: () => ({ KEYVAULT_NAME: "kv-from-params-file" }) },
+  };
+  await run(["deploy-from-commit", "origin/dev"], { log: noopLog(), modules });
+  await run(["deploy-from-release", "v1.2.3"], { log: noopLog(), modules });
+  assert.equal(receivedCommitOpts.env.KEYVAULT_NAME, "kv-from-params-file");
+  assert.equal(receivedReleaseOpts.env.KEYVAULT_NAME, "kv-from-params-file");
+});
+
+test("run: 'deploy-from-commit --help' and 'deploy-from-release --help' print help without loading params or calling run()", async () => {
+  for (const command of ["deploy-from-commit", "deploy-from-release"]) {
+    const messages = [];
+    const log = { ...noopLog(), info: (m) => messages.push(m) };
+    let runCalled = false;
+    let paramsLoaded = false;
+    const modules = {
+      [command]: { run: async () => { runCalled = true; return { ok: true }; }, HELP_TEXT: `${command} HELP` },
+      config: { loadParamsFile: () => { paramsLoaded = true; return {}; } },
+    };
+    const result = await run([command, "--help"], { log, modules });
+    assert.equal(result.help, true);
+    assert.equal(runCalled, false);
+    assert.equal(paramsLoaded, false);
+    assert.ok(messages.includes(`${command} HELP`));
+  }
 });
 
 test("run: routes 'dev' to dev.mjs's run()", async () => {
