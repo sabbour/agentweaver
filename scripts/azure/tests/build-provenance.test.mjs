@@ -6,6 +6,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import {
   releaseRefForTag,
   pathsChanged,
@@ -17,6 +18,7 @@ import {
   validateGhcrRef,
   importImagesFromGhcr,
   importImagesFromCustomSources,
+  stashFrontendNodeModules,
   waitForAcrTagDigest,
   stampProvenance,
   run as runBuild,
@@ -57,6 +59,37 @@ function fakeExec({ captureImpl, runImpl, dryRun = false } = {}) {
     },
   };
 }
+
+test("stashFrontendNodeModules: removes stale sibling stashes but preserves this process's stash", () => {
+  const repoRoot = "C:\\fake\\repo";
+  const currentStash = `${repoRoot}.frontend-node_modules.${process.pid}`;
+  const staleStash = `${repoRoot}.frontend-node_modules.12345`;
+  const removed = [];
+  const renamed = [];
+  const fsImpl = {
+    readdirSync: (directory, options) => {
+      assert.equal(directory, "C:\\fake");
+      assert.deepEqual(options, { withFileTypes: true });
+      return [
+        { name: "repo.frontend-node_modules.12345", isDirectory: () => true },
+        { name: `repo.frontend-node_modules.${process.pid}`, isDirectory: () => true },
+        { name: "repo.frontend-node_modules.file", isDirectory: () => false },
+        { name: "another-repo.frontend-node_modules.1", isDirectory: () => true },
+      ];
+    },
+    existsSync: (candidate) => candidate === path.join(repoRoot, "apps", "web", "node_modules"),
+    rmSync: (candidate) => removed.push(candidate),
+    renameSync: (from, to) => renamed.push({ from, to }),
+  };
+
+  stashFrontendNodeModules(repoRoot, { fsImpl });
+
+  assert.deepEqual(removed, [staleStash, currentStash]);
+  assert.deepEqual(renamed, [{
+    from: path.join(repoRoot, "apps", "web", "node_modules"),
+    to: currentStash,
+  }]);
+});
 
 // -------------------- releaseRefForTag / pathsChanged (20) --------------------
 
