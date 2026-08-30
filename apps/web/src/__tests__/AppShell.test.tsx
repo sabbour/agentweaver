@@ -155,6 +155,7 @@ describe('AppShell navigation', () => {
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('data-scrollbar-mode')).toBe('hover');
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('tabindex')).toBe('0');
     expect(getComputedStyle(screen.getByRole('group', { name: 'Operations' })).gap).toBe('2px');
+    expect(screen.getByRole('button', { name: 'GitHub identity' }).closest('.aw-rail-footer')).toBeTruthy();
 
     // The top bar exposes the project switcher and an API status indicator.
     expect(screen.getByLabelText('Project switcher')).toBeDefined();
