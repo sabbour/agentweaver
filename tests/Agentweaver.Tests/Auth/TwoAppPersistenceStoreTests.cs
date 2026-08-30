@@ -906,7 +906,12 @@ public sealed class TwoAppPersistenceStoreTests
         var vault = new TwoAppCredentialVault(secrets);
         await vault.WriteAsync(
             TwoAppCredentialLocator.ForCopilotProject("copilot-app-project-marketplace"),
-            """{"status":"signed-in","accessToken":"backlog-test-token","expiresAt":"2099-01-01T00:00:00Z"}""");
+            JsonSerializer.Serialize(new
+            {
+                Status = "signed-in",
+                AccessToken = "backlog-test-token",
+                ExpiresAt = DateTimeOffset.Parse("2099-01-01T00:00:00Z"),
+            }));
         var broker = new GitHubCapabilityBroker(
             persistence,
             vault,

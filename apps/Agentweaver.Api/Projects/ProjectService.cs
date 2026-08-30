@@ -200,6 +200,25 @@ public sealed class ProjectService
         return project;
     }
 
+    public async Task<Project> ConnectCreatedRepositoryAsync(
+        ProjectId id,
+        string fullName,
+        string cloneUrl,
+        string accessToken,
+        CancellationToken ct = default)
+    {
+        var project = await _store.GetAsync(id, ct).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException($"Project '{id}' was not found.");
+        if (project.Origin.Kind != ProjectOriginKind.Blank)
+            throw new InvalidOperationException("This project already has a connected repository.");
+
+        _gitInit.PushToNewRemote(project.WorkingDirectory, cloneUrl, project.DefaultBranch, accessToken);
+        var now = DateTimeOffset.UtcNow;
+        var origin = ProjectOrigin.FromGitHub(fullName);
+        await _store.UpdateOriginAsync(id, origin, now, ct).ConfigureAwait(false);
+        return project with { Origin = origin, UpdatedAt = now };
+    }
+
     // -----------------------------------------------------------------------
     // Updates
     // -----------------------------------------------------------------------

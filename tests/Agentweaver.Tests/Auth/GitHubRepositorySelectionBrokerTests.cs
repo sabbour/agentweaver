@@ -132,6 +132,38 @@ public sealed class GitHubRepositorySelectionBrokerTests
             42, "octo/secure-repo", "octo", true, "main", null));
     }
 
+    [Fact]
+    public async Task List_AcceptsTheCredentialSerializationProducedByRepoAppAuthorization()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await secrets.SetSecretAsync(
+            "repo-app-user-credential-version",
+            JsonSerializer.Serialize(new { Status = "signed-in", AccessToken = "test-token" }));
+        await using (var db = new MemoryDbContext(options))
+        {
+            db.GitHubAppAuthorizations.Add(new GitHubAppAuthorizationRecord
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                EntraObjectId = "entra-one",
+                AppKind = GitHubAppKind.Repo,
+                Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
+                CredentialReference = "repo-app-user-credential-version",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var listed = await CreateBroker(options, secrets, Repositories(42))
+            .ListAsync("entra-one", CancellationToken.None);
+
+        listed.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        listed.Candidates.Should().ContainSingle();
+    }
+
     private static GitHubRepositorySelectionBroker CreateBroker(
         DbContextOptions<MemoryDbContext> options,
         InMemorySecretStore secrets,

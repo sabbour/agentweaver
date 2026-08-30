@@ -46,6 +46,7 @@ internal sealed class GitHubRepositorySelectionBroker(
     GitHubRepositorySelectionClient repositories)
 {
     internal static readonly TimeSpan SelectionCodeLifetime = TimeSpan.FromMinutes(5);
+    private static readonly JsonSerializerOptions CredentialJsonOptions = new(JsonSerializerDefaults.Web);
 
     internal async Task<(GitHubRepositorySelectionOutcome Outcome, IReadOnlyList<GitHubRepositorySelectionCandidate> Candidates)>
         ListAsync(CallerContext caller, CancellationToken ct)
@@ -105,6 +106,37 @@ internal sealed class GitHubRepositorySelectionBroker(
             new CallerContext { User = entraObjectId, EntraObjectId = entraObjectId },
             fullName,
             ct);
+
+    /// <summary>Uses the caller's live Repo App credential only inside a server-side operation.</summary>
+    internal async Task<T> TryUseCredentialAsync<T>(
+        CallerContext caller,
+        Func<string, Task<T>> operation,
+        CancellationToken ct)
+    {
+        var subject = GetCallerSubject(caller);
+        var credential = await persistence.GetLiveRepoAppCredentialAsync(subject, ct).ConfigureAwait(false);
+        if (credential is null)
+            return default!;
+
+        SecretGetResult secret;
+        try
+        {
+            secret = await vault.ReadCurrentAsync(
+                TwoAppCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
+        }
+        catch (ArgumentException)
+        {
+            return default!;
+        }
+
+        if (!secret.Found || !TryGetUsableAccessToken(secret.Value, out var token))
+            return default!;
+
+        var result = await operation(token!).ConfigureAwait(false);
+        return await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false)
+            ? result
+            : default!;
+    }
 
     /// <summary>
     /// The code is bound to the caller, expires strictly, and is consumed by the conditional
@@ -242,13 +274,11 @@ internal sealed class GitHubRepositorySelectionBroker(
             return false;
         try
         {
-            using var document = JsonDocument.Parse(value);
-            if (!document.RootElement.TryGetProperty("status", out var status) ||
-                !string.Equals(status.GetString(), "signed-in", StringComparison.Ordinal) ||
-                !document.RootElement.TryGetProperty("accessToken", out var token) ||
-                string.IsNullOrWhiteSpace(token.GetString()))
+            var credential = JsonSerializer.Deserialize<Credential>(value, CredentialJsonOptions);
+            if (!string.Equals(credential?.Status, "signed-in", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(credential?.AccessToken))
                 return false;
-            accessToken = token.GetString();
+            accessToken = credential!.AccessToken;
             return true;
         }
         catch (JsonException)
@@ -256,6 +286,8 @@ internal sealed class GitHubRepositorySelectionBroker(
             return false;
         }
     }
+
+    private sealed record Credential(string? Status, string? AccessToken);
 
     private static string CreateCode() =>
         Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))

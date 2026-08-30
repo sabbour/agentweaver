@@ -717,6 +717,13 @@ public sealed record CreateProjectRunRequest
     [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
 }
 
+public sealed record CreateProjectRepositoryRequest
+{
+    [JsonPropertyName("owner")] public string? Owner { get; init; }
+    [JsonPropertyName("name")] public string? Name { get; init; }
+    [JsonPropertyName("private")] public bool? Private { get; init; }
+}
+
 // -----------------------------------------------------------------------
 // Casting
 // -----------------------------------------------------------------------
