@@ -79,6 +79,10 @@ destination, rejects junction/reparse escapes, and verifies that it remains insi
 repository's protected, Git-ignored auth root. It never prints cookies, tokens,
 storage-state contents, or session-storage values.
 
+Keep ad-hoc diagnostics and probe scripts out of `.auth`; use a scratch directory instead.
+That directory is reserved for authentication state, generated capture scripts, and the
+disposable Edge profile.
+
 ## Start a persistent recording session
 
 ```powershell
