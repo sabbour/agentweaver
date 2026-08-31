@@ -145,7 +145,7 @@ describe('ProjectSettingsPage', () => {
     await screen.findByText('Rename project');
     fireEvent.click(screen.getByRole('button', { name: /Background/i }));
 
-    expect(await screen.findByText('Background requirements')).toBeDefined();
+    expect(await screen.findByText('Background automation readiness')).toBeDefined();
     expect(screen.getByText('copilot_binding_required')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
     expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
