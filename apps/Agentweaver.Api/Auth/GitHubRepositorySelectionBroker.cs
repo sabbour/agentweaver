@@ -41,8 +41,8 @@ internal sealed record ResolvedGitHubRepositorySelection(
 /// No repository authority or credential material crosses this boundary to a client.
 /// </summary>
 internal sealed class GitHubRepositorySelectionBroker(
-    TwoAppPersistenceStore persistence,
-    ITwoAppCredentialVault vault,
+    GitHubConnectionsPersistenceStore persistence,
+    IGitHubConnectionsCredentialVault vault,
     GitHubRepositorySelectionClient repositories)
 {
     internal static readonly TimeSpan SelectionCodeLifetime = TimeSpan.FromMinutes(5);
@@ -122,7 +122,7 @@ internal sealed class GitHubRepositorySelectionBroker(
         try
         {
             secret = await vault.ReadCurrentAsync(
-                TwoAppCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
+                GitHubConnectionsCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
         }
         catch (ArgumentException)
         {
@@ -180,7 +180,7 @@ internal sealed class GitHubRepositorySelectionBroker(
         try
         {
             secret = await vault.ReadCurrentAsync(
-                TwoAppCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
+                GitHubConnectionsCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
         }
         catch (ArgumentException)
         {
@@ -236,7 +236,7 @@ internal sealed class GitHubRepositorySelectionBroker(
         try
         {
             secret = await vault.ReadCurrentAsync(
-                TwoAppCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
+                GitHubConnectionsCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
         }
         catch (ArgumentException)
         {

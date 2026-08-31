@@ -255,11 +255,11 @@ builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHa
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
-builder.Services.AddScoped<TwoAppPersistenceStore>();
+builder.Services.AddScoped<GitHubConnectionsPersistenceStore>();
 builder.Services.AddScoped<AutomationActivationSnapshotService>();
 builder.Services.AddScoped<AutomationInvocationService>();
 builder.Services.AddScoped<IAutomationInvocationService>(sp => sp.GetRequiredService<AutomationInvocationService>());
-builder.Services.AddScoped<ITwoAppCredentialVault, TwoAppCredentialVault>();
+builder.Services.AddScoped<IGitHubConnectionsCredentialVault, GitHubConnectionsCredentialVault>();
 builder.Services.AddScoped<GitHubRepositorySelectionClient>();
 builder.Services.AddScoped<GitHubRepositorySelectionBroker>();
 builder.Services.AddScoped<Agentweaver.Api.Webhooks.RepoAppInstallationTokenService>();

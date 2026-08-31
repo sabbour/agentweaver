@@ -19,8 +19,8 @@ internal sealed record GitHubCapabilityGrant(
 /// never a user, project, repository, grant, or ambient scope.
 /// </summary>
 internal sealed class GitHubCapabilityBroker(
-    TwoAppPersistenceStore persistence,
-    ITwoAppCredentialVault vault,
+    GitHubConnectionsPersistenceStore persistence,
+    IGitHubConnectionsCredentialVault vault,
     RepoAppInstallationTokenService installationTokens)
 {
     internal static readonly TimeSpan MaximumCapabilityLifetime = TimeSpan.FromMinutes(10);

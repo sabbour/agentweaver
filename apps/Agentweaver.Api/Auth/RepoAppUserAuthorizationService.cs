@@ -53,7 +53,7 @@ public sealed record McpBrowserHandoffResult(
 /// </summary>
 public sealed class RepoAppUserAuthorizationService(
     IConfiguration configuration,
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory)
 {
@@ -173,7 +173,7 @@ public sealed class RepoAppUserAuthorizationService(
             return new(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, null, null, null);
 
         var state = CreateRandomValue();
-        var transactionId = TwoAppPersistenceStore.CreateExternalTransactionId();
+        var transactionId = GitHubConnectionsPersistenceStore.CreateExternalTransactionId();
         var callbackCookie = CreateRandomValue();
         var verifier = CreateRandomValue();
         var now = DateTimeOffset.UtcNow;

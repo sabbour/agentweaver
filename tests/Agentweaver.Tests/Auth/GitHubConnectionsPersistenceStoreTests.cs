@@ -15,7 +15,7 @@ using System.Text.Json;
 
 namespace Agentweaver.Tests.Auth;
 
-public sealed class TwoAppPersistenceStoreTests
+public sealed class GitHubConnectionsPersistenceStoreTests
 {
     [Fact]
     public async Task AuthorizationClaim_IsSingleUseAndExpiresInDatabasePredicate()
@@ -24,10 +24,10 @@ public sealed class TwoAppPersistenceStoreTests
         var options = Options(connection);
         await using (var setup = new MemoryDbContext(options))
         {
-            await new TwoAppPersistenceStore(setup).AddAuthorizationAsync(new GitHubAuthorizationRecord
+            await new GitHubConnectionsPersistenceStore(setup).AddAuthorizationAsync(new GitHubAuthorizationRecord
             {
                 State = "state",
-                ExternalTransactionId = TwoAppPersistenceStore.CreateExternalTransactionId(),
+                ExternalTransactionId = GitHubConnectionsPersistenceStore.CreateExternalTransactionId(),
                 AppKind = GitHubAppKind.Copilot,
                 Purpose = GitHubAuthorizationPurpose.InteractiveCopilot,
                 EntraObjectId = "entra",
@@ -42,9 +42,9 @@ public sealed class TwoAppPersistenceStoreTests
 
         await using var first = new MemoryDbContext(options);
         await using var second = new MemoryDbContext(options);
-        (await new TwoAppPersistenceStore(first).ClaimAuthorizationAsync("state", "entra", DateTimeOffset.UtcNow))
+        (await new GitHubConnectionsPersistenceStore(first).ClaimAuthorizationAsync("state", "entra", DateTimeOffset.UtcNow))
             .Should().Be(AuthorizationClaimResult.Claimed);
-        (await new TwoAppPersistenceStore(second).ClaimAuthorizationAsync("state", "entra", DateTimeOffset.UtcNow))
+        (await new GitHubConnectionsPersistenceStore(second).ClaimAuthorizationAsync("state", "entra", DateTimeOffset.UtcNow))
             .Should().Be(AuthorizationClaimResult.Consumed);
     }
 
@@ -53,12 +53,12 @@ public sealed class TwoAppPersistenceStoreTests
     {
         await using var connection = await OpenDatabaseAsync();
         var options = Options(connection);
-        var transactionId = TwoAppPersistenceStore.CreateExternalTransactionId();
+        var transactionId = GitHubConnectionsPersistenceStore.CreateExternalTransactionId();
         transactionId.Should().HaveLength(43);
 
         await using (var setup = new MemoryDbContext(options))
         {
-            await new TwoAppPersistenceStore(setup).AddAuthorizationAsync(new GitHubAuthorizationRecord
+            await new GitHubConnectionsPersistenceStore(setup).AddAuthorizationAsync(new GitHubAuthorizationRecord
             {
                 State = "oauth-state-that-must-not-leak",
                 ExternalTransactionId = transactionId,
@@ -75,7 +75,7 @@ public sealed class TwoAppPersistenceStoreTests
         }
 
         await using var db = new MemoryDbContext(options);
-        var store = new TwoAppPersistenceStore(db);
+        var store = new GitHubConnectionsPersistenceStore(db);
         (await store.GetAuthorizationTransactionAsync(transactionId, GitHubAppKind.Repo, "entra-one"))
             .Should().Be(new GitHubAuthorizationTransactionHandle(
                 transactionId,
@@ -106,10 +106,10 @@ public sealed class TwoAppPersistenceStoreTests
     {
         await using var connection = await OpenDatabaseAsync();
         var options = Options(connection);
-        var transactionId = TwoAppPersistenceStore.CreateExternalTransactionId();
+        var transactionId = GitHubConnectionsPersistenceStore.CreateExternalTransactionId();
         await using (var setup = new MemoryDbContext(options))
         {
-            await new TwoAppPersistenceStore(setup).AddAuthorizationAsync(new GitHubAuthorizationRecord
+            await new GitHubConnectionsPersistenceStore(setup).AddAuthorizationAsync(new GitHubAuthorizationRecord
             {
                 State = "expired-state",
                 ExternalTransactionId = transactionId,
@@ -126,7 +126,7 @@ public sealed class TwoAppPersistenceStoreTests
         }
 
         await using var db = new MemoryDbContext(options);
-        (await new TwoAppPersistenceStore(db).GetAuthorizationTransactionAsync(
+        (await new GitHubConnectionsPersistenceStore(db).GetAuthorizationTransactionAsync(
             transactionId, GitHubAppKind.Copilot, "entra"))!.Status.Should().Be(GitHubAuthorizationStatus.Expired);
     }
 
@@ -136,7 +136,7 @@ public sealed class TwoAppPersistenceStoreTests
         await using var connection = await OpenDatabaseAsync();
         var options = Options(connection);
         await using var db = new MemoryDbContext(options);
-        var store = new TwoAppPersistenceStore(db);
+        var store = new GitHubConnectionsPersistenceStore(db);
 
         (await store.ReplaceCopilotBindingAsync(Binding("first"))).Should().Be(BindingWriteResult.Bound);
         (await store.ReplaceCopilotBindingAsync(Binding("second"))).Should().Be(BindingWriteResult.Bound);
@@ -166,12 +166,12 @@ public sealed class TwoAppPersistenceStoreTests
     }
 
     [Fact]
-    public async Task SQLiteProjectDeletion_CascadesTwoAppRecords()
+    public async Task SQLiteProjectDeletion_CascadesGitHubConnectionsRecords()
     {
         await using var connection = await OpenDatabaseAsync();
         var options = Options(connection);
         await using var db = new MemoryDbContext(options);
-        (await new TwoAppPersistenceStore(db).ReplaceCopilotBindingAsync(Binding("binding")))
+        (await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(Binding("binding")))
             .Should().Be(BindingWriteResult.Bound);
 
         db.Projects.Remove(new ProjectRecord { ProjectId = "project" });
@@ -217,8 +217,8 @@ public sealed class TwoAppPersistenceStoreTests
 
         await using var first = new MemoryDbContext(options);
         await using var second = new MemoryDbContext(options);
-        (await new TwoAppPersistenceStore(first).ClaimInvocationAsync(Invocation("one", "delivery", "push"))).Should().Be(InvocationClaimResult.Claimed);
-        (await new TwoAppPersistenceStore(second).ClaimInvocationAsync(Invocation("two", "delivery", "workflow_dispatch"))).Should().Be(InvocationClaimResult.Duplicate);
+        (await new GitHubConnectionsPersistenceStore(first).ClaimInvocationAsync(Invocation("one", "delivery", "push"))).Should().Be(InvocationClaimResult.Claimed);
+        (await new GitHubConnectionsPersistenceStore(second).ClaimInvocationAsync(Invocation("two", "delivery", "workflow_dispatch"))).Should().Be(InvocationClaimResult.Duplicate);
     }
 
     [Fact]
@@ -229,9 +229,9 @@ public sealed class TwoAppPersistenceStoreTests
         await using var first = new MemoryDbContext(options);
         await using var second = new MemoryDbContext(options);
 
-        (await new TwoAppPersistenceStore(first).ClaimLifecycleDeliveryAsync(LifecycleDelivery("delivery"))).Should()
+        (await new GitHubConnectionsPersistenceStore(first).ClaimLifecycleDeliveryAsync(LifecycleDelivery("delivery"))).Should()
             .Be(InvocationClaimResult.Claimed);
-        (await new TwoAppPersistenceStore(second).ClaimLifecycleDeliveryAsync(LifecycleDelivery("delivery"))).Should()
+        (await new GitHubConnectionsPersistenceStore(second).ClaimLifecycleDeliveryAsync(LifecycleDelivery("delivery"))).Should()
             .Be(InvocationClaimResult.Duplicate);
     }
 
@@ -241,7 +241,7 @@ public sealed class TwoAppPersistenceStoreTests
         await using var connection = await OpenDatabaseAsync();
         await using var db = new MemoryDbContext(Options(connection));
 
-        var action = () => new TwoAppPersistenceStore(db).ClaimLifecycleDeliveryAsync(LifecycleDelivery(""));
+        var action = () => new GitHubConnectionsPersistenceStore(db).ClaimLifecycleDeliveryAsync(LifecycleDelivery(""));
         await action.Should().ThrowAsync<ArgumentException>();
     }
 
@@ -251,7 +251,7 @@ public sealed class TwoAppPersistenceStoreTests
         await using var connection = await OpenDatabaseAsync();
         var options = Options(connection);
         await using var db = new MemoryDbContext(options);
-        var store = new TwoAppPersistenceStore(db);
+        var store = new GitHubConnectionsPersistenceStore(db);
         var snapshot = new RunGitHubIdentitySnapshotRecord
         {
             RunId = "run",
@@ -277,7 +277,7 @@ public sealed class TwoAppPersistenceStoreTests
         var options = Options(connection);
         await using var db = new MemoryDbContext(options);
         await SeedCapabilitySourcesAsync(db);
-        var store = new TwoAppPersistenceStore(db);
+        var store = new GitHubConnectionsPersistenceStore(db);
         var snapshots = Enum.GetValues<GitHubCapabilityPurpose>()
         .Select(CapabilitySnapshot)
         .ToArray();
@@ -314,7 +314,7 @@ public sealed class TwoAppPersistenceStoreTests
         var options = Options(connection);
         await using var db = new MemoryDbContext(options);
         await SeedCapabilitySourcesAsync(db);
-        var store = new TwoAppPersistenceStore(db);
+        var store = new GitHubConnectionsPersistenceStore(db);
         var snapshot = CapabilitySnapshot(GitHubCapabilityPurpose.InteractiveRepository);
         (await store.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
         var reference = new SnapshotRef(snapshot.SnapshotRef);
@@ -346,7 +346,7 @@ public sealed class TwoAppPersistenceStoreTests
         var options = Options(connection);
         await using var db = new MemoryDbContext(options);
         await SeedCapabilitySourcesAsync(db);
-        var store = new TwoAppPersistenceStore(db);
+        var store = new GitHubConnectionsPersistenceStore(db);
         var snapshot = CapabilitySnapshot(GitHubCapabilityPurpose.InteractiveRepository);
         (await store.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
         var reference = new SnapshotRef(snapshot.SnapshotRef);
@@ -365,7 +365,7 @@ public sealed class TwoAppPersistenceStoreTests
         var options = Options(connection);
         await using var db = new MemoryDbContext(options);
         await SeedCapabilitySourcesAsync(db);
-        var store = new TwoAppPersistenceStore(db);
+        var store = new GitHubConnectionsPersistenceStore(db);
         var snapshot = CapabilitySnapshot(GitHubCapabilityPurpose.UnattendedCopilot);
 
         (await store.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
@@ -401,7 +401,7 @@ public sealed class TwoAppPersistenceStoreTests
         // is ever inserted. Production never populates that legacy table, so a test that relies on
         // it does not exercise the real trusted root-construction seam.
         await SeedCapabilitySourcesAsync(db, projectId.ToString());
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var lifecycle = CreateLifecycle(db, persistence);
         var root = RunForSnapshotLifecycle(projectId);
 
@@ -465,7 +465,7 @@ public sealed class TwoAppPersistenceStoreTests
         var projectId = ProjectId.New();
         var projectStore = new FakeProjectStore();
         projectStore.Seed(BlankDomainProject(projectId));
-        var persistence = new TwoAppPersistenceStore(db, projectStore);
+        var persistence = new GitHubConnectionsPersistenceStore(db, projectStore);
         var lifecycle = CreateLifecycle(db, persistence);
         var root = RunForSnapshotLifecycle(projectId);
 
@@ -497,7 +497,7 @@ public sealed class TwoAppPersistenceStoreTests
         await SeedCapabilitySourcesAsync(db, projectId.ToString());
         await db.ProjectCopilotBindings.ExecuteDeleteAsync();
 
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var lifecycle = CreateLifecycle(db, persistence);
         var run = RunForSnapshotLifecycle(projectId);
 
@@ -519,7 +519,7 @@ public sealed class TwoAppPersistenceStoreTests
         var projectId = ProjectId.New();
         var projectStore = new FakeProjectStore();
         projectStore.Seed(GitHubOriginDomainProject(projectId));
-        var persistence = new TwoAppPersistenceStore(db, projectStore);
+        var persistence = new GitHubConnectionsPersistenceStore(db, projectStore);
         var lifecycle = CreateLifecycle(db, persistence);
         var root = RunForSnapshotLifecycle(projectId);
 
@@ -547,9 +547,9 @@ public sealed class TwoAppPersistenceStoreTests
         var projectId = ProjectId.New();
         var projectStore = new FakeProjectStore();
         projectStore.Seed(GitHubOriginDomainProject(projectId));
-        var persistence = new TwoAppPersistenceStore(db, projectStore);
+        var persistence = new GitHubConnectionsPersistenceStore(db, projectStore);
         // github_installations has an EF FK to the companion "projects" table (referential
-        // integrity only; see the remarks on TwoAppPersistenceStore) — seed it too, or the insert
+        // integrity only; see the remarks on GitHubConnectionsPersistenceStore) — seed it too, or the insert
         // below fails a FK check. Origin classification itself reads only projectStore above.
         db.Projects.Add(Project(projectId.ToString()));
         db.GitHubInstallations.Add(new GitHubInstallationRecord
@@ -587,7 +587,7 @@ public sealed class TwoAppPersistenceStoreTests
         // be treated as blank. Fail closed rather than silently launch with zero snapshots.
         await using var connection = await OpenDatabaseAsync();
         await using var db = new MemoryDbContext(Options(connection));
-        var persistence = new TwoAppPersistenceStore(db, new FakeProjectStore());
+        var persistence = new GitHubConnectionsPersistenceStore(db, new FakeProjectStore());
         var lifecycle = CreateLifecycle(db, persistence);
         var projectId = ProjectId.New();
         var root = RunForSnapshotLifecycle(projectId);
@@ -611,7 +611,7 @@ public sealed class TwoAppPersistenceStoreTests
         // here can only be attributed to the missing/null ProjectId on the Run itself, not to an
         // absence of live sources.
         await SeedCapabilitySourcesAsync(db);
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var lifecycle = CreateLifecycle(db, persistence);
         var root = RunForSnapshotLifecycle(projectId: null);
 
@@ -642,7 +642,7 @@ public sealed class TwoAppPersistenceStoreTests
         db.Projects.Add(Project(projectId.ToString()));
         await db.SaveChangesAsync();
         await SeedCapabilitySourcesAsync(db, projectId.ToString());
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var lifecycle = CreateLifecycle(db, persistence);
         var root = RunForSnapshotLifecycle(projectId);
 
@@ -666,7 +666,7 @@ public sealed class TwoAppPersistenceStoreTests
         db.Projects.Add(Project(projectId.ToString()));
         await db.SaveChangesAsync();
         await SeedCapabilitySourcesAsync(db, projectId.ToString());
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var lifecycle = CreateLifecycle(db, persistence);
         var parent = RunForSnapshotLifecycle(projectId);
 
@@ -686,12 +686,12 @@ public sealed class TwoAppPersistenceStoreTests
         (await persistence.GetCapabilitySnapshotsAsync("target-run")).Should().BeEmpty();
     }
 
-    private static RunGitHubCapabilitySnapshotLifecycle CreateLifecycle(MemoryDbContext db, TwoAppPersistenceStore persistence)
+    private static RunGitHubCapabilitySnapshotLifecycle CreateLifecycle(MemoryDbContext db, GitHubConnectionsPersistenceStore persistence)
     {
         var secrets = new InMemorySecretStore();
         var broker = new GitHubCapabilityBroker(
             persistence,
-            new TwoAppCredentialVault(secrets),
+            new GitHubConnectionsCredentialVault(secrets),
             new RepoAppInstallationTokenService(
                 new ConfigurationBuilder().AddInMemoryCollection().Build(),
                 db,
@@ -712,7 +712,7 @@ public sealed class TwoAppPersistenceStoreTests
         var binding = Binding("binding");
         binding.CredentialReference = credential;
 
-        var action = () => new TwoAppPersistenceStore(db).ReplaceCopilotBindingAsync(binding);
+        var action = () => new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(binding);
         await action.Should().ThrowAsync<ArgumentException>();
     }
 
@@ -730,14 +730,14 @@ public sealed class TwoAppPersistenceStoreTests
         var options = Options(connection);
         await using var db = new MemoryDbContext(options);
         await SeedCapabilitySourcesAsync(db);
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var snapshot = CapabilitySnapshot(GitHubCapabilityPurpose.InteractiveRepository);
         (await persistence.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
         var secrets = new InMemorySecretStore();
-        var vault = new TwoAppCredentialVault(secrets);
+        var vault = new GitHubConnectionsCredentialVault(secrets);
         var token = "g" + "hu_broker_test";
         await vault.WriteAsync(
-            TwoAppCredentialLocator.ForRepoAppUser("repo-app-user-credential-version"),
+            GitHubConnectionsCredentialLocator.ForRepoAppUser("repo-app-user-credential-version"),
             $"{{\"status\":\"signed-in\",\"accessToken\":\"{token}\"}}");
         var tokenService = new RepoAppInstallationTokenService(
             new ConfigurationBuilder().AddInMemoryCollection().Build(),
@@ -775,7 +775,7 @@ public sealed class TwoAppPersistenceStoreTests
         await using var db = new MemoryDbContext(options);
         db.Projects.Add(Project(projectId.ToString()));
         await db.SaveChangesAsync();
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         // Before the connect action has completed its durable binding, no capability is issued.
         (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
             projectId.ToString(), "entra", now, now.AddMinutes(2))).Should().BeNull();
@@ -800,9 +800,9 @@ public sealed class TwoAppPersistenceStoreTests
         var capability = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
             projectId.ToString(), "entra", now, now.AddMinutes(2)))!;
         var secrets = new InMemorySecretStore();
-        var vault = new TwoAppCredentialVault(secrets);
+        var vault = new GitHubConnectionsCredentialVault(secrets);
         await vault.WriteAsync(
-            TwoAppCredentialLocator.ForCopilotProject("copilot-app-project-marketplace"),
+            GitHubConnectionsCredentialLocator.ForCopilotProject("copilot-app-project-marketplace"),
             """{"status":"signed-in","accessToken":"marketplace-test-token","expiresAt":"2099-01-01T00:00:00Z"}""");
         var broker = new GitHubCapabilityBroker(
             persistence,
@@ -895,7 +895,7 @@ public sealed class TwoAppPersistenceStoreTests
         var now = DateTimeOffset.UtcNow;
         db.ProjectCopilotBindings.Add(MarketplaceBinding("backlog-binding"));
         await db.SaveChangesAsync();
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var capability = (await persistence.TryIssueProjectCopilotCapabilityAsync(
             GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
             "project",
@@ -903,9 +903,9 @@ public sealed class TwoAppPersistenceStoreTests
             now,
             now.AddMinutes(2)))!;
         var secrets = new InMemorySecretStore();
-        var vault = new TwoAppCredentialVault(secrets);
+        var vault = new GitHubConnectionsCredentialVault(secrets);
         await vault.WriteAsync(
-            TwoAppCredentialLocator.ForCopilotProject("copilot-app-project-marketplace"),
+            GitHubConnectionsCredentialLocator.ForCopilotProject("copilot-app-project-marketplace"),
             JsonSerializer.Serialize(new
             {
                 Status = "signed-in",
@@ -1010,7 +1010,7 @@ public sealed class TwoAppPersistenceStoreTests
             }));
         await db.SaveChangesAsync();
 
-        var removed = await new TwoAppPersistenceStore(db).PruneMarketplaceCopilotCapabilitiesAsync(now);
+        var removed = await new GitHubConnectionsPersistenceStore(db).PruneMarketplaceCopilotCapabilitiesAsync(now);
 
         removed.Should().Be(100);
         (await db.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(1);
@@ -1037,7 +1037,7 @@ public sealed class TwoAppPersistenceStoreTests
         });
         await db.SaveChangesAsync();
 
-        (await new TwoAppPersistenceStore(db).PruneMarketplaceCopilotCapabilitiesAsync(now)).Should().Be(0);
+        (await new GitHubConnectionsPersistenceStore(db).PruneMarketplaceCopilotCapabilitiesAsync(now)).Should().Be(0);
         (await db.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(1);
     }
 
@@ -1049,7 +1049,7 @@ public sealed class TwoAppPersistenceStoreTests
         var now = DateTimeOffset.UtcNow;
         db.ProjectCopilotBindings.Add(MarketplaceBinding("marketplace-binding"));
         await db.SaveChangesAsync();
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var capability = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
             "project", "entra", now, now.AddMinutes(1)))!;
 
@@ -1065,7 +1065,7 @@ public sealed class TwoAppPersistenceStoreTests
             "maintenance protection does not make a claimed capability redeemable again");
 
         (await persistence.PruneMarketplaceCopilotCapabilitiesAsync(
-            now.Add(TwoAppPersistenceStore.MarketplaceCapabilityClaimLease).AddSeconds(1))).Should().Be(1);
+            now.Add(GitHubConnectionsPersistenceStore.MarketplaceCapabilityClaimLease).AddSeconds(1))).Should().Be(1);
         (await db.MarketplaceCopilotCapabilities.CountAsync()).Should().Be(0,
             "maintenance must eventually reclaim a crash-abandoned claim without another browse request");
     }
@@ -1095,7 +1095,7 @@ public sealed class TwoAppPersistenceStoreTests
 
         using var services = new ServiceCollection()
             .AddScoped<MemoryDbContext>(_ => new MemoryDbContext(options))
-            .AddScoped<TwoAppPersistenceStore>()
+            .AddScoped<GitHubConnectionsPersistenceStore>()
             .BuildServiceProvider();
         var maintenance = new MarketplaceCopilotCapabilityMaintenanceService(
             services.GetRequiredService<IServiceScopeFactory>(),
@@ -1116,12 +1116,12 @@ public sealed class TwoAppPersistenceStoreTests
         await using var db = new MemoryDbContext(options);
         db.ProjectCopilotBindings.Add(MarketplaceBinding("marketplace-binding"));
         await db.SaveChangesAsync();
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var capability = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
             "project", "entra", now, now.AddMinutes(1)))!;
         var vault = new PruningCredentialVault(
             () => persistence.PruneMarketplaceCopilotCapabilitiesAsync(
-                now.Add(TwoAppPersistenceStore.MarketplaceCapabilityClaimLease).AddSeconds(-1)),
+                now.Add(GitHubConnectionsPersistenceStore.MarketplaceCapabilityClaimLease).AddSeconds(-1)),
             """{"status":"signed-in","accessToken":"marketplace-test-token","expiresAt":"2099-01-01T00:00:00Z"}""");
         var broker = new GitHubCapabilityBroker(
             persistence,
@@ -1150,12 +1150,12 @@ public sealed class TwoAppPersistenceStoreTests
         var now = DateTimeOffset.UtcNow;
         db.ProjectCopilotBindings.Add(MarketplaceBinding("marketplace-binding"));
         await db.SaveChangesAsync();
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         var capability = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
             "project", "entra", now, now.AddMinutes(1)))!;
         var vault = new PruningCredentialVault(
             () => persistence.PruneMarketplaceCopilotCapabilitiesAsync(
-                now.Add(TwoAppPersistenceStore.MarketplaceCapabilityClaimLease).AddSeconds(1)),
+                now.Add(GitHubConnectionsPersistenceStore.MarketplaceCapabilityClaimLease).AddSeconds(1)),
             """{"status":"signed-in","accessToken":"marketplace-test-token","expiresAt":"2099-01-01T00:00:00Z"}""");
         var broker = new GitHubCapabilityBroker(
             persistence,
@@ -1208,8 +1208,8 @@ public sealed class TwoAppPersistenceStoreTests
         await db.SaveChangesAsync();
         var secrets = new InMemorySecretStore();
         var broker = new GitHubCapabilityBroker(
-            new TwoAppPersistenceStore(db),
-            new TwoAppCredentialVault(secrets),
+            new GitHubConnectionsPersistenceStore(db),
+            new GitHubConnectionsCredentialVault(secrets),
             new RepoAppInstallationTokenService(
                 new ConfigurationBuilder().AddInMemoryCollection().Build(),
                 db,
@@ -1348,7 +1348,7 @@ public sealed class TwoAppPersistenceStoreTests
     /// <summary>
     /// Minimal in-memory <see cref="IProjectStore"/> double for capability-snapshot lifecycle tests
     /// that need to prove classification is driven by persisted project origin
-    /// (<see cref="TwoAppPersistenceStore.IsIntentionallyBlankOriginProjectAsync"/>). Only
+    /// (<see cref="GitHubConnectionsPersistenceStore.IsIntentionallyBlankOriginProjectAsync"/>). Only
     /// <see cref="GetAsync"/>/<see cref="InsertAsync"/> are implemented; the snapshot lifecycle under
     /// test never calls any other member.
     /// </summary>
@@ -1546,22 +1546,22 @@ public sealed class TwoAppPersistenceStoreTests
 
     private sealed class PruningCredentialVault(
         Func<Task<int>> pruneAsync,
-        string credential) : ITwoAppCredentialVault
+        string credential) : IGitHubConnectionsCredentialVault
     {
         public int PrunedRecords { get; private set; }
 
         public async Task<SecretGetResult> ReadCurrentAsync(
-            TwoAppCredentialLocator locator,
+            GitHubConnectionsCredentialLocator locator,
             CancellationToken ct = default)
         {
             PrunedRecords = await pruneAsync().ConfigureAwait(false);
             return new SecretGetResult(credential, ETag: null, Found: true);
         }
 
-        public Task WriteAsync(TwoAppCredentialLocator locator, string value, CancellationToken ct = default) =>
+        public Task WriteAsync(GitHubConnectionsCredentialLocator locator, string value, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task TombstoneAndDeleteAsync(TwoAppCredentialLocator locator, CancellationToken ct = default) =>
+        public Task TombstoneAndDeleteAsync(GitHubConnectionsCredentialLocator locator, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

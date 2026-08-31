@@ -18,18 +18,18 @@ public sealed class SqliteToPostgresMigrator
     private readonly IDbContextFactory<MemoryDbContext> _factory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<SqliteToPostgresMigrator> _logger;
-    private readonly Func<CancellationToken, Task>? _beforeTwoAppCommit;
+    private readonly Func<CancellationToken, Task>? _beforeGitHubConnectionsCommit;
 
     public SqliteToPostgresMigrator(
         IDbContextFactory<MemoryDbContext> factory,
         IConfiguration configuration,
         ILogger<SqliteToPostgresMigrator> logger,
-        Func<CancellationToken, Task>? beforeTwoAppCommit = null)
+        Func<CancellationToken, Task>? beforeGitHubConnectionsCommit = null)
     {
         _factory = factory;
         _configuration = configuration;
         _logger = logger;
-        _beforeTwoAppCommit = beforeTwoAppCommit;
+        _beforeGitHubConnectionsCommit = beforeGitHubConnectionsCommit;
     }
 
     public async Task RunAsync(CancellationToken ct = default)
@@ -47,13 +47,13 @@ public sealed class SqliteToPostgresMigrator
         await MigrateAgentweaverDbAsync(agentweaverDbPath, db, ct);
 
         // Legacy GitHub OAuth, linked-identity, and MCP broker state is intentionally not
-        // transferred. Only two-App records below remain valid after the Entra-only cutover.
-        await MigrateTwoAppRecordsAsync(memoryDbPath, db, ct);
+        // transferred. Only GitHub connections records below remain valid after the Entra-only cutover.
+        await MigrateGitHubConnectionsRecordsAsync(memoryDbPath, db, ct);
 
         _logger.LogInformation("Migration complete.");
     }
 
-    private async Task MigrateTwoAppRecordsAsync(string memoryDbPath, MemoryDbContext destination, CancellationToken ct)
+    private async Task MigrateGitHubConnectionsRecordsAsync(string memoryDbPath, MemoryDbContext destination, CancellationToken ct)
     {
         if (!File.Exists(memoryDbPath))
             return;
@@ -64,7 +64,7 @@ public sealed class SqliteToPostgresMigrator
                 sqlite => sqlite.MigrationsAssembly(typeof(SqliteToPostgresMigrator).Assembly.GetName().Name))
             .Options;
         await using var source = new MemoryDbContext(sourceOptions);
-        await PrepareTwoAppSourceSchemaAsync(source, ct).ConfigureAwait(false);
+        await PrepareGitHubConnectionsSourceSchemaAsync(source, ct).ConfigureAwait(false);
 
         List<GitHubAuthorizationRecord> authorizations;
         List<GitHubInstallationRecord> installations;
@@ -96,7 +96,7 @@ public sealed class SqliteToPostgresMigrator
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
                                         ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogInformation("SQLite source predates two-App persistence; no two-App records to migrate.");
+            _logger.LogInformation("SQLite source predates GitHub connections persistence; no GitHub connections records to migrate.");
             return;
         }
 
@@ -122,7 +122,7 @@ public sealed class SqliteToPostgresMigrator
             .ConfigureAwait(false);
         if (targetProjectIds.Count != projectIds.Length)
             throw new InvalidOperationException(
-                "Two-App persistence transfer aborted: a project is missing from the destination, so no binding can become usable partially.");
+                "GitHub connections persistence transfer aborted: a project is missing from the destination, so no binding can become usable partially.");
 
         await using var transaction = await destination.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         try
@@ -164,7 +164,7 @@ public sealed class SqliteToPostgresMigrator
                 }
                 if (!CapabilitySnapshotsMatch(item, byReference) || !CapabilitySnapshotsMatch(item, byRunPurpose))
                     throw new InvalidOperationException(
-                        "Two-App persistence transfer aborted: immutable capability snapshot conflict.");
+                        "GitHub connections persistence transfer aborted: immutable capability snapshot conflict.");
             }
             foreach (var item in appAuthorizations)
                 if (!await destination.GitHubAppAuthorizations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
@@ -182,8 +182,8 @@ public sealed class SqliteToPostgresMigrator
                     .ConfigureAwait(false);
             }
 
-            if (_beforeTwoAppCommit is not null)
-                await _beforeTwoAppCommit(ct).ConfigureAwait(false);
+            if (_beforeGitHubConnectionsCommit is not null)
+                await _beforeGitHubConnectionsCommit(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }
         catch
@@ -214,7 +214,7 @@ public sealed class SqliteToPostgresMigrator
         source.CapturedAt == destination.CapturedAt &&
         source.SnapshotExpiresAt == destination.SnapshotExpiresAt;
 
-    private static async Task PrepareTwoAppSourceSchemaAsync(MemoryDbContext source, CancellationToken ct)
+    private static async Task PrepareGitHubConnectionsSourceSchemaAsync(MemoryDbContext source, CancellationToken ct)
     {
         if (await HasMigrationHistoryAsync(source, ct).ConfigureAwait(false))
         {
@@ -226,7 +226,7 @@ public sealed class SqliteToPostgresMigrator
             return;
 
         // EnsureCreated sources have no migration history. Upgrade only the missing #955
-        // and #962 projection fields so the existing two-App records can be read and transferred.
+        // and #962 projection fields so the existing GitHub connections records can be read and transferred.
         if (!await HasColumnAsync(source, "github_authorizations", "external_transaction_id", ct).ConfigureAwait(false))
         {
             await source.Database.ExecuteSqlRawAsync(

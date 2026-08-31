@@ -150,7 +150,7 @@ public sealed class AutomationActivationSnapshotServiceTests
         var service = CreateService(db, roles);
         var first = await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
 
-        var persistence = new TwoAppPersistenceStore(db);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
         (await persistence.ReplaceCopilotBindingAsync(Binding(project, "binding-2", "copilot-digest-2")))
             .Should().Be(BindingWriteResult.Bound);
         db.ChangeTracker.Clear();
@@ -185,7 +185,7 @@ public sealed class AutomationActivationSnapshotServiceTests
     }
 
     private static AutomationActivationSnapshotService CreateService(MemoryDbContext db, MutableRoles roles) =>
-        new(new TwoAppPersistenceStore(db), roles);
+        new(new GitHubConnectionsPersistenceStore(db), roles);
 
     private static CallerContext Human(string subject) => new() { User = subject, EntraObjectId = subject };
     private static ClaimsPrincipal HumanPrincipal() =>
