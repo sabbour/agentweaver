@@ -921,18 +921,6 @@ export function VisualWorkflowEditor({
     setValidationResult({ intent: 'success', message: 'Validation passed: YAML parses and every declared gate verdict is routed.' });
   }, [yamlText]);
 
-  const handleScheduleSave = useCallback((trigger: NonNullable<ReturnType<typeof getScheduleTrigger>>) => {
-    setYamlText((text) => setScheduleTrigger(text, trigger));
-    setSaveError(null);
-    setScheduleOpen(false);
-  }, []);
-
-  const handleScheduleRemove = useCallback(() => {
-    setYamlText((text) => setScheduleTrigger(text, null));
-    setSaveError(null);
-    setScheduleOpen(false);
-  }, []);
-
   const handleSave = useCallback(async () => {
     setSaving(true);
     setSaveError(null);
