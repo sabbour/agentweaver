@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.22.0
+
+### Minor Changes
+
+- 44e9a91: Added a deployment-wide bring-your-own-key (BYOK) inference provider option. Platform admins can configure an OpenAI-compatible, Azure, or Anthropic provider (base URL, model, API key) via the new `/api/admin/byok-provider` endpoint; when configured, it is used for all inference execution paths (one-shot runs, sandboxed AgentHost runs for projects/schedules/webhooks) instead of GitHub Copilot, and no per-user Copilot credential is required. Also removed the duplicate legacy Foundry runner/factory/dispatcher in favor of the generic `ModelSource.Byok` provider path.
+- 61125af: Reworked the workflow editor to show more canvas, with entry-point editing, undo/redo, discard, and on-demand validation.
+- c936f8b: Platform admins can now connect a single platform-wide GitHub Copilot account for GitHub Copilot mode, separate from per-project Copilot connections. Agentweaver now blocks app access behind a setup screen until either BYOK or the platform-default Copilot connection is configured.
+- c900f4e: Make Background automation requirements easier to scan by clearly separating them from the project Copilot connection controls.
+- a4da3b7: Show the current project’s GitHub repository account and AI source in a read-only status badge with links to the relevant settings.
+- f390805: Clarify GitHub Copilot and repository connections, provide consistent connection recovery, rename unattended automation to Background, and show project GitHub status in settings.
+- db37b64: Add a Platform settings page for choosing the deployment-wide AI inference source: GitHub Copilot mode (everyone connects their own Copilot login) or Custom key mode (one shared API key configuration for OpenAI-compatible, Azure, or Anthropic providers, used by everyone including background runs).
+- 72bc6b6: Add an Account settings page for GitHub connections, including a direct Repo App connection flow and guidance for managing project Copilot access.
+- a0a1ccc: Added a visual diagram of cluster health on the Cluster page, showing warm pools, sandbox claims, and agent pods.
+
+### Patch Changes
+
+- f138c79: Added Platform settings navigation for administrators and removed the duplicate sandbox-policy tool from Account settings.
+- baa4e4d: Renamed ModelSource BYOK API output to `byok` while preserving legacy `microsoft-foundry` reads, and replaced the Project General tab provider picker with a deployment-level Platform settings note.
+- 03178ec: Delete each generated demo-recording beat script (`scripts/demo-recording/.auth/generated/**/beat-*.cjs`) right after it runs instead of leaving it on disk. These single-use scripts embed seeded session data and previously accumulated indefinitely across recording runs, wasting local disk space.
+- 8610042: Fix a production startup outage where Copilot App validation treated a correctly configured GitHub App with no extra permissions as having repository permissions, crashing the API on every boot.
+- 39dc6da: Prune known-safe browser cache directories (Cache, Code Cache, BrowserMetrics, GrShaderCache,
+  etc.) from the demo-recording tool's persistent playwright-cli session profile after each
+  `close` command. Previously this profile (`scripts/demo-recording/.auth/sessions/<name>/`)
+  grew unbounded across recording sessions since nothing ever cleaned it up; a single session
+  had accumulated ~52MB of regenerable cache data.
+- 39dc6da: Fix `deploy-from-commit` and `deploy-from-release` not auto-loading the per-user
+  `params.<username>.json` config file the way `deploy-from-local` already does. Previously
+  these two subcommands required every deploy variable (e.g. `KEYVAULT_NAME`) to be set by
+  hand in the shell environment, unlike `deploy-from-local`.
+- 2e2e1a9: Wire Auth__CopilotApp__FrontendUrl and Auth__RepoApp__FrontendUrl into the production Kubernetes deployment. Without these, the post-authorization browser redirect for both GitHub Apps fell back to the http://localhost:5173 development default, sending production users to their own machine instead of back to the deployed frontend after connecting.
+- 428bb6d: Fix GitHub App credentials being rejected after a successful connection because their stored JSON property casing differed from the capability broker's reader.
+- 8d896d2: Restore GitHub connection handling so ordinary authorization failures do not show a
+  connection action, while keeping connection guidance accurate across the project UI.
+- 4b4dbd6: Fixed a build break on Settings page introduced by a merge that dropped the `getAuthConfig` API client method and the `formActions` style, both used by the Entra ID admin link and GitHub Repo App connect button.
+- 91a44e0: Fixed flaky Skills page tests when switching projects during a pending blueprint-defaults request.
+- 48dfbe6: Improved worker disruption recovery by preserving an available worker, promptly re-arming interrupted dispatches, limiting retry delays, and allowing preview cleanup to read Services.
+- 5e62974: Log the underlying reason when a GitHub Copilot App binding attempt or connection status check fails with `github_binding_unavailable`, instead of silently swallowing the exception. This was previously undiagnosable in production because the failure path had no logging at all.
+- 8d72b93: Fixed run detail state staying stale after confirming an outcome plan, and stopped a retry error loop on transient not-ready responses.
+- 3c64aa9: Added a link to manage your platform role assignments directly in Microsoft Entra ID.
+- 988e0f1: Rename legacy internal GitHub auth and persistence type names to GitHubConnections for clearer backend naming without changing behavior.
+- 428bb6d: Restore connecting a blank project to a newly created GitHub repository through the active Repo App authorization.
+- 761cf98: Restore the signed-in GitHub identity indicator in the sidebar footer after the legacy OAuth controls were removed.
+- 9fc259e: Fixed missing processing feedback when submitting a plan clarification.
+- f2b4442: Add close controls to dialogs and keep GitHub connection actions on one line.
+- 95b965d: Wire GitHub Copilot App and Repo App credentials into the production Kubernetes deployment so the previously merged authentication fixes can take effect.
+- fe6b9d8: Fixed GitHub Copilot App and Repo App connections not persisting, causing repository loading, session start, and run start failures.
+
 ## 0.21.4
 
 ### Patch Changes
