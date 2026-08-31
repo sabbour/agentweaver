@@ -1,7 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SettingsPage } from '../pages/SettingsPage';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
