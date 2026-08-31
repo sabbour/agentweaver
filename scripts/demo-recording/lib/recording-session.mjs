@@ -839,6 +839,7 @@ export async function captureRecordingPlan(options, {
   prepareScripts = prepareCaptureScripts,
   runScript = runPlaywrightCli,
   makeDirectory = fs.mkdir,
+  removeScript = (scriptPath) => fs.rm(scriptPath, { force: true }).catch(() => {}),
   write = (message) => process.stdout.write(message),
 } = {}) {
   await (options.unauthenticated ? openUnauthenticatedSession : openSession)(options);
@@ -856,10 +857,16 @@ export async function captureRecordingPlan(options, {
     if (!item) throw new Error(`Capture preparation did not produce beat ${queued.beatId}.`);
     if (item.videoPath) await makeDirectory(path.dirname(path.resolve(item.videoPath)), { recursive: true });
     write(`Capturing beat ${item.beatId}.\n`);
-    runScript(
-      sessionArgs(options.session, '--raw', 'run-code', `--filename=${item.scriptPath}`),
-      { output: 'inherit' },
-    );
+    try {
+      runScript(
+        sessionArgs(options.session, '--raw', 'run-code', `--filename=${item.scriptPath}`),
+        { output: 'inherit' },
+      );
+    } finally {
+      // Each generated beat script embeds seeded session data and is single-use; deleting it
+      // right after it runs prevents .auth/generated from accumulating stale scripts across runs.
+      await removeScript(item.scriptPath);
+    }
     lastPrepared = { outputDirectory: prepared.outputDirectory, scripts: [...(lastPrepared?.scripts ?? []), item] };
   }
   return lastPrepared ?? { outputDirectory: queue.outputDirectory, scripts: [] };
