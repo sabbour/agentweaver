@@ -25,9 +25,7 @@ public static class AgentRuntimeServiceCollectionExtensions
 
         services.AddSingleton<GitHubCopilotClientFactory>();
         services.AddSingleton<GitHubCopilotAgentRunner>();
-        services.AddSingleton<FoundryClientFactory>();
-        services.AddSingleton<FoundryAgentRunner>();
-        services.AddSingleton<IAgentRunner, AgentRunnerDispatcher>();
+        services.AddSingleton<IAgentRunner>(sp => sp.GetRequiredService<GitHubCopilotAgentRunner>());
         services.AddSingleton<IShellApprovalStore, InMemoryShellApprovalStore>();
         services.AddSingleton<IToolApprovalGate, InMemoryToolApprovalGate>();
         services.AddSingleton<IQuestionGate, InMemoryQuestionGate>();

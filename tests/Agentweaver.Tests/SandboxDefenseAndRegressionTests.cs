@@ -7,30 +7,6 @@ using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Sandbox;
 
-/// <summary>
-/// G. Foundry regression: asserts that the removed ResolveSandboxedPath method
-/// does NOT exist on FoundryAgentRunner. This was the source of the escape —
-/// Foundry had its own path-resolution logic that bypassed the shared governance gate.
-/// </summary>
-public sealed class FoundryRegressionTests
-{
-    [Fact]
-    public void FoundryAgentRunner_DoesNotHave_ResolveSandboxedPath()
-    {
-        var type = typeof(FoundryAgentRunner);
-
-        var method = type.GetMethod("ResolveSandboxedPath",
-            System.Reflection.BindingFlags.Public |
-            System.Reflection.BindingFlags.NonPublic |
-            System.Reflection.BindingFlags.Static |
-            System.Reflection.BindingFlags.Instance);
-
-        method.Should().BeNull(
-            "ResolveSandboxedPath was DELETED as part of the containment fix — " +
-            "Foundry must use the shared SandboxGovernance gate, not its own resolver");
-    }
-}
-
 public sealed class BubblewrapSandboxCommandTests
 {
     [Theory]
@@ -400,88 +376,5 @@ public sealed class PerCommandTempDirTests
 
         Directory.Exists(perCmdTempDir).Should().BeFalse(
             "per-command temp subdir must be deleted after the command completes");
-    }
-}
-
-/// <summary>
-/// Finding 2 regression: network_enabled=true emits a sandbox.warning event
-/// from both FoundryAgentRunner and (structurally) GitHubCopilotAgentRunner.
-/// </summary>
-public sealed class NetworkOpenWarningTests : IDisposable
-{
-    private readonly string _workDir;
-
-    public NetworkOpenWarningTests()
-    {
-        _workDir = Path.Combine(Path.GetTempPath(), $"net-warn-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_workDir);
-    }
-
-    public void Dispose()
-    {
-        try { Directory.Delete(_workDir, recursive: true); } catch { }
-    }
-
-    [Fact]
-    public async Task FoundryRunner_NetworkEnabled_EmitsSandboxWarning()
-    {
-        // Policy with NetworkEnabled = true
-        var policy = new SandboxPolicy
-        {
-            RepositoryPath = _workDir,
-            NetworkEnabled = true,
-        };
-
-        var client = new FakeNetworkWarningChatClient();
-        var runner = new FoundryAgentRunner(
-            client,
-            SandboxExecutorFactory.CreatePassthrough("unit-test"),
-            new StubPolicyStore(policy),
-            new InMemoryShellApprovalStore(),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<FoundryAgentRunner>.Instance);
-
-        var ch = System.Threading.Channels.Channel.CreateUnbounded<RunEvent>();
-        await runner.ExecuteAsync("task", _workDir, "", ModelSource.Byok, "r-net", null, ch.Writer, CancellationToken.None);
-        ch.Writer.TryComplete();
-
-        var events = new List<RunEvent>();
-        while (ch.Reader.TryRead(out var e)) events.Add(e);
-
-        var warnings = events
-            .Where(e => e.Type == "sandbox.warning")
-            .ToList();
-
-        warnings.Should().Contain(
-            e => GetProp(e.Payload, "category") == "network-open" &&
-                 (GetProp(e.Payload, "message") ?? "").Contains("network_enabled: true"),
-            "a sandbox.warning with category=network-open must be emitted when network_enabled=true");
-    }
-
-    private static string? GetProp(object payload, string name)
-        => payload.GetType().GetProperty(name)?.GetValue(payload)?.ToString();
-
-    /// <summary>Minimal chat client that immediately ends the turn with no text.</summary>
-    private sealed class FakeNetworkWarningChatClient : Microsoft.Extensions.AI.IChatClient
-    {
-        public Microsoft.Extensions.AI.ChatClientMetadata Metadata => new("fake", null, null);
-        public object? GetService(Type serviceType, object? serviceKey) => null;
-
-        public Task<Microsoft.Extensions.AI.ChatResponse> GetResponseAsync(
-            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
-            Microsoft.Extensions.AI.ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public async IAsyncEnumerable<Microsoft.Extensions.AI.ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
-            Microsoft.Extensions.AI.ChatOptions? options = null,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await Task.Yield();
-            yield return new Microsoft.Extensions.AI.ChatResponseUpdate(
-                Microsoft.Extensions.AI.ChatRole.Assistant, "done") { MessageId = "m1" };
-        }
-
-        public void Dispose() { }
     }
 }

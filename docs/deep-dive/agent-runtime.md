@@ -92,7 +92,7 @@ sequenceDiagram
 
 - **The run must be restartable.** Workflows and provider sessions can be checkpointed or reconstructed, so long-running runs survive process boundaries better than a single in-memory method call.
 - **The model must not own policy.** The model can request a shell command or file edit, but governance, approvals, and sandbox boundaries are enforced outside the model.
-- **The UI needs provider-neutral events.** A Copilot stream, a Foundry chat loop, a tool denial, and a review gate all become normalized run events.
+- **The UI needs provider-neutral events.** A Copilot stream, a tool denial, and a review gate all become normalized run events.
 - **Post-processing is part of correctness.** A useful agent run is not complete when the model stops talking; Agentweaver still needs a diff, commit, review state, RAI verdict, and memory pass.
 
 Where this lives:
@@ -149,8 +149,6 @@ The model may request file reads, edits, shell commands, URL fetches, API tools,
 
 For Copilot live runs, native provider operations are governed through the permission-request callback. This lets Agentweaver use provider-native file/shell capabilities while still applying Agentweaver policy. For registered custom functions, the runtime can decide whether to suppress raw tool lifecycle events and emit more meaningful domain events instead.
 
-For Foundry, the runtime runs an explicit loop: send chat history and tool definitions, receive function calls, evaluate governance, invoke the matching function, append the function result to chat history, and continue until no calls remain or the turn limit is reached.
-
 **Invariant:** the model only sees string-like tool results. This keeps the tool contract simple and portable across providers.
 
 ### 5. Close the turn and hand control back to the workflow
@@ -165,61 +163,18 @@ Where this lives:
 - `packages/Agentweaver.AgentRuntime/Workflow/AgentTurnExecutor.cs`
 - `packages/Agentweaver.AgentRuntime/Workflow/IWorkflowTurnAgent.cs`
 
-## Runner selection and provider seams
+## Runner and workflow seams
 
-Agentweaver has two provider seams that are easy to confuse.
-
-### Seam 1: the one-shot runner dispatcher
-
-`IAgentRunner` is a provider-neutral interface for "execute this task in this directory with this model source." The dispatcher chooses a concrete runner from `ModelSource`:
-
-- `GitHubCopilot` routes to the GitHub Copilot runner.
-- `MicrosoftFoundry` routes to the Foundry runner.
-- unknown providers fail fast.
-
-This seam serves one-shot, model-assisted tasks. The casting service is its primary caller: roster generation and other single-prompt operations run through this dispatcher. Foundry is wired here and runs whenever a caller reaches the dispatcher with `MicrosoftFoundry`.
-
-### Seam 2: the live workflow turn-agent seam
-
-Project and coordinator runs are Microsoft Agents Framework workflows. The app-level live path is `RunWorkflowFactory` → `AgentTurnExecutor` → `CopilotAIAgent`: the workflow factory builds a Copilot-backed workflow turn agent, and the executor calls `SetupAsync` and `RunTurnAsync` on that worker. This path does not dispatch on `AgentTurnInput.ModelSource` to select Foundry.
-
-This is the key nuance:
-
-> The dispatcher can route to Foundry, but the live project/coordinator run path builds the Copilot workflow agent. Foundry is wired behind the dispatcher, not selected by the app-level live workflow factory.
-
-![Seam 2: the live workflow turn-agent seam: Caller wants model execution, Which seam?, AgentRunnerDispatcher, ModelSource, GitHub Copilot runner, Foundry runner, Fail fast, RunWorkflowFactory, AgentTurnExecutor, CopilotAIAgent, SetupAsync + RunTurnAsync, Casting / model-assisted generation, …](../diagrams/agent-runtime-fig1.png)
-
-<!-- Rendered from ../diagrams/src/agent-runtime-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-### Why keep both seams?
-
-- The dispatcher is simple and provider-neutral. It is a good adapter for operations that only need "prompt plus workspace plus result."
-- The workflow turn-agent seam supports checkpointing, structured workflow edges, review loops, RAI/Scribe nodes, and provider session state.
-- Keeping Foundry behind the dispatcher allows provider choice for one-shot operations without forcing live workflows to support all provider-specific session behavior.
-
-### Foundry's conceptual loop
-
-Foundry does not use the Copilot SDK's native permission callback. Its runner owns the tool loop directly:
-
-1. Build chat history with the system prompt and user task.
-2. Register the full sandbox tool catalog as chat tools.
-3. Ask the model for the next assistant response.
-4. If the response contains function calls, normalize aliases, evaluate governance, invoke allowed functions, and append results.
-5. Repeat until the model stops calling tools or a maximum turn count is reached.
-
-This makes Foundry easier to reason about as a classic tool-calling loop, but it means the runner must implement details that Copilot delegates to its SDK.
-
-No app-level live run path selects Foundry through the workflow factory: the live project and coordinator path always builds the Copilot workflow turn agent. External callers that invoke `IAgentRunner` directly can still exercise the Foundry dispatcher path.
+`GitHubCopilotAgentRunner` is the sole `IAgentRunner` implementation for one-shot,
+model-assisted tasks such as casting. Project and coordinator runs use the Microsoft
+Agents Framework workflow path: `RunWorkflowFactory` → `AgentTurnExecutor` →
+`CopilotAIAgent`. Both paths use the GitHub Copilot SDK, so provider behavior and
+tool governance are not reimplemented in a separate runner.
 
 Where this lives:
 
 - `packages/Agentweaver.Domain/IAgentRunner.cs`
 - `packages/Agentweaver.Domain/ModelSource.cs`
-- `packages/Agentweaver.AgentRuntime/AgentRunnerDispatcher.cs`
-- `packages/Agentweaver.AgentRuntime/FoundryAgentRunner.cs`
 - `packages/Agentweaver.AgentRuntime/GitHubCopilotAgentRunner.cs`
 - `packages/Agentweaver.AgentRuntime/Workflow`
 
@@ -276,10 +231,6 @@ The live Copilot path intentionally does **not** register the entire sandbox cat
 `run_command` is conditional: it is registered only when the executor provides real isolation (or direct mode) *and* shell policy is enabled. When shell is disabled there is no shell path at all — native shell is denied and `run_command` is absent — which is the intended fail-closed behavior.
 
 This design avoids duplicate/conflicting file tools while keeping Agentweaver governance in front of native provider operations and ensuring all shell execution passes through the sandbox executor.
-
-### Foundry tool exposure
-
-Foundry receives the full canonical sandbox catalog as function tools. Because Foundry does not have the same native permission callback, the runner performs the whole loop explicitly: map the requested function name, check governance, invoke the function, convert the result to text, and append it to chat history.
 
 ### Agentweaver API tools
 
@@ -451,9 +402,8 @@ To add a provider-neutral sandbox tool:
 1. Define the tool name, input schema, description, and string result contract.
 2. Decide what run-scoped authority it needs and add that to the tool context if necessary.
 3. Add it to the canonical registry only if it should be generally available.
-4. Decide how each provider should see it:
-   - Foundry can receive it as a normal function tool.
-   - Copilot live may be better served by native provider capabilities plus permission handling, or by a selected custom function if the tool has Agentweaver-specific semantics.
+4. Decide whether Copilot should use a native provider capability plus permission
+   handling, or a selected custom function for Agentweaver-specific semantics.
 5. Add governance and event behavior before exposing it to the model.
 
 Gotchas:
@@ -464,15 +414,9 @@ Gotchas:
 
 ### Adding a provider
 
-To add a provider for the one-shot seam, implement the runner interface, register it, and update the dispatcher/model-source conversion.
-
-To add a provider for live project/coordinator runs, that is not enough. You also need a workflow turn-agent implementation that supports setup, turn execution, event normalization, tool governance, and ideally session serialization. Then update the workflow agent factory to select it based on run input.
-
-Gotchas:
-
-- Foundry support in the dispatcher does not imply Foundry support in live workflows.
-- New providers must preserve system-prompt context, memory instructions, and event semantics.
-- If the provider has no native permission callback, the runner must own the tool loop explicitly.
+Add providers through the GitHub Copilot SDK's provider configuration, preserving the
+existing system-prompt context, memory instructions, event semantics, and tool
+governance. Do not add a separate provider-specific runner.
 
 ### Changing RAI or Scribe
 
