@@ -519,7 +519,22 @@ export async function waitForInteractiveSignInCompletion(page, {
   throw new Error('Agentweaver sign-in did not complete before the interactive sign-in window timed out.');
 }
 
+export async function pruneOrphanedAutomationProfileCopies(paths) {
+  const root = paths.root;
+  const automationDirName = path.basename(paths.automationUserDataDir);
+  let entries;
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(`${automationDirName}.refresh-`))
+    .map((entry) => fs.rm(path.join(root, entry.name), { recursive: true, force: true }).catch(() => {})));
+}
+
 export async function refreshDisposableEdgeProfile(paths, edgeProfile, repositoryRoot) {
+  await pruneOrphanedAutomationProfileCopies(paths);
   const refreshRoot = `${paths.automationUserDataDir}.refresh-${process.pid}-${Date.now()}`;
   const refreshDefault = path.join(refreshRoot, EDGE_DEFAULT_PROFILE_DIRECTORY);
   try {
