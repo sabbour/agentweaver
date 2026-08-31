@@ -137,9 +137,9 @@ public sealed class ProjectTools(AgentweaverApiClient api)
     [McpServerTool(Name = "project_configure"), Description("Configure the AI model provider settings for a project.")]
     public async Task<string> ProjectConfigureAsync(
         [Description("Project ID")] string project_id,
-        [Description("Default model provider (e.g. github_copilot or microsoft_foundry)")] string default_provider,
+        [Description("Default model provider (e.g. github-copilot or byok; legacy microsoft-foundry is still accepted)")] string default_provider,
         [Description("Model ID for GitHub Copilot provider (optional)")] string? default_model_github_copilot = null,
-        [Description("Model ID for Microsoft Foundry provider (optional)")] string? default_model_microsoft_foundry = null,
+        [Description("Model ID for the BYOK provider (optional; uses the legacy default_model_microsoft_foundry field name)")] string? default_model_microsoft_foundry = null,
         CancellationToken ct = default)
     {
         try

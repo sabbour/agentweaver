@@ -17,13 +17,14 @@ public static class ModelSourceExtensions
     public static string ToApiString(this ModelSource src) => src switch
     {
         ModelSource.GitHubCopilot => "github-copilot",
-        ModelSource.Byok => "microsoft-foundry",
+        ModelSource.Byok => "byok",
         _ => throw new ArgumentOutOfRangeException(nameof(src))
     };
 
     public static ModelSource FromApiString(string s) => s switch
     {
         "github-copilot" => ModelSource.GitHubCopilot,
+        "byok" => ModelSource.Byok,
         "microsoft-foundry" => ModelSource.Byok,
         _ => throw new ArgumentException($"Unknown model source: {s}", nameof(s))
     };

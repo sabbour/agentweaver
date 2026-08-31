@@ -1,4 +1,4 @@
-export type ModelSource = 'github-copilot' | 'microsoft-foundry';
+export type ModelSource = 'github-copilot' | 'byok';
 export type AuthMode = 'entra';
 
 export interface ServerInfo {

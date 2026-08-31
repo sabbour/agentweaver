@@ -1366,7 +1366,7 @@ the repository and cloning into `working_directory`; direct repository URLs and 
 | `origin` | string | Yes | `"blank"` or `"github"` |
 | `working_directory` | string | Yes | Absolute local path for the project |
 | `repository_selection_code` | string | When `origin` is `"github"` | Short-lived opaque selection code from `POST /api/github/repository-selections` |
-| `default_provider` | string | No | `"github-copilot"` or `"microsoft-foundry"`. Falls back to the runtime default when omitted. |
+| `default_provider` | string | No | `"github-copilot"` or `"byok"`. The legacy `"microsoft-foundry"` value is still accepted on input. Falls back to the runtime default when omitted. |
 | `default_model_github_copilot` | string | No | Model name override for the GitHub Copilot provider |
 | `default_model_microsoft_foundry` | string | No | Model name override for the BYOK provider. The legacy field name remains supported. |
 | `blueprint_id` | string | No | Predefined blueprint id from `GET /api/blueprints`. Mutually exclusive with `blueprint`. |
@@ -1439,7 +1439,7 @@ Request:
 
 ```json
 {
-  "default_provider": "microsoft-foundry",
+  "default_provider": "byok",
   "default_model_github_copilot": null,
   "default_model_microsoft_foundry": "gpt-4o",
   "blueprint_generation_model": "gpt-5-mini",

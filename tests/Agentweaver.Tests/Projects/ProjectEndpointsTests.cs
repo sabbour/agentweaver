@@ -173,7 +173,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
             $"/api/projects/{id}/provider-settings",
             new UpdateProjectProviderSettingsRequest
             {
-                DefaultProvider           = "microsoft-foundry",
+                DefaultProvider           = "byok",
                 DefaultModelMicrosoftFoundry = "gpt-4o",
                 BlueprintGenerationModel = "gpt-5-mini",
                 WorkflowGenerationModel = "gpt-5.3-codex",
@@ -184,7 +184,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
 
         var getResp = await _client.GetAsync($"/api/projects/{id}");
         var result  = await getResp.Content.ReadFromJsonAsync<ProjectResponse>();
-        result!.DefaultProvider.Should().Be("microsoft-foundry");
+        result!.DefaultProvider.Should().Be("byok");
         result.DefaultModelMicrosoftFoundry.Should().Be("gpt-4o");
         result.BlueprintGenerationModel.Should().Be("gpt-5-mini");
         result.WorkflowGenerationModel.Should().Be("gpt-5.3-codex");

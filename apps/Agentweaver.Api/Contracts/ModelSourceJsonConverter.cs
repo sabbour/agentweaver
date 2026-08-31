@@ -6,7 +6,7 @@ namespace Agentweaver.Api.Contracts;
 
 /// <summary>
 /// Serializes <see cref="ModelSource"/> using its stable API string form
-/// ("github-copilot" / "microsoft-foundry") rather than the CLR enum name, so
+/// ("github-copilot" / "byok") rather than the CLR enum name, so
 /// event payloads and API responses stay consistent with the request contract.
 /// </summary>
 public sealed class ModelSourceJsonConverter : JsonConverter<ModelSource>
