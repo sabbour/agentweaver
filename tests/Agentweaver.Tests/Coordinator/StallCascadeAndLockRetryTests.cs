@@ -649,8 +649,9 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
             await db.SaveChangesAsync();
         }
 
-        var sut = BuildDispatch(new SqliteRunEventStream(_streamConfig));
-        await sut.StopAsync(CancellationToken.None);
+        var lifetime = new StoppableHostApplicationLifetime();
+        _ = BuildDispatch(new SqliteRunEventStream(_streamConfig), lifetime: lifetime);
+        lifetime.StopApplication();
 
         using var verifyScope = _provider.CreateScope();
         var released = await verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>()
@@ -847,7 +848,8 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         double stallTimeoutMinutes = 5,
         bool instantRetryBackoff = true,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        IHostApplicationLifetime? lifetime = null)
     {
         var retrySeconds = instantRetryBackoff ? "0" : null;
         var config = configuration ?? new ConfigurationBuilder()
@@ -869,7 +871,7 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
 
         return new CoordinatorDispatchService(
             _runStore, _streamStore, orchestrator, null!, new CoordinatorSteeringQueue(_scopeFactory), _assembly,
-            _scopeFactory, new TestHostApplicationLifetime(),
+            _scopeFactory, lifetime ?? new TestHostApplicationLifetime(),
             NullLogger<CoordinatorDispatchService>.Instance,
             runOptions: null, autopilot: null, configuration: config, eventStream: eventStream,
             podLifecycle: podLifecycle,
@@ -1104,6 +1106,17 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped => CancellationToken.None;
         public void StopApplication() { }
+    }
+
+    private sealed class StoppableHostApplicationLifetime : IHostApplicationLifetime
+    {
+        private readonly CancellationTokenSource _stopping = new();
+
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+        public CancellationToken ApplicationStopping => _stopping.Token;
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+
+        public void StopApplication() => _stopping.Cancel();
     }
 
     private sealed class RecordingPodLifecycle : IAgentHostPodLifecycle

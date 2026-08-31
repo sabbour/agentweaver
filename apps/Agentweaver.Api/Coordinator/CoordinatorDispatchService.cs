@@ -65,7 +65,7 @@ public interface ICoordinatorDispatch
 /// <see cref="MemoryDbContext"/> (the <see cref="IServiceScopeFactory"/> pattern), so parallel
 /// child dispatch + observation never corrupt EF state. Observation tasks only READ the stream.
 /// </summary>
-public sealed class CoordinatorDispatchService : ICoordinatorDispatch, IHostedService
+public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 {
     internal static readonly TimeSpan MaxInfrastructureRetryBackoff = TimeSpan.FromMinutes(2);
     private readonly IRunStore _runStore;
@@ -167,6 +167,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch, IHostedSe
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
+        _appStopping.Register(OnApplicationStopping);
         _integrationBuildLock = integrationBuildLock;
 
         var stallMinutes = configuration?.GetValue("Coordinator:SubtaskStallTimeoutMinutes", 5.0) ?? 5.0;
@@ -237,9 +238,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch, IHostedSe
             }
             finally
             {
-                if (_appStopping.IsCancellationRequested)
-                    await RelinquishCoordinatorLeaseOnShutdownAsync(
-                        context.CoordinatorRunId, CancellationToken.None).ConfigureAwait(false);
                 _active.TryRemove(context.CoordinatorRunId, out _);
                 _runCts.TryRemove(context.CoordinatorRunId, out _);
                 runCts.Dispose();
@@ -250,15 +248,24 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch, IHostedSe
     /// <inheritdoc />
     public bool IsDispatchActive(string coordinatorRunId) => _active.ContainsKey(coordinatorRunId);
 
-    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
     /// <summary>
-    /// Releases every locally owned dispatch lease before the host finishes stopping. The application
-    /// stopping token has already cancelled in-flight loops when this runs, so a replacement worker
-    /// can safely re-arm their durable work plans without waiting for the stale-lease timeout.
+    /// Releases locally owned dispatch leases synchronously as the host begins stopping. The callback
+    /// runs before service-provider disposal, so a replacement worker can immediately re-arm the
+    /// durable work plans instead of waiting for the stale-lease timeout.
     /// </summary>
-    public Task StopAsync(CancellationToken cancellationToken) =>
-        RelinquishCoordinatorLeaseOnShutdownAsync(coordinatorRunId: null, cancellationToken);
+    private void OnApplicationStopping()
+    {
+        try
+        {
+            RelinquishCoordinatorLeaseOnShutdownAsync(
+                coordinatorRunId: null, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Coordinator dispatch: failed to release shutdown leases; normal stale-lease recovery will apply");
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Dispatch + observe loop
@@ -1070,9 +1077,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch, IHostedSe
     /// subtask rows remain unchanged, letting the existing reconciler re-observe in-flight children
     /// from a replacement worker without waiting for this pod's lease to become stale.
     /// </summary>
-    internal async Task RelinquishCoordinatorLeaseOnShutdownAsync(
-        string? coordinatorRunId,
-        CancellationToken cancellationToken)
+    internal async Task RelinquishCoordinatorLeaseOnShutdownAsync(string? coordinatorRunId, CancellationToken cancellationToken)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
