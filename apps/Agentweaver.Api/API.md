@@ -54,7 +54,8 @@ Request:
 }
 ```
 
-`model_source` must be `github-copilot` or `microsoft-foundry`; any other value
+`model_source` must be `github-copilot` or `byok`. The legacy `microsoft-foundry`
+value is still accepted for backward compatibility; any other value
 returns `400`. The submitting user is taken from the bearer key, not the body.
 
 `repository_path` must be an absolute local filesystem path. It is canonicalized

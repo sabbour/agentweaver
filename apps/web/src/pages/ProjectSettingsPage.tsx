@@ -701,7 +701,7 @@ export function ProjectSettingsPage() {
               <MetricRow items={[
                 { label: 'Project', value: project.name },
                 { label: 'Working directory', value: project.working_directory ?? 'Not configured' },
-                { label: 'Default provider', value: project.default_provider ?? 'github-copilot' },
+                { label: 'AI source', value: 'Deployment setting' },
                 { label: 'Authentication mode', value: authModeLabel },
                 { label: 'Your project role', value: projectRoleSummary },
               ]} />
@@ -709,6 +709,13 @@ export function ProjectSettingsPage() {
 
             {displayedSection === 'general' && (
               <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>AI source</TitleText>
+                  <Body as="p" tone="muted">
+                    This project uses the AI source configured for the deployment. Change it in Platform settings.
+                  </Body>
+                </div>
+
                 <div className={styles.subBlock}>
                   <TitleText>Rename project</TitleText>
                   <Field

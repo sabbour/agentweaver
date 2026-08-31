@@ -139,6 +139,19 @@ describe('ProjectSettingsPage', () => {
     await waitFor(() => expect(screen.getByText('Sandbox enabled')).toBeDefined());
   });
 
+  it('shows the AI source as a deployment-level note on the General section', async () => {
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+
+    expect(screen.getAllByText('AI source')).toHaveLength(2);
+    expect(screen.getByText(
+      'This project uses the AI source configured for the deployment. Change it in Platform settings.',
+    )).toBeDefined();
+    expect(screen.getByText('Deployment setting')).toBeDefined();
+    expect(screen.queryByText('Default provider')).toBeNull();
+  });
+
   it('shows read-only background readiness without an activation control', async () => {
     renderPage('proj-1');
 

@@ -52,6 +52,14 @@ public sealed class ModelSourceValidationTests : IClassFixture<AgentweaverWebApp
     }
 
     [Fact]
+    public async Task Submit_WithByok_ReturnsGone()
+    {
+        var response = await PostRunAsync("byok");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Gone);
+    }
+
+    [Fact]
     public async Task Submit_WithMicrosoftFoundry_ReturnsGone()
     {
         var response = await PostRunAsync("microsoft-foundry");
