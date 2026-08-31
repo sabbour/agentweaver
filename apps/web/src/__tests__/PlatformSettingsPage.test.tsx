@@ -84,6 +84,7 @@ describe('PlatformSettingsPage', () => {
     renderPage();
 
     fireEvent.click(await screen.findByLabelText(/Custom key mode/));
+    fireEvent.click(screen.getByLabelText(/OpenAI-compatible/));
     fireEvent.change(screen.getByPlaceholderText('https://api.example.com'), {
       target: { value: 'https://api.example.com' },
     });
