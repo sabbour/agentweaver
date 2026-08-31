@@ -458,6 +458,7 @@ export interface AuthSessionResponse {
   avatar_url?: string | null;
   entra_object_id?: string | null;
   platform_roles: string[];
+  ai_configured: boolean;
 }
 
 export interface AuthConfigResponse {
@@ -569,6 +570,11 @@ export interface UnattendedReadiness {
  */
 export interface ProjectCopilotConnection {
   status: 'connected' | 'not_connected';
+  github_login: string | null;
+}
+
+export interface PlatformDefaultCopilotConnection {
+  connected: boolean;
   github_login: string | null;
 }
 

@@ -25,7 +25,8 @@ public sealed class GitHubConnectionsCredentialArchitectureTests
             GitHubAuthorizationPurpose.InteractiveRepository,
             GitHubAuthorizationPurpose.InteractiveCopilot,
             GitHubAuthorizationPurpose.UnattendedRepository,
-            GitHubAuthorizationPurpose.UnattendedCopilot);
+            GitHubAuthorizationPurpose.UnattendedCopilot,
+            GitHubAuthorizationPurpose.PlatformDefaultCopilot);
         Enum.GetValues<GitHubCapabilityPurpose>().Should().Equal(
             GitHubCapabilityPurpose.InteractiveRepository,
             GitHubCapabilityPurpose.InteractiveCopilot,

@@ -32,6 +32,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<GitHubRepositoryGrantRecord> GitHubRepositoryGrants => Set<GitHubRepositoryGrantRecord>();
     public DbSet<GitHubRepositorySelectionCodeRecord> GitHubRepositorySelectionCodes => Set<GitHubRepositorySelectionCodeRecord>();
     public DbSet<ProjectCopilotBindingRecord> ProjectCopilotBindings => Set<ProjectCopilotBindingRecord>();
+    public DbSet<PlatformDefaultCopilotBindingRecord> PlatformDefaultCopilotBindings => Set<PlatformDefaultCopilotBindingRecord>();
     public DbSet<AutomationActivationRecord> AutomationActivations => Set<AutomationActivationRecord>();
     public DbSet<AutomationInvocationRecord> AutomationInvocations => Set<AutomationInvocationRecord>();
     public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
@@ -628,6 +629,19 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasIndex(x => x.ProjectId).IsUnique().HasFilter("status = 0")
                 .HasDatabaseName("UX_project_copilot_bindings_active_project");
             ConfigureProjectForeignKey(e, "FK_project_copilot_bindings_projects_project_id");
+        });
+
+        model.Entity<PlatformDefaultCopilotBindingRecord>(e =>
+        {
+            e.ToTable("platform_default_copilot_bindings").HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.BoundAt).HasColumnName("bound_at");
+            e.Property(x => x.DeactivatedAt).HasColumnName("deactivated_at");
         });
 
         model.Entity<AutomationActivationRecord>(e =>

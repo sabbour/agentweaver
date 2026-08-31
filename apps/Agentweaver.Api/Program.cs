@@ -1056,6 +1056,7 @@ else
     app.MapTeamEndpoints();
     app.MapAuthEndpoints();
     app.MapByokProviderSettingsEndpoints();
+    app.MapPlatformDefaultCopilotBindingEndpoints();
     app.MapGitHubRepositorySelectionEndpoints();
     app.MapDecisionsEndpoints();
     app.MapMemoryEndpoints();

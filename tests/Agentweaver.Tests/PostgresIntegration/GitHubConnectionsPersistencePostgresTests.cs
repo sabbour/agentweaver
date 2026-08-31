@@ -64,6 +64,20 @@ public sealed class GitHubConnectionsPersistencePostgresTests(PostgresFixture po
     }
 
     [PostgresFact]
+    public async Task PlatformDefaultBinding_UpsertsTheSingletonRow()
+    {
+        await using var first = await postgres.CreateDbContextAsync();
+        var store = new GitHubConnectionsPersistenceStore(first);
+        (await store.ReplacePlatformDefaultCopilotBindingAsync(PlatformBinding("first"))).Should().Be(BindingWriteResult.Bound);
+        (await store.ReplacePlatformDefaultCopilotBindingAsync(PlatformBinding("second"))).Should().Be(BindingWriteResult.Bound);
+
+        await using var verify = await postgres.CreateDbContextAsync();
+        var bindings = await verify.PlatformDefaultCopilotBindings.ToListAsync();
+        bindings.Should().HaveCount(1);
+        bindings.Single().CredentialReference.Should().Be("kv-copilot-platform-second");
+    }
+
+    [PostgresFact]
     public async Task CapabilitySnapshots_AllowPurposeCoexistenceAndRejectRunPurposeRaces()
     {
         var projectId = $"capability-snapshots-{Guid.NewGuid():N}";
@@ -122,6 +136,17 @@ public sealed class GitHubConnectionsPersistencePostgresTests(PostgresFixture po
         CredentialReference = "kv-copilot",
         CredentialVersion = "version",
         GrantDigest = "digest",
+        Status = GitHubBindingStatus.Active,
+        BoundAt = DateTimeOffset.UtcNow,
+    };
+
+    private static PlatformDefaultCopilotBindingRecord PlatformBinding(string suffix) => new()
+    {
+        Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+        EntraObjectId = "entra",
+        CredentialReference = $"kv-copilot-platform-{suffix}",
+        CredentialVersion = $"version-{suffix}",
+        GrantDigest = $"digest-{suffix}",
         Status = GitHubBindingStatus.Active,
         BoundAt = DateTimeOffset.UtcNow,
     };

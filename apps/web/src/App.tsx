@@ -34,10 +34,17 @@ import { WorkflowsPage } from './pages/WorkflowsPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { AssistantRoute } from './routes/AssistantRoute';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import { Body, PageContainer, PageHeader, PageSection } from './components/ui';
 
-function Shell({ isPlatformAdmin }: { isPlatformAdmin: boolean }) {
+function Shell({
+  isPlatformAdmin,
+  onAiConfigurationChanged,
+}: {
+  isPlatformAdmin: boolean;
+  onAiConfigurationChanged?: () => void;
+}) {
   return (
     <AppShell isPlatformAdmin={isPlatformAdmin}>
       <Routes>
@@ -49,7 +56,9 @@ function Shell({ isPlatformAdmin }: { isPlatformAdmin: boolean }) {
         <Route path="/settings" element={<SettingsPage />} />
         <Route
           path="/platform-settings"
-          element={isPlatformAdmin ? <PlatformSettingsPage /> : <Navigate to="/overview" replace />}
+          element={isPlatformAdmin
+            ? <PlatformSettingsPage onRetryAccess={onAiConfigurationChanged} />
+            : <Navigate to="/overview" replace />}
         />
         {/* Legacy operator-dock bookmark (#346) — the dock is retired; route old links
             straight through the assistant page. */}
@@ -134,39 +143,63 @@ function describeSessionCheckError(err: unknown): string | null {
 function AuthGate() {
   const [authChecked, setAuthChecked] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [hasPlatformAccess, setHasPlatformAccess] = useState(false);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [aiConfigured, setAiConfigured] = useState(true);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    captureSessionAuthFromUrl()
-      .then(() => apiClient.getServerInfo())
-      .then(async () => {
-        if (cancelled) return;
-        const session = await apiClient.getAuthSession();
-        if (cancelled) return;
-        setSessionError(null);
-        if (!session.authenticated) {
-          clearSessionAuth();
-          setSignedIn(false);
-          setIsPlatformAdmin(false);
-          setAuthChecked(true);
-          return;
-        }
-        setIsPlatformAdmin(session.platform_roles.includes('PlatformAdmin'));
-        setSignedIn(true);
-        setAuthChecked(true);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
+  const runSessionCheck = useCallback(async (cancelledRef?: { cancelled: boolean }) => {
+    setAuthChecked(false);
+    setSessionError(null);
+    setAiConfigured(true);
+    setSignedIn(false);
+    setHasPlatformAccess(false);
+    setIsPlatformAdmin(false);
+
+    try {
+      await captureSessionAuthFromUrl();
+      await apiClient.getServerInfo();
+      if (cancelledRef?.cancelled) return;
+      const session = await apiClient.getAuthSession();
+      if (cancelledRef?.cancelled) return;
+      setSessionError(null);
+      if (!session.authenticated) {
         clearSessionAuth();
         setSignedIn(false);
+        setHasPlatformAccess(false);
         setIsPlatformAdmin(false);
-        setSessionError(describeSessionCheckError(err));
+        setAiConfigured(true);
         setAuthChecked(true);
-      });
-    return () => { cancelled = true; };
+        return;
+      }
+      const roles = session.platform_roles;
+      setHasPlatformAccess(roles.length > 0);
+      setIsPlatformAdmin(roles.includes('PlatformAdmin'));
+      setAiConfigured(session.ai_configured);
+      setSignedIn(true);
+      setAuthChecked(true);
+    } catch (err: unknown) {
+      if (cancelledRef?.cancelled) return;
+      clearSessionAuth();
+      setSignedIn(false);
+      setHasPlatformAccess(false);
+      setIsPlatformAdmin(false);
+      setAiConfigured(true);
+      setSessionError(describeSessionCheckError(err));
+      setAuthChecked(true);
+    }
   }, []);
+
+  useEffect(() => {
+    const cancelledRef = { cancelled: false };
+    const timer = window.setTimeout(() => {
+      void runSessionCheck(cancelledRef);
+    }, 0);
+    return () => {
+      cancelledRef.cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [runSessionCheck]);
 
   if (!authChecked) {
     return <SignInPageLoading />;
@@ -176,7 +209,53 @@ function AuthGate() {
     return <SignInPage sessionError={sessionError} />;
   }
 
-  return <Shell isPlatformAdmin={isPlatformAdmin} />;
+  if (!hasPlatformAccess) {
+    return (
+      <PageContainer width="readable">
+        <PageHeader
+          title="Access denied"
+          description="Your account is signed in, but no Agentweaver platform role is assigned."
+        />
+        <PageSection title="What to do next">
+          <Body>
+            Ask a Platform Admin to assign you an Agentweaver platform role in Microsoft Entra ID,
+            then refresh this page.
+          </Body>
+        </PageSection>
+      </PageContainer>
+    );
+  }
+
+  if (!aiConfigured) {
+    if (isPlatformAdmin) {
+      return (
+        <Routes>
+          <Route
+            path="/platform-settings"
+            element={<PlatformSettingsPage setupRequired onRetryAccess={() => { void runSessionCheck(); }} />}
+          />
+          <Route path="*" element={<Navigate to="/platform-settings" replace />} />
+        </Routes>
+      );
+    }
+
+    return (
+      <PageContainer width="readable">
+        <PageHeader
+          title="AI setup required"
+          description="Agentweaver cannot be used until an administrator configures an AI provider."
+        />
+        <PageSection title="What to do next">
+          <Body>
+            An administrator needs to configure an AI provider before Agentweaver can be used.
+            Please contact your administrator.
+          </Body>
+        </PageSection>
+      </PageContainer>
+    );
+  }
+
+  return <Shell isPlatformAdmin={isPlatformAdmin} onAiConfigurationChanged={() => { void runSessionCheck(); }} />;
 }
 
 function App() {

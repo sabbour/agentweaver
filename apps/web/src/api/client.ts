@@ -49,6 +49,7 @@ import type {
   PortForwardSessionDto,
   PagedRequestOptions,
   PagedResult,
+  PlatformDefaultCopilotConnection,
   Project,
   ProjectAccessOverview,
   ProjectCopilotConnection,
@@ -533,6 +534,22 @@ export class AgentweaverApiClient {
 
   clearByokProviderConfig(): Promise<void> {
     return this.request<void>('DELETE', '/admin/byok-provider');
+  }
+
+  beginPlatformDefaultCopilotAuthorization(): Promise<{
+    authorization_url: string;
+    transaction_id: string;
+    expires_at: string;
+  }> {
+    return this.request('POST', '/admin/platform-default-copilot/begin', {});
+  }
+
+  getPlatformDefaultCopilotConnection(): Promise<PlatformDefaultCopilotConnection> {
+    return this.request<PlatformDefaultCopilotConnection>('GET', '/admin/platform-default-copilot/status');
+  }
+
+  disconnectPlatformDefaultCopilotConnection(): Promise<void> {
+    return this.request<void>('POST', '/admin/platform-default-copilot/disconnect', {});
   }
 
   beginRepoAppAuthorization(): Promise<{ authorization_url: string; transaction_id: string; expires_at: string }> {
