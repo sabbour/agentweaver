@@ -32,6 +32,7 @@ export interface LeftNavProps {
   pathname: string;
   isFallbackProject?: boolean;
   onFallbackProjectMissing?: () => void;
+  isPlatformAdmin?: boolean;
 }
 
 function sectionLabel(heading: string): string {
@@ -47,7 +48,14 @@ function formatVersionBadge(version: string): string {
   return `${base}+${hash.slice(0, 7)}`;
 }
 
-export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onFallbackProjectMissing }: LeftNavProps) {
+export function LeftNav({
+  projectId,
+  activeKey,
+  pathname,
+  isFallbackProject,
+  onFallbackProjectMissing,
+  isPlatformAdmin = false,
+}: LeftNavProps) {
   const version = useAppVersion();
   const versionLabel = formatVersionBadge(version);
   const footerVersionText = versionLabel ? `v${versionLabel}` : 'Alpha';
@@ -68,11 +76,13 @@ export function LeftNav({ projectId, activeKey, pathname, isFallbackProject, onF
   });
 
   const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
-    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions'),
+    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter(
+      (item) => item.key !== 'sessions' && (!item.requiresPlatformAdmin || isPlatformAdmin),
+    ),
     globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions'),
     primarySections: NAV_SECTIONS.filter((section) => !section.anchorBottom),
     bottomSections: NAV_SECTIONS.filter((section) => section.anchorBottom),
-  }), []);
+  }), [isPlatformAdmin]);
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {

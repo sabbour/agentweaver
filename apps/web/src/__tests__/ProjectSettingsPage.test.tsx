@@ -139,15 +139,15 @@ describe('ProjectSettingsPage', () => {
     await waitFor(() => expect(screen.getByText('Sandbox enabled')).toBeDefined());
   });
 
-  it('shows read-only unattended readiness without an activation control', async () => {
+  it('shows read-only background readiness without an activation control', async () => {
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Unattended/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
 
-    expect(await screen.findByText('Automation readiness')).toBeDefined();
+    expect(await screen.findByText('Background automation readiness')).toBeDefined();
     expect(screen.getByText('copilot_binding_required')).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Manage GitHub account' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
     expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
   });
 

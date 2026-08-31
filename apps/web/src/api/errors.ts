@@ -29,7 +29,7 @@ export function githubConnectionErrorMessage(err: unknown): string | null {
   const body = parseApiBody(err.body);
   const code = body.error;
   if (code && GITHUB_CONNECTION_MESSAGES[code]) return GITHUB_CONNECTION_MESSAGES[code];
-  if (err.status === 404 || err.status === 401) {
+  if (err.status === 404) {
     return 'Connect GitHub to access this project repository and AI features.';
   }
   return null;

@@ -24,6 +24,7 @@ import { OverviewPage } from './pages/OverviewPage';
 import { ProjectGalleryPage } from './pages/ProjectGalleryPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { ProjectSettingsPage } from './pages/ProjectSettingsPage';
+import { PlatformSettingsPage } from './pages/PlatformSettingsPage';
 import { SessionsPage } from './pages/SessionsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SignInPage, SignInPageLoading } from './pages/SignInPage';
@@ -36,9 +37,9 @@ import { AssistantRoute } from './routes/AssistantRoute';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
 
-function Shell() {
+function Shell({ isPlatformAdmin }: { isPlatformAdmin: boolean }) {
   return (
-    <AppShell>
+    <AppShell isPlatformAdmin={isPlatformAdmin}>
       <Routes>
         {/* Global (non-project) destinations */}
         <Route path="/" element={<OverviewPage />} />
@@ -46,6 +47,10 @@ function Shell() {
         <Route path="/projects" element={<ProjectGalleryPage />} />
         <Route path="/sessions" element={<SessionsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route
+          path="/platform-settings"
+          element={isPlatformAdmin ? <PlatformSettingsPage /> : <Navigate to="/overview" replace />}
+        />
         {/* Legacy operator-dock bookmark (#346) — the dock is retired; route old links
             straight through the assistant page. */}
         <Route path="/console" element={<Navigate to="/assistant" replace />} />
@@ -129,6 +134,7 @@ function describeSessionCheckError(err: unknown): string | null {
 function AuthGate() {
   const [authChecked, setAuthChecked] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -143,9 +149,11 @@ function AuthGate() {
         if (!session.authenticated) {
           clearSessionAuth();
           setSignedIn(false);
+          setIsPlatformAdmin(false);
           setAuthChecked(true);
           return;
         }
+        setIsPlatformAdmin(session.platform_roles.includes('PlatformAdmin'));
         setSignedIn(true);
         setAuthChecked(true);
       })
@@ -153,6 +161,7 @@ function AuthGate() {
         if (cancelled) return;
         clearSessionAuth();
         setSignedIn(false);
+        setIsPlatformAdmin(false);
         setSessionError(describeSessionCheckError(err));
         setAuthChecked(true);
       });
@@ -167,7 +176,7 @@ function AuthGate() {
     return <SignInPage sessionError={sessionError} />;
   }
 
-  return <Shell />;
+  return <Shell isPlatformAdmin={isPlatformAdmin} />;
 }
 
 function App() {
