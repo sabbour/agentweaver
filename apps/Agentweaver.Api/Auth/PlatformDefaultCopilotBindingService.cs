@@ -50,6 +50,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(10);
 
     private readonly string _baseUrl = configuration["Auth:CopilotApp:BaseUrl"] ?? "https://github.com";
+    private readonly string _apiUrl = configuration["Auth:CopilotApp:ApiUrl"] ?? "https://api.github.com";
     private readonly string? _clientId = configuration["Auth:CopilotApp:ClientId"];
     private readonly string? _clientSecret = configuration["Auth:CopilotApp:ClientSecret"];
     private readonly string? _configuredCallbackUrl = configuration["Auth:CopilotApp:CallbackUrl"];
@@ -173,7 +174,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
         {
             var secret = await secretStore.GetSecretAsync(reference.CredentialReference, ct).ConfigureAwait(false);
             var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
-            if (await ShouldRevokeCredentialAsync(reference.Id, credential, null, ct).ConfigureAwait(false))
+            if (!await IsTokenStillInUseAsync(reference.Id, credential?.AccessToken, ct).ConfigureAwait(false))
                 await RevokeWithProviderAsync(credential?.AccessToken, ct).ConfigureAwait(false);
             await DeleteCredentialAsync(reference.CredentialReference, ct).ConfigureAwait(false);
         }
@@ -218,7 +219,9 @@ internal sealed class PlatformDefaultCopilotBindingService(
 
         var secret = await secretStore.GetSecretAsync(binding.CredentialReference, ct).ConfigureAwait(false);
         var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
-        if (credential is null || !string.Equals(credential.Status, "signed-in", StringComparison.Ordinal))
+        if (credential is null ||
+            !string.Equals(credential.Status, "signed-in", StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(credential.AccessToken))
         {
             logger.LogWarning(
                 "Platform-default Copilot connection has an active binding record but its credential secret is {SecretState}.",
@@ -296,7 +299,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
             if (completed.ReplacedCredential is not null)
                 await RevokeReplacedCredentialAsync(
                     completed.ReplacedCredential,
-                    credential.GitHubLogin,
+                    credential.AccessToken,
                     CancellationToken.None).ConfigureAwait(false);
             return PlatformDefaultCopilotBindingOutcome.Success;
         }
@@ -421,7 +424,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(ProviderTimeout);
         using var request = new HttpRequestMessage(HttpMethod.Delete,
-            $"{_baseUrl.TrimEnd('/')}/applications/{Uri.EscapeDataString(_clientId!)}/grant")
+            $"{_apiUrl.TrimEnd('/')}/applications/{Uri.EscapeDataString(_clientId!)}/token")
         {
             Content = new StringContent(JsonSerializer.Serialize(new { access_token = accessToken }), Encoding.UTF8, "application/json"),
         };
@@ -467,6 +470,25 @@ internal sealed class PlatformDefaultCopilotBindingService(
         catch (JsonException) { return null; }
     }
 
+    private async Task<bool> IsTokenStillInUseAsync(
+        string bindingId,
+        string? accessToken,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return false;
+        var otherBindings = await persistence.ListActiveCopilotBindingsAsync(bindingId, ct).ConfigureAwait(false);
+        foreach (var otherBinding in otherBindings)
+        {
+            var otherSecret = await secretStore.GetSecretAsync(otherBinding.CredentialReference, ct).ConfigureAwait(false);
+            var otherCredential = otherSecret.Found ? DeserializeCredential(otherSecret.Value) : null;
+            if (string.Equals(otherCredential?.AccessToken, accessToken, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
     private static GitHubAuditRecord CreateAudit(
         string entraObjectId,
         GitHubAuditOutcome outcome,
@@ -503,7 +525,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
 
     private async Task RevokeReplacedCredentialAsync(
         RepoAppCredentialReference reference,
-        string? replacementGitHubLogin,
+        string? replacementAccessToken,
         CancellationToken ct)
     {
         try
@@ -512,7 +534,8 @@ internal sealed class PlatformDefaultCopilotBindingService(
             var replacedCredential = secret.Found && !string.IsNullOrWhiteSpace(secret.Value)
                 ? DeserializeCredential(secret.Value)
                 : null;
-            if (await ShouldRevokeCredentialAsync(reference.Id, replacedCredential, replacementGitHubLogin, ct).ConfigureAwait(false))
+            if (!string.Equals(replacedCredential?.AccessToken, replacementAccessToken, StringComparison.Ordinal) &&
+                !await IsTokenStillInUseAsync(reference.Id, replacedCredential?.AccessToken, ct).ConfigureAwait(false))
                 await RevokeWithProviderAsync(replacedCredential?.AccessToken, ct).ConfigureAwait(false);
             await DeleteCredentialAsync(reference.CredentialReference, ct).ConfigureAwait(false);
         }
@@ -525,32 +548,6 @@ internal sealed class PlatformDefaultCopilotBindingService(
         }
     }
 
-    private async Task<bool> ShouldRevokeCredentialAsync(
-        string bindingId,
-        CopilotCredential? credential,
-        string? replacementGitHubLogin,
-        CancellationToken ct)
-    {
-        if (credential is null ||
-            string.IsNullOrWhiteSpace(credential.AccessToken) ||
-            string.IsNullOrWhiteSpace(credential.GitHubLogin))
-            return false;
-        if (!string.IsNullOrWhiteSpace(replacementGitHubLogin) &&
-            string.Equals(credential.GitHubLogin, replacementGitHubLogin, StringComparison.OrdinalIgnoreCase))
-            return false;
-        var otherBindings = await persistence.ListActiveCopilotBindingsAsync(bindingId, ct).ConfigureAwait(false);
-        foreach (var otherBinding in otherBindings)
-        {
-            var otherSecret = await secretStore.GetSecretAsync(otherBinding.CredentialReference, ct).ConfigureAwait(false);
-            var otherCredential = otherSecret.Found && !string.IsNullOrWhiteSpace(otherSecret.Value)
-                ? DeserializeCredential(otherSecret.Value)
-                : null;
-            if (string.Equals(credential.GitHubLogin, otherCredential?.GitHubLogin, StringComparison.OrdinalIgnoreCase))
-                return false;
-        }
-
-        return true;
-    }
 
     private static bool IsGitHubLogin(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&

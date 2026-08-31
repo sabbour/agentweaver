@@ -313,7 +313,7 @@ public static class AuthEndpoints
             if (document.RootElement.ValueKind != JsonValueKind.Object)
                 return false;
             var status = GetJsonString(document.RootElement, "status");
-            var accessToken = GetJsonString(document.RootElement, "access_token", "accessToken");
+            var accessToken = GetJsonString(document.RootElement, "accessToken");
             return string.Equals(status, "signed-in", StringComparison.Ordinal) &&
                    !string.IsNullOrWhiteSpace(accessToken);
         }

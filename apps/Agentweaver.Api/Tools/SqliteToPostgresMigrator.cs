@@ -84,7 +84,9 @@ public sealed class SqliteToPostgresMigrator
             installations = await source.GitHubInstallations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             grants = await source.GitHubRepositoryGrants.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             bindings = await source.ProjectCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
-            platformBindings = await source.PlatformDefaultCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            platformBindings = await HasTableAsync(source, "platform_default_copilot_bindings", ct).ConfigureAwait(false)
+                ? await source.PlatformDefaultCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
+                : [];
             activations = await source.AutomationActivations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             invocations = await source.AutomationInvocations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             lifecycleDeliveries = await source.GitHubLifecycleDeliveries.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
@@ -142,8 +144,20 @@ public sealed class SqliteToPostgresMigrator
                 if (!await destination.ProjectCopilotBindings.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
                     destination.ProjectCopilotBindings.Add(item);
             foreach (var item in platformBindings)
-                if (!await destination.PlatformDefaultCopilotBindings.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
+            {
+                var existing = await destination.PlatformDefaultCopilotBindings.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Id == item.Id, ct)
+                    .ConfigureAwait(false);
+                if (existing is null)
+                {
                     destination.PlatformDefaultCopilotBindings.Add(item);
+                    continue;
+                }
+
+                if (!PlatformBindingsMatch(item, existing))
+                    throw new InvalidOperationException(
+                        "GitHub connections persistence transfer aborted: immutable platform-default Copilot binding conflict.");
+            }
             foreach (var item in activations)
                 if (!await destination.AutomationActivations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
                     destination.AutomationActivations.Add(item);
@@ -218,6 +232,26 @@ public sealed class SqliteToPostgresMigrator
         source.GrantDigest == destination.GrantDigest &&
         source.CapturedAt == destination.CapturedAt &&
         source.SnapshotExpiresAt == destination.SnapshotExpiresAt;
+
+    private static bool PlatformBindingsMatch(
+        PlatformDefaultCopilotBindingRecord source,
+        PlatformDefaultCopilotBindingRecord destination) =>
+        source.Id == destination.Id &&
+        source.EntraObjectId == destination.EntraObjectId &&
+        source.CredentialReference == destination.CredentialReference &&
+        source.CredentialVersion == destination.CredentialVersion &&
+        source.GrantDigest == destination.GrantDigest &&
+        source.Status == destination.Status &&
+        NormalizeTimestamp(source.BoundAt) == NormalizeTimestamp(destination.BoundAt) &&
+        NormalizeTimestamp(source.DeactivatedAt) == NormalizeTimestamp(destination.DeactivatedAt);
+
+    private static DateTimeOffset? NormalizeTimestamp(DateTimeOffset? value)
+    {
+        if (value is null)
+            return null;
+        var ticks = value.Value.ToUniversalTime().Ticks;
+        return new DateTimeOffset(ticks - (ticks % 10), TimeSpan.Zero);
+    }
 
     private static async Task PrepareGitHubConnectionsSourceSchemaAsync(MemoryDbContext source, CancellationToken ct)
     {

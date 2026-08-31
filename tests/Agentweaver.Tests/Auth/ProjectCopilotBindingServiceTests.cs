@@ -140,6 +140,52 @@ public sealed class ProjectCopilotBindingServiceTests
     }
 
     [Fact]
+    public async Task Disconnect_RevokesOnlyTheRemovedTokenWhenAnotherBindingUsesTheSameGitHubLogin()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var secrets = new InMemorySecretStore();
+        var httpClientFactory = new StubHttpClientFactory();
+        var project = ProjectId.New();
+        var other = ProjectId.New();
+        await SeedProjectAsync(db, project, other);
+        await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(Binding(project, "project-secret", "version-one"));
+        await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(Binding(other, "other-secret", "version-two"));
+        await secrets.SetSecretAsync("project-secret", """{"Status":"signed-in","AccessToken":"ghu_shared_1","GitHubLogin":"octocat"}""");
+        await secrets.SetSecretAsync("other-secret", """{"Status":"signed-in","AccessToken":"ghu_shared_2","GitHubLogin":"octocat"}""");
+        var service = CreateService(db, roles, secrets, httpClientFactory: httpClientFactory);
+        var admin = new CallerContext { User = "admin", EntraObjectId = "admin", PlatformRoles = [PlatformRoles.PlatformAdmin] };
+
+        (await service.DisconnectAsync(admin, HumanPrincipal(), project)).Should().Be(CopilotBindingOutcome.Success);
+
+        httpClientFactory.ProviderGrantRevocations.Should().Be(1);
+        (await secrets.GetSecretAsync("other-secret")).Value.Should().Contain("ghu_shared_2");
+    }
+
+    [Fact]
+    public async Task Disconnect_DoesNotRevokeATokenThatIsStillUsedByAnotherBinding()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var secrets = new InMemorySecretStore();
+        var httpClientFactory = new StubHttpClientFactory();
+        var project = ProjectId.New();
+        var other = ProjectId.New();
+        await SeedProjectAsync(db, project, other);
+        await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(Binding(project, "project-secret", "version-one"));
+        await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(Binding(other, "other-secret", "version-two"));
+        await secrets.SetSecretAsync("project-secret", """{"Status":"signed-in","AccessToken":"ghu_shared","GitHubLogin":"octocat"}""");
+        await secrets.SetSecretAsync("other-secret", """{"Status":"signed-in","AccessToken":"ghu_shared","GitHubLogin":"octocat"}""");
+        var service = CreateService(db, roles, secrets, httpClientFactory: httpClientFactory);
+        var admin = new CallerContext { User = "admin", EntraObjectId = "admin", PlatformRoles = [PlatformRoles.PlatformAdmin] };
+
+        (await service.DisconnectAsync(admin, HumanPrincipal(), project)).Should().Be(CopilotBindingOutcome.Success);
+
+        httpClientFactory.ProviderGrantRevocations.Should().Be(0);
+        (await secrets.GetSecretAsync("other-secret")).Value.Should().Contain("ghu_shared");
+    }
+
+    [Fact]
     public async Task BindingAndAuditSerialization_RedactsProviderCredential()
     {
         await using var db = await OpenDatabaseAsync();
@@ -204,7 +250,12 @@ public sealed class ProjectCopilotBindingServiceTests
         connection.GitHubLogin.Should().BeNull();
     }
 
-    private static ProjectCopilotBindingService CreateService(MemoryDbContext db, MutableRoles roles, ISecretStore secrets, string? provider = null)
+    private static ProjectCopilotBindingService CreateService(
+        MemoryDbContext db,
+        MutableRoles roles,
+        ISecretStore secrets,
+        string? provider = null,
+        StubHttpClientFactory? httpClientFactory = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -212,7 +263,7 @@ public sealed class ProjectCopilotBindingServiceTests
             ["Auth:CopilotApp:CallbackUrl"] = "https://agentweaver.test/auth/github/copilot-app/callback",
             ["Auth:CopilotApp:Slug"] = "agentweaver-copilot",
         }).Build();
-        var httpClientFactory = new StubHttpClientFactory(provider);
+        httpClientFactory ??= new StubHttpClientFactory(provider);
         return new(configuration, new GitHubConnectionsPersistenceStore(db), secrets, httpClientFactory, roles,
             new CopilotAppRegistrationService(configuration, httpClientFactory),
             NullLogger<ProjectCopilotBindingService>.Instance);
@@ -249,22 +300,31 @@ public sealed class ProjectCopilotBindingServiceTests
         public Task<bool> DeleteAsync(ProjectId p, string s, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<ProjectRoleAssignmentStoreMutationResult> DeleteEnsuringOwnerInvariantAsync(ProjectId p, string s, CancellationToken ct = default) => throw new NotSupportedException();
     }
-    private sealed class StubHttpClientFactory(string? response) : IHttpClientFactory
+    private sealed class StubHttpClientFactory(string? response = null) : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => new(new Handler(response ?? """{"access_token":"ghu_token"}"""));
-        private sealed class Handler(string body) : HttpMessageHandler
+        public int ProviderGrantRevocations { get; private set; }
+
+        public HttpClient CreateClient(string name) => new(new Handler(response ?? """{"access_token":"ghu_token"}""", this));
+        private sealed class Handler(string body, StubHttpClientFactory owner) : HttpMessageHandler
         {
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
-                Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                Task.FromResult(CreateResponse(request, owner, body));
+        }
+
+        private static HttpResponseMessage CreateResponse(HttpRequestMessage request, StubHttpClientFactory owner, string body)
+        {
+            if (request.RequestUri!.AbsolutePath.Contains("/applications/", StringComparison.Ordinal))
+                owner.ProviderGrantRevocations++;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(request.RequestUri.AbsolutePath switch
                 {
-                    Content = new StringContent(request.RequestUri!.AbsolutePath switch
-                    {
-                        var path when path.StartsWith("/apps/", StringComparison.Ordinal) =>
-                            """{"permissions":{"metadata":"read"}}""",
-                        "/user" => """{"login":"octocat"}""",
-                        _ => body,
-                    }),
-                });
+                    var path when path.StartsWith("/apps/", StringComparison.Ordinal) =>
+                        """{"permissions":{"metadata":"read"}}""",
+                    "/user" => """{"login":"octocat"}""",
+                    _ => body,
+                }),
+            };
         }
     }
 }
