@@ -1,5 +1,6 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { formatApiErrorMessage } from '../api/errors';
 import { GitHubCopilotConnectionPicker } from '../components/GitHubCopilotConnectionPicker';
 import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
@@ -91,8 +92,8 @@ const SECTIONS: SectionDef[] = [
   },
   {
     id: 'unattended',
-    label: 'Unattended',
-    description: 'Review safe automation prerequisites for this project.',
+    label: 'Background',
+    description: 'Review safe background automation prerequisites for this project.',
     icon: <Shield24Regular />,
   },
   {
@@ -359,12 +360,7 @@ export function ProjectSettingsPage() {
   const [unattendedLoading, setUnattendedLoading] = useState(true);
   const [unattendedError, setUnattendedError] = useState<string | null>(null);
 
-  const formatError = (err: unknown): string =>
-    err instanceof ApiError
-      ? `API error ${err.status}: ${err.body}`
-      : err instanceof Error
-        ? err.message
-        : String(err);
+  const formatError = (err: unknown): string => formatApiErrorMessage(err);
 
   useEffect(() => {
     if (!projectId) return;
@@ -978,9 +974,9 @@ export function ProjectSettingsPage() {
             {displayedSection === 'unattended' && (
               <div className={styles.section}>
                 <div className={styles.subBlock}>
-                  <TitleText>Automation readiness</TitleText>
+                  <TitleText>Background automation readiness</TitleText>
                   <Body as="p" tone="muted">
-                    This read-only status reports the server-verified prerequisites for unattended work.
+                    This read-only status reports the server-verified prerequisites for background work.
                     This page does not enable or activate automation.
                   </Body>
                   <TitleText>GitHub Copilot account</TitleText>

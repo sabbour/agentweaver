@@ -18,6 +18,23 @@ export interface FormattedApiError {
   detail?: string;
 }
 
+const GITHUB_CONNECTION_MESSAGES: Record<string, string> = {
+  github_binding_unavailable: 'GitHub connections are temporarily unavailable. Connect GitHub and try again.',
+  github_copilot_auth_required: 'Connect your GitHub Copilot account to use AI features.',
+  github_copilot_connection_required: 'Connect your GitHub Copilot account to continue.',
+};
+
+export function githubConnectionErrorMessage(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const body = parseApiBody(err.body);
+  const code = body.error;
+  if (code && GITHUB_CONNECTION_MESSAGES[code]) return GITHUB_CONNECTION_MESSAGES[code];
+  if (err.status === 404 || err.status === 401) {
+    return 'Connect GitHub to access this project repository and AI features.';
+  }
+  return null;
+}
+
 export function parseApiBody(body: string): { error?: string; message?: string; detail?: string } {
   if (!body) return {};
   try {
@@ -78,6 +95,8 @@ export function formatApiError(err: unknown, fallback = 'The request failed.'): 
 }
 
 export function formatApiErrorMessage(err: unknown, fallback?: string): string {
+  const githubMessage = githubConnectionErrorMessage(err);
+  if (githubMessage) return githubMessage;
   const formatted = formatApiError(err, fallback);
   return formatted.detail ? `${formatted.message} ${formatted.detail}` : formatted.message;
 }
