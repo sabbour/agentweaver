@@ -225,6 +225,8 @@ interface OutcomePlanPanelProps {
   runStatus?: string;
   onCollapse?: () => void;
   onReconnect?: () => void;
+  /** Reconcile the parent run snapshot after confirmation changes coordinator state. */
+  onConfirmed?: () => void;
   onClarifyPlan?: () => void;
   clarificationSent?: boolean;
   /**
@@ -236,7 +238,7 @@ interface OutcomePlanPanelProps {
   onFooterChange?: (node: ReactNode) => void;
 }
 
-export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCollapse, onReconnect, onClarifyPlan, clarificationSent = false, onFooterChange }: OutcomePlanPanelProps) {
+export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCollapse, onReconnect, onConfirmed, onClarifyPlan, clarificationSent = false, onFooterChange }: OutcomePlanPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -381,6 +383,9 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
           const updated = await apiClient.confirmOutcomeSpec(runId, allowTaskPromotion);
           if (updated) setSpecFromApi(updated);
           else await fetchSpec();
+          // The parent derives its header/tree from separate REST snapshots, rather
+          // than this panel's spec state. Refresh those snapshots immediately.
+          onConfirmed?.();
           // Reconnect the SSE stream so post-confirmation events (outcome_spec.confirmed,
           // coordinator work plan, subtask events) arrive without a manual page refresh.
           onReconnect?.();

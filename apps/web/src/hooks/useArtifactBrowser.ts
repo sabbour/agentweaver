@@ -14,6 +14,7 @@ import type {
 } from '../api/types';
 const POLL_INTERVAL_MS = 3000;
 const RETRY_POLL_INTERVAL_MS = 15000;
+const MAX_SERVER_ERROR_RETRIES = 2;
 
 export const FILTERS = [
   { label: 'All', value: 'all' },
@@ -166,6 +167,7 @@ export function useArtifactBrowser(
     let active = true;
     let intervalId: ReturnType<typeof setInterval> | undefined;
     let requestInFlight = false;
+    let serverErrorRetries = 0;
 
     const startPolling = (intervalMs: number) => {
       if (intervalId !== undefined) clearInterval(intervalId);
@@ -178,6 +180,7 @@ export function useArtifactBrowser(
       (adapter?.getFiles ?? apiClient.getRunFiles.bind(apiClient))(runId, activeFilter)
         .then((data) => {
           if (active) {
+            serverErrorRetries = 0;
             setFiles(data);
             setFilesError(null);
             setFilesLoading(false);
@@ -185,10 +188,13 @@ export function useArtifactBrowser(
         })
         .catch((err: unknown) => {
           if (active) {
-            if (err instanceof ApiError && err.status === 409) {
-              setFilesError('Workspace files unavailable for this run state.');
+            if (err instanceof ApiError && (err.status === 409 || err.status === 404)) {
+              setFilesError(err.status === 409
+                ? 'Workspace files unavailable for this run state.'
+                : extractErrorMessage(err));
               setFilesLoading(false);
-              // 409 is permanent — stop polling
+              // 404/409 identify a gone or permanently unavailable artifact source.
+              // Transient provisioning is represented by the API as an empty list.
               clearInterval(intervalId);
               active = false;
             } else {
@@ -196,7 +202,14 @@ export function useArtifactBrowser(
               setFilesLoading(false);
               // Keep the error visible, but do not hammer a failing server every three seconds.
               // A new live event/filter change restarts this effect and retries immediately.
-              if (err instanceof ApiError && err.status >= 500) startPolling(RETRY_POLL_INTERVAL_MS);
+              if (err instanceof ApiError && err.status >= 500) {
+                if (serverErrorRetries++ >= MAX_SERVER_ERROR_RETRIES) {
+                  clearInterval(intervalId);
+                  active = false;
+                } else {
+                  startPolling(RETRY_POLL_INTERVAL_MS);
+                }
+              }
             }
           }
         })
@@ -232,6 +245,7 @@ export function useArtifactBrowser(
     let active = true;
     let workspaceIntervalId: ReturnType<typeof setInterval> | undefined;
     let requestInFlight = false;
+    let serverErrorRetries = 0;
 
     const startPolling = (intervalMs: number) => {
       if (workspaceIntervalId !== undefined) clearInterval(workspaceIntervalId);
@@ -244,6 +258,7 @@ export function useArtifactBrowser(
       (adapter?.getWorkspace ?? apiClient.getRunWorkspace.bind(apiClient))(runId)
         .then((data) => {
           if (active) {
+            serverErrorRetries = 0;
             setWorkspaceFiles(data);
             setWorkspaceError(null);
             setWorkspaceLoading(false);
@@ -253,7 +268,17 @@ export function useArtifactBrowser(
           if (active) {
             setWorkspaceError(extractErrorMessage(err));
             setWorkspaceLoading(false);
-            if (err instanceof ApiError && err.status >= 500) startPolling(RETRY_POLL_INTERVAL_MS);
+            if (err instanceof ApiError && (err.status === 404 || err.status === 409)) {
+              clearInterval(workspaceIntervalId);
+              active = false;
+            } else if (err instanceof ApiError && err.status >= 500) {
+              if (serverErrorRetries++ >= MAX_SERVER_ERROR_RETRIES) {
+                clearInterval(workspaceIntervalId);
+                active = false;
+              } else {
+                startPolling(RETRY_POLL_INTERVAL_MS);
+              }
+            }
           }
         })
         .finally(() => { requestInFlight = false; });

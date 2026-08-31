@@ -1488,6 +1488,11 @@ app.MapGet("/api/runs/{id}/workspace", async (
     if (run.Status is RunStatus.Pending)
         return Results.Json(Array.Empty<WorkspaceNode>());
 
+    // An active run can become visible before asynchronous worktree provisioning
+    // writes its path. This is an empty workspace, not a missing artifact source.
+    if (run.Status is RunStatus.InProgress && string.IsNullOrEmpty(run.WorktreePath))
+        return Results.Json(Array.Empty<WorkspaceNode>());
+
     // Merged runs: enumerate the commit tree from git (worktree has been deleted).
     if (run.Status is RunStatus.Merged)
     {
@@ -2292,8 +2297,11 @@ app.MapGet("/api/runs/{id}/files", async (
 
     if (!hasWorktreePath || !hasWorktreeBranch)
     {
-        logger.LogError("Run {RunId} has incomplete worktree metadata while retrieving file entries", runId);
-        return Results.Problem("Run worktree metadata is incomplete.", statusCode: StatusCodes.Status500InternalServerError);
+        // Worktree fields are persisted independently while a child run starts.
+        // Treat a partial snapshot as no artifacts yet, not as a server failure that
+        // causes the live artifact browser to retry aggressively.
+        logger.LogDebug("Run {RunId} worktree metadata is not ready while retrieving file entries", runId);
+        return Results.Json(Array.Empty<WorkspaceFileEntry>());
     }
 
     if (!Directory.Exists(run.WorktreePath!))
