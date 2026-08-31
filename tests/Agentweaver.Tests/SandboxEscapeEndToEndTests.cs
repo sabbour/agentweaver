@@ -12,8 +12,8 @@ using Xunit.Abstractions;
 namespace Agentweaver.Tests;
 
 /// <summary>
-/// Live end-to-end sandbox-escape tests that drive a real agent turn through each
-/// model provider (GitHub Copilot and Microsoft Foundry) and prove the run cannot
+/// Live end-to-end sandbox-escape tests that drive a real agent turn through the
+/// GitHub Copilot SDK runner and prove the run cannot
 /// reach the host filesystem outside its artifact directory.
 ///
 /// These tests make real model calls, so they are opt-in: they only execute when
@@ -62,30 +62,6 @@ public sealed class SandboxEscapeEndToEndTests
         var runner = new GitHubCopilotAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(), logger);
 
         await RunEscapeScenarioAsync(ModelSource.GitHubCopilot, runner, logger.Lines);
-    }
-
-    [Fact]
-    public async Task MicrosoftFoundry_EscapeAttempt_DoesNotLeakHostFilesystem()
-    {
-        if (!LiveEnabled)
-        {
-            _output.WriteLine($"Skipped — set {OptInVariable}=1 to run live Microsoft Foundry provider test.");
-            return;
-        }
-
-        var config = LoadConfiguration();
-        if (string.IsNullOrWhiteSpace(config["Providers:MicrosoftFoundry:ApiKey"])
-            || string.IsNullOrWhiteSpace(config["Providers:MicrosoftFoundry:Endpoint"]))
-        {
-            throw new InvalidOperationException(
-                "Microsoft Foundry credentials not found. Set Providers:MicrosoftFoundry:ApiKey and :Endpoint.");
-        }
-
-        var factory = new FoundryClientFactory(config);
-        var logger = new CapturingLogger<FoundryAgentRunner>();
-        var runner = new FoundryAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
-
-        await RunEscapeScenarioAsync(ModelSource.MicrosoftFoundry, runner, logger.Lines);
     }
 
     private async Task RunEscapeScenarioAsync(

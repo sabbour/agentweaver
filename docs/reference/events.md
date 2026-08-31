@@ -18,9 +18,8 @@ Clients should order and deduplicate events by `sequence`.
 | Type | When it fires | Payload fields |
 | --- | --- | --- |
 | `agent.turn.start` | When the model begins a turn | `turnId` |
-| `agent.message.delta` | When the model streams a chunk of visible text — emitted by both the GitHub Copilot and Microsoft Foundry runners | `delta`, `messageId` |
-| `agent.message` | Fallback: emitted only when a turn produced no token deltas (Foundry runner only; tool-call-only turns or empty streams) | `content` |
-| `agent.turn.end` | When the model finishes a turn (emitted by both runners; closes the turn bubble in the frontend) | `turnId` |
+| `agent.message.delta` | When the model streams a chunk of visible text from the GitHub Copilot SDK runner | `delta`, `messageId` |
+| `agent.turn.end` | When the model finishes a turn (closes the turn bubble in the frontend) | `turnId` |
 | `agent.intent` | When the agent calls `report_intent` before a major step | `intent` |
 | `agent.system_prompt` | At run start, after the system prompt is set | `provider`, `prompt` (full text), `note` (optional) |
 | `agent.tools` | At run start, listing the tools registered for this run | `tools` (string array of tool names) |
@@ -98,9 +97,14 @@ Each `tool.call` carries a `callId` in its payload. The matching `tool.result` o
 
 ## Provider parity
 
-Both the GitHub Copilot and Microsoft Foundry runners stream text as `agent.message.delta` events. Each delta carries a `delta` chunk and the `messageId` it belongs to. Both providers emit `agent.turn.end` to close the final turn, giving the frontend a consistent signal to close the turn bubble regardless of which provider is active.
+The GitHub Copilot SDK runner streams text as `agent.message.delta` events. Each
+delta carries a `delta` chunk and the `messageId` it belongs to, and
+`agent.turn.end` closes the final turn bubble.
 
-Both providers surface the same tool event vocabulary. For each tool the agent runs, the stream carries a `tool.call`, followed by a `tool.result` for an approved tool (with its real content) or a `tool.error` for a denial or failure. The Copilot provider reads these from the tool-execution lifecycle that flows inline through the streaming response, so an observer sees individual tool activity on Copilot runs at parity with Foundry.
+For each tool the agent runs, the stream carries a `tool.call`, followed by a
+`tool.result` for an approved tool (with its real content) or a `tool.error` for a
+denial or failure. The Copilot SDK supplies these through lifecycle events that flow
+inline through the streaming response.
 
 SDK-internal tools (`report_outcome`, `glob`) are suppressed from the event stream. `report_intent` is translated into an `agent.intent` event rather than suppressed — the raw tool call is hidden, but the intent text surfaces as a first-class event. `agent.tools` is a synthetic event emitted by the runtime, not an SDK tool.
 
@@ -118,12 +122,6 @@ The RAI executor emits one structured verdict event when a Responsible AI review
 
 The event is written to both the parent run stream and the `{runId}-rai` sub-stream (`packages/Agentweaver.Domain/EventTypes.cs:104`, `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs:373`). The web session panel reads the token and maps it locally to a traffic-light presentation with the rationale (`apps/web/src/components/AgentSessionPanel.tsx:1200`, `:1216`).
 
-### `agent.message`
-
-This event is emitted only by the Foundry runner, as a fallback when a turn produced no token deltas — for example, a tool-call-only turn or an empty stream. `content` carries the full text for that turn. It is never emitted alongside `agent.message.delta` events for the same turn.
-
-During normal streaming, both the GitHub Copilot and Microsoft Foundry runners produce `agent.message.delta` events, each carrying a `delta` chunk and the `messageId` it belongs to.
-
 ### `tool.call`
 
 This event fires before the runtime evaluates the request against the sandbox policy. `toolName` is the tool the model invoked, and `arguments` is the argument object it passed (for file tools, this includes the requested `path`).
@@ -138,7 +136,12 @@ This event records every tool outcome that is not a success. It covers sandbox p
 
 ### `run.completed`
 
-This event is emitted exclusively by the watch loop (`RunWatchLoopService`) when the workflow reaches a terminal state with no file changes. The `result` field is `"no_changes"`. Neither the GitHub Copilot runner nor the Foundry runner emits this event; they emit `agent.turn.end` to close their final turn and let the watch loop determine terminal state. When the agent produces changes, `run.completed` is not emitted; the run transitions to `review.requested` instead.
+This event is emitted exclusively by the watch loop (`RunWatchLoopService`) when the
+workflow reaches a terminal state with no file changes. The `result` field is
+`"no_changes"`. The GitHub Copilot SDK runner emits `agent.turn.end` to close its
+final turn and lets the watch loop determine terminal state. When the agent produces
+changes, `run.completed` is not emitted; the run transitions to `review.requested`
+instead.
 
 ### `run.failed`
 

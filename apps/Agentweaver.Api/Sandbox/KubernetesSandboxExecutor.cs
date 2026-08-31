@@ -197,6 +197,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private readonly IHttpClientFactory? _httpClientFactory;
     // Redeems the run-bound Copilot snapshot for the AgentHost /configure call.
     private readonly IGitHubCopilotCapabilityCredentialProvider? _copilotCredentials;
+    private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     // Replica-safe run secret store used to persist the per-run preview-runner credential so a
     // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
     // release (spec-006 decouple-preview, BLOCKER A / RESIDUAL). Null in unit tests → no minting.
@@ -245,7 +246,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IGitHubCopilotCapabilityCredentialProvider? copilotCredentials = null,
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
         Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
-        IRunStore? runStore = null)
+        IRunStore? runStore = null,
+        IByokProviderConfigurationProvider? byokProviderConfiguration = null)
     {
         _client = client;
         _options = options;
@@ -263,6 +265,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _previewService = previewService;
         _authorshipCapabilityStore = authorshipCapabilityStore;
         _runStore = runStore;
+        _byokProviderConfiguration = byokProviderConfiguration;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -390,8 +393,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         // Resolve the run's submitting user so the pod can scope GitHub Copilot auth to that user's
         // signed-in token. The user's Key Vault secret name (Option C warm-pool path) is derived here
         // and delivered to the pod via /configure — never another user's secret.
+        var byokProvider = _byokProviderConfiguration is null
+            ? null
+            : await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
         var submittingUser = await ResolveSubmittingUserAsync(runId, ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(submittingUser))
+        if (byokProvider is null && string.IsNullOrWhiteSpace(submittingUser))
         {
             throw new InvalidOperationException(
                 $"Cannot launch AgentHost pod for run '{runId}' without a submitting user; " +
@@ -409,7 +415,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         var copilotCredential = _copilotCredentials is null
             ? null
             : await _copilotCredentials.GetCredentialAsync(runId, ct).ConfigureAwait(false);
-        if (copilotCredential is null)
+        if (byokProvider is null && copilotCredential is null)
             throw new InvalidOperationException(
                 $"Cannot launch AgentHost pod for run '{runId}' without a live run-bound Copilot capability snapshot.");
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
@@ -565,12 +571,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     ? null
                     : await _repositoryCredentials.MintAsync(runId, ct).ConfigureAwait(false);
                 var effectiveWorkingDirectory = await CallAgentHostConfigureAsync(
-                    podIp, _options.AgentHostPort, runId, submittingUser, turnToken, copilotCredential,
+                    podIp, _options.AgentHostPort, runId, submittingUser ?? string.Empty, turnToken, copilotCredential,
                     repositoryAccessToken,
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
                     configProjectId,
-                    configAgentName,
+                    configAgentName, byokProvider,
                     ct)
                     .ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(effectiveWorkingDirectory))
@@ -927,11 +933,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// </summary>
     private async Task<string?> CallAgentHostConfigureAsync(
         string podIp, int port, string runId, string userId, string turnBearerToken,
-        GitHubCapabilitySnapshotCredential copilotCredential, string? repositoryAccessToken,
+        GitHubCapabilitySnapshotCredential? copilotCredential, string? repositoryAccessToken,
         string? sharedWorkingDirectory,
         AgentHostLaunchContext launchContext,
         string? projectId,
         string? agentName,
+        ByokProviderConfiguration? byokProviderConfiguration,
         CancellationToken ct)
     {
         if (_httpClientFactory is null)
@@ -959,6 +966,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             userId,
             turnBearerToken,
             copilotCredential,
+            byokProviderConfiguration,
             repositoryAccessToken,
             callerBearerToken = launchContext.CallerBearerToken,
             toolApprovalApiBaseUrl = _options.ToolApprovalApiBaseUrl,

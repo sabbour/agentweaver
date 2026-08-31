@@ -28,7 +28,7 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
     public ProjectRunAuthorizationTests(EntraWebApplicationFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task EntraProjectOwner_CanReadProjectRun_RegardlessOfSubmittingIdentity()
+    public async Task ProjectOwner_CanReadBackgroundRun_RegardlessOfSubmittingIdentity()
     {
         var projectId = await CreateProjectAsync(UnlinkedOwnerOid);
         var runId = await InsertRunAsync(projectId, UnlinkedOwnerOid);

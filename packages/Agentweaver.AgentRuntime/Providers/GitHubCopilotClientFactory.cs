@@ -64,6 +64,13 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
         return new CopilotClient(options);
     }
 
+    public CopilotClient CreateByokClient()
+    {
+        var options = new CopilotClientOptions();
+        ApplyRuntimeConnection(options);
+        return new CopilotClient(options);
+    }
+
     /// <summary>
     /// Resolves a caller- and project-bound marketplace-classification capability. This path is
     /// intentionally separate from run snapshot redemption so a non-run request cannot fabricate

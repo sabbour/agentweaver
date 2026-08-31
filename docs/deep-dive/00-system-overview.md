@@ -255,9 +255,10 @@ Where this lives: `packages/Agentweaver.AgentTools`, `packages/Agentweaver.Sandb
 
 Agentweaver distinguishes between **workflow orchestration** and **model execution**. Workflow orchestration decides when an agent turn should happen, what context it receives, which tools are available, and what to do with its output. Model execution is the provider-specific mechanism for producing that turn.
 
-The production worker path centers on a Copilot-backed workflow agent that can persist session state, use registered tools, and stream progress. There are also runner abstractions for direct provider dispatch, including GitHub Copilot and Microsoft Foundry paths. The architectural intent is provider substitution behind stable run and workflow contracts, not provider-specific behavior leaking into every subsystem.
-
-Foundry support exists for direct runner dispatch, while the coordinator path is Copilot-oriented: coordinator turns run through the Copilot-backed workflow agent. Provider substitution applies at the runner boundary, so adding a Foundry coordinator path would extend the same contract rather than reshape orchestration.
+The production worker path centers on a Copilot-backed workflow agent that can persist
+session state, use registered tools, and stream progress. One-shot execution uses the
+same GitHub Copilot SDK runner. Custom providers are configured through that SDK rather
+than a separate provider-specific runner.
 
 Named agents add another layer above providers. A role such as reviewer, planner, or specialist is defined by charter, memory, and assignment. The same model provider can behave differently depending on that role context. This is why casting and charters are first-class: they make team behavior reproducible.
 
@@ -291,7 +292,7 @@ Where this lives: `k8s`, `scripts/azure`, `apps/Agentweaver.AgentHost`.
 | --- | --- | --- |
 | Backend services | .NET / ASP.NET Core | Strong fit for long-lived services, dependency injection, streaming endpoints, hosted recovery jobs, and typed domain models. |
 | Workflow runtime | Microsoft Agents / MAF-style workflows | Provides a resumable graph model for agent turns, request ports, gates, and streaming execution. |
-| Model providers | GitHub Copilot SDK and Microsoft Foundry-related abstractions | Allows GitHub-native agent work while leaving a provider abstraction for alternate enterprise model backends. |
+| Model providers | GitHub Copilot SDK | Supports GitHub-native agent work and custom-provider configuration through one governed runtime. |
 | Persistence | SQLite plus EF Core-backed memory store options | SQLite keeps self-hosted/local deployment simple; the memory layer is structured enough to evolve toward server databases. |
 | Git operations | LibGit2Sharp-style repository APIs | Enables programmatic worktree, branch, diff, and merge operations without shelling out for every repository action. |
 | Web UI | React, TypeScript, Vite, Fluent UI | Good fit for a live operational UI with review forms, timelines, project screens, and reusable Microsoft-style components. |
@@ -331,6 +332,5 @@ The common theme is pragmatic layering. Agentweaver uses simple local-first prim
 
 ## Known limitations and scope
 
-- Foundry is wired into direct runner dispatch, while the coordinator path is Copilot-oriented. Coordinator turns run through the Copilot-backed workflow agent.
 - Agentweaver ships a default embedded workflow and loads additional catalog and project workflows separately. The workflow model and the default pipeline are documented here; individual embedded catalog workflow resources are defined alongside their projects.
 - The control plane is a single authoritative backend even though AKS deploys API, MCP, and frontend as separate processes. API and run orchestration remain the single source of truth; MCP and frontend are thin client-facing processes that render and forward backend state.

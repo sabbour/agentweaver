@@ -274,6 +274,9 @@ builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IGitHubBlueprint
 builder.Services.AddScoped<Agentweaver.Api.Blueprints.GitHubBlueprintPackageImportService>();
 
 builder.Services.AddSingleton<Agentweaver.Api.Auth.WebSessionExchangeService>();
+builder.Services.AddSingleton<ByokProviderConfigurationService>();
+builder.Services.AddSingleton<Agentweaver.Domain.IByokProviderConfigurationProvider>(
+    sp => sp.GetRequiredService<ByokProviderConfigurationService>());
 
 // Project infrastructure (must be before AddAgentRuntime)
 // Provider-aware: Postgres uses EF stores; SQLite uses raw ADO.NET stores.
@@ -1052,6 +1055,7 @@ else
     app.MapBlueprintEndpoints();
     app.MapTeamEndpoints();
     app.MapAuthEndpoints();
+    app.MapByokProviderSettingsEndpoints();
     app.MapGitHubRepositorySelectionEndpoints();
     app.MapDecisionsEndpoints();
     app.MapMemoryEndpoints();

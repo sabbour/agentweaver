@@ -33,7 +33,8 @@ Executor selection happens at startup via `SandboxExecutorFactory.Create`. The f
 
 When the API runs **inside a Kubernetes cluster** (`KUBERNETES_SERVICE_HOST` is set), the `SandboxExecutorRouter` overrides the factory result with the `kubernetes-sandbox-claim` backend (`KubernetesSandboxExecutor`), which runs commands in a per-run Kata VM pod claimed from a warm pool. See [aks-deployment.md](../aks-deployment.md#sandbox-setup).
 
-The selected executor is injected into the per-run governance context and both agent runners. Its key properties are:
+The selected executor is injected into the per-run governance context and GitHub
+Copilot SDK runner. Its key properties are:
 
 - **`IsRealIsolation`** — `true` for `processcontainer`, `wsl-bwrap`, `linux-bwrap`, `lxc-native-linux`, and `kubernetes-sandbox-claim`; `false` for `wsl-unshare` and the `direct` fallback. Shell execution requires this to be `true`, **except** for the `direct` backend, which is an explicit opt-out (see [Layer C](#layer-c-executor-gate)).
 - **`HasNetworkWarning`** — `true` for the Windows `processcontainer` and `wsl-unshare` tiers, whose backends cannot enforce a network allowlist. When set, the runner emits a `sandbox.warning` event (see [Limitations](#limitations)).
@@ -47,16 +48,17 @@ An explicit caller timeout is used as requested unless the active runtime policy
 minimum or maximum limit. The controlled Build/Test shell keeps its ten-minute minimum
 and maximum limit.
 
-Both agent runners add a separate five-minute grace period after the effective command
-timeout. The executor cancels the command first and returns `timed_out: true`. Copilot's
-streaming watchdog and Foundry's direct tool-invocation watchdog stop the agent turn only
-when the process still has not exited after that grace period. Both emit shell-progress
-heartbeats while waiting. This extra time is important for Kata VM pods, where process
-termination can take longer while the Kata agent relays the signal.
+The GitHub Copilot SDK runner adds a separate five-minute grace period after the
+effective command timeout. The executor cancels the command first and returns
+`timed_out: true`. Its streaming watchdog stops the agent turn only when the process
+still has not exited after that grace period and emits shell-progress heartbeats while
+waiting. This extra time is important for Kata VM pods, where process termination can
+take longer while the Kata agent relays the signal.
 
 ## Tool architecture
 
-Both agent runners (GitHub Copilot and Microsoft Foundry) register the same set of custom `AIFunction` tools assembled by `SandboxToolRegistry.Build`. There are nine tool names total:
+The GitHub Copilot SDK runner registers the custom `AIFunction` tools assembled by
+`SandboxToolRegistry.Build`. There are nine tool names total:
 
 | Tool | Purpose | Conditional |
 | --- | --- | --- |

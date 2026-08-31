@@ -236,7 +236,7 @@ Update provider settings for a project.
 | `project_id` | string | yes | Project ID |
 | `default_provider` | string | yes | Model provider (`github_copilot` or `microsoft_foundry`) |
 | `default_model_github_copilot` | string | no | Model ID for GitHub Copilot provider |
-| `default_model_microsoft_foundry` | string | no | Model ID for Microsoft Foundry provider |
+| `default_model_microsoft_foundry` | string | no | Model ID for the BYOK provider; the legacy field name remains supported. |
 
 **Returns**: Confirmation message.
 

@@ -16,19 +16,20 @@ inspectable, and composable across the system. Using MAF will help us keep our p
 
 ### II. Model Sources
 
-A run's model MUST come from GitHub Copilot. GitHub Copilot is the single,
-approved model provider; the provider is fixed and MUST NOT be selectable per
-run, per role, or per project. No other model source is permitted.
+An admin MUST select exactly one deployment-wide AI mode: GitHub Copilot or a
+custom-provider key (BYOK) through the GitHub Copilot SDK. The source MUST NOT
+be selectable per run, per role, or per project.
 
-The specific model used within GitHub Copilot MAY vary (for example, a per-role
-default model with a runtime override), but the provider MUST always be GitHub
-Copilot.
+The specific model within the active deployment-wide source MAY vary (for
+example, a per-role default model with a runtime override).
 
 Microsoft Agent Framework supports multiple providers. For this project:
 - GitHub Copilot: https://docs.github.com/en/copilot/how-tos/copilot-sdk/integrations/microsoft-agent-framework
+- BYOK through the GitHub Copilot SDK: https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/byok
 
-Rationale: Constraining the model source to a single, well-defined provider keeps
-authentication, billing, and capability assumptions tractable and auditable.
+Rationale: A single deployment-wide source keeps authentication, billing, and
+capability assumptions tractable and auditable while allowing operators to use
+their approved inference provider.
 
 ### III. API-First
 
@@ -167,8 +168,9 @@ each surface to police itself.
 ## Architecture & Technology Constraints
 
 - The Microsoft Agent Framework (.NET 10) (https://github.com/microsoft/agent-framework) is the mandated agent runtime (Principle I).
-- The model provider is fixed to GitHub Copilot and is not selectable per run;
-  only the specific model within GitHub Copilot may vary (Principle II).
+- The deployment-wide model source is GitHub Copilot or BYOK through the
+  GitHub Copilot SDK and is not selectable per run, role, or project
+  (Principle II).
 - The backend API is authoritative; clients hold no business logic
   (Principle III).
 - The two clients are an MCP server (stdio transport, `.mcp.json` registration)

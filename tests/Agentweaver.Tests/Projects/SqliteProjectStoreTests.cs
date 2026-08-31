@@ -116,14 +116,14 @@ public sealed class SqliteProjectStoreTests
 
         var newSettings = new ProjectProviderSettings
         {
-            DefaultProvider       = ModelSource.MicrosoftFoundry,
+            DefaultProvider       = ModelSource.Byok,
             GitHubCopilotModel    = "gpt-4o",
             MicrosoftFoundryModel = "foundry-model-1",
         };
         await store.UpdateProviderSettingsAsync(project.Id, newSettings, DateTimeOffset.UtcNow);
 
         var retrieved = await store.GetAsync(project.Id);
-        retrieved!.ProviderSettings.DefaultProvider.Should().Be(ModelSource.MicrosoftFoundry);
+        retrieved!.ProviderSettings.DefaultProvider.Should().Be(ModelSource.Byok);
         retrieved.ProviderSettings.GitHubCopilotModel.Should().Be("gpt-4o");
         retrieved.ProviderSettings.MicrosoftFoundryModel.Should().Be("foundry-model-1");
     }
