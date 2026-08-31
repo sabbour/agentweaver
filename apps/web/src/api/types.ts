@@ -469,6 +469,22 @@ export interface AuthConfigResponse {
   };
 }
 
+export type ByokProviderType = 'openai' | 'azure' | 'anthropic';
+
+export interface ByokProviderConfig {
+  type: ByokProviderType;
+  base_url: string;
+  model: string;
+  configured: true;
+}
+
+export interface ByokProviderConfigRequest {
+  type: ByokProviderType;
+  base_url: string;
+  model: string;
+  api_key: string;
+}
+
 export interface GitHubRepositorySelectionCandidate {
   full_name: string;
   owner_login: string;

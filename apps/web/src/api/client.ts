@@ -18,6 +18,8 @@ import type {
   AutopilotResponse,
   BacklogSettingsDto,
   BacklogTaskDto,
+  ByokProviderConfig,
+  ByokProviderConfigRequest,
   Blueprint,
   BlueprintSkillDefaultsPreviewResponse,
   BoardDto,
@@ -516,6 +518,21 @@ export class AgentweaverApiClient {
 
   getAuthConfig(): Promise<AuthConfigResponse> {
     return this.request<AuthConfigResponse>('GET', '/auth/config');
+  }
+
+  // Deployment-wide "bring your own key" inference provider configuration.
+  // Presence of a saved configuration IS the AI mode switch: configured = Custom key
+  // mode, absent = GitHub Copilot mode (see Platform settings page).
+  getByokProviderConfig(): Promise<ByokProviderConfig | null> {
+    return this.request<ByokProviderConfig | null>('GET', '/admin/byok-provider');
+  }
+
+  setByokProviderConfig(req: ByokProviderConfigRequest): Promise<void> {
+    return this.request<void>('PUT', '/admin/byok-provider', req);
+  }
+
+  clearByokProviderConfig(): Promise<void> {
+    return this.request<void>('DELETE', '/admin/byok-provider');
   }
 
   beginRepoAppAuthorization(): Promise<{ authorization_url: string; transaction_id: string; expires_at: string }> {
