@@ -77,9 +77,11 @@ Click **New workflow** to open the visual editor with a YAML-backed template. Us
 
 ### Visual editor
 
-Use **Edit visually** to build a workflow as a node graph. Drag roles onto the canvas, connect them, and configure each step visually. The editor generates the YAML for you.
+Use **Edit visually** to build a workflow as a node graph. Drag roles onto the canvas, connect them, and configure each step visually. The editor generates the YAML for you. The Build view keeps the canvas prominent: select no graph item to edit the workflow id, name, description, start node, and schedule; select a node or edge to edit its properties. The start node is marked on the canvas.
 
-Click **Add node** to insert a new step. The palette is grouped under **Reviewers & gates**, **Agent steps**, **Actions**, and **Flow control**, and each entry shows an icon and a one-line description. **Build & Test** appears once, as a ready-to-use preset.
+Click **Add node** to insert a new step, or choose **Add next step** on a node to add a connected prompt step. Each node also has an actions menu for renaming or deleting it. The palette is grouped under **Reviewers & gates**, **Agent steps**, **Actions**, and **Flow control**, and each entry shows an icon and a one-line description. **Build & Test** appears once, as a ready-to-use preset.
+
+The inspector and **YAML** are separate tabs. Changes from either surface share the same YAML draft, so **Undo**, **Redo**, **Revert to last save**, and **Discard changes** apply consistently. Use **Validate** to check that the YAML parses and that all declared gate verdicts have outgoing routes before saving.
 
 The **Actions** group includes **Open pull request**, which creates a pull request on the connected GitHub repository, and **Publish**, an agent-backed step for packaging or delivering approved output without code-merge semantics. Both types round-trip through YAML. Configure common fields in the node inspector; use the YAML view for pull-request template overrides such as `title`, `body`, `base`, `head`, and `draft`.
 
