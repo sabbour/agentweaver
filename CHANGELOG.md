@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.22.1
+
+### Patch Changes
+
+- 7dd046c: Harden GitHub Copilot platform-connection handling so malformed saved configuration does not block recovery, platform/default and project-scoped bindings safely clean up or preserve shared credentials, and SQLite-to-Postgres migration carries the platform-default binding forward reliably.
+
 ## 0.22.0
 
 ### Minor Changes
