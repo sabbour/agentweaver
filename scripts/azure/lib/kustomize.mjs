@@ -322,7 +322,7 @@ export function buildRuntimeConfigLiterals(vars) {
     ENTRA_FRONTEND_URL: isEntra ? entraOrigin : host ? `https://${host}` : "",
     COPILOT_APP_CALLBACK_URL: isEntra ? `${entraOrigin}/auth/github/copilot-app/callback` : host ? `https://${host}/auth/github/copilot-app/callback` : "",
     REPO_APP_CALLBACK_URL: isEntra ? `${entraOrigin}/auth/github/repo-app/callback` : host ? `https://${host}/auth/github/repo-app/callback` : "",
-    TOKEN_STORE_KEYVAULT_URI: vars.KEYVAULT_NAME ? `https://${vars.KEYVAULT_NAME}.vault.azure.net` : "",
+    KEYVAULT_URI: vars.KEYVAULT_NAME ? `https://${vars.KEYVAULT_NAME}.vault.azure.net` : "",
     AGENTHOST_KEYVAULT_URI: str(vars.AGENTHOST_KEYVAULT_URI),
     APPINSIGHTS_WORKSPACE_ID: str(vars.APPINSIGHTS_WORKSPACE_ID),
     SANDBOX_PREVIEW_ZONE_SUFFIX: str(vars.SANDBOX_PREVIEW_ZONE_SUFFIX),
