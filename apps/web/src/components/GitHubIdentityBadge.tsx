@@ -2,6 +2,7 @@ import { apiClient } from '../api/apiClient';
 import {
   Button,
   Divider,
+  Link,
   Popover,
   PopoverSurface,
   PopoverTrigger,
@@ -14,8 +15,7 @@ import {
 } from '@fluentui/react-components';
 import { ChevronDownRegular, PersonRegular, SignOutRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
-import type { AuthSessionResponse, ProjectCopilotConnection } from '../api/types';
-import { GitHubCopilotConnectionPicker } from './GitHubCopilotConnectionPicker';
+import type { AuthSessionResponse, ProjectAccessOverview, ProjectCopilotConnection } from '../api/types';
 
 const useStyles = makeStyles({
   trigger: {
@@ -116,6 +116,12 @@ function connectionStatus(connection: ProjectCopilotConnection | null): string {
   return 'Not connected';
 }
 
+function repositoryStatus(access: ProjectAccessOverview | null): string {
+  return access?.effective_github_login
+    ? `Repository access: @${access.effective_github_login}`
+    : 'Repository access: not connected';
+}
+
 export interface GitHubIdentityBadgeProps {
   projectId?: string;
   collapsed?: boolean;
@@ -129,6 +135,7 @@ export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadg
   const [connection, setConnection] = useState<ProjectCopilotConnection | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [access, setAccess] = useState<ProjectAccessOverview | null>(null);
   const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
@@ -155,16 +162,18 @@ export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadg
       if (!active) return;
       setConnectionLoading(true);
       setConnectionError(null);
-      void apiClient.getProjectCopilotConnection(projectId)
-        .then((nextConnection) => {
-          if (active) setConnection(nextConnection);
-        })
-        .catch(() => {
-          if (active) setConnectionError('Could not load this project’s GitHub Copilot connection.');
-        })
-        .finally(() => {
-          if (active) setConnectionLoading(false);
-        });
+      void Promise.all([
+        apiClient.getProjectCopilotConnection(projectId),
+        apiClient.getProjectAccessOverview(projectId),
+      ]).then(([nextConnection, nextAccess]) => {
+        if (!active) return;
+        setConnection(nextConnection);
+        setAccess(nextAccess);
+      }).catch(() => {
+        if (active) setConnectionError('Could not load this project’s GitHub connection status.');
+      }).finally(() => {
+        if (active) setConnectionLoading(false);
+      });
     });
 
     return () => {
@@ -238,11 +247,19 @@ export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadg
             <>
               <Divider />
               <div className={styles.section}>
-                <Text weight="semibold">GitHub Copilot for this project</Text>
-                {connectionLoading && <Spinner label="Loading GitHub Copilot connection" size="extra-tiny" />}
+                <Text weight="semibold">Project GitHub status</Text>
+                {connectionLoading && <Spinner label="Loading GitHub connection status" size="extra-tiny" />}
                 {!connectionLoading && connectionError && <Text size={200} className={styles.secondary}>{connectionError}</Text>}
-                {!connectionLoading && !connectionError && <Text size={200} className={styles.secondary}>{connectionStatus(connection)}</Text>}
-                <GitHubCopilotConnectionPicker projectId={projectId} triggerLabel="Manage GitHub Copilot" />
+                {!connectionLoading && !connectionError && (
+                  <>
+                    <Text size={200} className={styles.secondary}>{repositoryStatus(access)}</Text>
+                    <Text size={200} className={styles.secondary}>AI source: GitHub Copilot — {connectionStatus(connection)}</Text>
+                  </>
+                )}
+                <Link href={`/projects/${encodeURIComponent(projectId)}/settings`}>
+                  Manage project connections
+                </Link>
+                <Link href="/settings">Manage account GitHub connections</Link>
               </div>
             </>
           )}
