@@ -263,6 +263,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
   // Synchronous in-flight guard for confirm — prevents a second click from firing before
   // React has had a chance to re-render the button as disabled (acting state update is async).
   const confirmInFlightRef = useRef(false);
+  const reviseInFlightRef = useRef(false);
 
   const fetchSpec = useCallback(async () => {
     try {
@@ -402,7 +403,8 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
 
   const handleRevise = async () => {
     const composed = composedFeedback.trim();
-    if (!composed) return;
+    if (!composed || reviseInFlightRef.current) return;
+    reviseInFlightRef.current = true;
     setActing(true);
     setActionError(null);
     try {
@@ -417,6 +419,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
     } catch (err) {
       setActionError(actionErrorMessage(err));
     } finally {
+      reviseInFlightRef.current = false;
       setActing(false);
     }
   };
@@ -592,7 +595,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
       )}
 
       {revisionPending && (
-        <span className={styles.drafting}>
+        <span className={styles.drafting} role="status" aria-live="polite" aria-atomic="true">
           <Spinner size="extra-tiny" aria-hidden="true" />
           <InfoRegular aria-hidden="true" />
           <Text>Clarification sent — the coordinator is revising the Outcome plan.</Text>
@@ -634,7 +637,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         </>
       ) : null}
 
-      {actionError && (
+      {actionError && !reviseOpen && (
         <MessageBar intent="error">
           <MessageBarBody>{actionError}</MessageBarBody>
         </MessageBar>
@@ -699,6 +702,11 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
                     rows={3}
                   />
                 </Field>
+                {actionError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{actionError}</MessageBarBody>
+                  </MessageBar>
+                )}
               </div>
             </DialogContent>
             <DialogActions>
