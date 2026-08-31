@@ -2,7 +2,8 @@ import {
   apiClient } from '../../api/apiClient';
 import { useBoard } from '../../api/board';
 import { ApiError } from '../../api/client';
-import { Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, makeStyles, mergeClasses, MessageBar, MessageBarBody, Spinner, Text, tokens } from '@fluentui/react-components';
+import { Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, DialogTrigger, makeStyles, mergeClasses, MessageBar, MessageBarBody, Spinner, Text, tokens } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { ArrowImportRegular } from '@fluentui/react-icons';
 import { EmptyState } from '../ui';
 import { DecomposePreviewDialog } from '../DecomposePreviewDialog';
@@ -564,7 +565,13 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       <Dialog open={importPickerOpen} onOpenChange={(_, d) => { if (!d.open) setImportPickerOpen(false); }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Import from workspace</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Import from workspace</DialogTitle>
             <DialogContent>
               <WorkspaceFilePicker
                 projectId={projectId}
@@ -601,4 +608,3 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     </div>
   );
 }
-

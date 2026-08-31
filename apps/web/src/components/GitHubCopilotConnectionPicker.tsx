@@ -11,6 +11,7 @@ import {
   MessageBarBody,
   Spinner,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectCopilotConnection } from '../api/types';
 
@@ -107,7 +108,16 @@ export function GitHubCopilotConnectionPicker({
       <Dialog open={open} onOpenChange={(_, data) => setOpen(data.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Connect GitHub Copilot</DialogTitle>
+            <DialogTitle
+              action={
+                <Button
+                  appearance="subtle"
+                  aria-label="Close"
+                  icon={<DismissRegular />}
+                  onClick={() => setOpen(false)}
+                />
+              }
+            >Connect GitHub Copilot</DialogTitle>
             <DialogContent>
               <p>
                 Choose the GitHub account with Copilot access in GitHub’s secure browser page.
@@ -136,7 +146,12 @@ export function GitHubCopilotConnectionPicker({
                 Refresh
               </Button>
               <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-              <Button appearance="primary" disabled={connecting} onClick={() => void connect()}>
+              <Button
+                appearance="primary"
+                disabled={connecting}
+                onClick={() => void connect()}
+                style={{ whiteSpace: 'nowrap' }}
+              >
                 {connecting ? 'Opening GitHub…' : connected ? 'Switch GitHub account' : 'Connect GitHub account'}
               </Button>
             </DialogActions>

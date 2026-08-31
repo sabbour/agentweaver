@@ -8,6 +8,7 @@ import { Button,
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   Field,
   makeStyles,
   MessageBar,
@@ -18,6 +19,7 @@ import { Button,
   Tooltip,
   tokens,
   } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { DAG_NODE_SEP,
   layoutDagColumns,
   NODE_W,
@@ -667,7 +669,13 @@ export function CoordinatorTopologyGraph({ coordinatorRunId, nodes, edges }: Coo
       <Dialog open={!!steerReq} onOpenChange={(_, d) => { if (!d.open) closeSteer(); }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >
               {steerReq ? steerKindLabel(steerReq.kind) : ''}{steerReq ? ` — ${steerReq.node.title}` : ''}
             </DialogTitle>
             <DialogContent>

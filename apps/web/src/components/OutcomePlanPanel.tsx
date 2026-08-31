@@ -9,6 +9,7 @@ import { Button,
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   Field,
   makeStyles,
   MessageBar,
@@ -18,6 +19,7 @@ import { Button,
   Textarea,
   tokens,
   } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import {
   CheckmarkCircleRegular,
   ChevronLeftRegular,
@@ -664,7 +666,13 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
       <Dialog open={reviseOpen} onOpenChange={(_, d) => { setReviseOpen(d.open); if (!d.open) { setAnswers([]); setExtraFeedback(''); } }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Clarify plan</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Clarify plan</DialogTitle>
             <DialogContent>
               <div className={styles.reviseFields}>
                 <Text>
