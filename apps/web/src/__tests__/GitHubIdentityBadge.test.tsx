@@ -8,7 +8,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getAuthSession: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
-    beginProjectCopilotAuthorization: vi.fn(),
+    getProjectAccessOverview: vi.fn(),
     signOutSession: vi.fn(),
   },
 }));
@@ -37,22 +37,28 @@ beforeEach(() => {
     status: 'connected',
     github_login: 'octocat',
   });
+  vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
+    effective_github_login: 'octocat',
+  } as never);
   vi.mocked(apiClient.signOutSession).mockResolvedValue(undefined as never);
 });
 
 afterEach(() => cleanup());
 
 describe('GitHubIdentityBadge', () => {
-  it('shows the signed-in identity, project Copilot status, management action, and sign-out', async () => {
+  it('shows the signed-in identity and read-only project GitHub status links', async () => {
     renderBadge({ projectId: 'proj-1' });
 
     fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
 
     await screen.findByText('Signed in');
     expect(screen.getAllByText('Ada Lovelace')).toHaveLength(2);
-    expect(await screen.findByText('Connected as @octocat')).toBeDefined();
+    expect(await screen.findByText('Repository access: @octocat')).toBeDefined();
+    expect(screen.getByText('AI source: GitHub Copilot — Connected as @octocat')).toBeDefined();
     expect(apiClient.getProjectCopilotConnection).toHaveBeenCalledWith('proj-1');
-    expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
+    expect(apiClient.getProjectAccessOverview).toHaveBeenCalledWith('proj-1');
+    expect(screen.getByRole('link', { name: 'Manage project connections' }).getAttribute('href')).toBe('/projects/proj-1/settings');
+    expect(screen.getByRole('link', { name: 'Manage account GitHub connections' }).getAttribute('href')).toBe('/settings');
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeDefined();
   });
 
@@ -62,7 +68,7 @@ describe('GitHubIdentityBadge', () => {
     fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
 
     expect(await screen.findByText('Signed in')).toBeDefined();
-    expect(screen.queryByText('GitHub Copilot for this project')).toBeNull();
+    expect(screen.queryByText('Project GitHub status')).toBeNull();
     expect(apiClient.getProjectCopilotConnection).not.toHaveBeenCalled();
   });
 
