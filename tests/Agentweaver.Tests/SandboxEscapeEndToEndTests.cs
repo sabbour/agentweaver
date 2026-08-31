@@ -85,7 +85,7 @@ public sealed class SandboxEscapeEndToEndTests
         var logger = new CapturingLogger<FoundryAgentRunner>();
         var runner = new FoundryAgentRunner(factory, SandboxExecutorFactory.CreatePassthrough(), new StubPolicyStore(), new InMemoryShellApprovalStore(), logger);
 
-        await RunEscapeScenarioAsync(ModelSource.MicrosoftFoundry, runner, logger.Lines);
+        await RunEscapeScenarioAsync(ModelSource.Byok, runner, logger.Lines);
     }
 
     private async Task RunEscapeScenarioAsync(

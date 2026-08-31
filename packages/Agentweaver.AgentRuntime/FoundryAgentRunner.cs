@@ -467,7 +467,7 @@ public sealed class FoundryAgentRunner : IAgentRunner
         Action<string, object> emit)
     {
         var failure = new AgentProviderException(
-            ModelSource.MicrosoftFoundry,
+            ModelSource.Byok,
             AgentProviderFailureKind.ProviderUnavailable,
             "shell_execution_timeout",
             $"Shell execution exceeded its hard deadline of {(snapshot.Deadline - snapshot.StartedAt).TotalMinutes:n0} minutes and was terminated.",
