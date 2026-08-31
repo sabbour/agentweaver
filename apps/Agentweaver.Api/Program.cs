@@ -155,6 +155,8 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorAutopilot,
     Agentweaver.Api.Coordinator.CoordinatorAutopilot>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorDispatch>(
     sp => sp.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorDispatchService>());
+builder.Services.AddHostedService(
+    sp => sp.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorDispatchService>());
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringQueue>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringWaitRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorSteeringService>();

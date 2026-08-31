@@ -589,7 +589,7 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
 
     [Theory]
     [InlineData(1, 30, 60)]
-    [InlineData(2, 120, 240)]
+    [InlineData(2, 60, 120)]
     public async Task RetryableInfrastructureFailure_PersistsExponentialBackoffWithJitter(
         int attempt,
         int minimumSeconds,
@@ -614,6 +614,51 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         row.InfrastructureRetryEligibleAt.Should().NotBeNull();
         row.InfrastructureRetryEligibleAt!.Value.Should().BeOnOrAfter(before.AddSeconds(minimumSeconds));
         row.InfrastructureRetryEligibleAt.Value.Should().BeOnOrBefore(after.AddSeconds(maximumSeconds));
+    }
+
+    [Fact]
+    public void InfrastructureRetryBackoff_ConfigurationCannotExceedTwoMinutes()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Coordinator:InfrastructureRetryAttempt1MinSeconds"] = "900",
+                ["Coordinator:InfrastructureRetryAttempt1MaxSeconds"] = "1800",
+                ["Coordinator:InfrastructureRetryAttempt2MinSeconds"] = "900",
+                ["Coordinator:InfrastructureRetryAttempt2MaxSeconds"] = "1800",
+            })
+            .Build();
+        var sut = BuildDispatch(new SqliteRunEventStream(_streamConfig), configuration: config);
+
+        sut.CalculateInfrastructureRetryBackoff(1).Should().Be(CoordinatorDispatchService.MaxInfrastructureRetryBackoff);
+        sut.CalculateInfrastructureRetryBackoff(2).Should().Be(CoordinatorDispatchService.MaxInfrastructureRetryBackoff);
+    }
+
+    [Fact]
+    public async Task Shutdown_RelinquishesDispatchLeaseForReplacementWorker()
+    {
+        var coordinatorRunId = "shutdown-lease-coordinator";
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId, [(SubtaskStatus.Pending, null)]);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(p => p.Id == workPlanId);
+            plan.Status = WorkPlanStatus.Dispatching;
+            plan.CoordinatorPodId = Environment.MachineName;
+            await db.SaveChangesAsync();
+        }
+
+        var sut = BuildDispatch(new SqliteRunEventStream(_streamConfig));
+        await sut.StopAsync(CancellationToken.None);
+
+        using var verifyScope = _provider.CreateScope();
+        var released = await verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+            .WorkPlans.AsNoTracking()
+            .SingleAsync(p => p.Id == workPlanId);
+        released.Status.Should().Be(WorkPlanStatus.Dispatching);
+        released.CoordinatorPodId.Should().BeNull(
+            "the replacement worker's reconciler must be able to re-arm the interrupted dispatch");
     }
 
     [Fact]
@@ -801,10 +846,11 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         IRunEventStream eventStream,
         double stallTimeoutMinutes = 5,
         bool instantRetryBackoff = true,
-        IAgentHostPodLifecycle? podLifecycle = null)
+        IAgentHostPodLifecycle? podLifecycle = null,
+        IConfiguration? configuration = null)
     {
         var retrySeconds = instantRetryBackoff ? "0" : null;
-        var config = new ConfigurationBuilder()
+        var config = configuration ?? new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Coordinator:SubtaskStallTimeoutMinutes"] =

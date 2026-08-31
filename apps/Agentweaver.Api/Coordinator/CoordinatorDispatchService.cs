@@ -65,8 +65,9 @@ public interface ICoordinatorDispatch
 /// <see cref="MemoryDbContext"/> (the <see cref="IServiceScopeFactory"/> pattern), so parallel
 /// child dispatch + observation never corrupt EF state. Observation tasks only READ the stream.
 /// </summary>
-public sealed class CoordinatorDispatchService : ICoordinatorDispatch
+public sealed class CoordinatorDispatchService : ICoordinatorDispatch, IHostedService
 {
+    internal static readonly TimeSpan MaxInfrastructureRetryBackoff = TimeSpan.FromMinutes(2);
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunOrchestrator _orchestrator;
@@ -182,7 +183,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _infrastructureRetryBackoffs =
         [
             ReadRetryBackoff(configuration, attempt: 1, defaultMinSeconds: 30, defaultMaxSeconds: 60),
-            ReadRetryBackoff(configuration, attempt: 2, defaultMinSeconds: 120, defaultMaxSeconds: 240),
+            ReadRetryBackoff(configuration, attempt: 2, defaultMinSeconds: 60, defaultMaxSeconds: 120),
         ];
 
         _myPodId = configuration?.GetValue<string>("App:PodId")
@@ -236,6 +237,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             }
             finally
             {
+                if (_appStopping.IsCancellationRequested)
+                    await RelinquishCoordinatorLeaseOnShutdownAsync(
+                        context.CoordinatorRunId, CancellationToken.None).ConfigureAwait(false);
                 _active.TryRemove(context.CoordinatorRunId, out _);
                 _runCts.TryRemove(context.CoordinatorRunId, out _);
                 runCts.Dispose();
@@ -245,6 +249,16 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
     /// <inheritdoc />
     public bool IsDispatchActive(string coordinatorRunId) => _active.ContainsKey(coordinatorRunId);
+
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
+    /// Releases every locally owned dispatch lease before the host finishes stopping. The application
+    /// stopping token has already cancelled in-flight loops when this runs, so a replacement worker
+    /// can safely re-arm their durable work plans without waiting for the stale-lease timeout.
+    /// </summary>
+    public Task StopAsync(CancellationToken cancellationToken) =>
+        RelinquishCoordinatorLeaseOnShutdownAsync(coordinatorRunId: null, cancellationToken);
 
     // -----------------------------------------------------------------------
     // Dispatch + observe loop
@@ -1042,13 +1056,41 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         double defaultMinSeconds,
         double defaultMaxSeconds)
     {
-        var minSeconds = Math.Max(0, configuration?.GetValue(
+        var minSeconds = Math.Clamp(configuration?.GetValue(
             $"Coordinator:InfrastructureRetryAttempt{attempt}MinSeconds", defaultMinSeconds)
-            ?? defaultMinSeconds);
-        var maxSeconds = Math.Max(minSeconds, configuration?.GetValue(
+            ?? defaultMinSeconds, 0, MaxInfrastructureRetryBackoff.TotalSeconds);
+        var maxSeconds = Math.Clamp(configuration?.GetValue(
             $"Coordinator:InfrastructureRetryAttempt{attempt}MaxSeconds", defaultMaxSeconds)
-            ?? defaultMaxSeconds);
+            ?? defaultMaxSeconds, minSeconds, MaxInfrastructureRetryBackoff.TotalSeconds);
         return (TimeSpan.FromSeconds(minSeconds), TimeSpan.FromSeconds(maxSeconds));
+    }
+
+    /// <summary>
+    /// Releases dispatch ownership during graceful host shutdown. The durable work-plan status and
+    /// subtask rows remain unchanged, letting the existing reconciler re-observe in-flight children
+    /// from a replacement worker without waiting for this pod's lease to become stale.
+    /// </summary>
+    internal async Task RelinquishCoordinatorLeaseOnShutdownAsync(
+        string? coordinatorRunId,
+        CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var released = await db.WorkPlans
+            .Where(w => (coordinatorRunId == null || w.CoordinatorRunId == coordinatorRunId)
+                     && w.Status == WorkPlanStatus.Dispatching
+                     && w.CoordinatorPodId == _myPodId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.CoordinatorPodId, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), cancellationToken)
+            .ConfigureAwait(false);
+        if (released > 0)
+        {
+            _logger.LogInformation(
+                "Coordinator dispatch: released {Count} shutdown lease(s); replacement workers may re-arm them",
+                released);
+        }
     }
 
     private async Task<bool> IsInfrastructureRetryEligibleAsync(int subtaskId, CancellationToken ct)
