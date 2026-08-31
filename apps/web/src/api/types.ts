@@ -460,6 +460,15 @@ export interface AuthSessionResponse {
   platform_roles: string[];
 }
 
+export interface AuthConfigResponse {
+  mode: 'Entra';
+  entra: {
+    client_id: string | null;
+    tenant_id: string | null;
+    authority: string | null;
+  };
+}
+
 export interface GitHubRepositorySelectionCandidate {
   full_name: string;
   owner_login: string;

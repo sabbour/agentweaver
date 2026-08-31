@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
+    getAuthConfig: vi.fn(),
     getAuthSession: vi.fn(),
     getSandboxPolicy: vi.fn(),
     updateSandboxPolicy: vi.fn(),
@@ -17,6 +18,14 @@ afterEach(cleanup);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(apiClient.getAuthConfig).mockResolvedValue({
+    mode: 'Entra',
+    entra: {
+      tenant_id: 'tenant-1',
+      client_id: 'client-1',
+      authority: 'https://login.microsoftonline.com/tenant-1/v2.0',
+    },
+  } as never);
   vi.mocked(apiClient.getAuthSession).mockResolvedValue({
     authenticated: true,
     auth_mode: 'entra',
@@ -41,6 +50,8 @@ describe('SettingsPage', () => {
 
     expect(await screen.findByText('Entra ID')).toBeDefined();
     expect(screen.getByText('PlatformAdmin')).toBeDefined();
+    expect((await screen.findByRole('link', { name: 'Manage in Microsoft Entra ID' })).getAttribute('href'))
+      .toBe('https://entra.microsoft.com/tenant-1/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/client-1/isMSAApp~/false');
     expect(screen.getByText('MCP clients')).toBeDefined();
     expect(screen.getByDisplayValue(/\/mcp$/)).toBeDefined();
     expect(screen.getByText('Sandbox policy')).toBeDefined();
