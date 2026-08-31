@@ -87,6 +87,7 @@ export function SettingsPage() {
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [entraAdminUrl, setEntraAdminUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,6 +101,17 @@ export function SettingsPage() {
       })
       .finally(() => {
         if (!cancelled) setAuthLoading(false);
+      });
+
+    void apiClient.getAuthConfig()
+      .then(({ entra }) => {
+        if (!entra.tenant_id || !entra.client_id || cancelled) return;
+        setEntraAdminUrl(
+          `https://entra.microsoft.com/${encodeURIComponent(entra.tenant_id)}/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/${encodeURIComponent(entra.client_id)}/isMSAApp~/false`,
+        );
+      })
+      .catch(() => {
+        // The role list remains useful if the public Entra configuration is unavailable.
       });
 
     return () => { cancelled = true; };
@@ -189,6 +201,11 @@ export function SettingsPage() {
                     <Label as="span" className={styles.emptyNote}>No Entra app roles are currently assigned.</Label>
                   )}
                 </div>
+                {entraAdminUrl && (
+                  <Button as="a" href={entraAdminUrl} target="_blank" rel="noreferrer" appearance="subtle">
+                    Manage in Microsoft Entra ID
+                  </Button>
+                )}
               </div>
             </>
           )}
