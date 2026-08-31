@@ -438,18 +438,16 @@ describe('VisualWorkflowEditor — selection persistence (#1007)', () => {
     return screen.findByRole('textbox', { name: 'Gate branches' });
   }
 
-  it('keeps a selected node inspector open after editing workflow metadata', async () => {
+  it('shows workflow metadata in the inspector when nothing is selected', async () => {
     renderEditor(YAML_WITH_UNROUTED_RAI);
-    await selectRaiCheck();
 
-    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
       target: { value: 'Renamed workflow' },
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('textbox', { name: 'Gate branches' })).toBeDefined();
+      expect(screen.getByText('Workflow details')).toBeDefined();
     });
-    expect(screen.queryByText('Select a node or edge')).toBeNull();
   });
 
   it('keeps a selected node inspector open after text and type edits', async () => {
@@ -499,7 +497,7 @@ describe('VisualWorkflowEditor — selection persistence (#1007)', () => {
     await user.click(screen.getByRole('button', { name: 'Delete node' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Select a node or edge')).toBeDefined();
+      expect(screen.getByText('Workflow details')).toBeDefined();
     });
   });
 });
@@ -514,9 +512,9 @@ describe('VisualWorkflowEditor — semantic edge selection (#1015)', () => {
   }
 
   async function replaceYaml(user: ReturnType<typeof userEvent.setup>, yaml: string) {
-    await user.click(screen.getByRole('button', { name: 'View YAML' }));
+    await user.click(screen.getByRole('tab', { name: 'YAML' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Workflow YAML' }), { target: { value: yaml } });
-    await user.click(screen.getByRole('button', { name: 'Inspector' }));
+    await user.click(screen.getByRole('tab', { name: 'Inspector' }));
   }
 
   it('clears edge selection when the selected YAML edge is deleted', async () => {
@@ -527,7 +525,7 @@ describe('VisualWorkflowEditor — semantic edge selection (#1015)', () => {
     await replaceYaml(user, YAML_WITH_SELECTED_EDGE_REMOVED);
 
     await waitFor(() => {
-      expect(screen.getByText('Select a node or edge')).toBeDefined();
+      expect(screen.getByText('Workflow details')).toBeDefined();
     });
   });
 
@@ -544,7 +542,7 @@ describe('VisualWorkflowEditor — semantic edge selection (#1015)', () => {
     fireEvent.change(when, { target: { value: 'approved' } });
     fireEvent.blur(when);
 
-    await user.click(screen.getByRole('button', { name: 'View YAML' }));
+    await user.click(screen.getByRole('tab', { name: 'YAML' }));
     const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
     expect(parsed.model?.edges).toEqual([
       { from: 'implement', to: 'done', when: 'shortcut' },
@@ -563,7 +561,7 @@ describe('VisualWorkflowEditor — semantic edge selection (#1015)', () => {
     fireEvent.change(when, { target: { value: 'approved' } });
     fireEvent.blur(when);
 
-    await user.click(screen.getByRole('button', { name: 'View YAML' }));
+    await user.click(screen.getByRole('tab', { name: 'YAML' }));
     const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
     expect(parsed.model?.edges.filter((edge) => edge.from === 'rai-check' && edge.to === 'done'))
       .toEqual([
@@ -582,7 +580,7 @@ describe('VisualWorkflowEditor — semantic edge selection (#1015)', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Select a node or edge')).toBeDefined();
+      expect(screen.getByText('Workflow details')).toBeDefined();
     });
   });
 
@@ -600,7 +598,7 @@ describe('VisualWorkflowEditor — semantic edge selection (#1015)', () => {
     fireEvent.change(when, { target: { value: 'approved' } });
     fireEvent.blur(when);
 
-    await user.click(screen.getByRole('button', { name: 'View YAML' }));
+    await user.click(screen.getByRole('tab', { name: 'YAML' }));
     const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
     expect(parsed.model?.edges.filter((edge) => edge.from === 'rai-check' && edge.to === 'done'))
       .toEqual([{ from: 'rai-check', to: 'done', when: 'approved' }]);
@@ -676,5 +674,54 @@ describe('VisualWorkflowEditor — schedule trigger (#561)', () => {
     expect(savedYaml).toContain('type: event');
     expect(savedYaml).toContain('event_name: github.issues');
     expect(savedYaml).toContain('type: schedule');
+  });
+});
+
+describe('VisualWorkflowEditor — canvas editing controls (#1010)', () => {
+  it('sets and visibly marks the workflow start node from workflow details', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await user.click(await screen.findByRole('combobox', { name: 'Start node' }));
+    await user.click(await screen.findByRole('option', { name: 'Done' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-done').textContent).toContain('Start');
+    });
+  });
+
+  it('undos and redoes YAML-buffer edits', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Changed workflow' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect((screen.getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('Sample');
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    expect((screen.getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('Changed workflow');
+  });
+
+  it('discards unsaved YAML-buffer edits', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Changed workflow' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+
+    expect((screen.getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('Sample');
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
+  it('reports client-side validation results on demand', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await user.click(await screen.findByRole('button', { name: 'Validate' }));
+    expect(screen.getByText(/validation failed.*unrouted verdicts/i)).toBeDefined();
   });
 });
