@@ -8,6 +8,7 @@ import {
   Badge,
   Button,
   Checkbox,
+  Divider,
   Field,
   Input,
   MessageBar,
@@ -984,6 +985,11 @@ export function ProjectSettingsPage() {
                     Connect or switch the project-scoped GitHub account used for Copilot capabilities.
                   </Body>
                   <GitHubCopilotConnectionPicker projectId={projectId} showConnectionStatus />
+                  <Divider />
+                  <TitleText>Background requirements</TitleText>
+                  <Body as="p" tone="muted">
+                    Background runs need the following server-verified prerequisites.
+                  </Body>
                   {unattendedLoading && <Spinner label="Checking automation readiness" size="extra-tiny" />}
                   {unattendedReadiness && (
                     <>
