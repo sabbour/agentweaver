@@ -350,6 +350,12 @@ function readStr(p: Record<string, unknown>, keys: string[]): string | undefined
   return undefined;
 }
 
+function apiErrorCode(err: unknown): string | undefined {
+  if (!(err instanceof ApiError) || typeof err.payload !== 'object' || err.payload === null) return undefined;
+  const error = (err.payload as Record<string, unknown>).error;
+  return typeof error === 'string' ? error : undefined;
+}
+
 function readEventTimestamp(p: Record<string, unknown>): string | undefined {
   return readStr(p, ['timestamp_utc', 'timestampUtc', 'updated_at', 'updatedAt', 'timestamp']);
 }
@@ -2433,6 +2439,7 @@ export function CoordinatorRunPage() {
     if (!runId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let consecutiveWorkPlanNotReady = 0;
     const TERMINAL = new Set<OrchPhase>(['complete', 'failed', 'blocked', 'declined']);
     queueMicrotask(() => {
       setRunLoadError(null);
@@ -2468,6 +2475,7 @@ export function CoordinatorRunPage() {
       setIsChildRun(childRun);
       let wp: WorkPlanResponse | null = null;
       let workPlanFailed = false;
+      let workPlanNotReady = false;
       if (!childRun) {
         try {
           wp = await apiClient.getWorkPlan(runId);
@@ -2482,6 +2490,9 @@ export function CoordinatorRunPage() {
           if (err instanceof ApiError && err.status === 404) {
             setNoWorkPlan(true);
             setWorkPlanError(null);
+            // A confirmed coordinator persists its work plan asynchronously. This
+            // typed 404 is expected briefly; exponentially back off until it exists.
+            workPlanNotReady = apiErrorCode(err) === 'work_plan_not_ready';
           } else {
             workPlanFailed = true;
             setWorkPlanError(formatApiError(err, 'The work plan could not be loaded.'));
@@ -2501,6 +2512,7 @@ export function CoordinatorRunPage() {
       setCoordinatorSteerable(typeof detail?.coordinator_steerable === 'boolean' ? detail.coordinator_steerable : undefined);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
+      if (wp) consecutiveWorkPlanNotReady = 0;
       // Seed the option toggles once from the run detail; subsequent user toggles own the state.
       if (!seededToggles.current && detail) {
         setAutopilot(Boolean(detail.autopilot));
@@ -2513,7 +2525,14 @@ export function CoordinatorRunPage() {
       const phase = normalizePhase(statusField) !== 'unknown'
         ? normalizePhase(statusField)
         : normalizePhase(wpStatus);
-      if (!TERMINAL.has(phase)) timer = setTimeout(() => { void tick(); }, workPlanFailed ? 8000 : 4000);
+      if (!TERMINAL.has(phase)) {
+        const delay = workPlanNotReady
+          ? Math.min(30_000, 8_000 * (2 ** consecutiveWorkPlanNotReady++))
+          : workPlanFailed
+            ? 8_000
+            : 4_000;
+        timer = setTimeout(() => { void tick(); }, delay);
+      }
     };
 
     void tick();
@@ -4838,6 +4857,7 @@ export function CoordinatorRunPage() {
             runStatus={runLevelStatus}
             onCollapse={() => setPlanPanelOpen(false)}
             onReconnect={reconnectStream}
+            onConfirmed={() => setRetryRefreshNonce((value) => value + 1)}
             onClarifyPlan={() => { setPlanPanelOpen(false); focusOutcomePlanComposer(); }}
             clarificationSent={outcomePlanClarifying}
             onFooterChange={setPlanFooter}

@@ -136,6 +136,7 @@ describe('OutcomePlanPanel confirm retry', () => {
   it('keeps the REST confirmed status when stale SSE still says awaiting confirmation after confirm', async () => {
     vi.mocked(apiClient.confirmOutcomeSpec).mockResolvedValue(confirmedSpec);
     const onReconnect = vi.fn();
+    const onConfirmed = vi.fn();
 
     render(
       <Wrapper>
@@ -144,6 +145,7 @@ describe('OutcomePlanPanel confirm retry', () => {
           events={[staleAwaitingEvent]}
           streamStatus="streaming"
           onReconnect={onReconnect}
+          onConfirmed={onConfirmed}
         />
       </Wrapper>,
     );
@@ -154,6 +156,7 @@ describe('OutcomePlanPanel confirm retry', () => {
     expect(screen.getByText(/Outcome plan confirmed by Ahmed/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /confirm plan/i })).toBeNull();
     expect(onReconnect).toHaveBeenCalledTimes(1);
+    expect(onConfirmed).toHaveBeenCalledTimes(1);
   });
 
   it('shows the updated interrupted message for run_not_active failures', async () => {
