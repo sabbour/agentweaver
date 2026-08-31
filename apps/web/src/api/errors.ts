@@ -35,6 +35,17 @@ export function githubConnectionErrorMessage(err: unknown): string | null {
   return null;
 }
 
+/**
+ * True when the API rejected a request because the caller has not yet connected the GitHub Repo
+ * App (or the connection is stale) — the case where the caller should be offered a "Connect
+ * GitHub" action rather than a generic retry.
+ */
+export function isGitHubRepoAppConnectionRequired(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  const body = parseApiBody(err.body);
+  return body.error === 'github_binding_unavailable';
+}
+
 export function parseApiBody(body: string): { error?: string; message?: string; detail?: string } {
   if (!body) return {};
   try {

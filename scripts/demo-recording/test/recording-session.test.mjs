@@ -16,6 +16,7 @@ import {
   parsePlaywrightSessionList,
   parseRecordingCommandOptions,
   pruneCacheDirectories,
+  pruneOrphanedAutomationProfileCopies,
   refreshRecordingAuthentication,
   recordingAuthPaths,
   resolveCaptureBeatPrerequisites,
@@ -278,6 +279,31 @@ test('pruneCacheDirectories removes known-safe cache dirs but preserves identity
 
 test('pruneCacheDirectories is a no-op when the profile root does not exist', () => {
   assert.doesNotThrow(() => pruneCacheDirectories(path.join(os.tmpdir(), 'agentweaver-prune-missing')));
+});
+
+test('pruneOrphanedAutomationProfileCopies removes stale refresh temp dirs left by an interrupted signin', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agentweaver-orphan-prune-test-'));
+  try {
+    const paths = recordingAuthPaths(root);
+    await fs.mkdir(`${paths.automationUserDataDir}.refresh-1234-1000`, { recursive: true });
+    await fs.writeFile(path.join(`${paths.automationUserDataDir}.refresh-1234-1000`, 'Local State'), '{}');
+    await fs.mkdir(`${paths.automationUserDataDir}.refresh-5678-2000`, { recursive: true });
+    await fs.mkdir(paths.automationUserDataDir, { recursive: true });
+    await fs.writeFile(path.join(paths.automationUserDataDir, 'marker'), 'keep');
+
+    await pruneOrphanedAutomationProfileCopies(paths);
+
+    assert.equal(existsSync(`${paths.automationUserDataDir}.refresh-1234-1000`), false);
+    assert.equal(existsSync(`${paths.automationUserDataDir}.refresh-5678-2000`), false);
+    assert.equal(existsSync(paths.automationUserDataDir), true);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('pruneOrphanedAutomationProfileCopies is a no-op when the auth root does not exist', async () => {
+  const paths = recordingAuthPaths(path.join(os.tmpdir(), 'agentweaver-orphan-prune-missing'));
+  await assert.doesNotReject(() => pruneOrphanedAutomationProfileCopies(paths));
 });
 
 test('recording session reports expired or unverifiable authentication', () => {

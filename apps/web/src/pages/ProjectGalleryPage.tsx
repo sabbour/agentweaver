@@ -1,6 +1,6 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { formatApiErrorMessage } from '../api/errors';
+import { formatApiErrorMessage, isGitHubRepoAppConnectionRequired } from '../api/errors';
 import {
   Badge,
   Button,
@@ -474,6 +474,7 @@ function useGitHubData(open: boolean) {
   const [repos, setRepos] = useState<RepoBrowserRepo[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
+  const [reposConnectionRequired, setReposConnectionRequired] = useState(false);
   const [reposKey, setReposKey] = useState(0);
 
   useEffect(() => {
@@ -484,6 +485,7 @@ function useGitHubData(open: boolean) {
     const loadRepositories = async () => {
       setReposLoading(true);
       setReposError(null);
+      setReposConnectionRequired(false);
       try {
         const selections = await apiClient.listGitHubRepositorySelections();
         if (cancelled) return;
@@ -495,11 +497,8 @@ function useGitHubData(open: boolean) {
         })));
       } catch (err: unknown) {
         if (cancelled) return;
-        setReposError(
-          err instanceof ApiError
-            ? `Error ${err.status}: ${err.body}`
-            : err instanceof Error ? err.message : String(err),
-        );
+        setReposConnectionRequired(isGitHubRepoAppConnectionRequired(err));
+        setReposError(formatApiErrorMessage(err, 'Could not load repositories.'));
       } finally {
         if (!cancelled) setReposLoading(false);
       }
@@ -511,20 +510,32 @@ function useGitHubData(open: boolean) {
   const reloadRepos = () => setReposKey((k) => k + 1);
 
   return {
-    repos, reposLoading, reposError, reloadRepos,
+    repos, reposLoading, reposError, reposConnectionRequired, reloadRepos,
   };
 }
+
 
 function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCreated: (p: Project) => void; dataDir: string | null; workspaceAutoAssigned: boolean }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('github', onCreated);
-  const { repos, reposLoading, reposError, reloadRepos } = useGitHubData(d.open);
+  const { repos, reposLoading, reposError, reposConnectionRequired, reloadRepos } = useGitHubData(d.open);
   const [repoFilter, setRepoFilter] = useState('');
   const [pasteRepo, setPasteRepo] = useState('');
   const [folderName, setFolderName] = useState('');
   const [folderEdited, setFolderEdited] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
+  const [connectingRepoApp, setConnectingRepoApp] = useState(false);
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
+
+  const connectRepoApp = async () => {
+    setConnectingRepoApp(true);
+    try {
+      const handoff = await apiClient.beginRepoAppAuthorization();
+      window.location.assign(handoff.authorization_url);
+    } catch {
+      setConnectingRepoApp(false);
+    }
+  };
 
   const hasChosenRepository = /^(https:\/\/github\.com\/)?[\w.-]+\/[\w.-]+/.test(d.sourceRepository.trim());
   const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && hasChosenRepository && !d.saving);
@@ -604,7 +615,20 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
         />
       </Field>
 
-      {reposError && <MessageBar intent="error"><MessageBarBody>Could not load repositories: {reposError}</MessageBarBody><MessageBarActions><Button size="small" onClick={reloadRepos}>Retry</Button></MessageBarActions></MessageBar>}
+      {reposError && (
+        <MessageBar intent="error">
+          <MessageBarBody>{reposError}</MessageBarBody>
+          <MessageBarActions>
+            {reposConnectionRequired
+              ? (
+                <Button size="small" appearance="primary" disabled={connectingRepoApp} onClick={() => void connectRepoApp()}>
+                  {connectingRepoApp ? 'Opening GitHub…' : 'Connect GitHub'}
+                </Button>
+              )
+              : <Button size="small" onClick={reloadRepos}>Retry</Button>}
+          </MessageBarActions>
+        </MessageBar>
+      )}
 
       <Field label="Paste a repository from your Repo App authorization" hint="owner/repo e.g. kubernetes/client-go">
         <div className={styles.pasteRow}>
