@@ -90,7 +90,7 @@ configMapGenerator:
       - "ENTRA_FRONTEND_URL=https://agentweaver.example.com"
       - "COPILOT_APP_CALLBACK_URL=https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/auth/github/copilot-app/callback"
       - "REPO_APP_CALLBACK_URL=https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/auth/github/repo-app/callback"
-      - "TOKEN_STORE_KEYVAULT_URI=https://changeme.vault.azure.net"
+      - "KEYVAULT_URI=https://changeme.vault.azure.net"
       - "AGENTHOST_KEYVAULT_URI=https://changeme.vault.azure.net/"
       - "APPINSIGHTS_WORKSPACE_ID="
       - "SANDBOX_PREVIEW_ZONE_SUFFIX=example.com"

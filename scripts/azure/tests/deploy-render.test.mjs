@@ -81,7 +81,7 @@ test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IM
 
 test("buildRuntimeConfigLiterals() passes through deployment values without retired OAuth metadata", () => {
   const literals = buildRuntimeConfigLiterals(VARS);
-  assert.equal(literals.TOKEN_STORE_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net");
+  assert.equal(literals.KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net");
   assert.equal(literals.AGENTHOST_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net/");
   assert.equal(literals.IDENTITY_CLIENT_ID, "11111111-2222-3333-4444-555555555555");
   assert.equal(literals.AGENTHOST_IDENTITY_CLIENT_ID, "99999999-8888-7777-6666-555555555555");
