@@ -224,10 +224,10 @@ app.MapPost("/configure", async (HttpContext ctx) =>
 
     if (body is null || string.IsNullOrWhiteSpace(body.RunId))
         return Results.BadRequest("runId is required");
-    if (body.CopilotCredential is null ||
+    if (body.ByokProviderConfiguration is null && (body.CopilotCredential is null ||
         string.IsNullOrWhiteSpace(body.CopilotCredential.SnapshotReference) ||
         string.IsNullOrWhiteSpace(body.CopilotCredential.AccessToken) ||
-        body.CopilotCredential.ExpiresAt <= DateTimeOffset.UtcNow)
+        body.CopilotCredential.ExpiresAt <= DateTimeOffset.UtcNow))
     {
         return Results.BadRequest("A live run-bound Copilot capability credential is required");
     }
@@ -529,6 +529,7 @@ internal sealed record ConfigureRequest
     /// The AgentHost never resolves it from a user identity or a token store.
     /// </summary>
     public GitHubCapabilitySnapshotCredential? CopilotCredential { get; init; }
+    public ByokProviderConfiguration? ByokProviderConfiguration { get; init; }
 
     /// <summary>
     /// Short-lived credential for the configured run and repository. The runtime gives this value
@@ -634,7 +635,8 @@ internal sealed record ConfigureRequest
         AgentName,
         CallerBearerToken,
         RepositoryAccessToken,
-        ToolApprovalApiBaseUrl);
+        ToolApprovalApiBaseUrl,
+        ByokProviderConfiguration);
 }
 
 internal sealed record PreviewProcessStartRequest

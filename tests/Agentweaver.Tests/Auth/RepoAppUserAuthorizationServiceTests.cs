@@ -125,13 +125,13 @@ public sealed class RepoAppUserAuthorizationServiceTests
         var secrets = new InMemorySecretStore();
         var service = CreateService(database, secrets, new StubHttpClientFactory());
 
-        await new TwoAppPersistenceStore(database).AddAuthorizationAsync(Transaction(
+        await new GitHubConnectionsPersistenceStore(database).AddAuthorizationAsync(Transaction(
             "expired", "expired-id", "entra", GitHubAppKind.Repo,
             GitHubAuthorizationPurpose.InteractiveRepository, DateTimeOffset.UtcNow.AddMinutes(-1)));
-        await new TwoAppPersistenceStore(database).AddAuthorizationAsync(Transaction(
+        await new GitHubConnectionsPersistenceStore(database).AddAuthorizationAsync(Transaction(
             "wrong-purpose", "purpose-id", "entra", GitHubAppKind.Repo,
             GitHubAuthorizationPurpose.InteractiveCopilot, DateTimeOffset.UtcNow.AddMinutes(1)));
-        await new TwoAppPersistenceStore(database).AddAuthorizationAsync(Transaction(
+        await new GitHubConnectionsPersistenceStore(database).AddAuthorizationAsync(Transaction(
             "wrong-app", "app-id", "entra", GitHubAppKind.Copilot,
             GitHubAuthorizationPurpose.InteractiveRepository, DateTimeOffset.UtcNow.AddMinutes(1)));
 
@@ -155,7 +155,7 @@ public sealed class RepoAppUserAuthorizationServiceTests
             GitHubAuthorizationPurpose.InteractiveRepository,
             DateTimeOffset.UtcNow.AddMinutes(-1));
         record.Status = GitHubAuthorizationStatus.Redeeming;
-        await new TwoAppPersistenceStore(database).AddAuthorizationAsync(record);
+        await new GitHubConnectionsPersistenceStore(database).AddAuthorizationAsync(record);
         var service = CreateService(database, new InMemorySecretStore(), new StubHttpClientFactory());
 
         var result = await service.PollAsync(Human("entra"), HumanPrincipal(), "redeeming-id");
@@ -352,7 +352,7 @@ public sealed class RepoAppUserAuthorizationServiceTests
                 ["Auth:RepoApp:CallbackUrl"] = "https://agentweaver.test/auth/github/repo-app/callback",
                 ["Auth:RepoApp:FrontendUrl"] = "https://agentweaver.test",
             }).Build(),
-            new TwoAppPersistenceStore(database),
+            new GitHubConnectionsPersistenceStore(database),
             secrets,
             factory);
 

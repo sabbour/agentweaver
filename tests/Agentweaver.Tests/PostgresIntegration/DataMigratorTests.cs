@@ -158,7 +158,7 @@ public sealed class DataMigratorTests : IDisposable
     }
 
     [PostgresFact]
-    public async Task Migrator_TwoAppFailure_RollsBackEveryTwoAppRecord()
+    public async Task Migrator_GitHubConnectionsFailure_RollsBackEveryGitHubConnectionsRecord()
     {
         var options = new DbContextOptionsBuilder<MemoryDbContext>()
             .UseSqlite($"Data Source={_memoryDbPath}")
@@ -192,20 +192,92 @@ public sealed class DataMigratorTests : IDisposable
         }
 
         var migrator = BuildMigrator(_ => Task.FromException(
-            new InvalidOperationException("Injected two-App transfer failure.")));
+            new InvalidOperationException("Injected GitHub connections transfer failure.")));
         Func<Task> migrate = () => migrator.RunAsync();
         await migrate.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Injected two-App transfer failure.");
+            .WithMessage("Injected GitHub connections transfer failure.");
 
         await using var verify = await _pg.CreateDbContextAsync();
         (await verify.ProjectCopilotBindings.CountAsync(x => x.ProjectId == _seededProjectId)).Should().Be(0);
+    }
+
+    [PostgresFact]
+    public async Task Migrator_TransfersPlatformDefaultCopilotBinding()
+    {
+        var options = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite($"Data Source={_memoryDbPath}")
+            .Options;
+        await using (var source = new MemoryDbContext(options))
+        {
+            await source.Database.EnsureCreatedAsync();
+            source.Projects.Add(new ProjectRecord
+            {
+                ProjectId = _seededProjectId,
+                Name = "Source project",
+                OriginKind = "blank",
+                WorkingDirectory = "source-worktree",
+                Owner = "owner",
+                DefaultProvider = "github_copilot",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            source.GitHubInstallations.Add(new GitHubInstallationRecord
+            {
+                InstallationId = 101,
+                AppKind = GitHubAppKind.Repo,
+                ProjectId = _seededProjectId,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            source.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+            {
+                InstallationId = 101,
+                RepositoryId = 202,
+                ProjectId = _seededProjectId,
+                FullNameDisplay = "owner/repository",
+                PermissionDigest = "repo-digest",
+                GrantedAt = DateTimeOffset.UtcNow,
+            });
+            source.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+            {
+                Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+                EntraObjectId = "platform-admin",
+                CredentialReference = "copilot-app-platform-default",
+                CredentialVersion = "version-1",
+                GrantDigest = "platform-digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            source.AutomationActivations.Add(new AutomationActivationRecord
+            {
+                Id = "activation-" + Guid.NewGuid().ToString("N"),
+                ProjectId = _seededProjectId,
+                InstallationId = 101,
+                RepositoryId = 202,
+                RepositoryGrantDigest = "repo-digest",
+                CopilotBindingId = PlatformDefaultCopilotBindingRecord.SingletonId,
+                CopilotBindingGrantDigest = "platform-digest",
+                AutomationKey = "internal-activation-snapshot",
+                Status = AutomationActivationStatus.Active,
+                ActivatedAt = DateTimeOffset.UtcNow,
+            });
+            await source.SaveChangesAsync();
+        }
+
+        await BuildMigrator().RunAsync();
+
+        await using var verify = await _pg.CreateDbContextAsync();
+        var binding = await verify.PlatformDefaultCopilotBindings.SingleAsync();
+        binding.CredentialReference.Should().Be("copilot-app-platform-default");
+        binding.GrantDigest.Should().Be("platform-digest");
+        (await verify.AutomationActivations.CountAsync(
+            x => x.CopilotBindingId == PlatformDefaultCopilotBindingRecord.SingletonId)).Should().Be(1);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private SqliteToPostgresMigrator BuildMigrator(Func<CancellationToken, Task>? beforeTwoAppCommit = null)
+    private SqliteToPostgresMigrator BuildMigrator(Func<CancellationToken, Task>? beforeGitHubConnectionsCommit = null)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -219,7 +291,7 @@ public sealed class DataMigratorTests : IDisposable
             _pg.Factory,
             config,
             NullLogger<SqliteToPostgresMigrator>.Instance,
-            beforeTwoAppCommit);
+            beforeGitHubConnectionsCommit);
     }
 
     /// <summary>

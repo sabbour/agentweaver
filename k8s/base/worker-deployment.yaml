@@ -8,8 +8,9 @@ metadata:
     app.kubernetes.io/part-of: agentweaver
 spec:
   # Worker is Postgres-backed and stateless w.r.t. storage → safe RollingUpdate.
-  # Min 1 for availability; scale via worker-hpa.yaml.
-  replicas: 1
+  # Keep two workers available so the PDB can permit one voluntary disruption.
+  # Scale via worker-hpa.yaml.
+  replicas: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:

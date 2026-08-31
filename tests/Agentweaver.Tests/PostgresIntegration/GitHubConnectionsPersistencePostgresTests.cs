@@ -7,7 +7,7 @@ namespace Agentweaver.Tests.PostgresIntegration;
 
 [Collection("PostgresIntegration")]
 [Trait("Category", "PostgresIntegration")]
-public sealed class TwoAppPersistencePostgresTests(PostgresFixture postgres)
+public sealed class GitHubConnectionsPersistencePostgresTests(PostgresFixture postgres)
 {
     [PostgresFact]
     public async Task ProjectCascadeAndActiveBindingConstraintMatchSqlite()
@@ -27,7 +27,7 @@ public sealed class TwoAppPersistencePostgresTests(PostgresFixture postgres)
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
-            var store = new TwoAppPersistenceStore(db);
+            var store = new GitHubConnectionsPersistenceStore(db);
             (await store.ReplaceCopilotBindingAsync(Binding("first", projectId))).Should().Be(BindingWriteResult.Bound);
         }
 
@@ -54,13 +54,27 @@ public sealed class TwoAppPersistencePostgresTests(PostgresFixture postgres)
         var deliveryId = $"delivery-{Guid.NewGuid():N}";
         await using (var first = await postgres.CreateDbContextAsync())
         {
-            (await new TwoAppPersistenceStore(first).ClaimLifecycleDeliveryAsync(LifecycleDelivery(deliveryId)))
+            (await new GitHubConnectionsPersistenceStore(first).ClaimLifecycleDeliveryAsync(LifecycleDelivery(deliveryId)))
                 .Should().Be(InvocationClaimResult.Claimed);
         }
 
         await using var second = await postgres.CreateDbContextAsync();
-        (await new TwoAppPersistenceStore(second).ClaimLifecycleDeliveryAsync(LifecycleDelivery(deliveryId)))
+        (await new GitHubConnectionsPersistenceStore(second).ClaimLifecycleDeliveryAsync(LifecycleDelivery(deliveryId)))
             .Should().Be(InvocationClaimResult.Duplicate);
+    }
+
+    [PostgresFact]
+    public async Task PlatformDefaultBinding_UpsertsTheSingletonRow()
+    {
+        await using var first = await postgres.CreateDbContextAsync();
+        var store = new GitHubConnectionsPersistenceStore(first);
+        (await store.ReplacePlatformDefaultCopilotBindingAsync(PlatformBinding("first"))).Should().Be(BindingWriteResult.Bound);
+        (await store.ReplacePlatformDefaultCopilotBindingAsync(PlatformBinding("second"))).Should().Be(BindingWriteResult.Bound);
+
+        await using var verify = await postgres.CreateDbContextAsync();
+        var bindings = await verify.PlatformDefaultCopilotBindings.ToListAsync();
+        bindings.Should().HaveCount(1);
+        bindings.Single().CredentialReference.Should().Be("kv-copilot-platform-second");
     }
 
     [PostgresFact]
@@ -122,6 +136,17 @@ public sealed class TwoAppPersistencePostgresTests(PostgresFixture postgres)
         CredentialReference = "kv-copilot",
         CredentialVersion = "version",
         GrantDigest = "digest",
+        Status = GitHubBindingStatus.Active,
+        BoundAt = DateTimeOffset.UtcNow,
+    };
+
+    private static PlatformDefaultCopilotBindingRecord PlatformBinding(string suffix) => new()
+    {
+        Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+        EntraObjectId = "entra",
+        CredentialReference = $"kv-copilot-platform-{suffix}",
+        CredentialVersion = $"version-{suffix}",
+        GrantDigest = $"digest-{suffix}",
         Status = GitHubBindingStatus.Active,
         BoundAt = DateTimeOffset.UtcNow,
     };

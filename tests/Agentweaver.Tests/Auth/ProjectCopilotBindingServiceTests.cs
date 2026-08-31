@@ -9,6 +9,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -123,8 +124,8 @@ public sealed class ProjectCopilotBindingServiceTests
         var project = ProjectId.New();
         var other = ProjectId.New();
         await SeedProjectAsync(db, project, other);
-        await new TwoAppPersistenceStore(db).ReplaceCopilotBindingAsync(Binding(project, "project-secret", "version-one"));
-        await new TwoAppPersistenceStore(db).ReplaceCopilotBindingAsync(Binding(other, "other-secret", "version-two"));
+        await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(Binding(project, "project-secret", "version-one"));
+        await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(Binding(other, "other-secret", "version-two"));
         await secrets.SetSecretAsync("project-secret", """{"accessToken":"ghu_should_not_persist"}""");
         await secrets.SetSecretAsync("other-secret", """{"accessToken":"ghu_other"}""");
         var service = CreateService(db, roles, secrets);
@@ -212,8 +213,9 @@ public sealed class ProjectCopilotBindingServiceTests
             ["Auth:CopilotApp:Slug"] = "agentweaver-copilot",
         }).Build();
         var httpClientFactory = new StubHttpClientFactory(provider);
-        return new(configuration, new TwoAppPersistenceStore(db), secrets, httpClientFactory, roles,
-            new CopilotAppRegistrationService(configuration, httpClientFactory));
+        return new(configuration, new GitHubConnectionsPersistenceStore(db), secrets, httpClientFactory, roles,
+            new CopilotAppRegistrationService(configuration, httpClientFactory),
+            NullLogger<ProjectCopilotBindingService>.Instance);
     }
     private static CallerContext Human(string id) => new() { User = id, EntraObjectId = id };
     private static ClaimsPrincipal HumanPrincipal() => new(new ClaimsIdentity([new Claim("oid", "owner")], "test"));

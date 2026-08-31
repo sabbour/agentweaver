@@ -54,7 +54,7 @@ The durable artifacts are:
 - **Recovery starts from persisted state.** Restart logic routes by WorkPlan status, not by reconstructing chat history.
 - **Only terminally ineligible subtasks block assembly.** Pending or still-running children are "not ready yet" and re-arm dispatch; only terminal non-eligible states such as failed/blocked/RAI-flagged produce an `assembly_blocked` verdict (`apps/Agentweaver.Api/Coordinator/AssemblyPlanning.cs:30`, `apps/Agentweaver.Api/Coordinator/CoordinatorAssemblyService.cs:563`).
 - **Stale assembly blocks can clear.** If dispatch later observes every subtask eligible, it can advance `assembly_blocked -> awaiting_assembly` so a stale block does not latch forever (`apps/Agentweaver.Api/Coordinator/CoordinatorDispatchService.cs:479`).
-- **Provider choice is not dynamic on the live path.** The live coordinator path directly builds Copilot-backed agents; the Foundry dispatcher seam is plumbed but not active here.
+- **Provider choice is not dynamic on the live path.** The live coordinator path directly builds Copilot-backed agents.
 
 ## Dispatchable-team guard layers
 
@@ -663,7 +663,7 @@ The semantics are deliberately "honest": there is no mid-token or mid-tool magic
 
 Retrying a failed backlog-pickup coordinator creates a fresh parent run with `RetriedFrom` pointing to the source run and preserves the durable backlog-pickup origin and accountable human. It does not silently re-claim or duplicate the backlog task.
 
-## CopilotAIAgent vs AgentRunnerDispatcher
+## Copilot-backed coordinator execution
 
 The live coordinator path is Copilot-backed in multiple places:
 
@@ -674,7 +674,9 @@ The live coordinator path is Copilot-backed in multiple places:
 - child runs are created with `ModelSource.GitHubCopilot`;
 - live workflow execution uses the Copilot workflow turn-agent path.
 
-The provider-neutral `AgentRunnerDispatcher` can route one-shot runner calls to Foundry, but that seam is not active for the live coordinator/run workflow path. Rebuilding provider choice for coordinator execution requires adding an explicit workflow turn-agent selection point and preserving setup, event normalization, tool governance, checkpointing, and child-run semantics for the new provider.
+One-shot runner calls and live coordinator/run workflows use the GitHub Copilot SDK.
+Adding a provider configuration must preserve setup, event normalization, tool
+governance, checkpointing, and child-run semantics.
 
 ## Common failure modes
 

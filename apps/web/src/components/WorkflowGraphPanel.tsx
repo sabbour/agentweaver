@@ -2,6 +2,11 @@ import { apiClient } from '../api/apiClient';
 import {
   Button,
   makeStyles,
+  Menu,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
   mergeClasses,
   MessageBar,
   MessageBarBody,
@@ -37,6 +42,7 @@ import {
   DismissCircleRegular,
   FolderRegular,
   MergeRegular,
+  MoreHorizontalRegular,
   NotebookRegular,
   PersonClockRegular,
   PersonRegular,
@@ -133,6 +139,15 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   interactionTestId?: string;
   /** Prefix used to expose stable source/target handle selectors in the editable canvas. */
   handleTestIdPrefix?: string;
+  /** Marks the workflow entry point in the editable workflow canvas. */
+  isStart?: boolean;
+  /** Editing actions supplied only by the visual workflow editor. */
+  editorActions?: {
+    addNext: () => void;
+    rename: () => void;
+    remove: () => void;
+    select: () => void;
+  };
   /** When true and the node is running, an orange tool-approval badge is shown. */
   hasPendingApproval?: boolean;
   /** Active preview URL associated with a build/test gate. */
@@ -469,6 +484,10 @@ export const useNodeStyles = makeStyles({
       transitionProperty: 'none',
       ':hover': { transform: 'none' },
     },
+    ':focus-visible': {
+      outline: '2px solid #8c837c',
+      outlineOffset: '2px',
+    },
   },
   // Tall pill — subtask (agent) nodes carrying avatar + 2-line title + Name(Role) + credits.
   pillTall: {
@@ -517,6 +536,15 @@ export const useNodeStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
     minWidth: 0,
+  },
+  startBadge: {
+    flexShrink: 0,
+    padding: '1px 6px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorPaletteMarigoldBackground2,
+    color: tokens.colorPaletteMarigoldForeground2,
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
   },
   pillTitle: {
     flex: 1,
@@ -893,6 +921,8 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     connectable,
     interactionTestId,
     handleTestIdPrefix,
+    isStart,
+    editorActions,
   } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent, message } = state;
@@ -1044,6 +1074,11 @@ export function WorkflowNode({ data, selected }: NodeProps) {
             e.preventDefault();
             openSession?.();
           }
+        } : editorActions ? (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            editorActions.select();
+          }
         } : undefined}
       >
         {dir === 'GRID' ? (
@@ -1079,6 +1114,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
         <div className={s.pillBody}>
           <div className={s.pillTitleRow}>
             <span className={s.pillTitle}>{label}</span>
+            {isStart && <span className={s.startBadge}>Start</span>}
           </div>
           {subText && <span className={s.pillSub}>{subText}</span>}
           {showFaceReviewAction && (
@@ -1092,6 +1128,31 @@ export function WorkflowNode({ data, selected }: NodeProps) {
             </div>
           )}
         </div>
+        {editorActions && (
+          <div className={mergeClasses(s.pillFaceActions, 'nopan', 'nodrag')}>
+            <Button
+              appearance="outline"
+              size="small"
+              onClick={(event) => {
+                event.stopPropagation();
+                editorActions.addNext();
+              }}
+            >
+              Add next step
+            </Button>
+            <Menu>
+              <MenuTrigger disableButtonEnhancement>
+                <Button appearance="subtle" size="small" icon={<MoreHorizontalRegular />} aria-label={`Actions for ${label}`} />
+              </MenuTrigger>
+              <MenuPopover>
+                <MenuList>
+                  <MenuItem onClick={editorActions.rename}>Rename</MenuItem>
+                  <MenuItem onClick={editorActions.remove}>Delete</MenuItem>
+                </MenuList>
+              </MenuPopover>
+            </Menu>
+          </div>
+        )}
       </div>
       {modelCaption && <span className={s.pillModelCaption} title={modelCaption}>{modelCaption}</span>}
     </div>

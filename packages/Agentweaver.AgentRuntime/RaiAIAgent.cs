@@ -22,8 +22,10 @@ public sealed class RaiAIAgent : CopilotAIAgent
         ISandboxPolicyStore sandboxPolicyStore,
         IShellApprovalStore approvalStore,
         IToolApprovalGate toolApprovalGate,
-        ILogger<CopilotAIAgent> logger)
-        : base(factory, executor, sandboxPolicyStore, approvalStore, toolApprovalGate, logger)
+        ILogger<CopilotAIAgent> logger,
+        IByokProviderConfigurationProvider? byokProviderConfiguration = null)
+        : base(factory, executor, sandboxPolicyStore, approvalStore, toolApprovalGate, logger,
+            byokProviderConfiguration: byokProviderConfiguration)
     {
     }
 

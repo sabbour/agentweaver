@@ -1,5 +1,6 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { formatApiErrorMessage } from '../api/errors';
 import { GitHubCopilotConnectionPicker } from '../components/GitHubCopilotConnectionPicker';
 import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
@@ -7,6 +8,7 @@ import {
   Badge,
   Button,
   Checkbox,
+  Divider,
   Field,
   Input,
   MessageBar,
@@ -18,7 +20,7 @@ import {
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import { Branch24Regular, Delete24Regular, People24Regular, Settings24Regular, Shield24Regular } from '@fluentui/react-icons';
+import { Branch24Regular, Delete24Regular, People24Regular, Settings24Regular, Shield24Regular, Wrench24Regular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
@@ -91,15 +93,15 @@ const SECTIONS: SectionDef[] = [
   },
   {
     id: 'unattended',
-    label: 'Unattended',
-    description: 'Review safe automation prerequisites for this project.',
+    label: 'Background',
+    description: 'Review safe background automation prerequisites for this project.',
     icon: <Shield24Regular />,
   },
   {
     id: 'sandbox',
     label: 'Sandbox policy',
     description: 'Control how agent commands execute and what they may reach.',
-    icon: <Shield24Regular />,
+    icon: <Wrench24Regular />,
   },
   {
     id: 'danger',
@@ -359,12 +361,7 @@ export function ProjectSettingsPage() {
   const [unattendedLoading, setUnattendedLoading] = useState(true);
   const [unattendedError, setUnattendedError] = useState<string | null>(null);
 
-  const formatError = (err: unknown): string =>
-    err instanceof ApiError
-      ? `API error ${err.status}: ${err.body}`
-      : err instanceof Error
-        ? err.message
-        : String(err);
+  const formatError = (err: unknown): string => formatApiErrorMessage(err);
 
   useEffect(() => {
     if (!projectId) return;
@@ -704,7 +701,7 @@ export function ProjectSettingsPage() {
               <MetricRow items={[
                 { label: 'Project', value: project.name },
                 { label: 'Working directory', value: project.working_directory ?? 'Not configured' },
-                { label: 'Default provider', value: project.default_provider ?? 'github-copilot' },
+                { label: 'AI source', value: 'Deployment setting' },
                 { label: 'Authentication mode', value: authModeLabel },
                 { label: 'Your project role', value: projectRoleSummary },
               ]} />
@@ -712,6 +709,13 @@ export function ProjectSettingsPage() {
 
             {displayedSection === 'general' && (
               <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>AI source</TitleText>
+                  <Body as="p" tone="muted">
+                    This project uses the AI source configured for the deployment. Change it in Platform settings.
+                  </Body>
+                </div>
+
                 <div className={styles.subBlock}>
                   <TitleText>Rename project</TitleText>
                   <Field
@@ -978,9 +982,9 @@ export function ProjectSettingsPage() {
             {displayedSection === 'unattended' && (
               <div className={styles.section}>
                 <div className={styles.subBlock}>
-                  <TitleText>Automation readiness</TitleText>
+                  <TitleText>Background automation readiness</TitleText>
                   <Body as="p" tone="muted">
-                    This read-only status reports the server-verified prerequisites for unattended work.
+                    This read-only status reports the server-verified prerequisites for background work.
                     This page does not enable or activate automation.
                   </Body>
                   <TitleText>GitHub Copilot account</TitleText>
@@ -988,6 +992,11 @@ export function ProjectSettingsPage() {
                     Connect or switch the project-scoped GitHub account used for Copilot capabilities.
                   </Body>
                   <GitHubCopilotConnectionPicker projectId={projectId} showConnectionStatus />
+                  <Divider />
+                  <TitleText>Background requirements</TitleText>
+                  <Body as="p" tone="muted">
+                    Background runs need the following server-verified prerequisites.
+                  </Body>
                   {unattendedLoading && <Spinner label="Checking automation readiness" size="extra-tiny" />}
                   {unattendedReadiness && (
                     <>

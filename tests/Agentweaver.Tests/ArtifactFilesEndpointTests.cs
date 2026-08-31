@@ -151,7 +151,21 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
     }
 
     [Fact]
-    public async Task InProgressRun_WithIncompleteWorktreeMetadata_ReturnsServerError()
+    public async Task InProgressRun_WithoutWorktreePath_ReturnsEmptyWorkspaceWhileProvisioning()
+    {
+        var runId = await InsertOwnerRunAsync(RunStatus.InProgress);
+
+        var response = await _ownerClient.GetAsync($"/api/runs/{runId}/workspace");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "an active run may be visible before asynchronous worktree provisioning completes");
+        var workspace = await response.Content.ReadFromJsonAsync<JsonElement>();
+        workspace.ValueKind.Should().Be(JsonValueKind.Array);
+        workspace.GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task InProgressRun_WithIncompleteWorktreeMetadata_ReturnsEmptyArrayWhileProvisioning()
     {
         const string persistedPath = @"C:\worktrees\incomplete-run";
         var runId = await InsertOwnerRunAsync(
@@ -160,9 +174,11 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
 
         var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files?filter=all");
 
-        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError,
-            "a partially persisted worktree is corrupt metadata, not an unprovisioned run");
-        (await response.Content.ReadAsStringAsync()).Should().NotContain(persistedPath);
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "worktree metadata is persisted asynchronously and must not surface as a retryable server error");
+        var files = await response.Content.ReadFromJsonAsync<JsonElement>();
+        files.ValueKind.Should().Be(JsonValueKind.Array);
+        files.GetArrayLength().Should().Be(0);
     }
 
     [Fact]

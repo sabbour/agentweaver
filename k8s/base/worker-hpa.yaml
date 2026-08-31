@@ -1,6 +1,6 @@
 # worker-hpa.yaml — Autoscaling for the agentweaver-worker Deployment.
 #
-# CURRENT: CPU-based HPA (min 1 / max 3, target 70% CPU utilization).
+# CURRENT: CPU-based HPA (min 2 / max 3, target 70% CPU utilization).
 # This is the fallback per platform-deployment.md §2.3: "if KEDA is unavailable,
 # fall back to an HPA on a custom 'queued runs' metric exported via OTEL/Prometheus".
 #
@@ -59,10 +59,10 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: agentweaver-worker
-  # min 1: workers must always be running to drain leases (never scale-to-zero).
+  # min 2: preserves one worker during a voluntary disruption (worker PDB).
   # max 3: conservative ceiling for staging; raise once quota.yaml ceilings are adjusted
   #        (platform-deployment.md §3.2) and KEDA/lease-depth scaling is validated.
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 3
   metrics:
     - type: Resource
@@ -94,9 +94,9 @@ spec:
           value: 1
           periodSeconds: 30
 ---
-# PDB — allow at most one worker pod to be unavailable at a time.
-# Ensures lease drain happens one pod at a time; avoids simultaneous lease expiry
-# across all replicas during node maintenance (platform-deployment.md §2.4).
+# PDB — retain one worker while allowing one voluntary disruption at a time.
+# The worker HPA floor is two replicas, so minAvailable: 1 does not block all
+# node-drain or rolling-maintenance disruptions.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -106,7 +106,7 @@ metadata:
     app: agentweaver-worker
     app.kubernetes.io/part-of: agentweaver
 spec:
-  maxUnavailable: 1
+  minAvailable: 1
   selector:
     matchLabels:
       app: agentweaver-worker

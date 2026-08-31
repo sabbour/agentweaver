@@ -95,7 +95,7 @@ active installation, canonical repository grant, and unchanged permission digest
 or sandbox route exposes the broker. Repository and Copilot adapter delivery is owned by #947;
 this broker layer never configures a sandbox or model process.
 
-Two-App credential reads use current secret versions only. Revocation writes a tombstone before
+GitHub connections credential reads use current secret versions only. Revocation writes a tombstone before
 deleting the current value. Azure Key Vault soft-delete and purge protection can retain older
 provider versions for the configured retention period; this is an accepted recovery risk,
 mitigated by retention policy and least-privilege Key Vault RBAC that forbids versioned reads
@@ -132,6 +132,16 @@ or used for unattended work until its registration has zero permissions.
 | `Auth:CopilotApp:Scopes` | `read:user` | Explicit non-repository user-authorization scopes |
 | `Auth:CopilotApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for the fixed callback route |
 | `Auth:CopilotApp:SecretPath` | none | Optional Key Vault path; must not equal the Repo App secret path |
+
+The same Copilot App registration also serves the deployment-wide
+**platform-default Copilot** connection used by GitHub Copilot mode when no BYOK
+provider is saved. Agentweaver derives a sibling callback route
+`/auth/github/platform-default-copilot/callback` from
+`Auth:CopilotApp:CallbackUrl`; a Platform Admin starts that flow from
+**Platform settings**. Register both callback routes on the same Copilot App:
+the configured project route and the derived platform-default sibling route. The
+saved binding is singleton platform state, separate from every project-scoped
+Copilot binding.
 
 When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
 GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)

@@ -56,7 +56,6 @@ rules:
     resources:
       - services
     verbs:
-      - get
       - list
       - create
       - delete
@@ -138,6 +137,15 @@ rules:
       - get
       - list
       - patch
+  # The worker's preview orphan sweep lists preview Services before it can safely
+  # delete stale sandbox claims. It remains read-only for Service resources.
+  - apiGroups:
+      - ""
+    resources:
+      - services
+    verbs:
+      - get
+      - list
   # #578: read-only access to per-preview HTTPRoutes so the worker's
   # AgentHostReaperService.HasActivePreviewAsync can see a live preview and defer the
   # orphan reap. The worker never creates or deletes routes — that stays with the API.

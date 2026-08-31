@@ -18,7 +18,7 @@ Source: `apps/Agentweaver.Api/Endpoints/ProjectEndpoints.cs:258`.
 |---|---|---|
 | `default_provider` | string \| null | Existing default provider field. |
 | `default_model_github_copilot` | string \| null | Existing default GitHub Copilot run model. |
-| `default_model_microsoft_foundry` | string \| null | Existing default Foundry run model. |
+| `default_model_microsoft_foundry` | string \| null | Existing default BYOK run model; the legacy field name remains supported. |
 | `blueprint_generation_model` | string \| null | Model id for blueprint JSON generation. Null inherits the configured blueprint generation default. |
 | `workflow_generation_model` | string \| null | Model id for generated workflow fallback. Null inherits the configured workflow generation default. |
 | `outcome_spec_generation_model` | string \| null | Model id for coordinator outcome-spec drafting. Null inherits the configured outcome-spec generation default. |

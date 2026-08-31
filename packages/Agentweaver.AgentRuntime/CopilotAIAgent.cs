@@ -74,6 +74,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly IRunOptionsStore? _runOptions;
     private readonly IEnumerable<IAgentRuntimeToolProvider> _toolProviders;
     private readonly ISandboxRepositoryCredentialProvider? _repositoryCredentialProvider;
+    private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
+    private ByokProviderConfiguration? _activeByokProviderConfiguration;
 
     // Names of tools built by an IAgentRuntimeToolProvider and wrapped in
     // InstrumentedCustomAIFunction (populated fresh on every RebuildInnerAgent call). The
@@ -262,7 +264,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         IQuestionGate? questionGate = null,
         IRunOptionsStore? runOptions = null,
         IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
-        ISandboxRepositoryCredentialProvider? repositoryCredentialProvider = null)
+        ISandboxRepositoryCredentialProvider? repositoryCredentialProvider = null,
+        IByokProviderConfigurationProvider? byokProviderConfiguration = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
@@ -274,6 +277,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _runOptions = runOptions;
         _toolProviders = toolProviders ?? [];
         _repositoryCredentialProvider = repositoryCredentialProvider;
+        _byokProviderConfiguration = byokProviderConfiguration;
     }
 
     /// <summary>
@@ -376,7 +380,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _activeExecutor = executor;
         _governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        _client = await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false);
+        _activeByokProviderConfiguration = _byokProviderConfiguration is null
+            ? null
+            : await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
+        _client = _activeByokProviderConfiguration is null
+            ? await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false)
+            : _factory.CreateByokClient();
         try
         {
             await _client.StartAsync(ct).ConfigureAwait(false);
@@ -537,7 +546,14 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     ? BuildBasePrompt(_includeTeamCoordinationPrompt)
                     : BuildBasePrompt(_includeTeamCoordinationPrompt) + "\n\n" + _systemPromptContext,
             },
-            Model = _modelId,
+            Model = _activeByokProviderConfiguration?.Model ?? _modelId,
+            Provider = _activeByokProviderConfiguration is null ? null : new GitHub.Copilot.ProviderConfig
+            {
+                Type = _activeByokProviderConfiguration.Type,
+                BaseUrl = _activeByokProviderConfiguration.BaseUrl,
+                ApiKey = _activeByokProviderConfiguration.ApiKey,
+                WireApi = "responses",
+            },
             // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
             // cross-session retrieval and the shared SQLite store causes "database is locked" under
             // concurrent load with multiple replicas.

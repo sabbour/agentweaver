@@ -19,6 +19,8 @@ import {
   MessageBar,
   MessageBarBody,
   Option,
+  Tab,
+  TabList,
   Text,
   Textarea,
   tokens,
@@ -31,10 +33,8 @@ import {
   BeakerRegular,
   BranchRegular,
   CheckmarkCircleRegular,
-  CodeRegular,
   DeleteRegular,
   DismissRegular,
-  EyeRegular,
   FlagRegular,
   FlowchartRegular,
   PeopleTeamRegular,
@@ -45,7 +45,6 @@ import {
   TextBulletListLtrRegular,
   WarningRegular,
 } from '@fluentui/react-icons';
-import { EmptyState, PageHeader } from './ui';
 import { ScheduleTriggerDialog } from './ScheduleTriggerDialog';
 import { DAG_NODE_SEP,
   layoutDag,
@@ -258,6 +257,18 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     borderRadius: tokens.borderRadiusLarge,
   },
+  compactHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: '32px',
+    gap: tokens.spacingHorizontalM,
+  },
+  modeActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
   identityGrid: {
     display: 'grid',
     gridTemplateColumns: '1fr 1fr',
@@ -300,7 +311,7 @@ const useStyles = makeStyles({
     },
   },
   canvasPane: {
-    flexBasis: '60%',
+    flexBasis: '68%',
     flexGrow: 1,
     overflow: 'hidden',
     position: 'relative',
@@ -312,7 +323,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-    flexBasis: '40%',
+    flexBasis: '32%',
     overflowY: 'auto',
     maxHeight: '560px',
     padding: tokens.spacingHorizontalL,
@@ -335,6 +346,16 @@ const useStyles = makeStyles({
     left: tokens.spacingHorizontalS,
     zIndex: 5,
   },
+  canvasMessages: {
+    position: 'absolute',
+    top: tokens.spacingVerticalS,
+    right: tokens.spacingHorizontalS,
+    zIndex: 5,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    maxWidth: 'min(560px, calc(100% - 156px))',
+  },
   yamlArea: {
     flexGrow: 1,
     width: '100%',
@@ -350,6 +371,10 @@ const useStyles = makeStyles({
     resize: 'vertical',
     outline: 'none',
     boxSizing: 'border-box',
+    ':focus-visible': {
+      outline: '2px solid #8c837c',
+      outlineOffset: '2px',
+    },
   },
   footer: {
     display: 'flex',
@@ -413,6 +438,12 @@ function buildGraph(
   positions: Map<string, { x: number; y: number }>,
   selectedNodeId: string | null,
   selectedEdgeIndex: number | null,
+  editorActions?: {
+    addNext: (nodeId: string) => void;
+    rename: (nodeId: string) => void;
+    remove: (nodeId: string) => void;
+    select: (nodeId: string) => void;
+  },
 ): { rfNodes: Node[]; rfEdges: Edge[] } {
   const order = new Map(model.nodes.map((n, i) => [n.id, i]));
 
@@ -459,6 +490,13 @@ function buildGraph(
         connectable: true,
         interactionTestId: `workflow-node-${n.id}`,
         handleTestIdPrefix: `workflow-node-${n.id}-handle`,
+        isStart: n.id === model.start,
+        editorActions: editorActions && (n.type === 'prompt' || n.type === 'publish') ? {
+          addNext: () => editorActions.addNext(n.id),
+          rename: () => editorActions.rename(n.id),
+          remove: () => editorActions.remove(n.id),
+          select: () => editorActions.select(n.id),
+        } : undefined,
       } as WorkflowNodeData,
     };
   });
@@ -540,6 +578,10 @@ export function VisualWorkflowEditor({
   const [selectedEdgeSelection, setSelectedEdgeSelection] = useState<EdgeSelection | null>(null);
   const [rightMode, setRightMode] = useState<'inspector' | 'yaml'>('inspector');
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [lastSavedYaml, setLastSavedYaml] = useState(initialYaml);
+  const [undoStack, setUndoStack] = useState<string[]>([]);
+  const [redoStack, setRedoStack] = useState<string[]>([]);
+  const [validationResult, setValidationResult] = useState<{ intent: 'success' | 'error'; message: string } | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<{ message: string; line: number | null } | null>(null);
@@ -549,15 +591,64 @@ export function VisualWorkflowEditor({
   // selection while YAML-derived node and edge objects are replaced.
   const selectedNodeIdRef = useRef(selectedNodeId);
   const selectedEdgeSelectionRef = useRef(selectedEdgeSelection);
-  const isDirty = yamlText !== initialYaml;
+  const isDirty = yamlText !== lastSavedYaml;
   const isDirtyRef = useRef(isDirty);
+  const yamlTextRef = useRef(yamlText);
   useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
+  useEffect(() => { yamlTextRef.current = yamlText; }, [yamlText]);
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => { if (isDirtyRef.current) e.preventDefault(); };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, []);
+
+  const updateYamlText = useCallback((updater: (text: string) => string) => {
+    const current = yamlTextRef.current;
+    const next = updater(current);
+    if (next === current) return;
+    setUndoStack((stack) => [...stack, current].slice(-50));
+    setRedoStack([]);
+    setValidationResult(null);
+    setYamlText(next);
+  }, []);
+
+  const selectNode = useCallback((nodeId: string) => {
+    selectedNodeIdRef.current = nodeId;
+    selectedEdgeSelectionRef.current = null;
+    setSelectedNodeId(nodeId);
+    setSelectedEdgeSelection(null);
+    setRightMode('inspector');
+  }, []);
+
+  const addNextStep = useCallback((sourceId: string) => {
+    updateYamlText((text) => {
+      const existing = new Set((parseWorkflowYaml(text).model?.nodes ?? []).map((node) => node.id));
+      let number = 1;
+      let id = `prompt-${number}`;
+      while (existing.has(id)) { number += 1; id = `prompt-${number}`; }
+      selectNode(id);
+      return addEdge(addNode(text, { id, type: 'prompt' }), sourceId, id);
+    });
+  }, [selectNode, updateYamlText]);
+
+  const deleteNodeById = useCallback((id: string) => {
+    positionsRef.current.delete(id);
+    selectedNodeIdRef.current = null;
+    selectedEdgeSelectionRef.current = null;
+    setSelectedNodeId(null);
+    setSelectedEdgeSelection(null);
+    updateYamlText((text) => removeNode(text, id));
+  }, [updateYamlText]);
+
+  const promptRenameNode = useCallback((id: string) => {
+    const nextId = window.prompt('Rename node', id)?.trim();
+    if (!nextId || nextId === id) return;
+    const pos = positionsRef.current.get(id);
+    if (pos) { positionsRef.current.delete(id); positionsRef.current.set(nextId, pos); }
+    selectNode(nextId);
+    updateYamlText((text) => renameNode(text, id, nextId));
+  }, [selectNode, updateYamlText]);
 
   // Re-derive the graph whenever the canonical YAML changes (either surface).
   useEffect(() => {
@@ -588,13 +679,19 @@ export function VisualWorkflowEditor({
           positionsRef.current,
           selectedNodeIdRef.current,
           selectedEdgeIndex,
+          {
+            addNext: addNextStep,
+            rename: promptRenameNode,
+            remove: deleteNodeById,
+            select: selectNode,
+          },
         );
         setNodes(rfNodes);
         setEdges(rfEdges);
       }
     };
     void syncGraph();
-  }, [yamlText]);
+  }, [addNextStep, deleteNodeById, promptRenameNode, selectNode, yamlText]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setNodes((nds) => applyNodeChanges(changes, nds));
@@ -605,12 +702,12 @@ export function VisualWorkflowEditor({
 
   const onConnect = useCallback((conn: Connection) => {
     if (!conn.source || !conn.target) return;
-    setYamlText((t) => addEdge(t, conn.source as string, conn.target as string));
-  }, []);
+    updateYamlText((t) => addEdge(t, conn.source as string, conn.target as string));
+  }, [updateYamlText]);
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
-    setYamlText((t) => deleted.reduce((acc, n) => removeNode(acc, n.id), t));
-  }, []);
+    updateYamlText((t) => deleted.reduce((acc, n) => removeNode(acc, n.id), t));
+  }, [updateYamlText]);
 
   const onEdgesDelete = useCallback((deleted: Edge[]) => {
     const indices = [...new Set(deleted
@@ -640,8 +737,8 @@ export function VisualWorkflowEditor({
       }
     }
 
-    setYamlText((t) => indices.reduce((acc, i) => removeEdgeAt(acc, i), t));
-  }, [model]);
+    updateYamlText((t) => indices.reduce((acc, i) => removeEdgeAt(acc, i), t));
+  }, [model, updateYamlText]);
 
   const onSelectionChange = useCallback((params: OnSelectionChangeParams) => {
     const nodeId = params.nodes[0]?.id ?? null;
@@ -656,7 +753,7 @@ export function VisualWorkflowEditor({
   }, [model]);
 
   const handleAddNode = useCallback((type: string) => {
-    setYamlText((t) => {
+    updateYamlText((t) => {
       const existing = new Set((parseWorkflowYaml(t).model?.nodes ?? []).map((n) => n.id));
       let i = 1;
       let id = `${type}-${i}`;
@@ -668,10 +765,10 @@ export function VisualWorkflowEditor({
       setRightMode('inspector');
       return addNode(t, { id, type });
     });
-  }, []);
+  }, [updateYamlText]);
 
   const handleAddSpecialGate = useCallback((gate: (typeof SPECIAL_GATES)[number]) => {
-    setYamlText((t) => {
+    updateYamlText((t) => {
       const existing = new Set((parseWorkflowYaml(t).model?.nodes ?? []).map((n) => n.id));
       let i = 1;
       let id = `${gate.key}-${i}`;
@@ -692,7 +789,7 @@ export function VisualWorkflowEditor({
         branches: gate.type === 'check' ? [...gate.branches] : undefined,
       });
     });
-  }, []);
+  }, [updateYamlText]);
 
   const selectedNode = useMemo(
     () => model?.nodes.find((n) => n.id === selectedNodeId) ?? null,
@@ -727,31 +824,25 @@ export function VisualWorkflowEditor({
     if (pos) { positionsRef.current.delete(oldId); positionsRef.current.set(newId, pos); }
     selectedNodeIdRef.current = newId;
     setSelectedNodeId(newId);
-    setYamlText((t) => renameNode(t, oldId, newId));
-  }, []);
+    updateYamlText((t) => renameNode(t, oldId, newId));
+  }, [updateYamlText]);
 
   const handleNodeField = useCallback((id: string, field: string, value: string) => {
-    setYamlText((t) => setNodeField(t, id, field, value));
-  }, []);
+    updateYamlText((t) => setNodeField(t, id, field, value));
+  }, [updateYamlText]);
 
   const handleBranchesField = useCallback((id: string, branches: string[]) => {
-    setYamlText((t) => setNodeStringArrayField(t, id, 'branches', branches));
-  }, []);
+    updateYamlText((t) => setNodeStringArrayField(t, id, 'branches', branches));
+  }, [updateYamlText]);
 
   const handleBranchTarget = useCallback((id: string, branch: string, target: string) => {
-    setYamlText((t) => setBranchTarget(t, id, branch, target));
-  }, []);
+    updateYamlText((t) => setBranchTarget(t, id, branch, target));
+  }, [updateYamlText]);
 
   const handleDeleteSelectedNode = useCallback(() => {
     if (!selectedNodeId) return;
-    const id = selectedNodeId;
-    positionsRef.current.delete(id);
-    selectedNodeIdRef.current = null;
-    selectedEdgeSelectionRef.current = null;
-    setSelectedNodeId(null);
-    setSelectedEdgeSelection(null);
-    setYamlText((t) => removeNode(t, id));
-  }, [selectedNodeId]);
+    deleteNodeById(selectedNodeId);
+  }, [deleteNodeById, selectedNodeId]);
 
   const handleEdgeField = useCallback((index: number, field: string, value: string) => {
     const edge = model?.edges[index];
@@ -762,28 +853,73 @@ export function VisualWorkflowEditor({
       selectedEdgeSelectionRef.current = selection;
       setSelectedEdgeSelection(selection);
     }
-    setYamlText((t) => setEdgeFieldAt(t, index, field, value));
-  }, [model]);
+    updateYamlText((t) => setEdgeFieldAt(t, index, field, value));
+  }, [model, updateYamlText]);
 
   const handleDeleteSelectedEdge = useCallback(() => {
     if (selectedEdgeIndex == null) return;
     const idx = selectedEdgeIndex;
     selectedEdgeSelectionRef.current = null;
     setSelectedEdgeSelection(null);
-    setYamlText((t) => removeEdgeAt(t, idx));
-  }, [selectedEdgeIndex]);
+    updateYamlText((t) => removeEdgeAt(t, idx));
+  }, [selectedEdgeIndex, updateYamlText]);
 
   const handleScheduleSave = useCallback((trigger: NonNullable<ReturnType<typeof getScheduleTrigger>>) => {
-    setYamlText((text) => setScheduleTrigger(text, trigger));
+    updateYamlText((text) => setScheduleTrigger(text, trigger));
     setSaveError(null);
     setScheduleOpen(false);
-  }, []);
+  }, [updateYamlText]);
 
   const handleScheduleRemove = useCallback(() => {
-    setYamlText((text) => setScheduleTrigger(text, null));
+    updateYamlText((text) => setScheduleTrigger(text, null));
     setSaveError(null);
     setScheduleOpen(false);
-  }, []);
+  }, [updateYamlText]);
+
+  const handleUndo = useCallback(() => {
+    const previous = undoStack.at(-1);
+    if (previous === undefined) return;
+    setUndoStack((stack) => stack.slice(0, -1));
+    setRedoStack((stack) => [...stack, yamlText].slice(-50));
+    setYamlText(previous);
+  }, [undoStack, yamlText]);
+
+  const handleRedo = useCallback(() => {
+    const next = redoStack.at(-1);
+    if (next === undefined) return;
+    setRedoStack((stack) => stack.slice(0, -1));
+    setUndoStack((stack) => [...stack, yamlText].slice(-50));
+    setYamlText(next);
+  }, [redoStack, yamlText]);
+
+  const handleRevertToLastSave = useCallback(() => {
+    updateYamlText(() => lastSavedYaml);
+  }, [lastSavedYaml, updateYamlText]);
+
+  const handleDiscard = useCallback(() => {
+    setYamlText(lastSavedYaml);
+    setUndoStack([]);
+    setRedoStack([]);
+    setSaveError(null);
+    setValidationResult(null);
+  }, [lastSavedYaml]);
+
+  const handleValidate = useCallback(() => {
+    const parsed = parseWorkflowYaml(yamlText);
+    if (!parsed.model) {
+      setValidationResult({ intent: 'error', message: `Validation failed: YAML is not parseable. ${parsed.error ?? ''}` });
+      return;
+    }
+    const unrouted = unroutedVerdicts(parsed.model);
+    if (unrouted.length > 0) {
+      setValidationResult({
+        intent: 'error',
+        message: `Validation failed: ${unrouted.map((item) => `${item.nodeId} has unrouted verdicts (${item.verdicts.join(', ')})`).join('; ')}.`,
+      });
+      return;
+    }
+    setValidationResult({ intent: 'success', message: 'Validation passed: YAML parses and every declared gate verdict is routed.' });
+  }, [yamlText]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -791,6 +927,9 @@ export function VisualWorkflowEditor({
     const id = readWorkflowId(yamlText, workflowId);
     try {
       const saved = await apiClient.saveWorkflowYaml(projectId, id, yamlText);
+      setLastSavedYaml(yamlText);
+      setUndoStack([]);
+      setRedoStack([]);
       onSave?.(saved);
     } catch (err) {
       setSaveError(parseApiError400(err));
@@ -829,10 +968,12 @@ export function VisualWorkflowEditor({
 
   return (
     <div className={styles.root}>
-      <PageHeader
-        title={model?.name || workflowId}
-        description={model?.id ?? workflowId}
-        actions={
+      <div className={styles.compactHeader}>
+        <TabList selectedValue="build" aria-label="Workflow mode">
+          <Tab value="build">Build</Tab>
+        </TabList>
+        <div className={styles.modeActions}>
+          <Button appearance="secondary" size="small" onClick={handleValidate}>Validate</Button>
           <Button
             appearance="subtle"
             size="small"
@@ -840,74 +981,8 @@ export function VisualWorkflowEditor({
             onClick={handleClose}
             aria-label="Close"
           />
-        }
-      />
-      <div className={styles.identityGrid}>
-        <Field label="Workflow id">
-          <Input
-            value={model?.id ?? ''}
-            onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'id', d.value))}
-          />
-        </Field>
-        <Field label="Name">
-          <Input
-            value={model?.name ?? ''}
-            onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'name', d.value))}
-          />
-        </Field>
-        <Field
-          label="Description"
-          hint="The coordinator reads this to decide when to select this workflow."
-          className={styles.identityWide}
-        >
-          <Textarea
-            value={model?.description ?? ''}
-            onChange={(_, d) => setYamlText((t) => setHeaderField(t, 'description', d.value))}
-            rows={2}
-          />
-        </Field>
-        <div className={styles.scheduleRow}>
-          <div className={styles.scheduleSummary}>
-            <Text weight="semibold">Schedule trigger</Text>
-            {scheduleTrigger ? (
-              <Badge appearance="tint" color="informative">
-                {scheduleTriggerLabel(scheduleTrigger)}
-              </Badge>
-            ) : (
-              <Text size={200}>{eventTrigger ? 'No schedule configured' : 'Manual only'}</Text>
-            )}
-          </div>
-          <Button
-            appearance="secondary"
-            disabled={Boolean(parseError)}
-            onClick={() => setScheduleOpen(true)}
-          >
-            {scheduleTrigger ? 'Edit schedule trigger' : 'Add schedule trigger'}
-          </Button>
         </div>
       </div>
-
-      {parseError && (
-        <MessageBar intent="warning">
-          <MessageBarBody>YAML not parseable — showing last valid graph. {parseError}</MessageBarBody>
-        </MessageBar>
-      )}
-
-      {warnings.length > 0 && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            {warnings.map((w) => `Gate "${w.nodeId}" has unrouted verdict(s): ${w.verdicts.join(', ')}`).join(' · ')}
-          </MessageBarBody>
-        </MessageBar>
-      )}
-
-      {saveError && (
-        <MessageBar intent="error">
-          <MessageBarBody>
-            {saveError.line != null ? `Line ${saveError.line}: ${saveError.message}` : saveError.message}
-          </MessageBarBody>
-        </MessageBar>
-      )}
 
       <div className={styles.split}>
         <div className={styles.canvasPane} data-testid="workflow-canvas">
@@ -942,6 +1017,32 @@ export function VisualWorkflowEditor({
               </MenuPopover>
             </Menu>
           </div>
+          <div className={styles.canvasMessages} aria-live="polite">
+            {parseError && (
+              <MessageBar intent="warning">
+                <MessageBarBody>YAML not parseable — showing last valid graph. {parseError}</MessageBarBody>
+              </MessageBar>
+            )}
+            {warnings.length > 0 && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  {warnings.map((w) => `Gate "${w.nodeId}" has unrouted verdict(s): ${w.verdicts.join(', ')}`).join(' · ')}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {saveError && (
+              <MessageBar intent="error">
+                <MessageBarBody>
+                  {saveError.line != null ? `Line ${saveError.line}: ${saveError.message}` : saveError.message}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {validationResult && (
+              <MessageBar intent={validationResult.intent}>
+                <MessageBarBody>{validationResult.message}</MessageBarBody>
+              </MessageBar>
+            )}
+          </div>
           <ExecutionModalContext.Provider value={undefined}>
             <ActiveEdgeContext.Provider value={undefined}>
               <ReactFlow
@@ -969,30 +1070,33 @@ export function VisualWorkflowEditor({
         </div>
 
         <div className={styles.sidePane}>
-          <div className={styles.paneHeader}>
-            <Text weight="semibold">
-              {rightMode === 'yaml' ? 'YAML' : 'Inspector'}
-            </Text>
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={rightMode === 'yaml' ? <EyeRegular /> : <CodeRegular />}
-              onClick={() => setRightMode((m) => (m === 'yaml' ? 'inspector' : 'yaml'))}
-            >
-              {rightMode === 'yaml' ? 'Inspector' : 'View YAML'}
-            </Button>
-          </div>
+          <TabList
+            selectedValue={rightMode}
+            onTabSelect={(_, data) => setRightMode(data.value as 'inspector' | 'yaml')}
+            aria-label="Workflow editor panel"
+          >
+            <Tab id="workflow-inspector-tab" value="inspector" aria-controls="workflow-inspector-panel">Inspector</Tab>
+            <Tab id="workflow-yaml-tab" value="yaml" aria-controls="workflow-yaml-panel">YAML</Tab>
+          </TabList>
 
           {rightMode === 'yaml' && (
-            <textarea
-              className={styles.yamlArea}
-              value={yamlText}
-              onChange={(e) => { setYamlText(e.target.value); setSaveError(null); }}
-              spellCheck={false}
-              aria-label="Workflow YAML"
-            />
+            <div id="workflow-yaml-panel" role="tabpanel" aria-labelledby="workflow-yaml-tab">
+              <textarea
+                className={styles.yamlArea}
+                value={yamlText}
+                onChange={(e) => { updateYamlText(() => e.target.value); setSaveError(null); }}
+                spellCheck={false}
+                aria-label="Workflow YAML"
+              />
+            </div>
           )}
 
+          <div
+            id="workflow-inspector-panel"
+            role="tabpanel"
+            aria-labelledby="workflow-inspector-tab"
+            hidden={rightMode !== 'inspector'}
+          >
           {rightMode === 'inspector' && selectedNode && (
             <>
               {selectedReadOnly && (
@@ -1142,11 +1246,71 @@ export function VisualWorkflowEditor({
           )}
 
           {rightMode === 'inspector' && !selectedNode && !selectedEdge && (
-            <EmptyState
-              title="Select a node or edge"
-              description="Edit its properties, drag from a node handle to connect, or use Add node."
-            />
+            <>
+              <Text weight="semibold">Workflow details</Text>
+              <div className={styles.identityGrid}>
+                <Field label="Workflow id">
+                  <Input
+                    value={model?.id ?? ''}
+                    onChange={(_, d) => updateYamlText((t) => setHeaderField(t, 'id', d.value))}
+                  />
+                </Field>
+                <Field label="Name">
+                  <Input
+                    value={model?.name ?? ''}
+                    onChange={(_, d) => updateYamlText((t) => setHeaderField(t, 'name', d.value))}
+                  />
+                </Field>
+                <Field
+                  label="Description"
+                  hint="The coordinator reads this to decide when to select this workflow."
+                  className={styles.identityWide}
+                >
+                  <Textarea
+                    value={model?.description ?? ''}
+                    onChange={(_, d) => updateYamlText((t) => setHeaderField(t, 'description', d.value))}
+                    rows={2}
+                  />
+                </Field>
+                <Field label="Start node" hint="The first node run by this workflow.">
+                  <Dropdown
+                    selectedOptions={model?.start ? [model.start] : []}
+                    value={model?.start ?? ''}
+                    onOptionSelect={(_, d) => {
+                      const start = d.optionValue;
+                      if (start) updateYamlText((t) => setHeaderField(t, 'start', start));
+                    }}
+                  >
+                    {(model?.nodes ?? []).map((node) => (
+                      <Option key={node.id} value={node.id} text={node.label || node.id}>
+                        {node.label || node.id}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                <div className={styles.scheduleRow}>
+                  <div className={styles.scheduleSummary}>
+                    <Text weight="semibold">Schedule trigger</Text>
+                    {scheduleTrigger ? (
+                      <Badge appearance="tint" color="informative">
+                        {scheduleTriggerLabel(scheduleTrigger)}
+                      </Badge>
+                    ) : (
+                      <Text size={200}>{eventTrigger ? 'No schedule configured' : 'Manual only'}</Text>
+                    )}
+                  </div>
+                  <Button
+                    appearance="secondary"
+                    disabled={Boolean(parseError)}
+                    onClick={() => setScheduleOpen(true)}
+                  >
+                    {scheduleTrigger ? 'Edit schedule trigger' : 'Add schedule trigger'}
+                  </Button>
+                </div>
+              </div>
+            </>
           )}
+          </div>
         </div>
       </div>
 
@@ -1158,6 +1322,18 @@ export function VisualWorkflowEditor({
           </span>
         )}
         <div className={styles.footerActions}>
+          <Button appearance="secondary" disabled={undoStack.length === 0} onClick={handleUndo}>
+            Undo
+          </Button>
+          <Button appearance="secondary" disabled={redoStack.length === 0} onClick={handleRedo}>
+            Redo
+          </Button>
+          <Button appearance="secondary" disabled={!isDirty} onClick={handleRevertToLastSave}>
+            Revert to last save
+          </Button>
+          <Button appearance="secondary" disabled={!isDirty} onClick={handleDiscard}>
+            Discard changes
+          </Button>
           <Button
             appearance="primary"
             disabled={saving}

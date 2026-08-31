@@ -27,6 +27,9 @@ import type {
 } from '../api/types';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import {
+  ClusterTopologyGraph,
+} from '../components/ClusterTopologyGraph';
+import {
   EmptyState,
   Label,
   LoadingState,
@@ -347,6 +350,13 @@ export function ClusterPage() {
               />
             )}
           </div>
+
+          <PageSection
+            title="Resource topology"
+            description="Live relationships from cluster to warm pools, sandbox claims, and agent pods."
+          >
+            <ClusterTopologyGraph data={data} />
+          </PageSection>
 
           <PageSection title="Health checks">
             <HealthChecksTable rows={data.checks} />

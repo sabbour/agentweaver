@@ -290,7 +290,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
         await ActivateAsync(invocationDb, project.Id);
 
         var durableInvocations = new AutomationInvocationService(
-            invocationDb, new TwoAppPersistenceStore(invocationDb));
+            invocationDb, new GitHubConnectionsPersistenceStore(invocationDb));
         var invocations = new FailFirstBindingInvocationService(durableInvocations);
         await using var provider = new ServiceCollection()
             .AddScoped<IAutomationInvocationService>(_ => invocations)

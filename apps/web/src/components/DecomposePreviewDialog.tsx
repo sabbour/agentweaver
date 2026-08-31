@@ -6,6 +6,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   makeStyles,
   MessageBar,
   MessageBarBody,
@@ -19,6 +20,7 @@ import {
   Text,
   tokens,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { CheckmarkCircleRegular, InfoRegular } from '@fluentui/react-icons';
 import { EmptyState } from './ui';
 import type { ProposedBacklogItem } from '../api/types';
@@ -90,7 +92,13 @@ export function DecomposePreviewDialog({
     <Dialog open={isOpen} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Preview proposed backlog items</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Preview proposed backlog items</DialogTitle>
           <DialogContent>
             {isLoading ? (
               <div className={styles.loadingRow}>

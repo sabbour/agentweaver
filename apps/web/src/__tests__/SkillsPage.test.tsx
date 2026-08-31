@@ -2,7 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SkillsPage } from '../pages/SkillsPage';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import {
@@ -85,6 +85,19 @@ function renderNavigablePage() {
       </MemoryRouter>
     </Wrapper>,
   );
+}
+
+async function findDefaultsTrigger() {
+  await screen.findByText(
+    'Preview bundled defaults for a predefined blueprint, or use the supported fallback for projects without source metadata.',
+  );
+  return screen.getByRole('button', { name: 'Preview blueprint defaults' });
+}
+
+async function waitForDefaultsDialogToClose() {
+  await waitFor(() => {
+    expect(screen.queryByRole('dialog', { hidden: true })).toBeNull();
+  });
 }
 
 function makeSkill(overrides: Partial<SkillDto> = {}): SkillDto {
@@ -497,7 +510,7 @@ describe('SkillsPage — blueprint defaults', () => {
       'blueprint-software-development',
       'matching-digest',
     ));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitForDefaultsDialogToClose();
     expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy();
   });
 
@@ -521,7 +534,7 @@ describe('SkillsPage — blueprint defaults', () => {
     expect(apiClient.applyBlueprintSkillDefaults).toHaveBeenCalledTimes(1);
     apply.resolve({ outcome: 'applied', errors: [], preview });
 
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitForDefaultsDialogToClose();
     expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy();
   });
 
@@ -545,7 +558,7 @@ describe('SkillsPage — blueprint defaults', () => {
 
     await user.keyboard('{Escape}');
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.queryByRole('dialog', { hidden: true })).toBeNull();
       expect(document.activeElement).toBe(trigger);
       expect((trigger as HTMLButtonElement).disabled).toBe(false);
     });
@@ -558,7 +571,7 @@ describe('SkillsPage — blueprint defaults', () => {
     await waitFor(() => expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy());
     await waitFor(() => expect(apiClient.listSkills).toHaveBeenCalledTimes(2));
     expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy();
-    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('dialog', { hidden: true })).toBeNull();
     expect(screen.queryByText('Version 2026.07.16')).toBeNull();
   });
 
@@ -639,12 +652,14 @@ describe('SkillsPage — blueprint defaults', () => {
     const user = userEvent.setup();
 
     renderNavigablePage();
-    await user.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    const navigateToProjectB = screen.getByRole('button', { name: 'Navigate to project B' });
+    const defaultsTrigger = await findDefaultsTrigger();
+    fireEvent.click(defaultsTrigger);
     await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
-    await user.click(screen.getByRole('button', { name: 'Navigate to project B' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(navigateToProjectB);
+    await waitForDefaultsDialogToClose();
 
-    await user.click(screen.getByRole('button', { name: 'Preview blueprint defaults' }));
+    fireEvent.click(defaultsTrigger);
     await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
     expect(apiClient.applyBlueprintSkillDefaults).toHaveBeenCalledWith(
       'proj-002',
@@ -675,10 +690,11 @@ describe('SkillsPage — blueprint defaults', () => {
     const user = userEvent.setup();
 
     renderNavigablePage();
-    await user.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    const navigateToProjectB = screen.getByRole('button', { name: 'Navigate to project B' });
+    fireEvent.click(await findDefaultsTrigger());
     await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
-    await user.click(screen.getByRole('button', { name: 'Navigate to project B' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(navigateToProjectB);
+    await waitForDefaultsDialogToClose();
 
     const projectBLoadsBeforeAResult = vi.mocked(apiClient.listSkills).mock.calls
       .filter(([id]) => id === 'proj-002').length;
@@ -707,13 +723,15 @@ describe('SkillsPage — blueprint defaults', () => {
     const user = userEvent.setup();
 
     renderNavigablePage();
-    await user.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    const navigateToProjectB = screen.getByRole('button', { name: 'Navigate to project B' });
+    const navigateToProjectA = screen.getByRole('button', { name: 'Navigate to project A' });
+    fireEvent.click(await findDefaultsTrigger());
     await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
     await screen.findByText('Blueprint defaults applied.');
 
-    await user.click(screen.getByRole('button', { name: 'Navigate to project B' }));
+    fireEvent.click(navigateToProjectB);
     await waitFor(() => expect(screen.queryByText('Blueprint defaults applied.')).toBeNull());
-    await user.click(screen.getByRole('button', { name: 'Navigate to project A' }));
+    fireEvent.click(navigateToProjectA);
     await waitFor(() => expect(screen.queryByText('Blueprint defaults applied.')).toBeNull());
   });
 
@@ -727,12 +745,14 @@ describe('SkillsPage — blueprint defaults', () => {
     const user = userEvent.setup();
 
     renderNavigablePage();
-    await user.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
+    const navigateToProjectB = screen.getByRole('button', { name: 'Navigate to project B' });
+    const navigateToProjectA = screen.getByRole('button', { name: 'Navigate to project A' });
+    fireEvent.click(await findDefaultsTrigger());
     await user.click(await screen.findByRole('button', { name: 'Apply defaults' }));
-    await user.click(screen.getByRole('button', { name: 'Navigate to project B' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(navigateToProjectB);
+    await waitForDefaultsDialogToClose();
 
-    await user.click(screen.getByRole('button', { name: 'Navigate to project A' }));
+    fireEvent.click(navigateToProjectA);
     await screen.findByText(/This request will continue if you close this dialog/);
     expect(screen.getByText(/preview project-a-digest/)).toBeTruthy();
     const applying = screen.getByRole('button', { name: /Applying/ }) as HTMLButtonElement;
@@ -741,7 +761,7 @@ describe('SkillsPage — blueprint defaults', () => {
     expect(apiClient.applyBlueprintSkillDefaults).toHaveBeenCalledTimes(1);
 
     projectAApply.resolve({ outcome: 'applied', errors: [], preview });
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitForDefaultsDialogToClose();
     expect(screen.getByText('Blueprint defaults applied.')).toBeTruthy();
   });
 
@@ -758,8 +778,8 @@ describe('SkillsPage — blueprint defaults', () => {
     fireEvent.click(trigger);
     await waitFor(() => expect(apiClient.previewBlueprintSkillDefaults).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Close preview' }));
+    await waitForDefaultsDialogToClose();
     await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(trigger);
     await waitFor(() => expect(apiClient.previewBlueprintSkillDefaults).toHaveBeenCalledTimes(2));
@@ -779,28 +799,25 @@ describe('SkillsPage — blueprint defaults', () => {
     const user = userEvent.setup();
 
     renderPage();
-    const trigger = await screen.findByRole('button', { name: 'Preview blueprint defaults' });
-    await user.click(trigger);
-    // A longer timeout guards against full-suite parallel-worker CPU
-    // contention delaying Fluent UI's dialog mount/focus-trap wiring (same
-    // rationale as the CoordinatorRunPage dialog tests).
-    await screen.findByRole('dialog', {}, { timeout: 4000 });
+    const trigger = await findDefaultsTrigger();
+    fireEvent.click(trigger);
+    await screen.findByRole('dialog');
 
     await user.keyboard('{Escape}');
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.queryByRole('dialog', { hidden: true })).toBeNull();
       expect(document.activeElement).toBe(trigger);
       expect((trigger as HTMLButtonElement).disabled).toBe(false);
     }, { timeout: 4000 });
 
-    await user.click(trigger);
-    await screen.findByRole('dialog', {}, { timeout: 4000 });
+    fireEvent.click(trigger);
+    await screen.findByRole('dialog');
     const backdrop = document.querySelector<HTMLElement>('[class*="fui-DialogSurface__backdrop"]');
     expect(backdrop).toBeTruthy();
     fireEvent.click(backdrop!);
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.queryByRole('dialog', { hidden: true })).toBeNull();
       expect(document.activeElement).toBe(trigger);
     }, { timeout: 4000 });
   });
@@ -816,11 +833,11 @@ describe('SkillsPage — blueprint defaults', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
     await waitFor(() => expect(resolveProject).toEqual(expect.any(Function)));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Close preview' }));
+    await waitForDefaultsDialogToClose();
 
     resolveProject!(makeProject());
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitForDefaultsDialogToClose();
     expect(apiClient.previewBlueprintSkillDefaults).not.toHaveBeenCalled();
     expect(screen.queryByText('Blueprint defaults applied.')).toBeNull();
   });

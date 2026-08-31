@@ -17,6 +17,7 @@ import {
   Spinner,
   Text,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import { KanbanBoard } from '../components/board/KanbanBoard';
 import { PageHeader } from '../components/PageHeader';
@@ -333,7 +334,13 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
             <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
               <DialogSurface>
                 <DialogBody>
-                  <DialogTitle>Abandon run?</DialogTitle>
+                  <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Abandon run?</DialogTitle>
                   <DialogContent>
                     This will abandon the run and discard any pending changes. This cannot be undone.
                     {error && <Text className={styles.errorText}>{error}</Text>}
@@ -364,7 +371,13 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
             <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
               <DialogSurface>
                 <DialogBody>
-                  <DialogTitle>Delete run?</DialogTitle>
+                  <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Delete run?</DialogTitle>
                   <DialogContent>
                     This will permanently delete the run and cannot be undone.
                     {error && <Text className={styles.errorText}>{error}</Text>}

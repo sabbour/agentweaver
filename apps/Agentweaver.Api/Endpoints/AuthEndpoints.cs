@@ -1,6 +1,7 @@
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Security;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Agentweaver.Api.Endpoints;
@@ -43,9 +44,18 @@ public static class AuthEndpoints
             });
         });
 
-        app.MapGet("/api/auth/session", (HttpContext httpContext) =>
+        app.MapGet("/api/auth/session", async (
+            HttpContext httpContext,
+            ByokProviderConfigurationService byokSettings,
+            GitHubConnectionsPersistenceStore persistence,
+            ISecretStore secretStore,
+            CancellationToken ct) =>
         {
             var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var platformBinding = await persistence.GetActivePlatformDefaultCopilotBindingAsync(ct).ConfigureAwait(false);
+            var aiConfigured =
+                await HasByokConfigurationAsync(byokSettings, ct).ConfigureAwait(false) ||
+                await HasUsablePlatformDefaultCopilotBindingAsync(platformBinding, secretStore, ct).ConfigureAwait(false);
             return Results.Ok(new
             {
                 authenticated = true,
@@ -56,6 +66,7 @@ public static class AuthEndpoints
                 avatar_url = (string?)null,
                 entra_object_id = caller.EntraObjectId,
                 platform_roles = caller.PlatformRoles,
+                ai_configured = aiConfigured,
             });
         });
 
@@ -63,7 +74,7 @@ public static class AuthEndpoints
             HttpContext httpContext,
             RepoAppAuthorizationBeginRequest? request,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -87,7 +98,7 @@ public static class AuthEndpoints
             HttpContext httpContext,
             RepoAppAuthorizationBeginRequest? request,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -110,7 +121,7 @@ public static class AuthEndpoints
             string transactionId,
             IConfiguration configuration,
             BrowserEntraSessionService browserSessions,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -136,7 +147,7 @@ public static class AuthEndpoints
             string? error,
             IConfiguration configuration,
             BrowserEntraSessionService browserSessions,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -155,7 +166,7 @@ public static class AuthEndpoints
             HttpContext httpContext,
             string transactionId,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -171,7 +182,7 @@ public static class AuthEndpoints
         app.MapPost("/api/auth/github/repo-app/authorization/refresh", async (
             HttpContext httpContext,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -186,7 +197,7 @@ public static class AuthEndpoints
         app.MapDelete("/api/auth/github/repo-app/authorization", async (
             HttpContext httpContext,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -282,6 +293,62 @@ public static class AuthEndpoints
             await browserSessions.IssueAsync(httpContext, claims, ct).ConfigureAwait(false);
             return Results.Ok(new SessionExchangeResponse(accessToken, login));
         }).AllowAnonymous();
+    }
+
+    private static async Task<bool> HasUsablePlatformDefaultCopilotBindingAsync(
+        RepoAppCredentialReference? binding,
+        ISecretStore secretStore,
+        CancellationToken ct)
+    {
+        if (binding is null)
+            return false;
+
+        var secret = await secretStore.GetSecretAsync(binding.CredentialReference, ct).ConfigureAwait(false);
+        if (!secret.Found || string.IsNullOrWhiteSpace(secret.Value))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(secret.Value);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+            var status = GetJsonString(document.RootElement, "status");
+            var accessToken = GetJsonString(document.RootElement, "access_token", "accessToken");
+            return string.Equals(status, "signed-in", StringComparison.Ordinal) &&
+                   !string.IsNullOrWhiteSpace(accessToken);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<bool> HasByokConfigurationAsync(
+        ByokProviderConfigurationService byokSettings,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await byokSettings.GetAsync(ct).ConfigureAwait(false) is not null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string? GetJsonString(JsonElement element, params string[] propertyNames)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            foreach (var propertyName in propertyNames)
+            {
+                if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                    return property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null;
+            }
+        }
+
+        return null;
     }
 }
 

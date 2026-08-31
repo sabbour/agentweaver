@@ -23,9 +23,10 @@ import type { GitHubCopilotConnectionRequirement } from '../../api/githubConnect
 export interface AppShellProps {
   children: ReactNode;
   banner?: ReactNode;
+  isPlatformAdmin?: boolean;
 }
 
-export function AppShell({ children, banner }: AppShellProps) {
+export function AppShell({ children, banner, isPlatformAdmin = false }: AppShellProps) {
   const location = useLocation();
   const [connectionRequirement, setConnectionRequirement] =
     useState<GitHubCopilotConnectionRequirement | null>(null);
@@ -90,6 +91,7 @@ export function AppShell({ children, banner }: AppShellProps) {
             pathname={location.pathname}
             isFallbackProject={isFallbackProject}
             onFallbackProjectMissing={clearFallbackProject}
+            isPlatformAdmin={isPlatformAdmin}
           />
           <div className="aw-shell-canvas">
             {/* key remounts the content area when the active project changes,

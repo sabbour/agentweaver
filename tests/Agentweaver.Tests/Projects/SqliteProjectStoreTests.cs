@@ -116,16 +116,57 @@ public sealed class SqliteProjectStoreTests
 
         var newSettings = new ProjectProviderSettings
         {
-            DefaultProvider       = ModelSource.MicrosoftFoundry,
+            DefaultProvider       = ModelSource.Byok,
             GitHubCopilotModel    = "gpt-4o",
             MicrosoftFoundryModel = "foundry-model-1",
         };
         await store.UpdateProviderSettingsAsync(project.Id, newSettings, DateTimeOffset.UtcNow);
 
         var retrieved = await store.GetAsync(project.Id);
-        retrieved!.ProviderSettings.DefaultProvider.Should().Be(ModelSource.MicrosoftFoundry);
+        retrieved!.ProviderSettings.DefaultProvider.Should().Be(ModelSource.Byok);
         retrieved.ProviderSettings.GitHubCopilotModel.Should().Be("gpt-4o");
         retrieved.ProviderSettings.MicrosoftFoundryModel.Should().Be("foundry-model-1");
+    }
+
+    [Fact]
+    public async Task GetAsync_MapsLegacyMicrosoftFoundryProviderToByok()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteProjectStore(testDb.Db);
+        var projectId = ProjectId.New();
+        var now = DateTimeOffset.UtcNow.ToString("O");
+
+        await using var connection = await testDb.Db.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO projects (
+                project_id, name, origin_kind, source_repository, working_directory,
+                default_branch, owner, default_provider, default_model_copilot,
+                default_model_foundry, state, created_at, updated_at
+            )
+            VALUES (
+                $projectId, $name, $originKind, NULL, $workingDirectory,
+                $defaultBranch, $owner, $defaultProvider, NULL,
+                NULL, $state, $createdAt, $updatedAt
+            );
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        command.Parameters.AddWithValue("$name", "Legacy Project");
+        command.Parameters.AddWithValue("$originKind", "blank");
+        command.Parameters.AddWithValue("$workingDirectory", Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        command.Parameters.AddWithValue("$defaultBranch", "main");
+        command.Parameters.AddWithValue("$owner", "test-user");
+        command.Parameters.AddWithValue("$defaultProvider", "microsoft-foundry");
+        command.Parameters.AddWithValue("$state", "active");
+        command.Parameters.AddWithValue("$createdAt", now);
+        command.Parameters.AddWithValue("$updatedAt", now);
+        await command.ExecuteNonQueryAsync();
+
+        var retrieved = await store.GetAsync(projectId);
+
+        retrieved.Should().NotBeNull();
+        retrieved!.ProviderSettings.DefaultProvider.Should().Be(ModelSource.Byok);
     }
 
     [Fact]

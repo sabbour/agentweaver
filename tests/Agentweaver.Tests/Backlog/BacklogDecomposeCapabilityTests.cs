@@ -91,8 +91,8 @@ public sealed class BacklogDecomposeCapabilityTests : IClassFixture<CoordinatorW
             {
                 services.RemoveAll<IBacklogDecomposeAgentRunner>();
                 services.AddSingleton<IBacklogDecomposeAgentRunner>(runner);
-                services.RemoveAll<ITwoAppCredentialVault>();
-                services.AddScoped<ITwoAppCredentialVault>(_ => new FixedCopilotCredentialVault());
+                services.RemoveAll<IGitHubConnectionsCredentialVault>();
+                services.AddScoped<IGitHubConnectionsCredentialVault>(_ => new FixedCopilotCredentialVault());
             });
         });
 
@@ -160,18 +160,18 @@ public sealed class BacklogDecomposeCapabilityTests : IClassFixture<CoordinatorW
         }
     }
 
-    private sealed class FixedCopilotCredentialVault : ITwoAppCredentialVault
+    private sealed class FixedCopilotCredentialVault : IGitHubConnectionsCredentialVault
     {
-        public Task<SecretGetResult> ReadCurrentAsync(TwoAppCredentialLocator locator, CancellationToken ct = default) =>
+        public Task<SecretGetResult> ReadCurrentAsync(GitHubConnectionsCredentialLocator locator, CancellationToken ct = default) =>
             Task.FromResult(new SecretGetResult(
                 """{"status":"signed-in","accessToken":"decompose-test-token","expiresAt":"2099-01-01T00:00:00Z"}""",
                 ETag: null,
                 Found: true));
 
-        public Task WriteAsync(TwoAppCredentialLocator locator, string value, CancellationToken ct = default) =>
+        public Task WriteAsync(GitHubConnectionsCredentialLocator locator, string value, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task TombstoneAndDeleteAsync(TwoAppCredentialLocator locator, CancellationToken ct = default) =>
+        public Task TombstoneAndDeleteAsync(GitHubConnectionsCredentialLocator locator, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 }

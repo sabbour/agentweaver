@@ -9,6 +9,7 @@ import type {
   ApplyBlueprintSkillDefaultsResponse,
   AmendProposalRequest,
   AnswerQuestionResponse,
+  AuthConfigResponse,
   AuthSessionResponse,
   AssemblyReviewDecision,
   AssemblyReviewRequest,
@@ -17,6 +18,8 @@ import type {
   AutopilotResponse,
   BacklogSettingsDto,
   BacklogTaskDto,
+  ByokProviderConfig,
+  ByokProviderConfigRequest,
   Blueprint,
   BlueprintSkillDefaultsPreviewResponse,
   BoardDto,
@@ -46,6 +49,7 @@ import type {
   PortForwardSessionDto,
   PagedRequestOptions,
   PagedResult,
+  PlatformDefaultCopilotConnection,
   Project,
   ProjectAccessOverview,
   ProjectCopilotConnection,
@@ -511,6 +515,45 @@ export class AgentweaverApiClient {
 
   getAuthSession(): Promise<AuthSessionResponse> {
     return this.request<AuthSessionResponse>('GET', '/auth/session');
+  }
+
+  getAuthConfig(): Promise<AuthConfigResponse> {
+    return this.request<AuthConfigResponse>('GET', '/auth/config');
+  }
+
+  // Deployment-wide "bring your own key" inference provider configuration.
+  // Presence of a saved configuration IS the AI mode switch: configured = Custom key
+  // mode, absent = GitHub Copilot mode (see Platform settings page).
+  getByokProviderConfig(): Promise<ByokProviderConfig | null> {
+    return this.request<ByokProviderConfig | null>('GET', '/admin/byok-provider');
+  }
+
+  setByokProviderConfig(req: ByokProviderConfigRequest): Promise<void> {
+    return this.request<void>('PUT', '/admin/byok-provider', req);
+  }
+
+  clearByokProviderConfig(): Promise<void> {
+    return this.request<void>('DELETE', '/admin/byok-provider');
+  }
+
+  beginPlatformDefaultCopilotAuthorization(): Promise<{
+    authorization_url: string;
+    transaction_id: string;
+    expires_at: string;
+  }> {
+    return this.request('POST', '/admin/platform-default-copilot/begin', {});
+  }
+
+  getPlatformDefaultCopilotConnection(): Promise<PlatformDefaultCopilotConnection> {
+    return this.request<PlatformDefaultCopilotConnection>('GET', '/admin/platform-default-copilot/status');
+  }
+
+  disconnectPlatformDefaultCopilotConnection(): Promise<void> {
+    return this.request<void>('POST', '/admin/platform-default-copilot/disconnect', {});
+  }
+
+  beginRepoAppAuthorization(): Promise<{ authorization_url: string; transaction_id: string; expires_at: string }> {
+    return this.request('POST', '/auth/github/repo-app/authorizations', {});
   }
 
   signOutSession(): Promise<void> {

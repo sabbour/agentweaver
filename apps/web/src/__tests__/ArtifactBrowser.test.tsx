@@ -119,6 +119,60 @@ describe('ArtifactBrowser', () => {
     expect(getRunFilesMock()).toHaveBeenCalledTimes(2);
   });
 
+  it('stops polling a removed artifact source instead of retrying its 404 response', async () => {
+    vi.useFakeTimers();
+    getRunFilesMock().mockRejectedValue(new ApiError(404, 'run not found'));
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser runId="gone-run" runStatus="in_progress" />
+      </Wrapper>,
+    );
+
+    await vi.waitFor(() => expect(getRunFilesMock()).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(getRunFilesMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops artifact polling after bounded retries for a persistent server error', async () => {
+    vi.useFakeTimers();
+    getRunFilesMock().mockRejectedValue(new ApiError(500, 'persistent server failure'));
+
+    render(
+      <Wrapper>
+        <ArtifactBrowser runId="failing-run" runStatus="in_progress" />
+      </Wrapper>,
+    );
+
+    await vi.waitFor(() => expect(getRunFilesMock()).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(getRunFilesMock()).toHaveBeenCalledTimes(3);
+    expect(document.body.textContent).toContain('persistent server failure');
+  });
+
+  it('stops Files-tab polling for a genuinely missing workspace source', async () => {
+    vi.useFakeTimers();
+    getRunFilesMock().mockResolvedValue([]);
+    getRunWorkspaceMock().mockRejectedValue(new ApiError(404, 'run not found'));
+
+    renderHook(() =>
+      useArtifactBrowser(
+        'gone-workspace-run',
+        'in_progress',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'files',
+      ),
+    );
+
+    await vi.waitFor(() => expect(getRunWorkspaceMock()).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(getRunWorkspaceMock()).toHaveBeenCalledTimes(1);
+  });
+
   // AB-01b: at a review gate, an empty file list means the run reached review with zero
   // committed changes — surface a clear explanation, not a bare "No changes" label.
   it('explains "no changes produced" when the file list is empty at a review gate', async () => {

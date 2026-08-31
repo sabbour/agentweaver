@@ -1365,6 +1365,49 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.ToTable("OutcomeSpecs");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.PlatformDefaultCopilotBindingRecord", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("BoundAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("bound_at");
+
+                    b.Property<string>("CredentialReference")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("credential_reference");
+
+                    b.Property<string>("CredentialVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("credential_version");
+
+                    b.Property<DateTimeOffset?>("DeactivatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deactivated_at");
+
+                    b.Property<string>("EntraObjectId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("entra_object_id");
+
+                    b.Property<string>("GrantDigest")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("grant_digest");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("platform_default_copilot_bindings", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.ProjectCopilotBindingRecord", b =>
                 {
                     b.Property<string>("Id")

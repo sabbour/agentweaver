@@ -6,6 +6,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   Field,
   Input,
   MessageBar,
@@ -13,6 +14,7 @@ import {
   Select,
   tokens,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { useState } from 'react';
 import type { WorkflowScheduleTrigger } from '../utils/workflowYaml';
 
@@ -58,7 +60,13 @@ function ScheduleTriggerDialogContent({
     <Dialog open onOpenChange={(_, data) => { if (!saving && !data.open) onDismiss(); }}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Schedule workflow</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Schedule workflow</DialogTitle>
           <DialogContent>
             {readOnly && (
               <MessageBar intent="info">

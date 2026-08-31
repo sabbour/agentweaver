@@ -86,7 +86,7 @@ public interface IAutomationInvocationService
 /// </summary>
 public sealed class AutomationInvocationService(
     MemoryDbContext db,
-    TwoAppPersistenceStore persistence) : IAutomationInvocationService
+    GitHubConnectionsPersistenceStore persistence) : IAutomationInvocationService
 {
     /// <summary>
     /// Claims an invocation only from the sole active activation for the project. Trigger producers
@@ -399,12 +399,11 @@ public sealed class AutomationInvocationService(
             activation.InstallationId != invocation.InstallationId ||
             activation.RepositoryId != invocation.RepositoryId)
             return false;
-        var binding = await db.ProjectCopilotBindings.AsNoTracking().SingleOrDefaultAsync(x =>
-            x.Id == activation.CopilotBindingId &&
-            x.ProjectId == activation.ProjectId &&
-            x.GrantDigest == activation.CopilotBindingGrantDigest &&
-            x.Status == GitHubBindingStatus.Active &&
-            x.DeactivatedAt == null, ct).ConfigureAwait(false);
+        var binding = await persistence.GetLiveAutomationCopilotBindingAsync(
+            activation.ProjectId,
+            activation.CopilotBindingId,
+            activation.CopilotBindingGrantDigest,
+            ct).ConfigureAwait(false);
         if (binding is null)
             return false;
 
@@ -459,7 +458,7 @@ public sealed class AutomationInvocationService(
     private static bool MatchesActivation(
         IReadOnlyList<RunGitHubCapabilitySnapshotRecord> snapshots,
         FencedAutomationActivation activation,
-        ProjectCopilotBindingRecord binding) =>
+        CopilotBindingSnapshotSource binding) =>
         snapshots.Count == 2 &&
         snapshots.Any(x => x.Purpose == GitHubCapabilityPurpose.UnattendedRepository &&
                            x.AppKind == GitHubAppKind.Repo &&

@@ -59,6 +59,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IQuestionGate? _questionGate;
     private readonly IRunOptionsStore? _runOptions;
+    private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     private readonly ILogger<GitHubCopilotAgentRunner> _logger;
 
     public GitHubCopilotAgentRunner(
@@ -69,7 +70,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         IToolApprovalGate toolApprovalGate,
         ILogger<GitHubCopilotAgentRunner> logger,
         IQuestionGate? questionGate = null,
-        IRunOptionsStore? runOptions = null)
+        IRunOptionsStore? runOptions = null,
+        IByokProviderConfigurationProvider? byokProviderConfiguration = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
@@ -79,6 +81,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _questionGate = questionGate;
         _runOptions = runOptions;
+        _byokProviderConfiguration = byokProviderConfiguration;
     }
 
     public Task<string> ExecuteAsync(
@@ -109,7 +112,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         string? userId = null,
         string? projectId = null)
     {
-        if (string.IsNullOrWhiteSpace(userId))
+        var byokProvider = _byokProviderConfiguration is not null
+            ? await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false)
+            : null;
+
+        if (modelSource == ModelSource.Byok && byokProvider is null)
+            throw new InvalidOperationException("A deployment-wide BYOK provider configuration is required.");
+
+        if (byokProvider is null && string.IsNullOrWhiteSpace(userId))
             throw new AgentProviderException(
                 ModelSource.GitHubCopilot,
                 AgentProviderFailureKind.Authorization,
@@ -130,7 +140,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             : _executor;
         using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        await using var client = await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false);
+        await using var client = byokProvider is null
+            ? await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false)
+            : _factory.CreateByokClient();
         try
         {
             await client.StartAsync(ct).ConfigureAwait(false);
@@ -358,7 +370,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                     : AgentBasePrompt.Base + "\n\n" + systemPromptContext,
             },
             // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
-            Model = modelId,
+            Model = byokProvider?.Model ?? modelId,
+            Provider = byokProvider is null ? null : new GitHub.Copilot.ProviderConfig
+            {
+                Type = byokProvider.Type,
+                BaseUrl = byokProvider.BaseUrl,
+                ApiKey = byokProvider.ApiKey,
+                WireApi = "responses",
+            },
             // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
             // cross-session retrieval and the shared SQLite store causes "database is locked" under
             // concurrent load with multiple replicas.

@@ -1,4 +1,4 @@
-export type ModelSource = 'github-copilot' | 'microsoft-foundry';
+export type ModelSource = 'github-copilot' | 'byok';
 export type AuthMode = 'entra';
 
 export interface ServerInfo {
@@ -458,6 +458,32 @@ export interface AuthSessionResponse {
   avatar_url?: string | null;
   entra_object_id?: string | null;
   platform_roles: string[];
+  ai_configured: boolean;
+}
+
+export interface AuthConfigResponse {
+  mode: 'Entra';
+  entra: {
+    client_id: string | null;
+    tenant_id: string | null;
+    authority: string | null;
+  };
+}
+
+export type ByokProviderType = 'openai' | 'azure' | 'anthropic';
+
+export interface ByokProviderConfig {
+  type: ByokProviderType;
+  base_url: string;
+  model: string;
+  configured: true;
+}
+
+export interface ByokProviderConfigRequest {
+  type: ByokProviderType;
+  base_url: string;
+  model: string;
+  api_key: string;
 }
 
 export interface GitHubRepositorySelectionCandidate {
@@ -544,6 +570,11 @@ export interface UnattendedReadiness {
  */
 export interface ProjectCopilotConnection {
   status: 'connected' | 'not_connected';
+  github_login: string | null;
+}
+
+export interface PlatformDefaultCopilotConnection {
+  connected: boolean;
   github_login: string | null;
 }
 

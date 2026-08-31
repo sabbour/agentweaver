@@ -11,14 +11,16 @@ import {
   MessageBarBody,
   Spinner,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectCopilotConnection } from '../api/types';
 
 const CONNECTION_LOAD_ERROR = 'Could not load this project’s GitHub Copilot connection. Refresh and try again.';
+const GITHUB_APPS_EXPLANATION = 'GitHub Copilot provides AI access. The separate Repo App provides repository access.';
 
 export function GitHubCopilotConnectionPicker({
   projectId,
-  triggerLabel = 'Manage GitHub account',
+  triggerLabel = 'Manage GitHub Copilot',
   showConnectionStatus = false,
 }: {
   projectId: string;
@@ -90,12 +92,12 @@ export function GitHubCopilotConnectionPicker({
           )}
           {!loading && !loadError && connected && (
             <MessageBar intent="success">
-              <MessageBarBody>GitHub Copilot is connected as {accountLabel}.</MessageBarBody>
+              <MessageBarBody>GitHub Copilot is connected as {accountLabel}. {GITHUB_APPS_EXPLANATION}</MessageBarBody>
             </MessageBar>
           )}
           {!loading && !loadError && !connected && (
             <MessageBar intent="warning">
-              <MessageBarBody>No GitHub account is connected to this project for Copilot.</MessageBarBody>
+              <MessageBarBody>No GitHub account is connected to this project for Copilot. {GITHUB_APPS_EXPLANATION}</MessageBarBody>
             </MessageBar>
           )}
         </div>
@@ -106,11 +108,20 @@ export function GitHubCopilotConnectionPicker({
       <Dialog open={open} onOpenChange={(_, data) => setOpen(data.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Connect GitHub Copilot</DialogTitle>
+            <DialogTitle
+              action={
+                <Button
+                  appearance="subtle"
+                  aria-label="Close"
+                  icon={<DismissRegular />}
+                  onClick={() => setOpen(false)}
+                />
+              }
+            >Connect GitHub Copilot</DialogTitle>
             <DialogContent>
               <p>
                 Choose the GitHub account with Copilot access in GitHub’s secure browser page.
-                Agentweaver keeps credentials private and uses the account only for this project.
+                {` ${GITHUB_APPS_EXPLANATION}`} Agentweaver keeps credentials private and uses this account only for this project.
               </p>
               {loading && <Spinner label="Loading GitHub connection" />}
               {!loading && loadError && (
@@ -123,7 +134,7 @@ export function GitHubCopilotConnectionPicker({
               )}
               {!loading && !loadError && !connected && (
                 <MessageBar intent="warning">
-                  <MessageBarBody>No GitHub account is connected to this project for Copilot.</MessageBarBody>
+                  <MessageBarBody>No GitHub account is connected to this project for Copilot. {GITHUB_APPS_EXPLANATION}</MessageBarBody>
                 </MessageBar>
               )}
               {connectionError && (
@@ -135,7 +146,12 @@ export function GitHubCopilotConnectionPicker({
                 Refresh
               </Button>
               <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-              <Button appearance="primary" disabled={connecting} onClick={() => void connect()}>
+              <Button
+                appearance="primary"
+                disabled={connecting}
+                onClick={() => void connect()}
+                style={{ whiteSpace: 'nowrap' }}
+              >
                 {connecting ? 'Opening GitHub…' : connected ? 'Switch GitHub account' : 'Connect GitHub account'}
               </Button>
             </DialogActions>

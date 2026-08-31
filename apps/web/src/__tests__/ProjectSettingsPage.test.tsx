@@ -139,15 +139,28 @@ describe('ProjectSettingsPage', () => {
     await waitFor(() => expect(screen.getByText('Sandbox enabled')).toBeDefined());
   });
 
-  it('shows read-only unattended readiness without an activation control', async () => {
+  it('shows the AI source as a deployment-level note on the General section', async () => {
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Unattended/i }));
 
-    expect(await screen.findByText('Automation readiness')).toBeDefined();
+    expect(screen.getAllByText('AI source')).toHaveLength(2);
+    expect(screen.getByText(
+      'This project uses the AI source configured for the deployment. Change it in Platform settings.',
+    )).toBeDefined();
+    expect(screen.getByText('Deployment setting')).toBeDefined();
+    expect(screen.queryByText('Default provider')).toBeNull();
+  });
+
+  it('shows read-only background readiness without an activation control', async () => {
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
+
+    expect(await screen.findByText('Background automation readiness')).toBeDefined();
     expect(screen.getByText('copilot_binding_required')).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Manage GitHub account' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
     expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
   });
 

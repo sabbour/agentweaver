@@ -99,6 +99,20 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkPlan_ActiveCoordinatorWithoutPlan_ReturnsTypedNotReady404()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        await SeedConfirmedOutcomeSpecAsync(runId);
+
+        var resp = await _owner.GetAsync($"/api/runs/{runId}/work-plan");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("work_plan_not_ready",
+            "an active coordinator can be asynchronously creating its plan after confirmation");
+    }
+
+    [Fact]
     public async Task WorkPlan_UnknownRun_Returns404()
     {
         var resp = await _owner.GetAsync($"/api/runs/{RunId.New()}/work-plan");
@@ -992,5 +1006,24 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         };
         await runStore.InsertAsync(run, CancellationToken.None);
         return runId.ToString();
+    }
+
+    private async Task SeedConfirmedOutcomeSpecAsync(string coordinatorRunId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.OutcomeSpecs.Add(new Agentweaver.Api.Memory.OutcomeSpec
+        {
+            ProjectId = "proj-x",
+            CoordinatorRunId = coordinatorRunId,
+            Goal = "g",
+            DesiredOutcome = "o",
+            Scope = "s",
+            Assumptions = "a",
+            Status = "confirmed",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
     }
 }

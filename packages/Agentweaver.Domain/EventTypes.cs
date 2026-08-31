@@ -115,7 +115,7 @@ public static class EventTypes
 
     /// <summary>
     /// Definitive per-turn completion marker emitted by every pod/agent runner AFTER the streaming
-    /// loop finishes cleanly (CopilotAIAgent / GitHubCopilotAgentRunner / FoundryAgentRunner). It is
+    /// loop finishes cleanly (CopilotAIAgent / GitHubCopilotAgentRunner). It is
     /// the authoritative "the agent finished its turn" signal on the AgentHost→worker A2A seam: the
     /// worker (<c>RemoteAgentProxy</c>) requires this marker before treating a completed A2A stream
     /// as a real success, so a pod-teardown / transport truncation that ends the stream mid-turn

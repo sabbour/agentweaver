@@ -204,9 +204,14 @@ builder.Services.AddSingleton<IOperatorAssistantAgent, Agentweaver.Api.Assistant
 builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(builder.Configuration.GetSection("Assistant"));
 builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Agentweaver.Api.Assistant.AssistantRunService>();
 
-// Two-App credentials stay in the server-side secret store. The legacy per-user token store is
-// deliberately absent: all GitHub authority is now pinned to a Repo App or Copilot App record.
-var kvUri = builder.Configuration["Auth:TwoApp:KeyVaultUri"];
+// GitHub Repo App / Copilot App connection credentials live in the server-side secret store.
+// The legacy per-user token store is deliberately absent: all GitHub authority is now pinned
+// to a Repo App or Copilot App record. IMPORTANT: without Auth:KeyVault:Uri configured, this
+// silently falls back to an in-memory store — fine for local dev, but in production it means
+// credentials written on one pod replica are invisible to every other replica (and are lost on
+// restart), which manifests as "github_binding_unavailable" / "github_copilot_auth_required"
+// errors that look like transient auth bugs. Log loudly if that happens outside Development.
+var kvUri = builder.Configuration["Auth:KeyVault:Uri"];
 if (!string.IsNullOrWhiteSpace(kvUri))
 {
     var secretClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
@@ -217,6 +222,15 @@ if (!string.IsNullOrWhiteSpace(kvUri))
 else
 {
     builder.Services.AddSingleton<ISecretStore, InMemorySecretStore>();
+    if (!builder.Environment.IsDevelopment())
+    {
+        // Can't resolve ILoggerFactory this early without building the provider; write directly
+        // so this is impossible to miss in production logs/console.
+        Console.Error.WriteLine(
+            "WARNING: Auth:KeyVault:Uri is not configured outside Development. GitHub Repo App / " +
+            "Copilot App credentials will be held in an in-memory store, which is NOT shared across " +
+            "pod replicas and does NOT survive restarts.");
+    }
 }
 builder.Services.AddHttpClient("github")
     .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(10));
@@ -241,11 +255,11 @@ builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHa
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
-builder.Services.AddScoped<TwoAppPersistenceStore>();
+builder.Services.AddScoped<GitHubConnectionsPersistenceStore>();
 builder.Services.AddScoped<AutomationActivationSnapshotService>();
 builder.Services.AddScoped<AutomationInvocationService>();
 builder.Services.AddScoped<IAutomationInvocationService>(sp => sp.GetRequiredService<AutomationInvocationService>());
-builder.Services.AddScoped<ITwoAppCredentialVault, TwoAppCredentialVault>();
+builder.Services.AddScoped<IGitHubConnectionsCredentialVault, GitHubConnectionsCredentialVault>();
 builder.Services.AddScoped<GitHubRepositorySelectionClient>();
 builder.Services.AddScoped<GitHubRepositorySelectionBroker>();
 builder.Services.AddScoped<Agentweaver.Api.Webhooks.RepoAppInstallationTokenService>();
@@ -260,6 +274,9 @@ builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IGitHubBlueprint
 builder.Services.AddScoped<Agentweaver.Api.Blueprints.GitHubBlueprintPackageImportService>();
 
 builder.Services.AddSingleton<Agentweaver.Api.Auth.WebSessionExchangeService>();
+builder.Services.AddSingleton<ByokProviderConfigurationService>();
+builder.Services.AddSingleton<Agentweaver.Domain.IByokProviderConfigurationProvider>(
+    sp => sp.GetRequiredService<ByokProviderConfigurationService>());
 
 // Project infrastructure (must be before AddAgentRuntime)
 // Provider-aware: Postgres uses EF stores; SQLite uses raw ADO.NET stores.
@@ -1038,6 +1055,8 @@ else
     app.MapBlueprintEndpoints();
     app.MapTeamEndpoints();
     app.MapAuthEndpoints();
+    app.MapByokProviderSettingsEndpoints();
+    app.MapPlatformDefaultCopilotBindingEndpoints();
     app.MapGitHubRepositorySelectionEndpoints();
     app.MapDecisionsEndpoints();
     app.MapMemoryEndpoints();

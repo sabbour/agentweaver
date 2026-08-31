@@ -9,6 +9,7 @@ import { Button,
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   Field,
   makeStyles,
   MessageBar,
@@ -18,6 +19,7 @@ import { Button,
   Textarea,
   tokens,
   } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import {
   CheckmarkCircleRegular,
   ChevronLeftRegular,
@@ -225,6 +227,8 @@ interface OutcomePlanPanelProps {
   runStatus?: string;
   onCollapse?: () => void;
   onReconnect?: () => void;
+  /** Reconcile the parent run snapshot after confirmation changes coordinator state. */
+  onConfirmed?: () => void;
   onClarifyPlan?: () => void;
   clarificationSent?: boolean;
   /**
@@ -236,7 +240,7 @@ interface OutcomePlanPanelProps {
   onFooterChange?: (node: ReactNode) => void;
 }
 
-export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCollapse, onReconnect, onClarifyPlan, clarificationSent = false, onFooterChange }: OutcomePlanPanelProps) {
+export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCollapse, onReconnect, onConfirmed, onClarifyPlan, clarificationSent = false, onFooterChange }: OutcomePlanPanelProps) {
   const styles = useStyles();
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
@@ -263,6 +267,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
   // Synchronous in-flight guard for confirm — prevents a second click from firing before
   // React has had a chance to re-render the button as disabled (acting state update is async).
   const confirmInFlightRef = useRef(false);
+  const reviseInFlightRef = useRef(false);
 
   const fetchSpec = useCallback(async () => {
     try {
@@ -380,6 +385,9 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
           const updated = await apiClient.confirmOutcomeSpec(runId, allowTaskPromotion);
           if (updated) setSpecFromApi(updated);
           else await fetchSpec();
+          // The parent derives its header/tree from separate REST snapshots, rather
+          // than this panel's spec state. Refresh those snapshots immediately.
+          onConfirmed?.();
           // Reconnect the SSE stream so post-confirmation events (outcome_spec.confirmed,
           // coordinator work plan, subtask events) arrive without a manual page refresh.
           onReconnect?.();
@@ -402,7 +410,8 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
 
   const handleRevise = async () => {
     const composed = composedFeedback.trim();
-    if (!composed) return;
+    if (!composed || reviseInFlightRef.current) return;
+    reviseInFlightRef.current = true;
     setActing(true);
     setActionError(null);
     try {
@@ -417,6 +426,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
     } catch (err) {
       setActionError(actionErrorMessage(err));
     } finally {
+      reviseInFlightRef.current = false;
       setActing(false);
     }
   };
@@ -592,7 +602,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
       )}
 
       {revisionPending && (
-        <span className={styles.drafting}>
+        <span className={styles.drafting} role="status" aria-live="polite" aria-atomic="true">
           <Spinner size="extra-tiny" aria-hidden="true" />
           <InfoRegular aria-hidden="true" />
           <Text>Clarification sent — the coordinator is revising the Outcome plan.</Text>
@@ -634,7 +644,7 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         </>
       ) : null}
 
-      {actionError && (
+      {actionError && !reviseOpen && (
         <MessageBar intent="error">
           <MessageBarBody>{actionError}</MessageBarBody>
         </MessageBar>
@@ -656,7 +666,13 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
       <Dialog open={reviseOpen} onOpenChange={(_, d) => { setReviseOpen(d.open); if (!d.open) { setAnswers([]); setExtraFeedback(''); } }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Clarify plan</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Clarify plan</DialogTitle>
             <DialogContent>
               <div className={styles.reviseFields}>
                 <Text>
@@ -699,6 +715,11 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
                     rows={3}
                   />
                 </Field>
+                {actionError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{actionError}</MessageBarBody>
+                  </MessageBar>
+                )}
               </div>
             </DialogContent>
             <DialogActions>

@@ -7,12 +7,11 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
-  Switch,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
 import { useEffect, useMemo, useState } from 'react';
-import type { AuthSessionResponse, SandboxPolicy } from '../api/types';
+import type { AuthConfigResponse, AuthSessionResponse } from '../api/types';
 import {
   Body,
   Label,
@@ -30,31 +29,10 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalM,
     maxWidth: '760px',
   },
-  listBox: {
-    backgroundColor: tokens.colorNeutralBackground3,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
-  },
-  listItem: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorNeutralForeground2,
-    padding: `${tokens.spacingVerticalXS} 0`,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
-    ':last-child': {
-      borderBottom: 'none',
-    },
-  },
   emptyNote: {
     fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     fontStyle: 'italic',
-  },
-  formActions: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalM,
-    alignItems: 'center',
-    flexWrap: 'wrap',
   },
   badgeRow: {
     display: 'flex',
@@ -66,6 +44,10 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
+  formActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+  },
 });
 
 function formatError(err: unknown): string {
@@ -76,17 +58,12 @@ function formatError(err: unknown): string {
 
 export function SettingsPage() {
   const styles = useStyles();
-  const [repositoryPath, setRepositoryPath] = useState('');
-  const [policy, setPolicy] = useState<SandboxPolicy | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
-
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [entraAdminUrl, setEntraAdminUrl] = useState<string | null>(null);
+  const [repoAppConnecting, setRepoAppConnecting] = useState(false);
+  const [repoAppError, setRepoAppError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +78,16 @@ export function SettingsPage() {
       .finally(() => {
         if (!cancelled) setAuthLoading(false);
       });
+    void apiClient.getAuthConfig()
+      .then(({ entra }: AuthConfigResponse) => {
+        if (!entra.tenant_id || !entra.client_id || cancelled) return;
+        setEntraAdminUrl(
+          `https://entra.microsoft.com/${encodeURIComponent(entra.tenant_id)}/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/${encodeURIComponent(entra.client_id)}/isMSAApp~/false`,
+        );
+      })
+      .catch(() => {
+        // The role list remains useful if the public Entra configuration is unavailable.
+      });
 
     return () => { cancelled = true; };
   }, []);
@@ -110,36 +97,15 @@ export function SettingsPage() {
     [session?.platform_roles],
   );
 
-  const handleFetch = async () => {
-    if (!repositoryPath.trim()) return;
-    setLoading(true);
-    setFetchError(null);
-    setPolicy(null);
-    setSaveSuccess(false);
-    setSaveError(null);
+  const connectRepoApp = async () => {
+    setRepoAppConnecting(true);
+    setRepoAppError(null);
     try {
-      const result = await apiClient.getSandboxPolicy(repositoryPath.trim());
-      setPolicy(result);
+      const handoff = await apiClient.beginRepoAppAuthorization();
+      window.location.assign(handoff.authorization_url);
     } catch (err) {
-      setFetchError(formatError(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSave = async () => {
-    if (!policy) return;
-    setSaving(true);
-    setSaveError(null);
-    setSaveSuccess(false);
-    try {
-      const updated = await apiClient.updateSandboxPolicy(policy);
-      setPolicy(updated);
-      setSaveSuccess(true);
-    } catch (err) {
-      setSaveError(formatError(err));
-    } finally {
-      setSaving(false);
+      setRepoAppError(formatError(err));
+      setRepoAppConnecting(false);
     }
   };
 
@@ -147,7 +113,7 @@ export function SettingsPage() {
     <PageContainer width="readable">
       <PageHeader
         title="Account settings"
-        description="Review authentication, MCP access, and local repository sandbox policy."
+        description="Review authentication and MCP access."
       />
 
       <PageSection
@@ -189,9 +155,45 @@ export function SettingsPage() {
                     <Label as="span" className={styles.emptyNote}>No Entra app roles are currently assigned.</Label>
                   )}
                 </div>
+                {entraAdminUrl && (
+                  <Button as="a" href={entraAdminUrl} target="_blank" rel="noreferrer" appearance="subtle">
+                    Manage in Microsoft Entra ID
+                  </Button>
+                )}
               </div>
             </>
           )}
+        </div>
+      </PageSection>
+
+      <PageSection
+        title="GitHub connections"
+        description="GitHub Copilot provides AI access. The separate Repo App provides repository access."
+      >
+        <div className={styles.section}>
+          <div className={styles.subBlock}>
+            <TitleText>GitHub Copilot App</TitleText>
+            <Body tone="muted">
+              Copilot connections are selected per project, so the account used for AI can match that project’s needs.
+            </Body>
+            <Button appearance="secondary" onClick={() => window.location.assign('/projects')}>
+              Manage Copilot connections in projects
+            </Button>
+          </div>
+          <div className={styles.subBlock}>
+            <TitleText>GitHub Repo App</TitleText>
+            <Body tone="muted">
+              Connect your GitHub account to browse, create, and manage repositories in projects.
+            </Body>
+            <div className={styles.formActions}>
+              <Button appearance="primary" disabled={repoAppConnecting} onClick={() => void connectRepoApp()}>
+                {repoAppConnecting ? 'Opening GitHub…' : 'Connect GitHub Repo App'}
+              </Button>
+            </div>
+            {repoAppError && (
+              <MessageBar intent="error"><MessageBarBody>{repoAppError}</MessageBarBody></MessageBar>
+            )}
+          </div>
         </div>
       </PageSection>
 
@@ -208,156 +210,6 @@ export function SettingsPage() {
           </Field>
         </div>
       </PageSection>
-
-      <PageSection
-        title="Sandbox policy"
-        description="View and update the sandbox policy for a repository. Enter the repository path to load its current policy."
-      >
-        <div className={styles.section}>
-          <Field
-            label="Repository path"
-            hint="Use an absolute local path for the repository whose sandbox policy should be inspected."
-          >
-            <Input
-              id="settings-repository-path"
-              value={repositoryPath}
-              placeholder="C:/path/to/repo"
-              onChange={(_, data) => setRepositoryPath(data.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void handleFetch(); }}
-            />
-          </Field>
-
-          <div className={styles.formActions}>
-            <Button
-              appearance="primary"
-              disabled={!repositoryPath.trim() || loading}
-              onClick={() => void handleFetch()}
-            >
-              {loading ? 'Loading' : 'Load policy'}
-            </Button>
-            <Button
-              appearance="secondary"
-              disabled={loading && !repositoryPath}
-              onClick={() => {
-                setRepositoryPath('');
-                setPolicy(null);
-                setFetchError(null);
-                setSaveError(null);
-                setSaveSuccess(false);
-              }}
-            >
-              Clear
-            </Button>
-            {loading && <Spinner size="extra-tiny" aria-hidden="true" />}
-          </div>
-
-          {fetchError && (
-            <MessageBar intent="error">
-              <MessageBarBody>{fetchError}</MessageBarBody>
-            </MessageBar>
-          )}
-        </div>
-      </PageSection>
-
-      {policy && (
-        <PageSection title="Policy settings">
-          <div className={styles.section}>
-            <Field label="Shell execution">
-              <Switch
-                label={policy.shell_enabled ? 'Enabled' : 'Disabled'}
-                checked={policy.shell_enabled}
-                onChange={(_, data) =>
-                  setPolicy((prev) => prev ? { ...prev, shell_enabled: data.checked } : prev)
-                }
-              />
-            </Field>
-
-            <Field
-              label="Sandbox enabled"
-              hint="When off, commands run directly on the host with no isolation layer."
-            >
-              <Switch
-                label={policy.direct ? 'Off — no isolation layer' : 'On — commands run in the sandbox'}
-                checked={!policy.direct}
-                onChange={(_, data) =>
-                  setPolicy((prev) => prev ? { ...prev, direct: !data.checked } : prev)
-                }
-              />
-            </Field>
-
-            <Field
-              label="Outbound network"
-              hint={policy.direct ? 'Only applies when the sandbox is enabled.' : undefined}
-            >
-              <Switch
-                label={policy.network_enabled ? 'Enabled' : 'Blocked'}
-                checked={policy.network_enabled}
-                disabled={policy.direct}
-                onChange={(_, data) =>
-                  setPolicy((prev) => prev ? { ...prev, network_enabled: data.checked } : prev)
-                }
-              />
-            </Field>
-
-            <Field label="Allowed repository roots">
-              <div className={styles.listBox}>
-                {policy.allowed_repository_roots.length === 0 ? (
-                  <Label as="span" className={styles.emptyNote}>None configured</Label>
-                ) : (
-                  policy.allowed_repository_roots.map((root, i) => (
-                    <div key={i} className={styles.listItem}>{root}</div>
-                  ))
-                )}
-              </div>
-            </Field>
-
-            <Field label="Blocked command patterns">
-              <div className={styles.listBox}>
-                {policy.destructive_command_patterns.length === 0 ? (
-                  <Label as="span" className={styles.emptyNote}>None configured</Label>
-                ) : (
-                  policy.destructive_command_patterns.map((pat, i) => (
-                    <div key={i} className={styles.listItem}>{pat}</div>
-                  ))
-                )}
-              </div>
-            </Field>
-
-            <div className={styles.formActions}>
-              <Button
-                appearance="primary"
-                disabled={saving}
-                onClick={() => void handleSave()}
-              >
-                {saving ? 'Saving' : 'Save'}
-              </Button>
-              <Button
-                appearance="secondary"
-                disabled={loading && !repositoryPath}
-                onClick={() => {
-                  setPolicy(null);
-                  setFetchError(null);
-                  setSaveError(null);
-                  setSaveSuccess(false);
-                }}
-              >
-                Clear loaded policy
-              </Button>
-            </div>
-
-            {saveError && (
-              <MessageBar intent="error">
-                <MessageBarBody>{saveError}</MessageBarBody>
-              </MessageBar>
-            )}
-            {saveSuccess && (
-              <MessageBar intent="success">
-                <MessageBarBody>Sandbox policy saved.</MessageBarBody>
-              </MessageBar>
-            )}
-          </div>
-        </PageSection>
-      )}
     </PageContainer>
   );
 }

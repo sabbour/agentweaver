@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   Field,
   Input,
   makeStyles,
@@ -28,6 +29,7 @@ import {
   Textarea,
   tokens,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import {
   AddRegular,
   ArrowSyncRegular,
@@ -933,7 +935,13 @@ export function WorkflowsPage() {
     <Dialog open={generateOpen} onOpenChange={(_, d) => { if (!generating) setGenerateOpen(d.open); }}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Generate workflow</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Generate workflow</DialogTitle>
           <DialogContent>
             <Field label="Describe the workflow you need" hint="A complete YAML draft will be generated for you to review and edit before saving.">
               <Textarea
@@ -974,7 +982,13 @@ export function WorkflowsPage() {
     <Dialog open={eventWorkflow !== null} onOpenChange={(_, d) => { if (!savingEventTrigger && !loadingEventTrigger && !d.open) setEventWorkflow(null); }}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Event trigger</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Event trigger</DialogTitle>
           <DialogContent>
             {loadingEventTrigger ? (
               <Spinner label="Loading event trigger" />

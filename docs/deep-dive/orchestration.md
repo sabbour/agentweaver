@@ -22,7 +22,9 @@ A useful rebuilding rule is: **the coordinator owns intent and coordination; wor
 
 Casting and Blueprints feed orchestration with team shape, role charters, workflow defaults, and review-policy defaults. They are summarized here only; the detailed explanation lives in [team-casting.md](team-casting.md).
 
-Live workflow execution is Copilot-backed. Some non-workflow single-prompt paths dispatch through other model runners, but the live workflow worker path does not switch worker implementation based on the run's model source. Rebuilds that need Foundry-backed live workflows add that dispatch point explicitly.
+Live workflow execution and non-workflow single-prompt paths use the Copilot SDK. The
+live workflow worker path does not switch worker implementation based on the run's model
+source; custom providers are configured through the SDK.
 
 ## Core Design Invariants
 

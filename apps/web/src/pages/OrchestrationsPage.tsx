@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   makeStyles,
   Spinner,
   Text,
@@ -17,6 +18,7 @@ import {
   tokens,
   Tooltip,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { collectPagedItems } from '../api/pagedResults';
 import { ArrowSyncRegular, DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { PageHeader } from '../components/PageHeader';
@@ -574,7 +576,13 @@ export function OrchestrationsPage() {
       <Dialog open={deleteTarget !== null} onOpenChange={(_, data) => { if (!data.open) setDeleteTarget(null); }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Delete orchestration</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Delete orchestration</DialogTitle>
             <DialogContent>
               Delete this orchestration? This removes the run and its workspace.
             </DialogContent>
@@ -596,7 +604,13 @@ export function OrchestrationsPage() {
       <Dialog open={stopTarget !== null} onOpenChange={(_, data) => { if (!data.open) setStopTarget(null); }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Stop orchestration?</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Stop orchestration?</DialogTitle>
             <DialogContent>
               The running work will be cancelled, but the run is kept so you can inspect it.
             </DialogContent>

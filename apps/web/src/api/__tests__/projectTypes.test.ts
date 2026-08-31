@@ -82,14 +82,14 @@ describe('Project type shapes', () => {
     expect(minimal).toBeDefined();
 
     const full: UpdateProjectProviderSettingsRequest = {
-      default_provider: 'microsoft-foundry',
+      default_provider: 'byok',
       default_model_github_copilot: 'gpt-4o',
       default_model_microsoft_foundry: 'my-model',
       blueprint_generation_model: 'gpt-5.5',
       workflow_generation_model: null,
       outcome_spec_generation_model: 'claude-sonnet-4.6',
     };
-    expect(full.default_provider).toBe('microsoft-foundry');
+    expect(full.default_provider).toBe('byok');
     expect(full.workflow_generation_model).toBeNull();
   });
 

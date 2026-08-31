@@ -303,10 +303,6 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("backlog_task_id");
 
-                    b.Property<string>("PendingBacklogTaskId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("pending_backlog_task_id");
-
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("TEXT")
                         .HasColumnName("completed_at");
@@ -331,6 +327,10 @@ namespace Agentweaver.Api.Migrations
                     b.Property<int>("Outcome")
                         .HasColumnType("INTEGER")
                         .HasColumnName("outcome");
+
+                    b.Property<string>("PendingBacklogTaskId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("pending_backlog_task_id");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
@@ -1014,6 +1014,49 @@ namespace Agentweaver.Api.Migrations
                     b.HasIndex("ProjectId", "CoordinatorRunId");
 
                     b.ToTable("OutcomeSpecs");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.PlatformDefaultCopilotBindingRecord", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("BoundAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("bound_at");
+
+                    b.Property<string>("CredentialReference")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("credential_reference");
+
+                    b.Property<string>("CredentialVersion")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("credential_version");
+
+                    b.Property<DateTimeOffset?>("DeactivatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("deactivated_at");
+
+                    b.Property<string>("EntraObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("entra_object_id");
+
+                    b.Property<string>("GrantDigest")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("grant_digest");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("platform_default_copilot_bindings", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.ProjectCopilotBindingRecord", b =>

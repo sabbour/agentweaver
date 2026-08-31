@@ -32,6 +32,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<GitHubRepositoryGrantRecord> GitHubRepositoryGrants => Set<GitHubRepositoryGrantRecord>();
     public DbSet<GitHubRepositorySelectionCodeRecord> GitHubRepositorySelectionCodes => Set<GitHubRepositorySelectionCodeRecord>();
     public DbSet<ProjectCopilotBindingRecord> ProjectCopilotBindings => Set<ProjectCopilotBindingRecord>();
+    public DbSet<PlatformDefaultCopilotBindingRecord> PlatformDefaultCopilotBindings => Set<PlatformDefaultCopilotBindingRecord>();
     public DbSet<AutomationActivationRecord> AutomationActivations => Set<AutomationActivationRecord>();
     public DbSet<AutomationInvocationRecord> AutomationInvocations => Set<AutomationInvocationRecord>();
     public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
@@ -145,7 +146,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<BrowserEntraSession>().HasIndex(s => s.ExpiresAt);
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
-        ConfigureTwoAppPersistence(model);
+        ConfigureGitHubConnectionsPersistence(model);
         model.Entity<DismissedNotification>(e =>
         {
             e.ToTable("dismissed_notifications");
@@ -180,7 +181,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         if (!Database.IsNpgsql())
         {
             // The SQLite companion database keeps a project projection solely as the principal
-            // for project-scoped durable two-App records, matching PostgreSQL FK semantics.
+            // for project-scoped durable GitHub connections records, matching PostgreSQL FK semantics.
             model.Entity<ProjectRecord>(e =>
             {
                 e.ToTable("projects");
@@ -532,7 +533,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
     }
 
-    private void ConfigureTwoAppPersistence(ModelBuilder model)
+    private void ConfigureGitHubConnectionsPersistence(ModelBuilder model)
     {
         model.Entity<GitHubAuthorizationRecord>(e =>
         {
@@ -630,6 +631,19 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             ConfigureProjectForeignKey(e, "FK_project_copilot_bindings_projects_project_id");
         });
 
+        model.Entity<PlatformDefaultCopilotBindingRecord>(e =>
+        {
+            e.ToTable("platform_default_copilot_bindings").HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.BoundAt).HasColumnName("bound_at");
+            e.Property(x => x.DeactivatedAt).HasColumnName("deactivated_at");
+        });
+
         model.Entity<AutomationActivationRecord>(e =>
         {
             e.ToTable("automation_activations").HasKey(x => x.Id);
@@ -709,16 +723,14 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         });
 
         model.Entity<RunGitHubCapabilitySnapshotRecord>(e =>
-        {
+                {
             e.ToTable("run_github_capability_snapshots", table => table
                 .HasCheckConstraint(
                     "CK_run_github_capability_snapshots_purpose_mapping",
-                    """
-                    (purpose = 0 AND app_kind = 0 AND source_kind = 0 AND entra_object_id IS NOT NULL AND source_authorization_id IS NOT NULL AND source_binding_id IS NULL AND installation_id IS NULL AND repository_id IS NOT NULL AND credential_reference IS NOT NULL AND credential_version IS NOT NULL)
-                    OR (purpose = 1 AND app_kind = 0 AND source_kind = 0 AND entra_object_id IS NOT NULL AND source_authorization_id IS NOT NULL AND source_binding_id IS NULL AND installation_id IS NULL AND repository_id IS NULL AND credential_reference IS NOT NULL AND credential_version IS NOT NULL)
-                    OR (purpose = 2 AND app_kind = 0 AND source_kind = 1 AND entra_object_id IS NULL AND source_authorization_id IS NULL AND source_binding_id IS NULL AND installation_id IS NOT NULL AND repository_id IS NOT NULL AND credential_reference IS NULL AND credential_version IS NULL)
-                    OR (purpose = 3 AND app_kind = 1 AND source_kind = 2 AND entra_object_id IS NULL AND source_authorization_id IS NULL AND source_binding_id IS NOT NULL AND installation_id IS NULL AND repository_id IS NULL AND credential_reference IS NOT NULL AND credential_version IS NOT NULL)
-                    """));
+                    "(purpose = 0 AND app_kind = 0 AND source_kind = 0 AND entra_object_id IS NOT NULL AND source_authorization_id IS NOT NULL AND source_binding_id IS NULL AND installation_id IS NULL AND repository_id IS NOT NULL AND credential_reference IS NOT NULL AND credential_version IS NOT NULL)\n" +
+                    "OR (purpose = 1 AND app_kind = 0 AND source_kind = 0 AND entra_object_id IS NOT NULL AND source_authorization_id IS NOT NULL AND source_binding_id IS NULL AND installation_id IS NULL AND repository_id IS NULL AND credential_reference IS NOT NULL AND credential_version IS NOT NULL)\n" +
+                    "OR (purpose = 2 AND app_kind = 0 AND source_kind = 1 AND entra_object_id IS NULL AND source_authorization_id IS NULL AND source_binding_id IS NULL AND installation_id IS NOT NULL AND repository_id IS NOT NULL AND credential_reference IS NULL AND credential_version IS NULL)\n" +
+                    "OR (purpose = 3 AND app_kind = 1 AND source_kind = 2 AND entra_object_id IS NULL AND source_authorization_id IS NULL AND source_binding_id IS NOT NULL AND installation_id IS NULL AND repository_id IS NULL AND credential_reference IS NOT NULL AND credential_version IS NOT NULL)"));
             e.HasKey(x => x.SnapshotRef);
             e.Property(x => x.SnapshotRef).HasColumnName("snapshot_ref");
             e.Property(x => x.RunId).HasColumnName("run_id");

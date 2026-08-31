@@ -67,6 +67,7 @@ public interface ICoordinatorDispatch
 /// </summary>
 public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 {
+    internal static readonly TimeSpan MaxInfrastructureRetryBackoff = TimeSpan.FromMinutes(2);
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunOrchestrator _orchestrator;
@@ -166,6 +167,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
+        _appStopping.Register(OnApplicationStopping);
         _integrationBuildLock = integrationBuildLock;
 
         var stallMinutes = configuration?.GetValue("Coordinator:SubtaskStallTimeoutMinutes", 5.0) ?? 5.0;
@@ -182,7 +184,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _infrastructureRetryBackoffs =
         [
             ReadRetryBackoff(configuration, attempt: 1, defaultMinSeconds: 30, defaultMaxSeconds: 60),
-            ReadRetryBackoff(configuration, attempt: 2, defaultMinSeconds: 120, defaultMaxSeconds: 240),
+            ReadRetryBackoff(configuration, attempt: 2, defaultMinSeconds: 60, defaultMaxSeconds: 120),
         ];
 
         _myPodId = configuration?.GetValue<string>("App:PodId")
@@ -245,6 +247,25 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
     /// <inheritdoc />
     public bool IsDispatchActive(string coordinatorRunId) => _active.ContainsKey(coordinatorRunId);
+
+    /// <summary>
+    /// Releases locally owned dispatch leases synchronously as the host begins stopping. The callback
+    /// runs before service-provider disposal, so a replacement worker can immediately re-arm the
+    /// durable work plans instead of waiting for the stale-lease timeout.
+    /// </summary>
+    private void OnApplicationStopping()
+    {
+        try
+        {
+            RelinquishCoordinatorLeaseOnShutdownAsync(
+                coordinatorRunId: null, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Coordinator dispatch: failed to release shutdown leases; normal stale-lease recovery will apply");
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Dispatch + observe loop
@@ -1042,13 +1063,39 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         double defaultMinSeconds,
         double defaultMaxSeconds)
     {
-        var minSeconds = Math.Max(0, configuration?.GetValue(
+        var minSeconds = Math.Clamp(configuration?.GetValue(
             $"Coordinator:InfrastructureRetryAttempt{attempt}MinSeconds", defaultMinSeconds)
-            ?? defaultMinSeconds);
-        var maxSeconds = Math.Max(minSeconds, configuration?.GetValue(
+            ?? defaultMinSeconds, 0, MaxInfrastructureRetryBackoff.TotalSeconds);
+        var maxSeconds = Math.Clamp(configuration?.GetValue(
             $"Coordinator:InfrastructureRetryAttempt{attempt}MaxSeconds", defaultMaxSeconds)
-            ?? defaultMaxSeconds);
+            ?? defaultMaxSeconds, minSeconds, MaxInfrastructureRetryBackoff.TotalSeconds);
         return (TimeSpan.FromSeconds(minSeconds), TimeSpan.FromSeconds(maxSeconds));
+    }
+
+    /// <summary>
+    /// Releases dispatch ownership during graceful host shutdown. The durable work-plan status and
+    /// subtask rows remain unchanged, letting the existing reconciler re-observe in-flight children
+    /// from a replacement worker without waiting for this pod's lease to become stale.
+    /// </summary>
+    internal async Task RelinquishCoordinatorLeaseOnShutdownAsync(string? coordinatorRunId, CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var released = await db.WorkPlans
+            .Where(w => (coordinatorRunId == null || w.CoordinatorRunId == coordinatorRunId)
+                     && w.Status == WorkPlanStatus.Dispatching
+                     && w.CoordinatorPodId == _myPodId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.CoordinatorPodId, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), cancellationToken)
+            .ConfigureAwait(false);
+        if (released > 0)
+        {
+            _logger.LogInformation(
+                "Coordinator dispatch: released {Count} shutdown lease(s); replacement workers may re-arm them",
+                released);
+        }
     }
 
     private async Task<bool> IsInfrastructureRetryEligibleAsync(int subtaskId, CancellationToken ct)

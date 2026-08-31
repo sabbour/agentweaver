@@ -13,6 +13,15 @@ import {
 } from 'vitest';
 import type { ClusterDiagnosticsDto } from '../api/types';
 import type { ReactNode } from 'react';
+
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getClusterDiagnostics: vi.fn(),
@@ -53,8 +62,25 @@ const sampleData: ClusterDiagnosticsDto = {
   pending_capacity_runs: [
     { subtask_id: 1, work_plan_id: 10, child_run_id: null, status: 'waiting', reason: 'Insufficient CPU', age_seconds: 30 },
   ],
-  warm_pools: [],
-  sandbox_claims: [],
+  warm_pools: [
+    {
+      name: 'default-pool',
+      desired_replicas: 2,
+      ready_replicas: 2,
+      available_replicas: 1,
+      status: 'healthy',
+      age_seconds: 300,
+    },
+  ],
+  sandbox_claims: [
+    {
+      name: 'claim-abc123',
+      phase: 'bound',
+      ready: true,
+      warm_pool: 'default-pool',
+      age_seconds: 60,
+    },
+  ],
 };
 
 beforeEach(() => {
@@ -100,6 +126,13 @@ describe('ClusterPage', () => {
     expect(screen.getByText('Orphaned pods')).toBeDefined();
     expect(screen.getByText('Pending capacity')).toBeDefined();
     expect(screen.getByText('Checks healthy')).toBeDefined();
+
+    expect(screen.getByText('Resource topology')).toBeDefined();
+    expect(screen.getByTestId('cluster-topology-graph')).toBeDefined();
+    expect(screen.getByLabelText('Cluster: 3 / 3 checks healthy')).toBeDefined();
+    expect(screen.getByLabelText('default-pool: Warm pool · 2 / 2 ready')).toBeDefined();
+    expect(screen.getByLabelText('claim-abc123: Sandbox claim · bound')).toBeDefined();
+    expect(screen.getByLabelText('agent-abc123: Agent pod · ready')).toBeDefined();
 
     // Health check rows
     expect(screen.getByText('K8s API')).toBeDefined();

@@ -48,14 +48,14 @@ describe('GitHubCopilotConnectionPicker', () => {
         <GitHubCopilotConnectionPicker projectId="project-b" showConnectionStatus />
       </Wrapper>,
     );
-    expect(await screen.findByText('GitHub Copilot is connected as @project-b.')).toBeDefined();
+    expect(await screen.findByText(/GitHub Copilot is connected as @project-b/)).toBeDefined();
 
     await act(async () => {
       resolveOldConnection!({ status: 'connected', github_login: 'project-a' });
       await oldConnection;
     });
 
-    expect(screen.getByText('GitHub Copilot is connected as @project-b.')).toBeDefined();
+    expect(screen.getByText(/GitHub Copilot is connected as @project-b/)).toBeDefined();
     expect(screen.queryByText('GitHub Copilot is connected as @project-a.')).toBeNull();
   });
 
@@ -66,11 +66,12 @@ describe('GitHubCopilotConnectionPicker', () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText('No GitHub account is connected to this project for Copilot.')).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub account' }));
+    expect(await screen.findByText(/No GitHub account is connected to this project for Copilot/)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub Copilot' }));
 
     expect(await screen.findByRole('dialog')).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Connect GitHub Copilot' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Connect GitHub account' })).toBeDefined();
   });
 
@@ -87,8 +88,8 @@ describe('GitHubCopilotConnectionPicker', () => {
       </Wrapper>,
     );
 
-    await screen.findByText('No GitHub account is connected to this project for Copilot.');
-    fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub account' }));
+    await screen.findByText(/No GitHub account is connected to this project for Copilot/);
+    fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub Copilot' }));
     vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
       status: 'connected',
       github_login: 'octocat',
@@ -110,7 +111,7 @@ describe('GitHubCopilotConnectionPicker', () => {
       </Wrapper>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub account' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub Copilot' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub account' }));
 
     expect(await screen.findByText('The GitHub Copilot App connection could not be started. Try again.')).toBeDefined();

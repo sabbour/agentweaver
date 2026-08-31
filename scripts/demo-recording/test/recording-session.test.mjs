@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { recordingHelp, runRecordingCommand } from '../cli.mjs';
@@ -13,6 +15,7 @@ import {
   openRecordingSession,
   parsePlaywrightSessionList,
   parseRecordingCommandOptions,
+  pruneCacheDirectories,
   refreshRecordingAuthentication,
   recordingAuthPaths,
   resolveCaptureBeatPrerequisites,
@@ -249,6 +252,32 @@ test('Edge profile copy retains identity data but excludes caches and lock files
   assert.equal(shouldCopyEdgeProfileEntry(path.join(root, 'Preferences'), root), true);
   assert.equal(shouldCopyEdgeProfileEntry(path.join(root, 'Cache', 'cache.bin'), root), false);
   assert.equal(shouldCopyEdgeProfileEntry(path.join(root, 'LOCK'), root), false);
+});
+
+test('pruneCacheDirectories removes known-safe cache dirs but preserves identity data', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agentweaver-prune-test-'));
+  try {
+    await fs.mkdir(path.join(root, 'BrowserMetrics'), { recursive: true });
+    await fs.writeFile(path.join(root, 'BrowserMetrics', 'metrics.pma'), 'x');
+    await fs.mkdir(path.join(root, 'Default', 'Cache', 'Cache_Data'), { recursive: true });
+    await fs.writeFile(path.join(root, 'Default', 'Cache', 'Cache_Data', 'blob'), 'x');
+    await fs.mkdir(path.join(root, 'Default', 'Network'), { recursive: true });
+    await fs.writeFile(path.join(root, 'Default', 'Network', 'Cookies'), 'x');
+    await fs.writeFile(path.join(root, 'Default', 'Preferences'), '{}');
+
+    pruneCacheDirectories(root);
+
+    assert.equal(existsSync(path.join(root, 'BrowserMetrics')), false);
+    assert.equal(existsSync(path.join(root, 'Default', 'Cache')), false);
+    assert.equal(existsSync(path.join(root, 'Default', 'Network', 'Cookies')), true);
+    assert.equal(existsSync(path.join(root, 'Default', 'Preferences')), true);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test('pruneCacheDirectories is a no-op when the profile root does not exist', () => {
+  assert.doesNotThrow(() => pruneCacheDirectories(path.join(os.tmpdir(), 'agentweaver-prune-missing')));
 });
 
 test('recording session reports expired or unverifiable authentication', () => {

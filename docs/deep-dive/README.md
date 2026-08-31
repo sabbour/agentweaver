@@ -14,7 +14,7 @@ These pages explain the **logic and concepts** behind each subsystem — enough 
 - [Coordinator internals](./coordinator-internals.md) — a deeper look inside the coordinator: OutcomeSpec drafting, WorkPlan decomposition, child dispatch, assembly, and recovery.
 - [Workflow engine](./workflow-engine.md) — how workflows are defined, triggered, generated, selected, and bound: templates, role slots, and trigger evaluation.
 - [Team & casting](./team-casting.md) — how a team is cast from blueprints and catalogs: universes, naming, charters, and squad/memory persistence.
-- [Agent runtime](./agent-runtime.md) — what happens inside an agent turn: workflow wiring, Copilot/Foundry runners, tools, RAI, Scribe, and events.
+- [Agent runtime](./agent-runtime.md) — what happens inside an agent turn: workflow wiring, the Copilot SDK runner, tools, RAI, Scribe, and events.
 - [Review & merge](./review-merge.md) — the human-oversight model: review gates, approve/request-changes, reviewer lockout, and how merge happens.
 
 ### Execution & integration

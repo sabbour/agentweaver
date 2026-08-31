@@ -94,6 +94,7 @@ export async function run(opts = {}) {
     resolveVariables: resolveVariablesFn = resolveVariables,
     deployCommittedSha: deployCommittedShaFn = deployCommittedSha,
     fsImpl = fs,
+    env: baseEnv = process.env,
   } = opts;
   const { ref, help } = parseArgs(argv);
   if (help) {
@@ -123,7 +124,7 @@ export async function run(opts = {}) {
   let cleanupError;
   try {
     const env = {
-      ...process.env,
+      ...baseEnv,
       IMAGE_TAG: imageTag,
       AGENTHOST_IMAGE_TAG: imageTag,
       TARGET_GIT_REF: commit,

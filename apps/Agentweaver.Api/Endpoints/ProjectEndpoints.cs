@@ -38,11 +38,12 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
     HttpContext httpContext,
     string id,
     IProjectStore projectStore,
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
+    ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -52,7 +53,7 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
 
     var service = new ProjectCopilotBindingService(
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
-        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+        persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.BeginAsync(
         ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
     if (result.Outcome != CopilotBindingOutcome.Success)
@@ -79,11 +80,12 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations/handoff", async (
     HttpContext httpContext,
     string id,
     IProjectStore projectStore,
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
+    ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -93,7 +95,7 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations/handoff", async (
 
     var service = new ProjectCopilotBindingService(
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
-        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+        persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.BeginMcpHandoffAsync(
         ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
     return result.Outcome == CopilotBindingOutcome.Success
@@ -113,11 +115,12 @@ app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
     string transactionId,
     IConfiguration configuration,
     BrowserEntraSessionService browserSessions,
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
+    ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
     // This browser route has no bearer header, so it validates the authenticated Entra browser
@@ -127,7 +130,7 @@ app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
         return Results.Unauthorized();
 
     var service = new ProjectCopilotBindingService(
-        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration);
+        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var handoff = await service.TakeMcpBrowserHandoffAsync(
         transactionId, browserSession.Id, browserSession.EntraObjectId, ct).ConfigureAwait(false);
     if (handoff is null)
@@ -146,15 +149,16 @@ app.MapGet("/auth/github/copilot-app/callback", async (
     string? error,
     IConfiguration configuration,
     BrowserEntraSessionService browserSessions,
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
+    ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
     var service = new ProjectCopilotBindingService(
-        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration);
+        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var cookie = ProjectCopilotBindingService.ReadCallbackCookie(httpContext);
     ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
     var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
@@ -170,18 +174,19 @@ app.MapGet("/api/projects/{id}/github/copilot/authorizations/{transactionId}", a
     HttpContext httpContext,
     string id,
     string transactionId,
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
+    ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "authorization_transaction_invalid" });
     var service = new ProjectCopilotBindingService(
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
-        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+        persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.PollAsync(
         ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, transactionId, ct).ConfigureAwait(false);
     return result.Outcome == CopilotBindingOutcome.Success
@@ -196,11 +201,12 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
     HttpContext httpContext,
     string id,
     IProjectStore projectStore,
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
+    ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -210,7 +216,7 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
 
     var service = new ProjectCopilotBindingService(
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
-        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+        persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.GetConnectionAsync(
         ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
     return result.Outcome == CopilotBindingOutcome.Success
@@ -234,11 +240,12 @@ app.MapDelete("/api/projects/{id}/github/copilot/binding", async (
     HttpContext httpContext,
     string id,
     IProjectStore projectStore,
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
+    ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -247,7 +254,7 @@ app.MapDelete("/api/projects/{id}/github/copilot/binding", async (
         return Results.NotFound();
     var service = new ProjectCopilotBindingService(
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
-        persistence, secretStore, httpClientFactory, roleAssignments, registration);
+        persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var outcome = await service.DisconnectAsync(
         ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
     return outcome == CopilotBindingOutcome.Success

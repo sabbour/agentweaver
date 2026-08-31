@@ -136,6 +136,7 @@ describe('OutcomePlanPanel confirm retry', () => {
   it('keeps the REST confirmed status when stale SSE still says awaiting confirmation after confirm', async () => {
     vi.mocked(apiClient.confirmOutcomeSpec).mockResolvedValue(confirmedSpec);
     const onReconnect = vi.fn();
+    const onConfirmed = vi.fn();
 
     render(
       <Wrapper>
@@ -144,6 +145,7 @@ describe('OutcomePlanPanel confirm retry', () => {
           events={[staleAwaitingEvent]}
           streamStatus="streaming"
           onReconnect={onReconnect}
+          onConfirmed={onConfirmed}
         />
       </Wrapper>,
     );
@@ -154,6 +156,7 @@ describe('OutcomePlanPanel confirm retry', () => {
     expect(screen.getByText(/Outcome plan confirmed by Ahmed/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /confirm plan/i })).toBeNull();
     expect(onReconnect).toHaveBeenCalledTimes(1);
+    expect(onConfirmed).toHaveBeenCalledTimes(1);
   });
 
   it('shows the updated interrupted message for run_not_active failures', async () => {
@@ -204,6 +207,24 @@ describe('OutcomePlanPanel clarify dialog', () => {
     expect(composed).toContain('A: Use /colors/grayscale and /colors/color');
     expect(composed).toContain('Q: Should GET /colors remain as-is?');
     expect(composed).toContain('A: Keep it as-is');
+  });
+
+  it('keeps a clarification error visible and lets the user retry', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.reviseOutcomeSpec).mockRejectedValue(new ApiError(500, 'server exploded'));
+
+    render(
+      <Wrapper>
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="streaming" />
+      </Wrapper>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /Clarify plan/i }));
+    await user.type(screen.getByRole('textbox', { name: 'Feedback' }), 'Support a dry run.');
+    await user.click(screen.getByRole('button', { name: /^send$/i, hidden: true }));
+
+    expect(await screen.findByText('API error 500: server exploded')).toBeTruthy();
+    expect((screen.getByRole('button', { name: /^send$/i, hidden: true }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
@@ -320,7 +341,9 @@ describe('OutcomePlanPanel external clarification state', () => {
     );
 
     expect(await screen.findByText('Ship the feature')).toBeTruthy();
-    expect(screen.getByText('Clarification sent — the coordinator is revising the Outcome plan.')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain(
+      'Clarification sent — the coordinator is revising the Outcome plan.',
+    );
     expect((screen.getByRole('button', { name: /confirm plan/i }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: /clarify plan/i }) as HTMLButtonElement).disabled).toBe(true);
 

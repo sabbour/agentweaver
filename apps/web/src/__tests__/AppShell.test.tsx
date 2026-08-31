@@ -70,11 +70,11 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
-function renderShellAt(path: string) {
+function renderShellAt(path: string, isPlatformAdmin = false) {
   return render(
     <Wrapper>
       <MemoryRouter initialEntries={[path]}>
-        <AppShell>
+        <AppShell isPlatformAdmin={isPlatformAdmin}>
           <Routes>
             <Route path="/" element={<div>Gallery</div>} />
             <Route path="/overview" element={<div>Overview content</div>} />
@@ -104,6 +104,7 @@ beforeEach(() => {
     avatar_url: 'https://example.com/sabbour.png',
     entra_object_id: 'entra-1',
     platform_roles: ['PlatformAdmin'],
+    ai_configured: true,
   } as never);
   vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
     auth_mode: 'entra',
@@ -155,6 +156,7 @@ describe('AppShell navigation', () => {
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('data-scrollbar-mode')).toBe('hover');
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('tabindex')).toBe('0');
     expect(getComputedStyle(screen.getByRole('group', { name: 'Operations' })).gap).toBe('2px');
+    expect(screen.getByRole('button', { name: 'GitHub identity' }).closest('.aw-rail-footer')).toBeTruthy();
 
     // The top bar exposes the project switcher and an API status indicator.
     expect(screen.getByLabelText('Project switcher')).toBeDefined();
@@ -169,8 +171,14 @@ describe('AppShell navigation', () => {
     expect(screen.getByText('Overview')).toBeDefined();
     expect(screen.getByText('Projects')).toBeDefined();
     expect(screen.getByRole('group', { name: 'Sessions' })).toBeDefined();
+    expect(screen.queryByRole('link', { name: 'Platform settings' })).toBeNull();
     expect(screen.queryByText('Work')).toBeNull();
     expect(screen.queryByText('System')).toBeNull();
+  });
+
+  it('shows Platform settings only to platform admins', () => {
+    renderShellAt('/overview', true);
+    expect(screen.getByRole('link', { name: 'Platform settings' })).toBeDefined();
   });
 
   it('shows the shared GitHub Copilot connection action for a typed capability requirement', async () => {
@@ -189,7 +197,7 @@ describe('AppShell navigation', () => {
     }));
 
     expect(await screen.findByText(GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE)).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Copilot' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub account' }));
     await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('proj-1'));
     expect(assign).toHaveBeenCalledWith(
@@ -219,6 +227,7 @@ describe('AppShell navigation', () => {
     expect(resolveActiveKey('/projects', undefined)).toBe('projects');
     expect(resolveActiveKey('/sessions', undefined)).toBe('sessions');
     expect(resolveActiveKey('/settings', undefined)).toBe('account-settings');
+    expect(resolveActiveKey('/platform-settings', undefined)).toBe('platform-settings');
   });
 
   it('extracts the project id from project-scoped paths', () => {
@@ -278,6 +287,7 @@ describe('AppShell navigation', () => {
       avatar_url: 'https://example.com/sabbour.png',
       entra_object_id: 'entra-1',
       platform_roles: ['PlatformAdmin'],
+      ai_configured: true,
     } as never);
 
     renderShellAt('/overview');
