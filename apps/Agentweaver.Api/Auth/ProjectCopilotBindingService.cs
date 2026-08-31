@@ -67,6 +67,7 @@ public sealed class ProjectCopilotBindingService(
         new Dictionary<string, string>(StringComparer.Ordinal) { ["projects"] = "/projects" };
 
     private readonly string _baseUrl = configuration["Auth:CopilotApp:BaseUrl"] ?? "https://github.com";
+    private readonly string _apiUrl = configuration["Auth:CopilotApp:ApiUrl"] ?? "https://api.github.com";
     private readonly string? _clientId = configuration["Auth:CopilotApp:ClientId"];
     private readonly string? _clientSecret = configuration["Auth:CopilotApp:ClientSecret"];
     private readonly string? _callbackUrl = configuration["Auth:CopilotApp:CallbackUrl"];
@@ -326,8 +327,9 @@ public sealed class ProjectCopilotBindingService(
         try
         {
             var secret = await secretStore.GetSecretAsync(reference.CredentialReference, ct).ConfigureAwait(false);
-            if (secret.Found)
-                await RevokeWithProviderAsync(DeserializeCredential(secret.Value)?.AccessToken, ct).ConfigureAwait(false);
+            var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
+            if (!await IsTokenStillInUseAsync(reference.Id, credential?.AccessToken, ct).ConfigureAwait(false))
+                await RevokeWithProviderAsync(credential?.AccessToken, ct).ConfigureAwait(false);
             await WriteTombstoneAsync(reference.CredentialReference, ct).ConfigureAwait(false);
         }
         catch
@@ -583,7 +585,7 @@ public sealed class ProjectCopilotBindingService(
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(ProviderTimeout);
         using var request = new HttpRequestMessage(HttpMethod.Delete,
-            $"{_baseUrl.TrimEnd('/')}/applications/{Uri.EscapeDataString(_clientId!)}/grant")
+            $"{_apiUrl.TrimEnd('/')}/applications/{Uri.EscapeDataString(_clientId!)}/token")
         {
             Content = new StringContent(JsonSerializer.Serialize(new { access_token = accessToken }), Encoding.UTF8, "application/json"),
         };
@@ -622,6 +624,26 @@ public sealed class ProjectCopilotBindingService(
         try { return string.IsNullOrWhiteSpace(value) ? null : JsonSerializer.Deserialize<CopilotCredential>(value); }
         catch (JsonException) { return null; }
     }
+
+    private async Task<bool> IsTokenStillInUseAsync(
+        string bindingId,
+        string? accessToken,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return false;
+        var otherBindings = await persistence.ListActiveCopilotBindingsAsync(bindingId, ct).ConfigureAwait(false);
+        foreach (var otherBinding in otherBindings)
+        {
+            var otherSecret = await secretStore.GetSecretAsync(otherBinding.CredentialReference, ct).ConfigureAwait(false);
+            var otherCredential = otherSecret.Found ? DeserializeCredential(otherSecret.Value) : null;
+            if (string.Equals(otherCredential?.AccessToken, accessToken, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
     private static GitHubAuditRecord CreateAudit(
         string entraObjectId, ProjectId projectId, GitHubAuditOutcome outcome, GitHubAuditReasonCode reason, string? version) =>
         new()

@@ -7,13 +7,22 @@ public sealed class ByokProviderConfigurationService(ISecretStore secretStore)
     : IByokProviderConfigurationProvider
 {
     private const string SecretName = "byok-provider-configuration";
+    private static readonly JsonSerializerOptions ReadJsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     public async Task<ByokProviderConfiguration?> GetAsync(CancellationToken ct)
     {
         var secret = await secretStore.GetSecretAsync(SecretName, ct).ConfigureAwait(false);
-        return secret.Found && !string.IsNullOrWhiteSpace(secret.Value)
-            ? JsonSerializer.Deserialize<ByokProviderConfiguration>(secret.Value)
-            : null;
+        if (!secret.Found || string.IsNullOrWhiteSpace(secret.Value))
+            return null;
+        try
+        {
+            var configuration = JsonSerializer.Deserialize<ByokProviderConfiguration>(secret.Value, ReadJsonOptions);
+            return IsValid(configuration) ? configuration : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     public async Task SetAsync(ByokProviderConfiguration configuration, CancellationToken ct)
@@ -43,5 +52,22 @@ public sealed class ByokProviderConfigurationService(ISecretStore secretStore)
             throw new ArgumentException("Provider model is required.");
         if (string.IsNullOrWhiteSpace(configuration.ApiKey))
             throw new ArgumentException("Provider API key is required.");
+    }
+
+    private static bool IsValid(ByokProviderConfiguration? configuration)
+    {
+        try
+        {
+            Validate(configuration!);
+            return true;
+        }
+        catch (ArgumentNullException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 }
