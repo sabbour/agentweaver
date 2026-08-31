@@ -366,7 +366,7 @@ internal sealed class RunRepositoryCredentialMinter(IServiceScopeFactory scopeFa
     public async Task<RepositoryCredential?> MintAsync(string runId, CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
-        var persistence = scope.ServiceProvider.GetRequiredService<TwoAppPersistenceStore>();
+        var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
         var snapshot = (await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false))
             .SingleOrDefault(x => x.Purpose == GitHubCapabilityPurpose.UnattendedRepository);
         if (snapshot is null)

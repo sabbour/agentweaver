@@ -53,7 +53,7 @@ public sealed record McpCopilotBrowserHandoffResult(
 /// </summary>
 public sealed class ProjectCopilotBindingService(
     IConfiguration configuration,
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
@@ -163,7 +163,7 @@ public sealed class ProjectCopilotBindingService(
             return new(CopilotBindingOutcome.GitHubBindingUnavailable, null, null, null);
 
         var state = CreateRandomValue();
-        var transactionId = TwoAppPersistenceStore.CreateExternalTransactionId();
+        var transactionId = GitHubConnectionsPersistenceStore.CreateExternalTransactionId();
         var cookie = CreateRandomValue();
         var verifier = CreateRandomValue();
         var now = DateTimeOffset.UtcNow;

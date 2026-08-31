@@ -71,7 +71,7 @@ public sealed record FencedGitHubCapabilitySnapshot(
 {
     // This is an in-process broker-to-vault implementation detail. It is never serializable or
     // visible outside this assembly's credential boundary.
-    internal TwoAppCredentialLocator? CredentialLocator { get; init; }
+    internal GitHubConnectionsCredentialLocator? CredentialLocator { get; init; }
 }
 
 /// <summary>
@@ -91,7 +91,7 @@ internal sealed record FencedMarketplaceCopilotCapability(
     string CredentialVersion,
     string GrantDigest)
 {
-    internal TwoAppCredentialLocator? CredentialLocator { get; init; }
+    internal GitHubConnectionsCredentialLocator? CredentialLocator { get; init; }
 }
 
 /// <summary>
@@ -143,7 +143,7 @@ internal sealed class RepoAppCredentialLease(
 }
 
 /// <summary>
-/// Persistence boundary for the two GitHub App model. It accepts only opaque credential
+/// Persistence boundary for the GitHub connections model. It accepts only opaque credential
 /// references and exposes guarded state transitions rather than mutable entity access.
 /// </summary>
 /// <remarks>
@@ -158,7 +158,7 @@ internal sealed class RepoAppCredentialLease(
 /// delivery idempotency, etc.) do not need to wire one; any code path that actually needs to
 /// classify a project's origin requires it and fails closed if it is absent.
 /// </remarks>
-public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? projectStore = null)
+public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProjectStore? projectStore = null)
 {
     private const int MarketplaceCapabilityCleanupBatchSize = 100;
     internal static readonly TimeSpan MarketplaceCapabilityClaimLease = TimeSpan.FromMinutes(5);
@@ -1041,9 +1041,9 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
                 CredentialLocator = snapshot.SourceKind switch
                 {
                     GitHubCapabilitySnapshotSourceKind.UserAuthorization =>
-                        TwoAppCredentialLocator.ForRepoAppUser(snapshot.CredentialReference!),
+                        GitHubConnectionsCredentialLocator.ForRepoAppUser(snapshot.CredentialReference!),
                     GitHubCapabilitySnapshotSourceKind.CopilotBinding =>
-                        TwoAppCredentialLocator.ForCopilotProject(snapshot.CredentialReference!),
+                        GitHubConnectionsCredentialLocator.ForCopilotProject(snapshot.CredentialReference!),
                     _ => null,
                 },
             };
@@ -1209,7 +1209,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
             capability.CredentialVersion,
             capability.GrantDigest)
         {
-            CredentialLocator = TwoAppCredentialLocator.ForCopilotProject(capability.CredentialReference),
+            CredentialLocator = GitHubConnectionsCredentialLocator.ForCopilotProject(capability.CredentialReference),
         };
     }
 
@@ -1413,7 +1413,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     /// or whose id is not a well-formed <see cref="ProjectId"/>, is treated as not blank (fail
     /// closed), since origin cannot be proven. Reads through <see cref="IProjectStore"/> (not the EF
     /// <c>db.Projects</c> set) so the check is correct for both the SQLite and Postgres providers;
-    /// see the remarks on <see cref="TwoAppPersistenceStore"/> for why the EF set cannot be used here.
+    /// see the remarks on <see cref="GitHubConnectionsPersistenceStore"/> for why the EF set cannot be used here.
     /// </summary>
     internal async Task<bool> IsIntentionallyBlankOriginProjectAsync(
         string projectId,
@@ -1421,7 +1421,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     {
         if (projectStore is null)
             throw new InvalidOperationException(
-                "TwoAppPersistenceStore requires an IProjectStore to classify project origin; none was supplied.");
+                "GitHubConnectionsPersistenceStore requires an IProjectStore to classify project origin; none was supplied.");
         if (!ProjectId.TryParse(projectId, out var id))
             return false;
 
@@ -1628,7 +1628,7 @@ public sealed class TwoAppPersistenceStore(MemoryDbContext db, IProjectStore? pr
     private static void EnsureSafe(object record)
     {
         if (SensitiveDataRedactor.ContainsSensitiveValue(JsonSerializer.Serialize(record)))
-            throw new ArgumentException("Two-App persistence accepts only redacted credential references and metadata.", nameof(record));
+            throw new ArgumentException("GitHub connections persistence accepts only redacted credential references and metadata.", nameof(record));
     }
 
     private static void EnsureCapabilitySnapshot(RunGitHubCapabilitySnapshotRecord snapshot)

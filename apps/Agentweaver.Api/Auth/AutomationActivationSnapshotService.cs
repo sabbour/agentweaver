@@ -23,7 +23,7 @@ public enum AutomationActivationOutcome
 /// resolved server-side and captured as an immutable, fenceable tuple.
 /// </summary>
 public sealed class AutomationActivationSnapshotService(
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
     IProjectRoleAssignmentStore roleAssignments)
 {
     public async Task<(AutomationActivationOutcome Outcome, FencedAutomationActivation? Activation)> ActivateAsync(

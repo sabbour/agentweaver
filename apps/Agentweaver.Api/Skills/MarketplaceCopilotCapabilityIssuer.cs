@@ -20,7 +20,7 @@ public sealed class MarketplaceCopilotCapabilityIssuer(IServiceScopeFactory scop
     internal async Task PruneAsync(CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
-        var persistence = scope.ServiceProvider.GetRequiredService<TwoAppPersistenceStore>();
+        var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
         await persistence.PruneMarketplaceCopilotCapabilitiesAsync(DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
     }
 
@@ -34,7 +34,7 @@ public sealed class MarketplaceCopilotCapabilityIssuer(IServiceScopeFactory scop
             return false;
 
         using var scope = scopeFactory.CreateScope();
-        var persistence = scope.ServiceProvider.GetRequiredService<TwoAppPersistenceStore>();
+        var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
         return await persistence.HasActiveMarketplaceCopilotBindingAsync(
             projectId.ToString(), caller.EntraObjectId, ct).ConfigureAwait(false);
     }
@@ -49,7 +49,7 @@ public sealed class MarketplaceCopilotCapabilityIssuer(IServiceScopeFactory scop
 
         using var scope = scopeFactory.CreateScope();
         var now = DateTimeOffset.UtcNow;
-        var persistence = scope.ServiceProvider.GetRequiredService<TwoAppPersistenceStore>();
+        var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
         var capability = await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
             projectId.ToString(),
             caller.EntraObjectId,

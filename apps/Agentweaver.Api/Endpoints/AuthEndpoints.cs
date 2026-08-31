@@ -63,7 +63,7 @@ public static class AuthEndpoints
             HttpContext httpContext,
             RepoAppAuthorizationBeginRequest? request,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -87,7 +87,7 @@ public static class AuthEndpoints
             HttpContext httpContext,
             RepoAppAuthorizationBeginRequest? request,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -110,7 +110,7 @@ public static class AuthEndpoints
             string transactionId,
             IConfiguration configuration,
             BrowserEntraSessionService browserSessions,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -136,7 +136,7 @@ public static class AuthEndpoints
             string? error,
             IConfiguration configuration,
             BrowserEntraSessionService browserSessions,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -155,7 +155,7 @@ public static class AuthEndpoints
             HttpContext httpContext,
             string transactionId,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -171,7 +171,7 @@ public static class AuthEndpoints
         app.MapPost("/api/auth/github/repo-app/authorization/refresh", async (
             HttpContext httpContext,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>
@@ -186,7 +186,7 @@ public static class AuthEndpoints
         app.MapDelete("/api/auth/github/repo-app/authorization", async (
             HttpContext httpContext,
             IConfiguration configuration,
-            TwoAppPersistenceStore persistence,
+            GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
             CancellationToken ct) =>

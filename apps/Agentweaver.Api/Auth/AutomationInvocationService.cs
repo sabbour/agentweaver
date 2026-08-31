@@ -86,7 +86,7 @@ public interface IAutomationInvocationService
 /// </summary>
 public sealed class AutomationInvocationService(
     MemoryDbContext db,
-    TwoAppPersistenceStore persistence) : IAutomationInvocationService
+    GitHubConnectionsPersistenceStore persistence) : IAutomationInvocationService
 {
     /// <summary>
     /// Claims an invocation only from the sole active activation for the project. Trigger producers

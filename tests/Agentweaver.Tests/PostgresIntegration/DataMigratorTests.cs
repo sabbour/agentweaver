@@ -158,7 +158,7 @@ public sealed class DataMigratorTests : IDisposable
     }
 
     [PostgresFact]
-    public async Task Migrator_TwoAppFailure_RollsBackEveryTwoAppRecord()
+    public async Task Migrator_GitHubConnectionsFailure_RollsBackEveryGitHubConnectionsRecord()
     {
         var options = new DbContextOptionsBuilder<MemoryDbContext>()
             .UseSqlite($"Data Source={_memoryDbPath}")
@@ -192,10 +192,10 @@ public sealed class DataMigratorTests : IDisposable
         }
 
         var migrator = BuildMigrator(_ => Task.FromException(
-            new InvalidOperationException("Injected two-App transfer failure.")));
+            new InvalidOperationException("Injected GitHub connections transfer failure.")));
         Func<Task> migrate = () => migrator.RunAsync();
         await migrate.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Injected two-App transfer failure.");
+            .WithMessage("Injected GitHub connections transfer failure.");
 
         await using var verify = await _pg.CreateDbContextAsync();
         (await verify.ProjectCopilotBindings.CountAsync(x => x.ProjectId == _seededProjectId)).Should().Be(0);
@@ -205,7 +205,7 @@ public sealed class DataMigratorTests : IDisposable
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private SqliteToPostgresMigrator BuildMigrator(Func<CancellationToken, Task>? beforeTwoAppCommit = null)
+    private SqliteToPostgresMigrator BuildMigrator(Func<CancellationToken, Task>? beforeGitHubConnectionsCommit = null)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -219,7 +219,7 @@ public sealed class DataMigratorTests : IDisposable
             _pg.Factory,
             config,
             NullLogger<SqliteToPostgresMigrator>.Instance,
-            beforeTwoAppCommit);
+            beforeGitHubConnectionsCommit);
     }
 
     /// <summary>

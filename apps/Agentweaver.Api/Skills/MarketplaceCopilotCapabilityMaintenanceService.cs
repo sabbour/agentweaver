@@ -48,7 +48,7 @@ internal sealed class MarketplaceCopilotCapabilityMaintenanceService(
     internal async Task<int> SweepOnceAsync(CancellationToken ct = default)
     {
         using var scope = scopeFactory.CreateScope();
-        var persistence = scope.ServiceProvider.GetRequiredService<TwoAppPersistenceStore>();
+        var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
         return await persistence
             .PruneMarketplaceCopilotCapabilitiesAsync(DateTimeOffset.UtcNow, ct)
             .ConfigureAwait(false);

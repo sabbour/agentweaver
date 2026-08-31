@@ -16,7 +16,7 @@ public sealed class AutomationInvocationServiceTests
     {
         await using var db = await OpenDatabaseAsync();
         var activation = await ActivateAsync(db);
-        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        var service = new AutomationInvocationService(db, new GitHubConnectionsPersistenceStore(db));
 
         (await service.TryClaimAsync(activation.ActivationId, "weekly:2026-08-31", "delivery-1", "schedule", 1, 99))
             .Should().BeFalse("a trigger must prove the activation's exact repository identity");
@@ -32,7 +32,7 @@ public sealed class AutomationInvocationServiceTests
     {
         await using var db = await OpenDatabaseAsync();
         var activation = await ActivateAsync(db);
-        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        var service = new AutomationInvocationService(db, new GitHubConnectionsPersistenceStore(db));
         (await service.TryClaimAsync(activation.ActivationId, "event:1", "delivery-2", "issues", 1, 10)).Should().BeTrue();
         var invocationId = (await db.AutomationInvocations.SingleAsync()).Id;
         var projectId = ProjectId.Parse(activation.ProjectId);
@@ -58,7 +58,7 @@ public sealed class AutomationInvocationServiceTests
     {
         await using var db = await OpenDatabaseAsync();
         var project = ProjectId.New();
-        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        var service = new AutomationInvocationService(db, new GitHubConnectionsPersistenceStore(db));
 
         (await service.TryClaimForProjectAsync(project, "schedule:missing", null, "schedule")).Should().BeNull(
             "an automated trigger must not create a pickup task without an active fenced activation");
@@ -82,7 +82,7 @@ public sealed class AutomationInvocationServiceTests
         await using var db = await OpenDatabaseAsync();
         var activation = await ActivateAsync(db);
         var project = ProjectId.Parse(activation.ProjectId);
-        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        var service = new AutomationInvocationService(db, new GitHubConnectionsPersistenceStore(db));
         const string occurrenceKey = "workflow-event-trigger:on-issue-opened:issue.opened:delivery-1";
 
         var claimed = await service.TryClaimForProjectAsync(
@@ -127,7 +127,7 @@ public sealed class AutomationInvocationServiceTests
     {
         await using var db = await OpenDatabaseAsync();
         var activation = await ActivateAsync(db);
-        var service = new AutomationInvocationService(db, new TwoAppPersistenceStore(db));
+        var service = new AutomationInvocationService(db, new GitHubConnectionsPersistenceStore(db));
         var project = ProjectId.Parse(activation.ProjectId);
 
         (await service.TryClaimForProjectAsync(project, "event:retry", "delivery-retry", "issues")).Should().NotBeNull();
@@ -158,12 +158,12 @@ public sealed class AutomationInvocationServiceTests
         await firstDb.Database.MigrateAsync();
         var activation = await ActivateAsync(firstDb);
         var project = ProjectId.Parse(activation.ProjectId);
-        var first = new AutomationInvocationService(firstDb, new TwoAppPersistenceStore(firstDb));
+        var first = new AutomationInvocationService(firstDb, new GitHubConnectionsPersistenceStore(firstDb));
         (await first.TryClaimForProjectAsync(project, "schedule:concurrent-legacy", null, "schedule")).Should().NotBeNull();
         var invocationId = await firstDb.AutomationInvocations.Select(x => x.Id).SingleAsync();
 
         await using var secondDb = new MemoryDbContext(options);
-        var second = new AutomationInvocationService(secondDb, new TwoAppPersistenceStore(secondDb));
+        var second = new AutomationInvocationService(secondDb, new GitHubConnectionsPersistenceStore(secondDb));
         var taskId = BacklogTaskId.New();
         var results = await Task.WhenAll(
             first.TryAdoptLegacyProvisionalTaskAsync(invocationId, project, taskId),
@@ -198,7 +198,7 @@ public sealed class AutomationInvocationServiceTests
         });
         await db.SaveChangesAsync();
         var roles = new OwnerRoles(project, "owner");
-        var result = await new AutomationActivationSnapshotService(new TwoAppPersistenceStore(db), roles)
+        var result = await new AutomationActivationSnapshotService(new GitHubConnectionsPersistenceStore(db), roles)
             .ActivateAsync(new CallerContext { User = "owner", EntraObjectId = "owner" },
                 new ClaimsPrincipal(new ClaimsIdentity([new Claim("oid", "owner")], "test")), project);
         result.Activation.Should().NotBeNull();

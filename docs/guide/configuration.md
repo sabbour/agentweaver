@@ -95,7 +95,7 @@ active installation, canonical repository grant, and unchanged permission digest
 or sandbox route exposes the broker. Repository and Copilot adapter delivery is owned by #947;
 this broker layer never configures a sandbox or model process.
 
-Two-App credential reads use current secret versions only. Revocation writes a tombstone before
+GitHub connections credential reads use current secret versions only. Revocation writes a tombstone before
 deleting the current value. Azure Key Vault soft-delete and purge protection can retain older
 provider versions for the configured retention period; this is an accepted recovery risk,
 mitigated by retention policy and least-privilege Key Vault RBAC that forbids versioned reads

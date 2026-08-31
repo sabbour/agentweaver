@@ -5,18 +5,18 @@ using System.Reflection;
 
 namespace Agentweaver.Tests.Auth;
 
-public sealed class TwoAppCredentialArchitectureTests
+public sealed class GitHubConnectionsCredentialArchitectureTests
 {
     private static readonly string[] AllowedReservedCredentialOwners =
     [
         "Auth/ProjectCopilotBindingService.cs",
         "Auth/RepoAppUserAuthorizationService.cs",
-        "Auth/TwoAppCredentialVault.cs",
+        "Auth/GitHubConnectionsCredentialVault.cs",
         "Webhooks/RepoAppInstallationService.cs",
     ];
 
     [Fact]
-    public void TwoAppContract_HasOnlyPurposeBoundRepoAndCopilotAppCapabilities()
+    public void GitHubConnectionsContract_HasOnlyPurposeBoundRepoAndCopilotAppCapabilities()
     {
         Enum.GetValues<GitHubAppKind>().Should().Equal(
             GitHubAppKind.Repo,

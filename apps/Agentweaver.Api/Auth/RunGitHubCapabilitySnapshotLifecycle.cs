@@ -19,7 +19,7 @@ namespace Agentweaver.Api.Auth;
 
 internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
-    TwoAppPersistenceStore persistence,
+    GitHubConnectionsPersistenceStore persistence,
 
     GitHubCapabilityBroker broker)
 

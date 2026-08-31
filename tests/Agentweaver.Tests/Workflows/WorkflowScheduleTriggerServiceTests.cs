@@ -328,7 +328,7 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
             .AddSingleton<IBacklogTaskStore>(_backlog)
             .AddSingleton(recoveryRegistry)
             .AddScoped<IAutomationInvocationService>(_ =>
-                new AutomationInvocationService(invocationDb, new TwoAppPersistenceStore(invocationDb)))
+                new AutomationInvocationService(invocationDb, new GitHubConnectionsPersistenceStore(invocationDb)))
             .BuildServiceProvider();
         var service = new WorkflowScheduleTriggerService(
             provider.GetRequiredService<IServiceScopeFactory>(),

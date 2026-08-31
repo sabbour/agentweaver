@@ -84,7 +84,7 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
             return null;
 
         using var scope = scopeFactory.CreateScope();
-        var persistence = scope.ServiceProvider.GetRequiredService<TwoAppPersistenceStore>();
+        var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
         var snapshot = (await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false))
             .SingleOrDefault(candidate => candidate.Purpose == purpose);
         if (snapshot is null)

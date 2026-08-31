@@ -169,8 +169,8 @@ public sealed class GitHubRepositorySelectionBrokerTests
         InMemorySecretStore secrets,
         HttpMessageHandler handler) =>
         new(
-            new TwoAppPersistenceStore(new MemoryDbContext(options)),
-            new TwoAppCredentialVault(secrets),
+            new GitHubConnectionsPersistenceStore(new MemoryDbContext(options)),
+            new GitHubConnectionsCredentialVault(secrets),
             new GitHubRepositorySelectionClient(new StubHttpClientFactory(handler)));
 
     private static async Task SeedLiveAuthorizationAsync(
