@@ -2,6 +2,7 @@ import {
   apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import { Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, DialogTrigger, Field, makeStyles, SpinButton, Text, tokens } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { SettingsRegular } from '@fluentui/react-icons';
 import { AUTOMATION_HELP } from '../automationHelp';
 import { AutomationToggle } from '../AutomationToggle';
@@ -63,7 +64,13 @@ export function PickupSettings({ projectId }: PickupSettingsProps) {
       </DialogTrigger>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Pickup settings</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Pickup settings</DialogTitle>
           <DialogContent>
             <div className={styles.fields}>
               <Field label="Max Ready items per heartbeat" hint="How many Ready tasks the coordinator may claim per tick (1-20).">

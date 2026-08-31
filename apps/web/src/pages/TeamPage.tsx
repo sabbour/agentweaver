@@ -1,4 +1,4 @@
-﻿import { apiClient } from '../api/apiClient';
+import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import {
   Badge,
@@ -29,6 +29,7 @@ import {
   Title3,
   tokens,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import {
   Dismiss24Regular,
   People24Regular,
@@ -200,7 +201,13 @@ function RemoveMemberDialog({
       </DialogTrigger>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Remove {member.name}</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Remove {member.name}</DialogTitle>
           <DialogContent>
             <Text>Are you sure you want to remove {member.name} from the team? This cannot be undone.</Text>
             {error && (
@@ -277,7 +284,13 @@ function ReroleDialog({
       </DialogTrigger>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Re-role {member.name}</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Re-role {member.name}</DialogTitle>
           <DialogContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Field label="New role" required>
@@ -371,7 +384,13 @@ function AddMemberDialog({
       </DialogTrigger>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Add team member</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Add team member</DialogTitle>
           <DialogContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Field label="Role" required>

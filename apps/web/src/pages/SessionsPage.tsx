@@ -13,6 +13,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { AddRegular, DeleteRegular } from '@fluentui/react-icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
@@ -241,7 +242,13 @@ export function SessionsPage() {
       <Dialog open={deleteTarget !== null} onOpenChange={(_, data) => { if (!data.open) closeDeleteDialog(); }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Delete this conversation?</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Delete this conversation?</DialogTitle>
             <DialogContent>
               This cannot be undone.
               {deleteError && <Text className={styles.dialogError}>{deleteError}</Text>}

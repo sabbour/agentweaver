@@ -20,6 +20,7 @@ import {
   Textarea,
   tokens,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { parseNoTeamStartError } from '../api/errors';
@@ -108,7 +109,13 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
       </DialogTrigger>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Start a task</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Start a task</DialogTitle>
           <DialogContent>
             <div className={styles.stack}>
               <Text>

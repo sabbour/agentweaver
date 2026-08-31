@@ -14,6 +14,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   DrawerBody,
   DrawerHeader,
   DrawerHeaderTitle,
@@ -30,6 +31,7 @@ import {
   tokens,
   Tooltip,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import {
   ArrowSync24Regular,
   ArrowUpload24Regular,
@@ -997,7 +999,13 @@ export function SkillsPage() {
       >
         <DialogSurface aria-describedby="blueprint-defaults-description">
           <DialogBody>
-            <DialogTitle>Preview blueprint skill defaults</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close preview" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Preview blueprint skill defaults</DialogTitle>
             <DialogContent className={styles.defaultsSections}>
               <Text id="blueprint-defaults-description">Review the proposed built-in skill changes before they are applied to this existing project.</Text>
               {busy === 'defaults-preview' && <LoadingState rows={3} />}
@@ -1067,7 +1075,13 @@ export function SkillsPage() {
       <Dialog open={addOpen} onOpenChange={(_, d) => setAddOpen(d.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Add skill</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Add skill</DialogTitle>
             <DialogContent className={styles.formGrid}>
               <Field label="Name" required hint="Command slug: lowercase letters, numbers, and hyphens.">
                 <Input value={skillName} onChange={(_, data) => setSkillName(data.value)} disabled={isBusy} placeholder="code-review" />
@@ -1096,7 +1110,13 @@ export function SkillsPage() {
       <Dialog open={generateOpen} onOpenChange={(_, d) => setGenerateOpen(d.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Generate skill</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Generate skill</DialogTitle>
             <DialogContent className={styles.formGrid}>
               <Field label="Describe the skill to generate" required>
                 <Textarea value={generatePrompt} onChange={(_, data) => setGeneratePrompt(data.value)} disabled={isBusy} rows={4} resize="vertical" />
@@ -1133,7 +1153,13 @@ export function SkillsPage() {
 
       {/* Import dialog */}
       <Dialog open={marketplaceOpen} onOpenChange={(_, d) => setMarketplaceOpen(d.open)}>
-        <DialogSurface><DialogBody><DialogTitle>Browse skill marketplaces</DialogTitle><DialogContent className={styles.formGrid}>
+        <DialogSurface><DialogBody><DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Browse skill marketplaces</DialogTitle><DialogContent className={styles.formGrid}>
           <Text>Browse curated sources or a source you've added, then import selected skills into this catalog.</Text>
           <Field label="Add a source by GitHub URL" hint="Paste a repo URL (or owner/repo). Layout is auto-detected unless you set a subpath.">
             <Input
@@ -1201,7 +1227,13 @@ export function SkillsPage() {
       <Dialog open={importOpen} onOpenChange={(_, d) => { setImportOpen(d.open); if (!d.open) { setCandidates(null); setSourceUrl(''); } }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Import skill</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Import skill</DialogTitle>
             <DialogContent className={styles.formGrid}>
               <MessageBar intent="warning"><MessageBarBody>Only import skills from sources you trust. Imported skills can change how the agent behaves.</MessageBarBody></MessageBar>
               <div

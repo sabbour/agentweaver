@@ -67,7 +67,8 @@ app.MapPost("/api/runs/{id}/outcome-spec/revise", ReviseOutcomeSpecAsync)
 // -----------------------------------------------------------------------
 
 // GET /api/runs/{coordinatorRunId}/work-plan — the persisted work plan (subtasks + dependencies)
-// for a coordinator run. 404 when the run is not a coordinator run / has no work plan yet.
+// for a coordinator run. An active coordinator without a plan returns the typed
+// work_plan_not_ready 404 while asynchronous decomposition is still in progress.
 app.MapGet("/api/runs/{coordinatorRunId}/work-plan", GetCoordinatorWorkPlanAsync)
     .WithName("GetCoordinatorWorkPlan")
     .WithTags("Coordinator")
@@ -502,7 +503,17 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             return ForbiddenError();
 
         var plan = await ReadWorkPlanWithBriefWaitAsync(coordinator, coordinatorRunId, ct);
-        if (plan is null) return NotFoundError("work_plan_not_found", "The coordinator work plan was not found.");
+        if (plan is null)
+        {
+            var outcomeSpec = await coordinator.GetOutcomeSpecAsync(coordinatorRunId, ct);
+            var awaitingMaterialization = run.ParentRunId is null
+                && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+                && !EndpointHelpers.IsTerminal(run.Status)
+                && string.Equals(outcomeSpec?.Status, "confirmed", StringComparison.Ordinal);
+            return awaitingMaterialization
+                ? NotFoundError("work_plan_not_ready", "The coordinator work plan is still being created.")
+                : NotFoundError("work_plan_not_found", "The coordinator work plan was not found.");
+        }
 
         return Results.Json(MapWorkPlan(plan));
     }
