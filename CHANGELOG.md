@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.22.0
+
+### Minor Changes
+
+- a0a1ccc: Added a visual diagram of cluster health on the Cluster page, showing warm pools, sandbox claims, and agent pods.
+
+### Patch Changes
+
+- 8610042: Fix a production startup outage where Copilot App validation treated a correctly configured GitHub App with no extra permissions as having repository permissions, crashing the API on every boot.
+- 39dc6da: Prune known-safe browser cache directories (Cache, Code Cache, BrowserMetrics, GrShaderCache,
+  etc.) from the demo-recording tool's persistent playwright-cli session profile after each
+  `close` command. Previously this profile (`scripts/demo-recording/.auth/sessions/<name>/`)
+  grew unbounded across recording sessions since nothing ever cleaned it up; a single session
+  had accumulated ~52MB of regenerable cache data.
+- 39dc6da: Fix `deploy-from-commit` and `deploy-from-release` not auto-loading the per-user
+  `params.<username>.json` config file the way `deploy-from-local` already does. Previously
+  these two subcommands required every deploy variable (e.g. `KEYVAULT_NAME`) to be set by
+  hand in the shell environment, unlike `deploy-from-local`.
+- 2e2e1a9: Wire Auth__CopilotApp__FrontendUrl and Auth__RepoApp__FrontendUrl into the production Kubernetes deployment. Without these, the post-authorization browser redirect for both GitHub Apps fell back to the http://localhost:5173 development default, sending production users to their own machine instead of back to the deployed frontend after connecting.
+- 428bb6d: Fix GitHub App credentials being rejected after a successful connection because their stored JSON property casing differed from the capability broker's reader.
+- 5e62974: Log the underlying reason when a GitHub Copilot App binding attempt or connection status check fails with `github_binding_unavailable`, instead of silently swallowing the exception. This was previously undiagnosable in production because the failure path had no logging at all.
+- 3c64aa9: Added a link to manage your platform role assignments directly in Microsoft Entra ID.
+- 428bb6d: Restore connecting a blank project to a newly created GitHub repository through the active Repo App authorization.
+- 761cf98: Restore the signed-in GitHub identity indicator in the sidebar footer after the legacy OAuth controls were removed.
+- 95b965d: Wire GitHub Copilot App and Repo App credentials into the production Kubernetes deployment so the previously merged authentication fixes can take effect.
+- fe6b9d8: Fixed GitHub Copilot App and Repo App connections not persisting, causing repository loading, session start, and run start failures.
+
 ## 0.21.4
 
 ### Patch Changes
