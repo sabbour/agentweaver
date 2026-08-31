@@ -74,10 +74,12 @@ internal sealed class GitHubConnectionsCredentialVault(ISecretStore secretStore)
         try
         {
             using var document = JsonDocument.Parse(value);
-            return document.RootElement.TryGetProperty("status", out var status) &&
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   document.RootElement.TryGetProperty("status", out var status) &&
+                   status.ValueKind == JsonValueKind.String &&
                    string.Equals(status.GetString(), "revoked", StringComparison.Ordinal);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return false;
         }

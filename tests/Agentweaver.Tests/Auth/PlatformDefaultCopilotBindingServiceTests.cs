@@ -95,6 +95,46 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
     }
 
     [Fact]
+    public async Task Disconnect_DoesNotRevokeATokenThatIsStillUsedByAProjectBinding()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var secrets = new InMemorySecretStore();
+        var httpClientFactory = new StubHttpClientFactory();
+        db.Projects.Add(new ProjectRecord { ProjectId = "project" });
+        await new GitHubConnectionsPersistenceStore(db).ReplacePlatformDefaultCopilotBindingAsync(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-existing",
+            CredentialVersion = "version-one",
+            GrantDigest = "digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(new ProjectCopilotBindingRecord
+        {
+            Id = "project-binding",
+            ProjectId = "project",
+            EntraObjectId = "owner",
+            CredentialReference = "copilot-app-project-project-version-two",
+            CredentialVersion = "version-two",
+            GrantDigest = "digest-project",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await secrets.SetSecretAsync("copilot-app-platform-default-existing", """{"Status":"signed-in","AccessToken":"ghu_shared","GitHubLogin":"octocat"}""");
+        await secrets.SetSecretAsync("copilot-app-project-project-version-two", """{"Status":"signed-in","AccessToken":"ghu_shared","GitHubLogin":"octocat"}""");
+        await db.SaveChangesAsync();
+        var service = CreateService(db, secrets, httpClientFactory: httpClientFactory);
+
+        (await service.DisconnectAsync(Admin("platform-admin"), HumanPrincipal()))
+            .Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
+
+        httpClientFactory.ProviderGrantRevocations.Should().Be(0);
+        (await secrets.GetSecretAsync("copilot-app-project-project-version-two")).Value.Should().Contain("ghu_shared");
+    }
+
+    [Fact]
     public async Task CompleteBrowserCallback_RevokeAndTombstonesReplacedCredentialAfterRebind()
     {
         await using var db = await OpenDatabaseAsync();
@@ -123,7 +163,7 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
     }
 
     [Fact]
-    public async Task CompleteBrowserCallback_DoesNotRevokeTheReplacementGrantWhenTheSameGitHubLoginReconnects()
+    public async Task CompleteBrowserCallback_RevokesOnlyTheRemovedTokenWhenTheSameGitHubLoginReconnects()
     {
         await using var db = await OpenDatabaseAsync();
         var secrets = new InMemorySecretStore();
@@ -138,7 +178,34 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
             Status = GitHubBindingStatus.Active,
             BoundAt = DateTimeOffset.UtcNow.AddMinutes(-5),
         });
-        await secrets.SetSecretAsync("copilot-app-platform-default-old", """{"access_token":"ghu_old","refresh_token":"refresh-old","status":"signed-in","github_login":"octocat"}""");
+        await secrets.SetSecretAsync("copilot-app-platform-default-old", """{"Status":"signed-in","AccessToken":"ghu_old","RefreshToken":"refresh-old","GitHubLogin":"octocat"}""");
+        var service = CreateService(db, secrets, httpClientFactory: httpClientFactory);
+        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal());
+
+        (await service.CompleteBrowserCallbackAsync(null, null, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
+
+        httpClientFactory.ProviderGrantRevocations.Should().Be(1);
+        (await secrets.GetSecretAsync("copilot-app-platform-default-old")).Should().Be(SecretGetResult.NotFound);
+    }
+
+    [Fact]
+    public async Task CompleteBrowserCallback_DoesNotRevokeTheActiveBindingWhenGitHubReturnsTheSameAccessToken()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var secrets = new InMemorySecretStore();
+        var httpClientFactory = new StubHttpClientFactory("""{"access_token":"ghu_same","refresh_token":"refresh-secret"}""");
+        await new GitHubConnectionsPersistenceStore(db).ReplacePlatformDefaultCopilotBindingAsync(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "first-admin",
+            CredentialReference = "copilot-app-platform-default-old",
+            CredentialVersion = "version-old",
+            GrantDigest = "digest-old",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+        });
+        await secrets.SetSecretAsync("copilot-app-platform-default-old", """{"Status":"signed-in","AccessToken":"ghu_same","RefreshToken":"refresh-old","GitHubLogin":"octocat"}""");
         var service = CreateService(db, secrets, httpClientFactory: httpClientFactory);
         var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal());
 
@@ -146,6 +213,10 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
             .Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
 
         httpClientFactory.ProviderGrantRevocations.Should().Be(0);
+        var binding = await db.PlatformDefaultCopilotBindings.SingleAsync();
+        var activeSecret = await secrets.GetSecretAsync(binding.CredentialReference);
+        activeSecret.Found.Should().BeTrue();
+        activeSecret.Value.Should().Contain("ghu_same");
         (await secrets.GetSecretAsync("copilot-app-platform-default-old")).Should().Be(SecretGetResult.NotFound);
     }
 
@@ -189,7 +260,7 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
 
     private static string Query(string url, string name) => Uri.UnescapeDataString(new Uri(url).Query.TrimStart('?').Split('&').Single(x => x.StartsWith($"{name}=", StringComparison.Ordinal)).Split('=', 2)[1]);
 
-    private sealed class StubHttpClientFactory(string? response) : IHttpClientFactory
+    private sealed class StubHttpClientFactory(string? response = null) : IHttpClientFactory
     {
         public int ProviderGrantRevocations { get; private set; }
 
