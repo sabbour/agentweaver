@@ -80,6 +80,7 @@ internal sealed class AgentHostRuntimeState
     /// capability snapshot. It is delivered only through the one-time configuration request.
     /// </summary>
     public GitHubCapabilitySnapshotCredential? CopilotCredential { get; private set; }
+    public ByokProviderConfiguration? ByokProviderConfiguration { get; private set; }
 
     /// <summary>
     /// Short-lived installation credential for the configured run and repository. The shell tool
@@ -114,6 +115,7 @@ internal sealed class AgentHostRuntimeState
         TurnBearerToken = options.TurnBearerToken ?? string.Empty;
         PreviewRunnerCredential = string.Empty; // not available on env-var launch path
         CopilotCredential = null; // env-var launches cannot bypass run snapshot redemption
+        ByokProviderConfiguration = null;
         RepositoryAccessToken = null;
         CallerBearerToken = null; // operator-assistant-only warm-pod input
         SetToolApprovalApiAccess(options.ApiBaseUrl, options.ApiKey);
@@ -159,6 +161,7 @@ internal sealed class AgentHostRuntimeState
         TurnBearerToken = configuration.TurnBearerToken ?? string.Empty;
         PreviewRunnerCredential = configuration.PreviewRunnerCredential ?? string.Empty;
         CopilotCredential = configuration.CopilotCredential;
+        ByokProviderConfiguration = configuration.ByokProviderConfiguration;
         RepositoryAccessToken = string.IsNullOrWhiteSpace(configuration.RepositoryAccessToken)
             ? null
             : configuration.RepositoryAccessToken;
@@ -233,4 +236,5 @@ internal sealed record AgentHostRunConfiguration(
     string? AgentName = null,
     string? CallerBearerToken = null,
     string? RepositoryAccessToken = null,
-    string? ToolApprovalApiBaseUrl = null);
+    string? ToolApprovalApiBaseUrl = null,
+    ByokProviderConfiguration? ByokProviderConfiguration = null);

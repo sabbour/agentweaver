@@ -10,6 +10,7 @@ internal static class AgentHostRuntimeServiceCollectionExtensions
     {
         services.AddHttpClient("agentweaver-api");
         services.AddSingleton<AgentHostRuntimeState>();
+        services.AddSingleton<IByokProviderConfigurationProvider, AgentHostByokProviderConfigurationProvider>();
         services.AddSingleton<IToolApprovalOwnerResolver, AgentHostToolApprovalOwnerResolver>();
         services.AddAgentRuntime();
         services.AddSingleton<IAgentHostToolApprovalPolicyClient, AgentHostToolApprovalPolicyClient>();
@@ -17,6 +18,13 @@ internal static class AgentHostRuntimeServiceCollectionExtensions
         services.AddSingleton<IToolApprovalGate>(sp =>
             sp.GetRequiredService<AgentHostDurableToolApprovalGate>());
         return services;
+    }
+
+    internal sealed class AgentHostByokProviderConfigurationProvider(AgentHostRuntimeState runtimeState)
+        : IByokProviderConfigurationProvider
+    {
+        public Task<ByokProviderConfiguration?> GetAsync(CancellationToken ct) =>
+            Task.FromResult(runtimeState.ByokProviderConfiguration);
     }
 }
 
