@@ -9,6 +9,7 @@ import type {
   ApplyBlueprintSkillDefaultsResponse,
   AmendProposalRequest,
   AnswerQuestionResponse,
+  AuthConfigResponse,
   AuthSessionResponse,
   AssemblyReviewDecision,
   AssemblyReviewRequest,
@@ -511,6 +512,10 @@ export class AgentweaverApiClient {
 
   getAuthSession(): Promise<AuthSessionResponse> {
     return this.request<AuthSessionResponse>('GET', '/auth/session');
+  }
+
+  getAuthConfig(): Promise<AuthConfigResponse> {
+    return this.request<AuthConfigResponse>('GET', '/auth/config');
   }
 
   beginRepoAppAuthorization(): Promise<{ authorization_url: string; transaction_id: string; expires_at: string }> {

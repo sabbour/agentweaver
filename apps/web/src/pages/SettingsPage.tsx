@@ -11,7 +11,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { useEffect, useMemo, useState } from 'react';
-import type { AuthSessionResponse } from '../api/types';
+import type { AuthConfigResponse, AuthSessionResponse } from '../api/types';
 import {
   Body,
   Label,
@@ -44,6 +44,10 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
+  formActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+  },
 });
 
 function formatError(err: unknown): string {
@@ -75,7 +79,7 @@ export function SettingsPage() {
         if (!cancelled) setAuthLoading(false);
       });
     void apiClient.getAuthConfig()
-      .then(({ entra }) => {
+      .then(({ entra }: AuthConfigResponse) => {
         if (!entra.tenant_id || !entra.client_id || cancelled) return;
         setEntraAdminUrl(
           `https://entra.microsoft.com/${encodeURIComponent(entra.tenant_id)}/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/${encodeURIComponent(entra.client_id)}/isMSAApp~/false`,
