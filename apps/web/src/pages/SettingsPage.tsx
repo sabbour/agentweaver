@@ -58,6 +58,8 @@ export function SettingsPage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [entraAdminUrl, setEntraAdminUrl] = useState<string | null>(null);
+  const [repoAppConnecting, setRepoAppConnecting] = useState(false);
+  const [repoAppError, setRepoAppError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,7 +74,6 @@ export function SettingsPage() {
       .finally(() => {
         if (!cancelled) setAuthLoading(false);
       });
-
     void apiClient.getAuthConfig()
       .then(({ entra }) => {
         if (!entra.tenant_id || !entra.client_id || cancelled) return;
@@ -91,6 +92,18 @@ export function SettingsPage() {
     () => (session?.platform_roles ?? []).filter((role, index, all) => all.indexOf(role) === index),
     [session?.platform_roles],
   );
+
+  const connectRepoApp = async () => {
+    setRepoAppConnecting(true);
+    setRepoAppError(null);
+    try {
+      const handoff = await apiClient.beginRepoAppAuthorization();
+      window.location.assign(handoff.authorization_url);
+    } catch (err) {
+      setRepoAppError(formatError(err));
+      setRepoAppConnecting(false);
+    }
+  };
 
   return (
     <PageContainer width="readable">
@@ -146,6 +159,37 @@ export function SettingsPage() {
               </div>
             </>
           )}
+        </div>
+      </PageSection>
+
+      <PageSection
+        title="GitHub connections"
+        description="GitHub Copilot provides AI access. The separate Repo App provides repository access."
+      >
+        <div className={styles.section}>
+          <div className={styles.subBlock}>
+            <TitleText>GitHub Copilot App</TitleText>
+            <Body tone="muted">
+              Copilot connections are selected per project, so the account used for AI can match that project’s needs.
+            </Body>
+            <Button appearance="secondary" onClick={() => window.location.assign('/projects')}>
+              Manage Copilot connections in projects
+            </Button>
+          </div>
+          <div className={styles.subBlock}>
+            <TitleText>GitHub Repo App</TitleText>
+            <Body tone="muted">
+              Connect your GitHub account to browse, create, and manage repositories in projects.
+            </Body>
+            <div className={styles.formActions}>
+              <Button appearance="primary" disabled={repoAppConnecting} onClick={() => void connectRepoApp()}>
+                {repoAppConnecting ? 'Opening GitHub…' : 'Connect GitHub Repo App'}
+              </Button>
+            </div>
+            {repoAppError && (
+              <MessageBar intent="error"><MessageBarBody>{repoAppError}</MessageBarBody></MessageBar>
+            )}
+          </div>
         </div>
       </PageSection>
 

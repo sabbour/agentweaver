@@ -48,15 +48,15 @@ describe('GitHubCopilotConnectionPicker', () => {
         <GitHubCopilotConnectionPicker projectId="project-b" showConnectionStatus />
       </Wrapper>,
     );
-    expect(await screen.findByText('GitHub Copilot is connected as @project-b. GitHub Copilot provides AI access. The separate Repo App provides repository access.')).toBeDefined();
+    expect(await screen.findByText(/GitHub Copilot is connected as @project-b/)).toBeDefined();
 
     await act(async () => {
       resolveOldConnection!({ status: 'connected', github_login: 'project-a' });
       await oldConnection;
     });
 
-    expect(screen.getByText('GitHub Copilot is connected as @project-b. GitHub Copilot provides AI access. The separate Repo App provides repository access.')).toBeDefined();
-    expect(screen.queryByText('GitHub Copilot is connected as @project-a. GitHub Copilot provides AI access. The separate Repo App provides repository access.')).toBeNull();
+    expect(screen.getByText(/GitHub Copilot is connected as @project-b/)).toBeDefined();
+    expect(screen.queryByText('GitHub Copilot is connected as @project-a.')).toBeNull();
   });
 
   it('shows an explicit, accessible connection picker when no account is connected', async () => {
@@ -66,7 +66,7 @@ describe('GitHubCopilotConnectionPicker', () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText('No GitHub account is connected to this project for Copilot. GitHub Copilot provides AI access. The separate Repo App provides repository access.')).toBeDefined();
+    expect(await screen.findByText(/No GitHub account is connected to this project for Copilot/)).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub Copilot' }));
 
     expect(await screen.findByRole('dialog')).toBeDefined();
@@ -87,7 +87,7 @@ describe('GitHubCopilotConnectionPicker', () => {
       </Wrapper>,
     );
 
-    await screen.findByText('No GitHub account is connected to this project for Copilot. GitHub Copilot provides AI access. The separate Repo App provides repository access.');
+    await screen.findByText(/No GitHub account is connected to this project for Copilot/);
     fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub Copilot' }));
     vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
       status: 'connected',

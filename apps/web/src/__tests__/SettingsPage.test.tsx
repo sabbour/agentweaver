@@ -1,7 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SettingsPage } from '../pages/SettingsPage';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,6 +9,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getAuthConfig: vi.fn(),
     getAuthSession: vi.fn(),
+    beginRepoAppAuthorization: vi.fn(),
   },
 }));
 
@@ -54,5 +55,22 @@ describe('SettingsPage', () => {
     expect(screen.getByDisplayValue(/\/mcp$/)).toBeDefined();
     expect(screen.queryByText('Sandbox policy')).toBeNull();
     expect(screen.queryByText(/Linked GitHub accounts/i)).toBeNull();
+  });
+
+  it('explains the two GitHub Apps and starts the Repo App connection', async () => {
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    vi.mocked(apiClient.beginRepoAppAuthorization).mockResolvedValue({
+      authorization_url: 'https://api.example.test/auth/github/repo-app/authorize',
+      transaction_id: 'transaction',
+      expires_at: '2026-09-01T00:00:00Z',
+    });
+    render(<MemoryRouter><AzureFluentProvider><SettingsPage /></AzureFluentProvider></MemoryRouter>);
+
+    expect(await screen.findByText('GitHub connections')).toBeDefined();
+    expect(screen.getByText(/separate Repo App provides repository access/i)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Repo App' }));
+    await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalled());
+    expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/repo-app/authorize');
+    assign.mockRestore();
   });
 });
