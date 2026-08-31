@@ -138,7 +138,7 @@ The same Copilot App registration also serves the deployment-wide
 provider is saved. Agentweaver derives a sibling callback route
 `/auth/github/platform-default-copilot/callback` from
 `Auth:CopilotApp:CallbackUrl`; a Platform Admin starts that flow from
-**Platform settings**. Register both callback routes on the same GitHub OAuth app:
+**Platform settings**. Register both callback routes on the same Copilot App:
 the configured project route and the derived platform-default sibling route. The
 saved binding is singleton platform state, separate from every project-scoped
 Copilot binding.
