@@ -1,7 +1,7 @@
 namespace Agentweaver.Api.Memory;
 
 public enum GitHubAppKind { Repo, Copilot }
-public enum GitHubAuthorizationPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot }
+public enum GitHubAuthorizationPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot, PlatformDefaultCopilot }
 public enum GitHubCapabilityPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot }
 public enum GitHubCapabilitySnapshotSourceKind { UserAuthorization, RepositoryGrant, CopilotBinding }
 public enum GitHubAuthorizationStatus { Pending, Redeeming, Completed, Failed, Expired }
@@ -131,6 +131,21 @@ public sealed class ProjectCopilotBindingRecord
 {
     public string Id { get; set; } = "";
     public string ProjectId { get; set; } = "";
+    public string EntraObjectId { get; set; } = "";
+    public string CredentialReference { get; set; } = "";
+    /// <summary>Stable identity of the authorization grant, not an access-token version.</summary>
+    public string CredentialVersion { get; set; } = "";
+    public string GrantDigest { get; set; } = "";
+    public GitHubBindingStatus Status { get; set; }
+    public DateTimeOffset BoundAt { get; set; }
+    public DateTimeOffset? DeactivatedAt { get; set; }
+}
+
+public sealed class PlatformDefaultCopilotBindingRecord
+{
+    public const string SingletonId = "platform-default";
+
+    public string Id { get; set; } = SingletonId;
     public string EntraObjectId { get; set; } = "";
     public string CredentialReference { get; set; } = "";
     /// <summary>Stable identity of the authorization grant, not an access-token version.</summary>

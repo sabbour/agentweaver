@@ -104,6 +104,7 @@ beforeEach(() => {
     avatar_url: 'https://example.com/sabbour.png',
     entra_object_id: 'entra-1',
     platform_roles: ['PlatformAdmin'],
+    ai_configured: true,
   } as never);
   vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
     auth_mode: 'entra',
@@ -286,6 +287,7 @@ describe('AppShell navigation', () => {
       avatar_url: 'https://example.com/sabbour.png',
       entra_object_id: 'entra-1',
       platform_roles: ['PlatformAdmin'],
+      ai_configured: true,
     } as never);
 
     renderShellAt('/overview');

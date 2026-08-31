@@ -133,6 +133,16 @@ or used for unattended work until its registration has zero permissions.
 | `Auth:CopilotApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for the fixed callback route |
 | `Auth:CopilotApp:SecretPath` | none | Optional Key Vault path; must not equal the Repo App secret path |
 
+The same Copilot App registration also serves the deployment-wide
+**platform-default Copilot** connection used by GitHub Copilot mode when no BYOK
+provider is saved. Agentweaver derives a sibling callback route
+`/auth/github/platform-default-copilot/callback` from
+`Auth:CopilotApp:CallbackUrl`; a Platform Admin starts that flow from
+**Platform settings**. Register both callback routes on the same GitHub OAuth app:
+the configured project route and the derived platform-default sibling route. The
+saved binding is singleton platform state, separate from every project-scoped
+Copilot binding.
+
 When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
 GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)
 uses the Microsoft identity platform v2.0 authorization-code-with-PKCE flow. Agentweaver

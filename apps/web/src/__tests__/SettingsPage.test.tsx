@@ -34,6 +34,7 @@ beforeEach(() => {
     avatar_url: null,
     entra_object_id: 'entra-1',
     platform_roles: ['PlatformAdmin', 'ProjectCreator'],
+    ai_configured: true,
   } as never);
 });
 

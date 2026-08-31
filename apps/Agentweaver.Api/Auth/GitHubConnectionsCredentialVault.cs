@@ -15,6 +15,15 @@ internal sealed record GitHubConnectionsCredentialLocator
     internal static GitHubConnectionsCredentialLocator ForCopilotProject(string credentialReference) =>
         Create(credentialReference, "copilot-app-project-");
 
+    internal static GitHubConnectionsCredentialLocator ForCopilotBinding(string credentialReference)
+    {
+        if (string.IsNullOrWhiteSpace(credentialReference) ||
+            (!credentialReference.StartsWith("copilot-app-project-", StringComparison.Ordinal) &&
+             !credentialReference.StartsWith("copilot-app-platform-default-", StringComparison.Ordinal)))
+            throw new ArgumentException("Credential reference is not a reserved GitHub connections locator.", nameof(credentialReference));
+        return new(credentialReference);
+    }
+
     private static GitHubConnectionsCredentialLocator Create(string credentialReference, string requiredPrefix)
     {
         if (string.IsNullOrWhiteSpace(credentialReference) ||

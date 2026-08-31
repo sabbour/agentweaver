@@ -149,6 +149,156 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     }
 
     [Fact]
+    public async Task PlatformDefaultBindingReplacement_UpsertsTheSingletonRow()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var store = new GitHubConnectionsPersistenceStore(db);
+
+        (await store.ReplacePlatformDefaultCopilotBindingAsync(PlatformBinding("first"))).Should().Be(BindingWriteResult.Bound);
+        (await store.ReplacePlatformDefaultCopilotBindingAsync(PlatformBinding("second"))).Should().Be(BindingWriteResult.Bound);
+
+        var bindings = await db.PlatformDefaultCopilotBindings.AsNoTracking().ToListAsync();
+        bindings.Should().HaveCount(1);
+        bindings.Single().CredentialReference.Should().Be("kv-copilot-platform-second");
+        bindings.Single().Status.Should().Be(GitHubBindingStatus.Active);
+    }
+
+    [Fact]
+    public async Task PlatformDefaultBinding_RejectsNonSingletonId()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+
+        var action = () => new GitHubConnectionsPersistenceStore(db).ReplacePlatformDefaultCopilotBindingAsync(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = "not-platform-default",
+            EntraObjectId = "entra",
+            CredentialReference = "kv-copilot-platform",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await action.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task CompletePlatformDefaultAuthorization_InvalidatesActiveAutomationActivations()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var store = new GitHubConnectionsPersistenceStore(db);
+        db.GitHubAuthorizations.Add(new GitHubAuthorizationRecord
+        {
+            State = "platform-state",
+            ExternalTransactionId = "tx-platform",
+            AppKind = GitHubAppKind.Copilot,
+            Purpose = GitHubAuthorizationPurpose.PlatformDefaultCopilot,
+            EntraObjectId = "entra",
+            ExpiresAtUnixMilliseconds = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+            ReturnRouteKey = "platform-settings",
+            PkceVerifierProtected = "pkce",
+            CallbackCookieHash = "cookie",
+            Status = GitHubAuthorizationStatus.Redeeming,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        db.PlatformDefaultCopilotBindings.Add(PlatformBinding("old"));
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = 1,
+            AppKind = GitHubAppKind.Repo,
+            ProjectId = "project",
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+        });
+        db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = 1,
+            RepositoryId = 2,
+            ProjectId = "project",
+            FullNameDisplay = "owner/repository",
+            PermissionDigest = "repo-digest",
+            GrantedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+        });
+        db.AutomationActivations.Add(new AutomationActivationRecord
+        {
+            Id = "activation-platform",
+            ProjectId = "project",
+            InstallationId = 1,
+            RepositoryId = 2,
+            RepositoryGrantDigest = "repo-digest",
+            CopilotBindingId = PlatformDefaultCopilotBindingRecord.SingletonId,
+            CopilotBindingGrantDigest = PlatformBinding("old").GrantDigest,
+            AutomationKey = "internal-activation-snapshot",
+            Status = AutomationActivationStatus.Active,
+            ActivatedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+        });
+        await db.SaveChangesAsync();
+
+        var completed = await store.CompletePlatformDefaultCopilotAuthorizationAsync(
+            "platform-state",
+            PlatformBinding("new"),
+            Audit(),
+            CancellationToken.None);
+
+        completed.Completed.Should().BeTrue();
+        db.ChangeTracker.Clear();
+        var activation = await db.AutomationActivations.SingleAsync();
+        activation.Status.Should().Be(AutomationActivationStatus.Invalidated);
+        activation.InvalidatedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RevokePlatformDefaultBinding_InvalidatesActiveAutomationActivations()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var store = new GitHubConnectionsPersistenceStore(db);
+        db.PlatformDefaultCopilotBindings.Add(PlatformBinding("active"));
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = 1,
+            AppKind = GitHubAppKind.Repo,
+            ProjectId = "project",
+            CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+        });
+        db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = 1,
+            RepositoryId = 2,
+            ProjectId = "project",
+            FullNameDisplay = "owner/repository",
+            PermissionDigest = "repo-digest",
+            GrantedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+        });
+        db.AutomationActivations.Add(new AutomationActivationRecord
+        {
+            Id = "activation-platform",
+            ProjectId = "project",
+            InstallationId = 1,
+            RepositoryId = 2,
+            RepositoryGrantDigest = "repo-digest",
+            CopilotBindingId = PlatformDefaultCopilotBindingRecord.SingletonId,
+            CopilotBindingGrantDigest = PlatformBinding("active").GrantDigest,
+            AutomationKey = "internal-activation-snapshot",
+            Status = AutomationActivationStatus.Active,
+            ActivatedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+        });
+        await db.SaveChangesAsync();
+
+        var revoked = await store.RevokePlatformDefaultCopilotBindingAsync(Audit(), CancellationToken.None);
+
+        revoked.Should().NotBeNull();
+        db.ChangeTracker.Clear();
+        var activation = await db.AutomationActivations.SingleAsync();
+        activation.Status.Should().Be(AutomationActivationStatus.Invalidated);
+        activation.InvalidatedAt.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task ActiveBindingUniqueIndexRejectsConcurrentInsert()
     {
         await using var connection = await OpenDatabaseAsync();
@@ -505,6 +655,55 @@ public sealed class GitHubConnectionsPersistenceStoreTests
             "other valid snapshots may still be captured for an interactive run");
         (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeFalse(
             "AgentHost /configure redeems the unattended Copilot capability and cannot use an ambient or partial fallback");
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_AgentHostFallsBackToPlatformDefaultCopilotBinding()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        await db.ProjectCopilotBindings.ExecuteDeleteAsync();
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "platform-version",
+            GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var run = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeTrue();
+        var snapshots = await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString());
+        snapshots.Should().ContainSingle(snapshot =>
+            snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+            snapshot.SourceBindingId == PlatformDefaultCopilotBindingRecord.SingletonId &&
+            snapshot.CredentialReference == "copilot-app-platform-default-version" &&
+            snapshot.CredentialVersion == "platform-version" &&
+            snapshot.GrantDigest == "platform-digest");
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeTrue(
+            "resume must continue accepting a live platform-default binding snapshot");
+
+        var revokedAt = DateTimeOffset.UtcNow;
+        await db.PlatformDefaultCopilotBindings
+            .Where(binding => binding.Id == PlatformDefaultCopilotBindingRecord.SingletonId)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(binding => binding.Status, GitHubBindingStatus.Revoked)
+                .SetProperty(binding => binding.DeactivatedAt, revokedAt));
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeFalse();
     }
 
     [Fact]
@@ -1269,6 +1468,32 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         GrantDigest = "digest",
         Status = GitHubBindingStatus.Active,
         BoundAt = DateTimeOffset.UtcNow,
+    };
+
+    private static PlatformDefaultCopilotBindingRecord PlatformBinding(string suffix) => new()
+    {
+        Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+        EntraObjectId = "entra",
+        CredentialReference = $"kv-copilot-platform-{suffix}",
+        CredentialVersion = $"version-{suffix}",
+        GrantDigest = $"digest-{suffix}",
+        Status = GitHubBindingStatus.Active,
+        BoundAt = DateTimeOffset.UtcNow,
+    };
+
+    private static GitHubAuditRecord Audit() => new()
+    {
+        EntraObjectId = "entra",
+        ActorKind = GitHubAuditActorKind.HumanEntraSubject,
+        Action = GitHubAuditAction.BindingChanged,
+        ResourceId = PlatformDefaultCopilotBindingRecord.SingletonId,
+        AppKind = GitHubAppKind.Copilot,
+        CapabilityPurpose = GitHubCapabilityPurpose.UnattendedCopilot,
+        Outcome = GitHubAuditOutcome.Succeeded,
+        ReasonCode = GitHubAuditReasonCode.None,
+        CorrelationId = Guid.NewGuid().ToString("N"),
+        OccurredAt = DateTimeOffset.UtcNow,
+        GrantDigest = "digest-new",
     };
 
     private static AutomationInvocationRecord Invocation(string id, string deliveryId, string eventName) => new()

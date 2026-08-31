@@ -70,6 +70,7 @@ public sealed class SqliteToPostgresMigrator
         List<GitHubInstallationRecord> installations;
         List<GitHubRepositoryGrantRecord> grants;
         List<ProjectCopilotBindingRecord> bindings;
+        List<PlatformDefaultCopilotBindingRecord> platformBindings;
         List<AutomationActivationRecord> activations;
         List<AutomationInvocationRecord> invocations;
         List<GitHubLifecycleDeliveryRecord> lifecycleDeliveries;
@@ -83,6 +84,7 @@ public sealed class SqliteToPostgresMigrator
             installations = await source.GitHubInstallations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             grants = await source.GitHubRepositoryGrants.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             bindings = await source.ProjectCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            platformBindings = await source.PlatformDefaultCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             activations = await source.AutomationActivations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             invocations = await source.AutomationInvocations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             lifecycleDeliveries = await source.GitHubLifecycleDeliveries.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
@@ -100,7 +102,7 @@ public sealed class SqliteToPostgresMigrator
             return;
         }
 
-        if (authorizations.Count + installations.Count + grants.Count + bindings.Count + activations.Count +
+        if (authorizations.Count + installations.Count + grants.Count + bindings.Count + platformBindings.Count + activations.Count +
             invocations.Count + lifecycleDeliveries.Count + snapshots.Count + capabilitySnapshots.Count +
             appAuthorizations.Count + audits.Count == 0)
             return;
@@ -139,6 +141,9 @@ public sealed class SqliteToPostgresMigrator
             foreach (var item in bindings)
                 if (!await destination.ProjectCopilotBindings.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
                     destination.ProjectCopilotBindings.Add(item);
+            foreach (var item in platformBindings)
+                if (!await destination.PlatformDefaultCopilotBindings.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
+                    destination.PlatformDefaultCopilotBindings.Add(item);
             foreach (var item in activations)
                 if (!await destination.AutomationActivations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
                     destination.AutomationActivations.Add(item);

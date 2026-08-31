@@ -77,6 +77,30 @@ public sealed class AutomationInvocationServiceTests
     }
 
     [Fact]
+    public async Task PrepareRun_UsesPlatformDefaultCopilotBindingWhenProjectBindingIsAbsent()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var activation = await ActivateAsync(db, usePlatformDefaultBinding: true);
+        var service = new AutomationInvocationService(db, new GitHubConnectionsPersistenceStore(db));
+        (await service.TryClaimAsync(activation.ActivationId, "event:platform-default", "delivery-platform", "schedule", 1, 10))
+            .Should().BeTrue();
+        var invocationId = (await db.AutomationInvocations.SingleAsync()).Id;
+        var projectId = ProjectId.Parse(activation.ProjectId);
+        var taskId = BacklogTaskId.New();
+
+        (await service.TryBindBacklogTaskAsync(invocationId, projectId, taskId)).Should().BeTrue();
+        (await service.TryPrepareRunAsync(projectId, taskId, "run-platform-default")).Should().BeTrue();
+
+        var snapshots = await db.RunGitHubCapabilitySnapshots
+            .Where(x => x.RunId == "run-platform-default")
+            .ToListAsync();
+        snapshots.Should().ContainSingle(x => x.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+                                             x.SourceBindingId == PlatformDefaultCopilotBindingRecord.SingletonId &&
+                                             x.CredentialReference == "copilot-app-platform-default-version" &&
+                                             x.CredentialVersion == "version");
+    }
+
+    [Fact]
     public async Task RetrievedClaim_RequiresExactProjectActivationAndOccurrenceIdentity()
     {
         await using var db = await OpenDatabaseAsync();
@@ -177,7 +201,10 @@ public sealed class AutomationInvocationServiceTests
         invocation.BacklogTaskId.Should().BeNull();
     }
 
-    private static async Task<FencedAutomationActivation> ActivateAsync(MemoryDbContext db, ProjectId? projectId = null)
+    private static async Task<FencedAutomationActivation> ActivateAsync(
+        MemoryDbContext db,
+        ProjectId? projectId = null,
+        bool usePlatformDefaultBinding = false)
     {
         var project = projectId ?? ProjectId.New();
         db.Projects.Add(new ProjectRecord { ProjectId = project.ToString() });
@@ -190,12 +217,28 @@ public sealed class AutomationInvocationServiceTests
             InstallationId = 1, RepositoryId = 10, ProjectId = project.ToString(), FullNameDisplay = "owner/repository",
             PermissionDigest = "repo-digest", GrantedAt = DateTimeOffset.UtcNow,
         });
-        db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+        if (usePlatformDefaultBinding)
         {
-            Id = "binding", ProjectId = project.ToString(), EntraObjectId = "owner",
-            CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
-            Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
-        });
+            db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+            {
+                Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+                EntraObjectId = "platform-admin",
+                CredentialReference = "copilot-app-platform-default-version",
+                CredentialVersion = "version",
+                GrantDigest = "copilot-digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+        }
+        else
+        {
+            db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+            {
+                Id = "binding", ProjectId = project.ToString(), EntraObjectId = "owner",
+                CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
+                Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
+            });
+        }
         await db.SaveChangesAsync();
         var roles = new OwnerRoles(project, "owner");
         var result = await new AutomationActivationSnapshotService(new GitHubConnectionsPersistenceStore(db), roles)

@@ -3,7 +3,9 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using FluentAssertions;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -60,5 +62,160 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
         var response = await client.GetAsync("/api/projects");
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task AuthSession_ReportsAiConfiguredFalse_WhenNoByokOrPlatformDefaultBindingExists()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            await secrets.DeleteSecretAsync("byok-provider-configuration");
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
+            await db.SaveChangesAsync();
+        }
+        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.Contributor);
+
+        var response = await client.GetAsync("/api/auth/session");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AuthSession_ReportsAiConfiguredTrue_WhenByokConfigurationExists()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            await secrets.SetSecretAsync(
+                "byok-provider-configuration",
+                """
+                {"type":"openai","baseUrl":"https://api.example.com","model":"gpt-4o","apiKey":"sk-test"}
+                """);
+        }
+        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.Contributor);
+
+        var response = await client.GetAsync("/api/auth/session");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AuthSession_ReportsAiConfiguredTrue_WhenPlatformDefaultCopilotBindingExists()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
+            db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+            {
+                Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+                EntraObjectId = "platform-admin",
+                CredentialReference = "copilot-app-platform-default",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            await secrets.SetSecretAsync(
+                "copilot-app-platform-default",
+                """{"Status":"signed-in","AccessToken":"ghu_platform","GitHubLogin":"octocat"}""");
+            await db.SaveChangesAsync();
+        }
+        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.Contributor);
+
+        var response = await client.GetAsync("/api/auth/session");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AuthSession_ReportsAiConfiguredFalse_WhenPlatformDefaultBindingSecretIsMissing()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
+            db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+            {
+                Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+                EntraObjectId = "platform-admin",
+                CredentialReference = "copilot-app-platform-default-missing",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            await secrets.DeleteSecretAsync("copilot-app-platform-default-missing");
+            await secrets.DeleteSecretAsync("byok-provider-configuration");
+            await db.SaveChangesAsync();
+        }
+        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.Contributor);
+
+        var response = await client.GetAsync("/api/auth/session");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AuthSession_ReportsAiConfiguredFalse_WhenByokSecretIsMalformed()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
+            await secrets.SetSecretAsync("byok-provider-configuration", "{\"type\":\"openai\"");
+            await db.SaveChangesAsync();
+        }
+        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.PlatformAdmin);
+
+        var response = await client.GetAsync("/api/auth/session");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AuthSession_ReportsAiConfiguredFalse_WhenPlatformDefaultSecretIsNotAnObject()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
+            db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+            {
+                Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+                EntraObjectId = "platform-admin",
+                CredentialReference = "copilot-app-platform-default-invalid-shape",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            await secrets.SetSecretAsync("copilot-app-platform-default-invalid-shape", "\"signed-in\"");
+            await secrets.DeleteSecretAsync("byok-provider-configuration");
+            await db.SaveChangesAsync();
+        }
+        using var client = _factory.CreateAuthenticatedClient(PlatformRoles.PlatformAdmin);
+
+        var response = await client.GetAsync("/api/auth/session");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeFalse();
     }
 }

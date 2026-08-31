@@ -32,6 +32,7 @@ beforeEach(() => {
     avatar_url: 'https://example.com/ada.png',
     entra_object_id: 'entra-1',
     platform_roles: [],
+    ai_configured: true,
   } as never);
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'connected',

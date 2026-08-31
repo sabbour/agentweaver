@@ -14,8 +14,13 @@ import {
 } from '@fluentui/react-components';
 import { apiClient } from '../api/apiClient';
 import { formatApiErrorMessage } from '../api/errors';
-import type { ByokProviderConfig, ByokProviderType } from '../api/types';
+import type {
+  ByokProviderConfig,
+  ByokProviderType,
+  PlatformDefaultCopilotConnection,
+} from '../api/types';
 import { Body, PageContainer, PageHeader, PageSection } from '../components/ui';
+import { useSearchParams } from 'react-router-dom';
 
 type AiMode = 'copilot' | 'byok';
 
@@ -31,6 +36,11 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
   },
+  stack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
 });
 
 const PROVIDER_LABELS: Record<ByokProviderType, string> = {
@@ -39,12 +49,56 @@ const PROVIDER_LABELS: Record<ByokProviderType, string> = {
   anthropic: 'Anthropic',
 };
 
-export function PlatformSettingsPage() {
+const PLATFORM_COPILOT_AUTH_RESULTS = {
+  success: {
+    intent: 'success',
+    message: 'The platform-default GitHub Copilot account is connected.',
+  },
+  human_entra_subject_required: {
+    intent: 'warning',
+    message: 'Connect GitHub Copilot while signed in with your work account.',
+  },
+  platform_admin_required: {
+    intent: 'warning',
+    message: 'Only a Platform Admin can connect the platform-default GitHub Copilot account.',
+  },
+  authorization_transaction_invalid: {
+    intent: 'error',
+    message: 'The GitHub Copilot connection could not be completed. Start a new connection from Platform settings.',
+  },
+  authorization_transaction_consumed: {
+    intent: 'error',
+    message: 'This GitHub Copilot connection has already been used. Start a new connection from Platform settings.',
+  },
+  github_binding_unavailable: {
+    intent: 'error',
+    message: 'The GitHub Copilot connection is currently unavailable. Try again later.',
+  },
+} as const;
+
+type PlatformCopilotAuthorizationResultCode = keyof typeof PLATFORM_COPILOT_AUTH_RESULTS;
+
+function isPlatformCopilotAuthorizationResultCode(
+  value: string | null,
+): value is PlatformCopilotAuthorizationResultCode {
+  return value !== null && Object.hasOwn(PLATFORM_COPILOT_AUTH_RESULTS, value);
+}
+
+export function PlatformSettingsPage({
+  setupRequired = false,
+  onRetryAccess,
+}: {
+  setupRequired?: boolean;
+  onRetryAccess?: () => void;
+}) {
   const styles = useStyles();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [existingConfig, setExistingConfig] = useState<ByokProviderConfig | null>(null);
   const [mode, setMode] = useState<AiMode>('copilot');
+  const [platformCopilotConnection, setPlatformCopilotConnection] = useState<PlatformDefaultCopilotConnection | null>(null);
+  const [platformCopilotError, setPlatformCopilotError] = useState<string | null>(null);
 
   const [providerType, setProviderType] = useState<ByokProviderType>('openai');
   const [baseUrl, setBaseUrl] = useState('');
@@ -52,8 +106,17 @@ export function PlatformSettingsPage() {
   const [apiKey, setApiKey] = useState('');
 
   const [saving, setSaving] = useState(false);
+  const [connectingCopilot, setConnectingCopilot] = useState(false);
+  const [disconnectingCopilot, setDisconnectingCopilot] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const copilotAuthorizationResult = searchParams.get('copilot_app_auth');
+
+  const dismissCopilotAuthorizationResult = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('copilot_app_auth');
+    setSearchParams(next, { replace: true });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -76,6 +139,30 @@ export function PlatformSettingsPage() {
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (loading || mode !== 'copilot') return () => { cancelled = true; };
+
+    apiClient.getPlatformDefaultCopilotConnection()
+      .then((connection) => {
+        if (cancelled) return;
+        setPlatformCopilotConnection(connection);
+        setPlatformCopilotError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setPlatformCopilotConnection(null);
+        setPlatformCopilotError(formatApiErrorMessage(err));
+      });
+
+    return () => { cancelled = true; };
+  }, [loading, mode]);
+
+  useEffect(() => {
+    if (!setupRequired || !onRetryAccess) return;
+    if (existingConfig || platformCopilotConnection?.connected) onRetryAccess();
+  }, [existingConfig, onRetryAccess, platformCopilotConnection?.connected, setupRequired]);
 
   const handleModeChange = (_: unknown, data: RadioGroupOnChangeData) => {
     const next = data.value as AiMode;
@@ -100,6 +187,7 @@ export function PlatformSettingsPage() {
       setMode(refreshed ? 'byok' : 'copilot');
       setApiKey('');
       setSaveSuccess(true);
+      onRetryAccess?.();
     } catch (err) {
       setSaveError(formatApiErrorMessage(err));
     } finally {
@@ -117,6 +205,7 @@ export function PlatformSettingsPage() {
       setMode('copilot');
       setApiKey('');
       setSaveSuccess(true);
+      onRetryAccess?.();
     } catch (err) {
       setSaveError(formatApiErrorMessage(err));
     } finally {
@@ -124,17 +213,88 @@ export function PlatformSettingsPage() {
     }
   };
 
+  const refreshPlatformCopilotConnection = async () => {
+    try {
+      const connection = await apiClient.getPlatformDefaultCopilotConnection();
+      setPlatformCopilotConnection(connection);
+      setPlatformCopilotError(null);
+    } catch (err) {
+      setPlatformCopilotConnection(null);
+      setPlatformCopilotError(formatApiErrorMessage(err));
+    }
+  };
+
+  const handleConnectPlatformCopilot = async () => {
+    setConnectingCopilot(true);
+    setPlatformCopilotError(null);
+    try {
+      const handoff = await apiClient.beginPlatformDefaultCopilotAuthorization();
+      window.location.assign(handoff.authorization_url);
+    } catch (err) {
+      setPlatformCopilotError(formatApiErrorMessage(err));
+      setConnectingCopilot(false);
+    }
+  };
+
+  const handleDisconnectPlatformCopilot = async () => {
+    setDisconnectingCopilot(true);
+    setPlatformCopilotError(null);
+    try {
+      await apiClient.disconnectPlatformDefaultCopilotConnection();
+      setPlatformCopilotConnection({ connected: false, github_login: null });
+      await refreshPlatformCopilotConnection();
+      setSaveSuccess(true);
+      onRetryAccess?.();
+    } catch (err) {
+      setPlatformCopilotError(formatApiErrorMessage(err));
+    } finally {
+      setDisconnectingCopilot(false);
+    }
+  };
+
+  const authorizationResult = isPlatformCopilotAuthorizationResultCode(copilotAuthorizationResult)
+    ? PLATFORM_COPILOT_AUTH_RESULTS[copilotAuthorizationResult]
+    : copilotAuthorizationResult
+      ? {
+        intent: 'error' as const,
+        message: 'The GitHub Copilot connection could not be completed. Start a new connection from Platform settings.',
+      }
+      : null;
+
   return (
     <PageContainer width="readable">
       <PageHeader
         title="Platform settings"
         description="Deployment-wide configuration for Agentweaver."
       />
+      {setupRequired && (
+        <div className={styles.stack}>
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              Agentweaver is locked until an administrator configures either a deployment-wide custom key
+              or a platform-default GitHub Copilot account.
+            </MessageBarBody>
+          </MessageBar>
+          {onRetryAccess && (
+            <div className={styles.formActions}>
+              <Button appearance="secondary" onClick={onRetryAccess}>Retry access</Button>
+            </div>
+          )}
+        </div>
+      )}
       <PageSection title="AI inference source">
         <Body tone="muted" style={{ marginBottom: tokens.spacingVerticalM }}>
           Choose exactly one AI source for the whole deployment. This is not per-project or
           per-person — it applies to everyone, including background and scheduled runs.
         </Body>
+        {authorizationResult && (
+          <MessageBar intent={authorizationResult.intent}>
+            <MessageBarBody>{authorizationResult.message}</MessageBarBody>
+            <Button appearance="subtle" size="small" onClick={dismissCopilotAuthorizationResult}>
+              Dismiss
+            </Button>
+          </MessageBar>
+        )}
         {loading && <Spinner size="small" label="Loading configuration" />}
         {loadError && (
           <MessageBar intent="error"><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
@@ -142,16 +302,75 @@ export function PlatformSettingsPage() {
         {!loading && !loadError && (
           <div className={styles.form}>
             <RadioGroup value={mode} onChange={handleModeChange} disabled={saving}>
-              <Radio value="copilot" label="GitHub Copilot mode — everyone connects their own Copilot login" />
+              <Radio value="copilot" label="GitHub Copilot mode — one platform-default Copilot account for unattended work" />
               <Radio value="byok" label="Custom key mode — one shared key is used for everyone" />
             </RadioGroup>
 
             {mode === 'copilot' && (
               <>
                 <Body tone="muted">
-                  In this mode, every signed-in person connects their own GitHub Copilot login to
-                  use AI features.
+                  In this mode, a Platform Admin connects one deployment-wide GitHub Copilot account
+                  for unattended and background work. Project-scoped Copilot connections remain
+                  separate and can still be managed inside individual project settings.
                 </Body>
+                <div className={styles.stack}>
+                  <Field
+                    label="Platform-default GitHub Copilot account"
+                    hint="Used for deployment-wide GitHub Copilot mode when no BYOK provider is configured."
+                  >
+                    <div className={styles.stack}>
+                      {platformCopilotError && (
+                        <MessageBar intent="error">
+                          <MessageBarBody>{platformCopilotError}</MessageBarBody>
+                        </MessageBar>
+                      )}
+                      {!platformCopilotError && platformCopilotConnection?.connected && (
+                        <MessageBar intent="success">
+                          <MessageBarBody>
+                            Connected GitHub login: @{platformCopilotConnection.github_login ?? 'unknown'}
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                      {!platformCopilotError && platformCopilotConnection && !platformCopilotConnection.connected && (
+                        <MessageBar intent="warning">
+                          <MessageBarBody>No platform-default GitHub Copilot account is connected yet.</MessageBarBody>
+                        </MessageBar>
+                      )}
+                      <div className={styles.formActions}>
+                        <Button
+                          appearance={platformCopilotConnection?.connected ? 'secondary' : 'primary'}
+                          disabled={connectingCopilot || disconnectingCopilot}
+                          onClick={() => void handleConnectPlatformCopilot()}
+                        >
+                          {connectingCopilot
+                            ? 'Opening GitHub…'
+                            : platformCopilotConnection?.connected
+                              ? 'Switch GitHub Copilot account'
+                              : 'Connect GitHub Copilot'}
+                        </Button>
+                        <Button
+                          appearance="secondary"
+                          disabled={connectingCopilot || disconnectingCopilot}
+                          onClick={() => void refreshPlatformCopilotConnection()}
+                        >
+                          Refresh status
+                        </Button>
+                        {platformCopilotConnection?.connected && (
+                          <Button
+                            appearance="secondary"
+                            disabled={connectingCopilot || disconnectingCopilot}
+                            onClick={() => void handleDisconnectPlatformCopilot()}
+                          >
+                            {disconnectingCopilot ? 'Disconnecting' : 'Disconnect'}
+                          </Button>
+                        )}
+                        {(connectingCopilot || disconnectingCopilot) && (
+                          <Spinner size="extra-tiny" aria-hidden="true" />
+                        )}
+                      </div>
+                    </div>
+                  </Field>
+                </div>
                 {existingConfig && (
                   <div className={styles.formActions}>
                     <Button appearance="primary" disabled={saving} onClick={() => void handleSwitchToCopilot()}>
