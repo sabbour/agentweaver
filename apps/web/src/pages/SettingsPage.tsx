@@ -57,6 +57,7 @@ export function SettingsPage() {
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [entraAdminUrl, setEntraAdminUrl] = useState<string | null>(null);
   const [repoAppConnecting, setRepoAppConnecting] = useState(false);
   const [repoAppError, setRepoAppError] = useState<string | null>(null);
   const [entraAdminUrl, setEntraAdminUrl] = useState<string | null>(null);
@@ -74,6 +75,14 @@ export function SettingsPage() {
       .finally(() => {
         if (!cancelled) setAuthLoading(false);
       });
+    void apiClient.getAuthConfig()
+      .then(({ entra }) => {
+        if (!entra.tenant_id || !entra.client_id || cancelled) return;
+        setEntraAdminUrl(
+          `https://entra.microsoft.com/${encodeURIComponent(entra.tenant_id)}/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/${encodeURIComponent(entra.client_id)}/isMSAApp~/false`,
+        );
+      })
+      .catch(() => {});
 
     void apiClient.getAuthConfig()
       .then(({ entra }) => {
