@@ -71,6 +71,7 @@ describe('GitHubCopilotConnectionPicker', () => {
 
     expect(await screen.findByRole('dialog')).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Connect GitHub Copilot' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Connect GitHub account' })).toBeDefined();
   });
 

@@ -8,6 +8,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   Field,
   Input,
   Link as FluentLink,
@@ -19,6 +20,7 @@ import {
   Switch,
   tokens,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import type { RepositoryOwner } from '../api/types';
 
@@ -134,7 +136,13 @@ export function ConnectGitHubRepositoryDialog({
     <Dialog open={open} onOpenChange={(_, data) => onOpenChange(data.open)}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Connect a GitHub repository</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Connect a GitHub repository</DialogTitle>
           <DialogContent className={styles.stack}>
             {result ? (
               <MessageBar intent="success">
@@ -196,6 +204,7 @@ export function ConnectGitHubRepositoryDialog({
                 appearance="primary"
                 disabled={!owner || saving || ownersLoading}
                 onClick={() => void handleCreate()}
+                style={{ whiteSpace: 'nowrap' }}
               >
                 {saving ? <Spinner size="tiny" /> : 'Create repository'}
               </Button>

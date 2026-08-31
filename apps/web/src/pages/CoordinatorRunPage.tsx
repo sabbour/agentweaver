@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   Field,
   Input,
   MessageBar,
@@ -4978,7 +4979,13 @@ export function CoordinatorRunPage() {
       <Dialog open={stopConfirmationOpen} onOpenChange={(_, d) => setStopConfirmationOpen(d.open)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Stop this run?</DialogTitle>
+            <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Stop this run?</DialogTitle>
             <DialogContent>
               Are you sure you want to stop this run?
             </DialogContent>

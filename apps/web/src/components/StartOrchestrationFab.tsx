@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  DialogTrigger,
   Field,
   Link,
   makeStyles,
@@ -23,6 +24,7 @@ import {
   tokens,
   Tooltip,
 } from '@fluentui/react-components';
+import { DismissRegular } from '@fluentui/react-icons';
 import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -184,7 +186,13 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
       </Tooltip>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Start a task</DialogTitle>
+          <DialogTitle
+              action={
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} />
+                </DialogTrigger>
+              }
+            >Start a task</DialogTitle>
           <DialogContent>
             <div className={styles.stack}>
               <Text>

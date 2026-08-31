@@ -2,7 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SkillsPage } from '../pages/SkillsPage';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import {
@@ -778,7 +778,7 @@ describe('SkillsPage — blueprint defaults', () => {
     fireEvent.click(trigger);
     await waitFor(() => expect(apiClient.previewBlueprintSkillDefaults).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Close preview' }));
     await waitForDefaultsDialogToClose();
     await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(trigger);
@@ -833,7 +833,7 @@ describe('SkillsPage — blueprint defaults', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Preview blueprint defaults' }));
     await waitFor(() => expect(resolveProject).toEqual(expect.any(Function)));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Close preview' }));
     await waitForDefaultsDialogToClose();
 
     resolveProject!(makeProject());
