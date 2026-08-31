@@ -4,6 +4,7 @@ import {
   BookToolbox24Regular,
   Bot24Regular,
   Brain24Regular,
+  Building24Regular,
   Chat24Regular,
   Code24Regular,
   DataPie24Regular,
@@ -11,6 +12,7 @@ import {
   Flowchart24Regular,
   Heart24Regular,
   Home24Regular,
+  Options24Regular,
   People24Regular,
   Pulse24Regular,
   Server24Regular,
@@ -43,6 +45,7 @@ export interface GlobalNavItemDef {
   path: string;
   // Path prefixes that should also mark this item active.
   matchPrefixes?: string[];
+  requiresPlatformAdmin?: boolean;
 }
 
 export interface NavSectionDef {
@@ -60,6 +63,7 @@ export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
   { key: 'projects', label: 'Projects', icon: <Apps24Regular />, path: '/projects', matchPrefixes: ['/projects'] },
   { key: 'sessions', label: 'Sessions', icon: <Chat24Regular />, path: '/sessions', matchPrefixes: ['/sessions'] },
   { key: 'account-settings', label: 'Account settings', icon: <Settings24Regular />, path: '/settings', matchPrefixes: ['/settings'] },
+  { key: 'platform-settings', label: 'Platform settings', icon: <Building24Regular />, path: '/platform-settings', matchPrefixes: ['/platform-settings'], requiresPlatformAdmin: true },
 ];
 
 // WORK / SQUAD / OPERATIONS / SYSTEM.
@@ -94,7 +98,7 @@ export const NAV_SECTIONS: NavSectionDef[] = [
     items: [
       // Workflows (formerly the "Flow" item) — route unchanged at /workflows.
       { key: 'workflows', label: 'Workflows', icon: <Flowchart24Regular />, segment: 'workflows' },
-      { key: 'settings', label: 'Settings', icon: <Settings24Regular />, segment: 'settings' },
+      { key: 'settings', label: 'Settings', icon: <Options24Regular />, segment: 'settings' },
     ],
   },
   {

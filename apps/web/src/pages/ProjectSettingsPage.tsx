@@ -19,7 +19,7 @@ import {
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import { Branch24Regular, Delete24Regular, People24Regular, Settings24Regular, Shield24Regular } from '@fluentui/react-icons';
+import { Branch24Regular, Delete24Regular, People24Regular, Settings24Regular, Shield24Regular, Wrench24Regular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
@@ -100,7 +100,7 @@ const SECTIONS: SectionDef[] = [
     id: 'sandbox',
     label: 'Sandbox policy',
     description: 'Control how agent commands execute and what they may reach.',
-    icon: <Shield24Regular />,
+    icon: <Wrench24Regular />,
   },
   {
     id: 'danger',

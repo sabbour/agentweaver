@@ -9,8 +9,6 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getAuthConfig: vi.fn(),
     getAuthSession: vi.fn(),
-    getSandboxPolicy: vi.fn(),
-    updateSandboxPolicy: vi.fn(),
   },
 }));
 
@@ -39,7 +37,7 @@ beforeEach(() => {
 });
 
 describe('SettingsPage', () => {
-  it('shows Entra platform access, MCP configuration, and sandbox policy settings', async () => {
+  it('shows Entra platform access and MCP configuration', async () => {
     render(
       <MemoryRouter>
         <AzureFluentProvider density="compact">
@@ -54,7 +52,7 @@ describe('SettingsPage', () => {
       .toBe('https://entra.microsoft.com/tenant-1/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/client-1/isMSAApp~/false');
     expect(screen.getByText('MCP clients')).toBeDefined();
     expect(screen.getByDisplayValue(/\/mcp$/)).toBeDefined();
-    expect(screen.getByText('Sandbox policy')).toBeDefined();
+    expect(screen.queryByText('Sandbox policy')).toBeNull();
     expect(screen.queryByText(/Linked GitHub accounts/i)).toBeNull();
   });
 });
