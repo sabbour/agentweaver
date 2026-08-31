@@ -1,5 +1,5 @@
 import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+import { formatApiErrorMessage } from '../api/errors';
 import {
   Button,
   Dialog,
@@ -40,11 +40,7 @@ function slugify(name: string): string {
 }
 
 function formatError(err: unknown): string {
-  return err instanceof ApiError
-    ? `API error ${err.status}: ${err.body}`
-    : err instanceof Error
-      ? err.message
-      : String(err);
+  return formatApiErrorMessage(err, 'Could not connect the GitHub repository.');
 }
 
 

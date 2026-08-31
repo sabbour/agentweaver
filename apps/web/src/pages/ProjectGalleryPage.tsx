@@ -1,5 +1,6 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { formatApiErrorMessage } from '../api/errors';
 import {
   Badge,
   Button,
@@ -264,11 +265,7 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
       reset();
     } catch (err) {
       setError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error
-            ? err.message
-            : String(err),
+        formatApiErrorMessage(err, 'Could not load projects.'),
       );
     } finally {
       setSaving(false);
@@ -742,11 +739,7 @@ export function ProjectGalleryPage() {
         }
         setLoadError(true);
         setErrorMessage(
-          err instanceof ApiError
-            ? `API error ${err.status}: ${err.body}`
-            : err instanceof Error
-              ? err.message
-              : String(err),
+          formatApiErrorMessage(err, 'Could not create the project.'),
         );
       } finally {
         if (!controller.signal.aborted) setLoading(false);

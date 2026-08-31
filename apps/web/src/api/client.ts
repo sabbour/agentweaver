@@ -1,8 +1,10 @@
 import { getSessionToken } from '../config';
 import {
   GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+  CONNECT_PROJECT_COPILOT_APP_ACTION,
   isGitHubCopilotConnectionRequirement,
 } from './githubConnectionRequirement';
+import { githubConnectionErrorMessage, parseApiBody } from './errors';
 import { isSkillProvenance } from './types';
 import type {
   AddMemberRequest,
@@ -1320,6 +1322,21 @@ export class AgentweaverApiClient {
       window.dispatchEvent(new CustomEvent(
         GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
         { detail: error.payload },
+      ));
+    } else if (typeof window !== 'undefined' && githubConnectionErrorMessage(error)) {
+      const projectId = /^\/projects\/([^/]+)/.exec(window.location.pathname)?.[1];
+      window.dispatchEvent(new CustomEvent(
+        GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+        {
+          detail: {
+            code: parseApiBody(body).error ?? 'github_connection_required',
+            message: githubConnectionErrorMessage(error),
+            action: {
+              type: CONNECT_PROJECT_COPILOT_APP_ACTION,
+              project_id: projectId ?? '',
+            },
+          },
+        },
       ));
     }
     return error;
