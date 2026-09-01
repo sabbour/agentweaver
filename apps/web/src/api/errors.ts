@@ -109,5 +109,7 @@ export function formatApiErrorMessage(err: unknown, fallback?: string): string {
   const githubMessage = githubConnectionErrorMessage(err);
   if (githubMessage) return githubMessage;
   const formatted = formatApiError(err, fallback);
-  return formatted.detail ? `${formatted.message} ${formatted.detail}` : formatted.message;
+  return formatted.detail && formatted.detail !== formatted.message
+    ? `${formatted.message} ${formatted.detail}`
+    : formatted.message;
 }
