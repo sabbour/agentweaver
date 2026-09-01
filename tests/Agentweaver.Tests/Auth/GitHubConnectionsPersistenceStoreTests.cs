@@ -708,6 +708,60 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     }
 
     [Fact]
+    public async Task CapabilitySnapshotLifecycle_PlatformScopedIgnoresIncidentalProjectCopilotBinding()
+    {
+        // Regression for personal/Operator ("Assistant") sessions: the run carries an INCIDENTAL
+        // ProjectId (the project the caller happened to be viewing), and that project's OWN Copilot
+        // binding is Active in the database — the exact production scenario from issue/PR #1116,
+        // where the project's binding row was Active but its backing Key Vault secret was missing.
+        // With platformScoped: true, credential resolution must go straight to the PLATFORM-level
+        // Copilot connection and never touch (or require) the project's own binding at all.
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "platform-version",
+            GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var run = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None, platformScoped: true))
+            .Should().BeTrue("a personal Operator/Assistant session must resolve via the platform connection " +
+                "even though the run's incidental ProjectId has its own project-scoped binding");
+        var snapshots = await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString());
+        snapshots.Should().ContainSingle(snapshot =>
+            snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+            snapshot.SourceBindingId == PlatformDefaultCopilotBindingRecord.SingletonId &&
+            snapshot.ProjectId == null &&
+            snapshot.CredentialReference == "copilot-app-platform-default-version" &&
+            snapshot.CredentialVersion == "platform-version" &&
+            snapshot.GrantDigest == "platform-digest",
+            "the platform binding must be used, not the project's own (incidental) Copilot binding");
+
+        // Now simulate the confirmed production defect: the project's own Copilot binding is deleted
+        // entirely (equivalent to "Active row but unusable"). A personal session must still launch,
+        // because it never depended on the project's binding in the first place.
+        await db.ProjectCopilotBindings.ExecuteDeleteAsync();
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None, platformScoped: true))
+            .Should().BeTrue("resume must continue accepting the platform snapshot regardless of the " +
+                "project's own binding state");
+    }
+
+    [Fact]
     public async Task CapabilitySnapshotLifecycle_AgentHostAllowsProjectlessRunWithPlatformDefaultCopilotBinding()
     {
         await using var connection = await OpenDatabaseAsync();

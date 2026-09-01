@@ -54,8 +54,14 @@ public sealed class AssistantRunEndpointsTests
     }
 
     [Fact]
-    public async Task StartRun_AgentHostWithoutCopilotBinding_ReturnsRedactedConnectionRequirement()
+    public async Task StartRun_AgentHostWithIncidentalProject_IgnoresProjectBinding_ReturnsPlatformConnectionRequirement()
     {
+        // Personal/Operator ("Assistant") sessions are never project-scoped work: an attached
+        // project_id is only incidental UI context (the project the caller happened to be viewing).
+        // Credential resolution must always go through the PLATFORM-level Copilot connection, so
+        // without a platform-default binding configured the caller gets the platform-settings CTA —
+        // never a per-project one, and never a hard dependency on that incidental project's own
+        // (possibly missing/broken) Copilot binding. Regression for the corrected #1116 architecture.
         await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
         var client = AuthedClient(factory);
         var projectDirectory = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-project-{Guid.NewGuid():N}");
@@ -80,10 +86,67 @@ public sealed class AssistantRunEndpointsTests
 
             response.StatusCode.Should().Be(HttpStatusCode.Conflict);
             var requirement = await response.Content.ReadFromJsonAsync<ModelProviderConnectionRequirement>();
-            requirement.Should().BeEquivalentTo(
-                ModelProviderConnectionRequirement.ForProject(ProjectId.Parse(projectId!)));
+            requirement.Should().BeEquivalentTo(ModelProviderConnectionRequirement.ForPlatformDefault(),
+                "an Operator/Assistant run's incidental project_id must never route the caller to a " +
+                "project-specific Connect-GitHub prompt");
             factory.Agent.Requests.Should().BeEmpty(
                 "the AgentHost path must stop before any assistant/pod work can use an ambient credential");
+        }
+        finally
+        {
+            try { Directory.Delete(projectDirectory, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task StartRun_AgentHostWithIncidentalProject_UsesPlatformDefaultCopilotBinding_NotProjectBinding()
+    {
+        // Same incidental-project scenario, but this time the project DOES have its own (working)
+        // Copilot binding while the platform default is also configured. The run must still resolve
+        // via the platform binding — proving credential selection never even looks at the project's
+        // own binding for these personal sessions.
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        await SeedPlatformDefaultCopilotBindingAsync(factory);
+        var client = AuthedClient(factory);
+        var projectDirectory = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-project-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectDirectory);
+        try
+        {
+            var projectResponse = await client.PostAsJsonAsync("/api/projects", new
+            {
+                name = "Assistant platform-scoped credential",
+                origin = "blank",
+                working_directory = projectDirectory,
+            });
+            projectResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+            var projectId = (await projectResponse.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("project_id").GetString()!;
+            await SeedProjectCopilotBindingAsync(factory, projectId);
+
+            var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+            {
+                project_id = projectId,
+                message = "Start an AgentHost assistant session with an incidental project",
+            });
+
+            response.StatusCode.Should().Be(HttpStatusCode.Created);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            var runId = body.GetProperty("run_id").GetString();
+            runId.Should().NotBeNullOrWhiteSpace();
+
+            var runStore = factory.Services.GetRequiredService<IRunStore>();
+            var run = await runStore.GetAsync(RunId.Parse(runId!), CancellationToken.None);
+            run.Should().NotBeNull();
+            run!.ProjectId.Should().NotBeNull("the incidental project context is still recorded on the run");
+
+            await using var scope = factory.Services.CreateAsyncScope();
+            var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
+            var snapshots = await persistence.GetCapabilitySnapshotsAsync(runId!, CancellationToken.None);
+            snapshots.Should().ContainSingle(snapshot =>
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+                snapshot.SourceBindingId == PlatformDefaultCopilotBindingRecord.SingletonId &&
+                snapshot.ProjectId == null,
+                "the incidental project's own Copilot binding must never be used to source the run's credential");
         }
         finally
         {
@@ -968,6 +1031,26 @@ public sealed class AssistantRunEndpointsTests
             CredentialReference = "copilot-app-platform-default-version",
             CredentialVersion = "platform-version",
             GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task SeedProjectCopilotBindingAsync(AssistantWebApplicationFactory factory, string projectId)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        if (!await db.Projects.AnyAsync(x => x.ProjectId == projectId))
+            db.Projects.Add(new ProjectRecord { ProjectId = projectId });
+        db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+        {
+            Id = $"binding-{projectId}",
+            ProjectId = projectId,
+            EntraObjectId = "entra",
+            CredentialReference = "copilot-app-project-version",
+            CredentialVersion = "version",
+            GrantDigest = "project-digest",
             Status = GitHubBindingStatus.Active,
             BoundAt = DateTimeOffset.UtcNow,
         });
