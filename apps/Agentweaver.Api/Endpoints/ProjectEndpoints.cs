@@ -140,8 +140,9 @@ app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
     return Results.Redirect(handoff.Value.AuthorizationUrl);
 }).AllowAnonymous();
 
-// This callback uses only the one-time cookie issued at the authenticated begin endpoint. It never
-// accepts a project id or Entra subject from GitHub; both remain pinned in the transaction.
+// Shared callback for both project-scoped and platform-default Copilot OAuth flows. It uses only
+// the one-time cookie issued at the authenticated begin endpoint and dispatches by persisted state;
+// it never accepts a project id or Entra subject from GitHub.
 app.MapGet("/auth/github/copilot-app/callback", async (
     HttpContext httpContext,
     string? code,
@@ -151,22 +152,78 @@ app.MapGet("/auth/github/copilot-app/callback", async (
     BrowserEntraSessionService browserSessions,
     GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
+    IGitHubConnectionsCredentialVault credentialVault,
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
     ILogger<ProjectCopilotBindingService> logger,
+    ILogger<PlatformDefaultCopilotBindingService> platformLogger,
     CancellationToken ct) =>
 {
-    var service = new ProjectCopilotBindingService(
-        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
-    var cookie = ProjectCopilotBindingService.ReadCallbackCookie(httpContext);
+    var projectCookie = ProjectCopilotBindingService.ReadCallbackCookie(httpContext);
     ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
+    var platformCookie = PlatformDefaultCopilotBindingService.ReadCallbackCookie(httpContext);
+    PlatformDefaultCopilotBindingService.ClearCallbackCookie(httpContext);
     var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
-    var outcome = await service.CompleteBrowserCallbackAsync(
+    var resolvedCode = string.IsNullOrWhiteSpace(error) ? code : null;
+    var projectTransaction = string.IsNullOrWhiteSpace(state)
+        ? null
+        : await persistence.GetCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
+    var platformTransaction = string.IsNullOrWhiteSpace(state)
+        ? null
+        : await persistence.GetPlatformDefaultCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
+    if (projectTransaction is not null)
+    {
+        var projectService = new ProjectCopilotBindingService(
+            configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
+        var projectOutcome = await projectService.CompleteBrowserCallbackAsync(
+            browserSession?.Id,
+            browserSession?.EntraObjectId,
+            state,
+            resolvedCode,
+            projectCookie,
+            ct).ConfigureAwait(false);
+        return Results.Redirect(await projectService.GetCallbackRedirectAsync(projectOutcome, state, ct).ConfigureAwait(false));
+    }
+
+    if (platformTransaction is not null)
+    {
+        var platformService = new PlatformDefaultCopilotBindingService(
+            configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, platformLogger);
+        var platformOutcome = await platformService.CompleteBrowserCallbackAsync(
+            browserSession?.Id,
+            browserSession?.EntraObjectId,
+            state,
+            resolvedCode,
+            platformCookie,
+            ct).ConfigureAwait(false);
+        return Results.Redirect(await platformService.GetCallbackRedirectAsync(platformOutcome, ct).ConfigureAwait(false));
+    }
+
+    if (!string.IsNullOrWhiteSpace(platformCookie) && string.IsNullOrWhiteSpace(projectCookie))
+    {
+        var platformService = new PlatformDefaultCopilotBindingService(
+            configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, platformLogger);
+        var platformOutcome = await platformService.CompleteBrowserCallbackAsync(
+            browserSession?.Id,
+            browserSession?.EntraObjectId,
+            state,
+            resolvedCode,
+            platformCookie,
+            ct).ConfigureAwait(false);
+        return Results.Redirect(await platformService.GetCallbackRedirectAsync(platformOutcome, ct).ConfigureAwait(false));
+    }
+
+    var projectServiceFallback = new ProjectCopilotBindingService(
+        configuration, persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
+    var projectOutcomeFallback = await projectServiceFallback.CompleteBrowserCallbackAsync(
         browserSession?.Id,
         browserSession?.EntraObjectId,
-        state, string.IsNullOrWhiteSpace(error) ? code : null, cookie, ct).ConfigureAwait(false);
-    return Results.Redirect(await service.GetCallbackRedirectAsync(outcome, state, ct).ConfigureAwait(false));
+        state,
+        resolvedCode,
+        projectCookie,
+        ct).ConfigureAwait(false);
+    return Results.Redirect(await projectServiceFallback.GetCallbackRedirectAsync(projectOutcomeFallback, state, ct).ConfigureAwait(false));
 }).AllowAnonymous();
 
 // GET /api/projects/{id}/github/copilot/authorizations/{transactionId} — initiating-human-only poll.

@@ -30,6 +30,8 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
         stored.AppKind.Should().Be(GitHubAppKind.Copilot);
         stored.Purpose.Should().Be(GitHubAuthorizationPurpose.PlatformDefaultCopilot);
         begin.AuthorizationUrl.Should().Contain("code_challenge_method=S256");
+        Query(begin.AuthorizationUrl!, "redirect_uri")
+            .Should().Be("https://agentweaver.test/auth/github/copilot-app/callback");
     }
 
     [Fact]

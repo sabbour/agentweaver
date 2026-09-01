@@ -40,8 +40,10 @@ not reuse or replace any per-project Copilot connection. Until either a BYOK
 provider or that platform-default Copilot account is configured, signed-in users
 see a setup lockout screen instead of the normal app shell. Platform Admins are
 sent straight to **Platform settings** so they can fix the configuration in place.
-That same Copilot OAuth app must register both callback routes: the existing
-project-scoped callback and the platform-default callback.
+That same Copilot OAuth app now needs only one registered callback route:
+`/auth/github/copilot-app/callback`. Agentweaver routes both the project-scoped
+and platform-default completions through that shared endpoint using the OAuth
+`state`.
 
 Project roles in Agentweaver do not translate to GitHub permissions. Repository and
 Copilot capabilities are granted only through their respective GitHub Apps.

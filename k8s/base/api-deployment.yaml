@@ -199,6 +199,8 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: COPILOT_APP_CALLBACK_URL
+            # Shared GitHub Copilot OAuth callback for both project-scoped and
+            # platform-default flows; the server dispatches by persisted state.
             - name: Auth__CopilotApp__Slug
               value: agentweaver-orchestrator-copilot
             # Browser redirect target after the OAuth callback completes. Without this,

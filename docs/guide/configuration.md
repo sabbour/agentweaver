@@ -127,7 +127,7 @@ or used for unattended work until its registration has zero permissions.
 | --- | --- | --- |
 | `Auth:CopilotApp:ClientId` | none | Copilot GitHub App OAuth client ID; must differ from `Auth:RepoApp:ClientId` |
 | `Auth:CopilotApp:ClientSecret` | none | Copilot App OAuth client secret; store in user-secrets or Key Vault |
-| `Auth:CopilotApp:CallbackUrl` | none | Exact callback URL ending in `/auth/github/copilot-app/callback` |
+| `Auth:CopilotApp:CallbackUrl` | none | Exact shared callback URL ending in `/auth/github/copilot-app/callback` for both Copilot OAuth flows |
 | `Auth:CopilotApp:BaseUrl` | `https://github.com` | GitHub authorization origin |
 | `Auth:CopilotApp:Slug` | none | GitHub App slug used for the required live registration check |
 | `Auth:CopilotApp:ApiUrl` | `https://api.github.com` | GitHub API origin used to check the public App registration |
@@ -137,13 +137,13 @@ or used for unattended work until its registration has zero permissions.
 
 The same Copilot App registration also serves the deployment-wide
 **platform-default Copilot** connection used by GitHub Copilot mode when no BYOK
-provider is saved. Agentweaver derives a sibling callback route
-`/auth/github/platform-default-copilot/callback` from
-`Auth:CopilotApp:CallbackUrl`; a Platform Admin starts that flow from
-**Platform settings**. Register both callback routes on the same Copilot App:
-the configured project route and the derived platform-default sibling route. The
-saved binding is singleton platform state, separate from every project-scoped
-Copilot binding.
+provider is saved. A Platform Admin starts that flow from **Platform settings**,
+but it now reuses the same physical callback URL as the project-scoped flow:
+`Auth:CopilotApp:CallbackUrl` (`/auth/github/copilot-app/callback`). The server
+disambiguates project vs. platform-default completion by the persisted OAuth
+`state`, so only this single callback URL needs to be registered on the GitHub
+App. The saved binding is singleton platform state, separate from every
+project-scoped Copilot binding.
 
 When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
 GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)
