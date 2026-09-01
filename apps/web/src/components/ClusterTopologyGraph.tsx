@@ -21,11 +21,14 @@ const useStyles = makeStyles({
     display: 'grid',
     gap: tokens.spacingVerticalM,
   },
-  graphCanvas: {
+  graphViewport: {
     height: '440px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
+  },
+  graphCanvas: {
+    height: '100%',
   },
   instancePanel: {
     display: 'grid',
@@ -276,26 +279,28 @@ export function ClusterTopologyGraph({ data }: { data: ClusterDiagnosticsDto }) 
   const styles = useStyles();
   return (
     <div className={styles.container} data-testid="cluster-topology-graph">
-      <ReactFlow
-        className={styles.graphCanvas}
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
-        minZoom={0.2}
-        maxZoom={2}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        nodesFocusable={false}
-        edgesFocusable={false}
-        panOnScroll
-        zoomOnScroll
-        zoomActivationKeyCode={['Meta', 'Control']}
-        zoomOnDoubleClick={false}
-        panOnDrag
-        proOptions={{ hideAttribution: true }}
-      />
+      <div className={styles.graphViewport} data-testid="cluster-topology-viewport">
+        <ReactFlow
+          className={styles.graphCanvas}
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
+          minZoom={0.2}
+          maxZoom={2}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          nodesFocusable={false}
+          edgesFocusable={false}
+          panOnScroll
+          zoomOnScroll
+          zoomActivationKeyCode={['Meta', 'Control']}
+          zoomOnDoubleClick={false}
+          panOnDrag
+          proOptions={{ hideAttribution: true }}
+        />
+      </div>
       <div className={styles.instancePanel}>
         {(data.warm_pools ?? []).map((pool) => (
           <section key={`${pool.name}-instances`} className={styles.instanceGroup}>

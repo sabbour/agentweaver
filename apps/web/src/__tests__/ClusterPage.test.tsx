@@ -150,6 +150,7 @@ describe('ClusterPage', () => {
 
     expect(screen.getByText('Resource topology')).toBeDefined();
     expect(screen.getByTestId('cluster-topology-graph')).toBeDefined();
+    expect(screen.getByTestId('cluster-topology-viewport')).toBeDefined();
     expect(screen.getByLabelText('Cluster: 3 / 3 checks healthy')).toBeDefined();
     expect(screen.getByLabelText('default-pool: Warm pool · 2 / 2 ready')).toBeDefined();
     expect(screen.getAllByLabelText('agentweaver-sandbox-unclaimed: Warm instance · available').length).toBeGreaterThan(0);
