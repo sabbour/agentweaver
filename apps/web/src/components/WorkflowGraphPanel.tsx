@@ -141,6 +141,11 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   handleTestIdPrefix?: string;
   /** Marks the workflow entry point in the editable workflow canvas. */
   isStart?: boolean;
+  /** Editor-only inline badge for setup/validation state that should be visible on the node face. */
+  editorBadge?: {
+    label: string;
+    title?: string;
+  };
   /** Editing actions supplied only by the visual workflow editor. */
   editorActions?: {
     addNext: () => void;
@@ -546,6 +551,17 @@ export const useNodeStyles = makeStyles({
     fontSize: tokens.fontSizeBase100,
     fontWeight: tokens.fontWeightSemibold,
   },
+  editorBadge: {
+    alignSelf: 'flex-start',
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '1px 6px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorStatusWarningBackground2,
+    color: tokens.colorStatusWarningForeground1,
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+  },
   pillTitle: {
     flex: 1,
     minWidth: 0,
@@ -922,6 +938,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     interactionTestId,
     handleTestIdPrefix,
     isStart,
+    editorBadge,
     editorActions,
   } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
@@ -1116,6 +1133,11 @@ export function WorkflowNode({ data, selected }: NodeProps) {
             <span className={s.pillTitle}>{label}</span>
             {isStart && <span className={s.startBadge}>Start</span>}
           </div>
+          {editorBadge && (
+            <span className={s.editorBadge} title={editorBadge.title}>
+              {editorBadge.label}
+            </span>
+          )}
           {subText && <span className={s.pillSub}>{subText}</span>}
           {showFaceReviewAction && (
             <div
