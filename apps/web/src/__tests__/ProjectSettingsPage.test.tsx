@@ -123,6 +123,7 @@ beforeEach(() => {
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'not_connected',
     github_login: null,
+    effective_source: 'none',
   });
   vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
     connected: false,
@@ -206,6 +207,24 @@ describe('ProjectSettingsPage', () => {
     expect(installLink.getAttribute('href')).toBe('https://github.com/apps/agentweaver-repo/installations/new');
     expect(installLink.getAttribute('target')).toBe('_blank');
     expect(screen.getByRole('button', { name: 'Refresh status' })).toBeDefined();
+  });
+
+  it('shows the platform default Copilot account instead of a broken project warning', async () => {
+    vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
+      status: 'not_connected',
+      github_login: 'platform-bot',
+      effective_source: 'platform_default',
+    });
+
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
+
+    expect(await screen.findByText(
+      'This project uses the platform-configured GitHub Copilot account for background AI access: @platform-bot. Manage it in Platform settings.',
+    )).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Manage GitHub Copilot' })).toBeNull();
   });
 
   it('uses connected-repository wording for background requirements when a repo is attached', async () => {

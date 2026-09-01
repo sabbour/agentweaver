@@ -14,7 +14,7 @@ import {
 } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { PlatformDefaultCopilotConnection, ProjectCopilotConnection } from '../api/types';
+import type { ProjectCopilotConnection } from '../api/types';
 
 const CONNECTION_LOAD_ERROR = 'Could not load this project’s GitHub Copilot connection. Refresh and try again.';
 const GITHUB_APPS_EXPLANATION = 'GitHub Copilot provides AI access. The separate Repo App provides repository access.';
@@ -32,7 +32,6 @@ export function GitHubCopilotConnectionPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [connection, setConnection] = useState<ProjectCopilotConnection | null>(null);
-  const [platformDefaultConnection, setPlatformDefaultConnection] = useState<PlatformDefaultCopilotConnection | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -44,24 +43,17 @@ export function GitHubCopilotConnectionPicker({
     setLoading(true);
     setLoadError(null);
     try {
-      const [nextConnection, nextPlatformDefaultConnection] = await Promise.all([
-        apiClient.getProjectCopilotConnection(projectId),
-        suppressProjectOverrideWhenPlatformDefault
-          ? apiClient.getPlatformDefaultCopilotConnection().catch(() => null)
-          : Promise.resolve(null),
-      ]);
+      const nextConnection = await apiClient.getProjectCopilotConnection(projectId);
       if (generation !== refreshGeneration.current) return;
       setConnection(nextConnection);
-      setPlatformDefaultConnection(nextPlatformDefaultConnection);
     } catch (err) {
       if (generation !== refreshGeneration.current) return;
       setConnection(null);
-      setPlatformDefaultConnection(null);
       setLoadError(formatApiErrorMessage(err, CONNECTION_LOAD_ERROR));
     } finally {
       if (generation === refreshGeneration.current) setLoading(false);
     }
-  }, [projectId, suppressProjectOverrideWhenPlatformDefault]);
+  }, [projectId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,17 +81,17 @@ export function GitHubCopilotConnectionPicker({
   };
 
   const connected = connection?.status === 'connected';
-  const platformDefaultConnected = suppressProjectOverrideWhenPlatformDefault &&
-    !connected &&
-    platformDefaultConnection?.connected === true;
+  const effectiveSource = connection?.effective_source ?? (connected ? 'project' : 'none');
+  const platformDefaultConnected = effectiveSource === 'platform_default';
+  const byokConfigured = effectiveSource === 'byok';
   const accountLabel = connection?.github_login
     ? `@${connection.github_login}`
-    : platformDefaultConnection?.github_login
-      ? `@${platformDefaultConnection.github_login}`
-      : 'a GitHub account';
-  const canManageProjectConnection = !platformDefaultConnected;
+    : 'a GitHub account';
+  const canManageProjectConnection = !suppressProjectOverrideWhenPlatformDefault
+    || (!platformDefaultConnected && !byokConfigured);
   const noConnectionMessage = 'No GitHub Copilot account is connected for this project’s background AI access.';
   const platformDefaultMessage = `This project uses the platform-configured GitHub Copilot account for background AI access: ${accountLabel}. Manage it in Platform settings.`;
+  const byokConfiguredMessage = 'This project uses the deployment’s custom key AI configuration for background AI. GitHub Copilot is not used while Platform settings is in Custom key mode.';
   const projectConnectionMessage = `GitHub Copilot background AI access is connected to this project as ${accountLabel}. ${GITHUB_APPS_EXPLANATION}`;
   const dialogDescription = (
     'Choose the GitHub account with Copilot access in GitHub’s secure browser page. '
@@ -127,7 +119,12 @@ export function GitHubCopilotConnectionPicker({
               <MessageBarBody>{platformDefaultMessage}</MessageBarBody>
             </MessageBar>
           )}
-          {!loading && !loadError && !connected && !platformDefaultConnected && (
+          {!loading && !loadError && byokConfigured && (
+            <MessageBar intent="info">
+              <MessageBarBody>{byokConfiguredMessage}</MessageBarBody>
+            </MessageBar>
+          )}
+          {!loading && !loadError && !connected && !platformDefaultConnected && !byokConfigured && (
             <MessageBar intent="warning">
               <MessageBarBody>{noConnectionMessage} {GITHUB_APPS_EXPLANATION}</MessageBarBody>
             </MessageBar>
@@ -163,7 +160,12 @@ export function GitHubCopilotConnectionPicker({
                   <MessageBarBody>{dialogConnectedMessage}</MessageBarBody>
                 </MessageBar>
               )}
-              {!loading && !loadError && !connected && (
+              {!loading && !loadError && byokConfigured && (
+                <MessageBar intent="info">
+                  <MessageBarBody>{byokConfiguredMessage}</MessageBarBody>
+                </MessageBar>
+              )}
+              {!loading && !loadError && !connected && !byokConfigured && (
                 <MessageBar intent="warning">
                   <MessageBarBody>{noConnectionMessage} {GITHUB_APPS_EXPLANATION}</MessageBarBody>
                 </MessageBar>

@@ -2,12 +2,13 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
-using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Projects;
 
@@ -57,6 +58,82 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         response.StatusCode.Should().Be(HttpStatusCode.Created);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("project_id").GetString()!;
+    }
+
+    private async Task ResetBackgroundAiConfigurationAsync()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+        db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
+        await db.SaveChangesAsync();
+        await secrets.DeleteSecretAsync("copilot-app-platform-default");
+        await secrets.DeleteSecretAsync("byok-provider-configuration");
+    }
+
+    private async Task SeedPlatformDefaultCopilotBindingAsync(string login = "platform-bot")
+    {
+        await ResetBackgroundAiConfigurationAsync();
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+        db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await secrets.SetSecretAsync(
+            "copilot-app-platform-default",
+            $$"""{"Status":"signed-in","AccessToken":"ghu_platform","GitHubLogin":"{{login}}"}""");
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SeedByokProviderConfigurationAsync()
+    {
+        await ResetBackgroundAiConfigurationAsync();
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+        await settings.SetAsync(
+            new ByokProviderConfiguration(
+                Type: "azure",
+                BaseUrl: "https://byok-resource.openai.azure.com",
+                Model: "gpt-4.1",
+                ApiKey: "test-byok-key"),
+            CancellationToken.None);
+    }
+
+    private async Task SeedRepoAppInstallationAsync(string projectId)
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        if (!db.Projects.Any(x => x.ProjectId == projectId))
+        {
+            db.Projects.Add(new ProjectRecord
+            {
+                ProjectId = projectId,
+                Name = "Seeded Project",
+                OriginKind = "blank",
+                WorkingDirectory = _factory.NewWorkingDirectory(),
+                Owner = ProjectsWebApplicationFactory.TestUser,
+                DefaultProvider = "github-copilot",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            AppKind = GitHubAppKind.Repo,
+            InstallationId = 1234,
+            ProjectId = projectId,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
     }
 
     // =========================================================================
@@ -243,6 +320,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     [Fact]
     public async Task GetUnattendedReadiness_ReturnsOnlyAClosedRedactedStatus()
     {
+        await ResetBackgroundAiConfigurationAsync();
         var id = await CreateBlankProjectAsync();
 
         var response = await _client.GetAsync($"/api/projects/{id}/github/unattended-readiness");
@@ -260,6 +338,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     [Fact]
     public async Task GetProjectCopilotConnection_ReturnsOnlyRedactedConnectionState()
     {
+        await ResetBackgroundAiConfigurationAsync();
         var id = await CreateBlankProjectAsync();
 
         var response = await _client.GetAsync($"/api/projects/{id}/github/copilot/connection");
@@ -268,10 +347,76 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("status").GetString().Should().Be("not_connected");
         body.GetProperty("github_login").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("effective_source").GetString().Should().Be("none");
         body.TryGetProperty("authorization_url", out _).Should().BeFalse();
         body.TryGetProperty("transaction_id", out _).Should().BeFalse();
         body.TryGetProperty("access_token", out _).Should().BeFalse();
         body.TryGetProperty("refresh_token", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetProjectCopilotConnection_FallsBackToPlatformDefaultConnection()
+    {
+        var id = await CreateBlankProjectAsync();
+        await SeedPlatformDefaultCopilotBindingAsync();
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/copilot/connection");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("not_connected");
+        body.GetProperty("github_login").GetString().Should().Be("platform-bot");
+        body.GetProperty("effective_source").GetString().Should().Be("platform_default");
+        body.GetProperty("platform_default_connected").GetBoolean().Should().BeTrue();
+        body.GetProperty("byok_configured").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetProjectCopilotConnection_ReportsByokWhenCustomKeyIsConfigured()
+    {
+        var id = await CreateBlankProjectAsync();
+        await SeedByokProviderConfigurationAsync();
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/copilot/connection");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("not_connected");
+        body.GetProperty("github_login").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("effective_source").GetString().Should().Be("byok");
+        body.GetProperty("platform_default_connected").GetBoolean().Should().BeFalse();
+        body.GetProperty("byok_configured").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetUnattendedReadiness_UsesPlatformDefaultCopilotForRepoAppInstallPrompt()
+    {
+        var id = await CreateBlankProjectAsync();
+        await SeedPlatformDefaultCopilotBindingAsync();
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/unattended-readiness");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("not_ready");
+        body.GetProperty("reason_code").GetString().Should().Be("repo_app_installation_required");
+        body.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GetUnattendedReadiness_UsesByokForRepoGrantChecks()
+    {
+        var id = await CreateBlankProjectAsync();
+        await SeedByokProviderConfigurationAsync();
+        await SeedRepoAppInstallationAsync(id);
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/unattended-readiness");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("not_ready");
+        body.GetProperty("reason_code").GetString().Should().Be("repo_app_repository_grant_required");
+        body.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
