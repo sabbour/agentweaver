@@ -91,6 +91,7 @@ describe('ProjectGalleryPage repository authorization', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
 
     const connectButton = await screen.findByRole('button', { name: 'Connect GitHub' });
+    expect(screen.getByTestId('create-from-github-repositories-error').getAttribute('data-intent')).toBe('warning');
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
 
     fireEvent.click(connectButton);
@@ -98,5 +99,18 @@ describe('ProjectGalleryPage repository authorization', () => {
     await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?client_id=repo-app'));
 
     vi.unstubAllGlobals();
+  });
+
+  it('keeps unexpected repository-loading failures styled as errors', async () => {
+    vi.mocked(apiClient.listGitHubRepositorySelections).mockRejectedValue(
+      new ApiError(500, JSON.stringify({ error: 'internal_error' })),
+    );
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
+
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(screen.getByTestId('create-from-github-repositories-error').getAttribute('data-intent')).toBe('error');
+    expect(screen.queryByRole('button', { name: 'Connect GitHub' })).toBeNull();
   });
 });
