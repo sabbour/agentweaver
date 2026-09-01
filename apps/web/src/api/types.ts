@@ -475,17 +475,33 @@ export interface AuthConfigResponse {
 export type ByokProviderType = 'openai' | 'azure' | 'anthropic';
 
 export interface ByokProviderConfig {
+  id: string;
+  name: string;
   type: ByokProviderType;
   base_url: string;
   model: string;
-  configured: true;
+  wire_api: 'completions' | 'responses' | null;
+  azure_api_version: string | null;
+  headers: Record<string, string> | null;
+  has_api_key: boolean;
+  is_active: boolean;
 }
 
-export interface ByokProviderConfigRequest {
+export interface ByokProviderListResponse {
+  active_provider_id: string | null;
+  providers: ByokProviderConfig[];
+}
+
+export interface ByokProviderRequest {
+  name: string;
   type: ByokProviderType;
   base_url: string;
   model: string;
-  api_key: string;
+  /** Optional — omit/blank on an edit to keep the previously saved key unchanged. */
+  api_key?: string | null;
+  wire_api?: 'completions' | 'responses' | null;
+  headers?: Record<string, string> | null;
+  azure_api_version?: string | null;
 }
 
 export interface GitHubRepositorySelectionCandidate {

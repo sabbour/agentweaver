@@ -376,7 +376,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 Type = byokProvider.Type,
                 BaseUrl = byokProvider.BaseUrl,
                 ApiKey = byokProvider.ApiKey,
-                WireApi = "responses",
+                WireApi = byokProvider.WireApi ?? "responses",
+                Headers = ByokProviderConfigMapper.ToHeaderDictionary(byokProvider.Headers),
+                Azure = ByokProviderConfigMapper.ToAzureOptions(byokProvider),
             },
             // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
             // cross-session retrieval and the shared SQLite store causes "database is locked" under
