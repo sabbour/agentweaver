@@ -111,6 +111,18 @@ Lists every SandboxWarmPool CRD object in the namespace. Each row represents one
 
 A pool in `warning` or `critical` means new run dispatches fall back to creating an ad-hoc sandbox, which adds latency to run startup.
 
+## Resource topology
+
+The **Resource topology** graph now expands each warm pool to the individual warm-pool sandbox instances the API can currently see:
+
+| State | Meaning |
+|---|---|
+| **Available** | An idle warm sandbox is ready to be claimed by the next run. |
+| **Claimed** | A run currently owns the instance. When the backend can resolve both run and project, the node exposes a direct link to the orchestration detail page. |
+| **Warming** | The sandbox pod exists but is not ready yet. |
+
+This is the quickest way to answer “which warm spares are still idle?” and “which run is holding this exact warm-pool pod?”
+
 ## Sandbox claims table
 
 Lists all SandboxClaim CRD objects in the namespace:

@@ -178,7 +178,20 @@ One entry per SandboxWarmPool CRD object in the namespace.
 | `ready_replicas` | number | Sandbox pods that are ready to accept a claim. |
 | `available_replicas` | number | Sandbox pods that are available (ready and not currently claimed). |
 | `status` | string | `"healthy"` when `ready_replicas == desired_replicas`; `"warning"` when some replicas are ready but below desired; `"critical"` when no replicas are ready. |
+| `instances` | `WarmPoolInstanceDto[]` | Individual warm-pool sandbox instances, including claim ownership when it can be resolved. |
 | `age_seconds` | number\|null | Age of the CRD object in seconds. Omitted if unavailable. |
+
+### WarmPoolInstanceDto
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | Kubernetes sandbox/pod name for the individual warm-pool instance. |
+| `status` | string | `"available"` when idle, `"claimed"` when a run currently owns the instance, or `"warming"` while the pod exists but is not ready yet. |
+| `claimed` | boolean | Convenience flag for whether a SandboxClaim currently owns this instance. |
+| `claim_name` | string\|null | SandboxClaim name bound to this instance. Omitted for idle instances. |
+| `run_id` | string\|null | Full owning run id when available. Omitted for idle instances or older claims without the full annotation. |
+| `project_id` | string\|null | Owning project id resolved from the run store, allowing a UI link to the orchestration detail page. |
+| `age_seconds` | number\|null | Age of the instance pod in seconds. Omitted if unavailable. |
 
 ### SandboxClaimObjectDto
 
@@ -189,7 +202,7 @@ One entry per SandboxClaim object in the namespace.
 | `name` | string | Kubernetes name of the SandboxClaim object. |
 | `phase` | string | `"bound"` when assigned to a sandbox, `"pending"` when waiting for a matching sandbox, or `"unknown"`. |
 | `ready` | boolean | Whether the claimed sandbox is ready. |
-| `run_id` | string\|null | The run that created this claim. Omitted if not traceable. |
+| `run_id` | string\|null | The full run id that created this claim when the claim carries `agentweaver.io/run-id`; otherwise the legacy lossy claim-name suffix. Omitted if not traceable. |
 | `bound_sandbox` | string\|null | Name of the Sandbox object this claim is bound to. `null` when still pending. |
 | `warm_pool` | string\|null | Name of the SandboxWarmPool requested by this claim via `spec.warmPoolRef.name`. `null` for ad-hoc claims or older objects with no warm-pool reference. |
 | `age_seconds` | number\|null | Age of the SandboxClaim object in seconds. Omitted if unavailable. |

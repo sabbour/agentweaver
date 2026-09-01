@@ -207,7 +207,7 @@ function SandboxClaimsTable({ rows }: { rows: SandboxClaimObjectDto[] }) {
           <TableHeaderCell>Phase</TableHeaderCell>
           <TableHeaderCell>Bound sandbox</TableHeaderCell>
           <TableHeaderCell>Warm pool used</TableHeaderCell>
-          <TableHeaderCell>Run ID (prefix)</TableHeaderCell>
+          <TableHeaderCell>Run ID</TableHeaderCell>
           <TableHeaderCell>Age</TableHeaderCell>
         </TableRow>
       </TableHeader>
