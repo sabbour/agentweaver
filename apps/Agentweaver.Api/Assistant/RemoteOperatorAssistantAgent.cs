@@ -191,12 +191,12 @@ public sealed class RemoteOperatorAssistantAgent(
         var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
         var run = await runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"Operator run '{runId}' was not found.");
-        if (run.ProjectId is not { } projectId)
-            throw new InvalidOperationException($"Operator run '{runId}' has no project capability binding.");
 
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
-            throw new GitHubCopilotConnectionRequiredException(projectId);
+            throw run.ProjectId is { } projectId
+                ? new GitHubCopilotConnectionRequiredException(projectId)
+                : new GitHubCopilotConnectionRequiredException();
     }
 
     /// <summary>

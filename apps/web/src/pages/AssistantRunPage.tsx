@@ -8,7 +8,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiErrorMessage, parseApiBody } from '../api/errors';
@@ -122,8 +122,6 @@ const SUGGESTED_PROMPTS: string[] = [
   'What MCP tools and skills do you currently have access to?',
   'Create a new test project and kick off a small run to verify everything is wired up.',
 ];
-
-const PROJECT_CONTEXT_REQUIRED_MESSAGE = 'Choose a project before starting an AgentHost assistant session.';
 
 function readString(payload: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
@@ -286,7 +284,6 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const styles = useStyles();
   const params = useParams<{ projectId?: string }>();
   const effectiveProjectId = projectId ?? params.projectId;
-  const needsProjectSelection = !effectiveProjectId;
   const [searchParams, setSearchParams] = useSearchParams();
   const routeRunId = searchParams.get('runId') ?? '';
 
@@ -383,7 +380,6 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const handleSubmit = useCallback(async () => {
     const message = input.trim();
     if (!message || busy || sendingRef.current) return;
-    if (!effectiveProjectId) return;
     sendingRef.current = true;
     setInput('');
     setBusy(true);
@@ -465,24 +461,11 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       <div className={styles.transcript} data-testid="assistant-transcript" ref={transcriptRef}>
         {!runId && (
           <Text className={styles.emptyState} data-testid="assistant-empty-state">
-            {needsProjectSelection
-              ? 'Pick a project first. The assistant needs the same project context the rest of the shell uses before it can open a session.'
-              : 'Start a conversation below. Your first message opens an operator run and the reply streams in here.'}
+            Start a conversation below. Your first message opens an operator run and the reply
+            streams in here.
           </Text>
         )}
-        {!runId && needsProjectSelection && (
-          <MessageBar intent="warning">
-            <MessageBarBody data-testid="assistant-project-required">
-              {PROJECT_CONTEXT_REQUIRED_MESSAGE}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-        {!runId && needsProjectSelection && (
-          <Link to="/projects" style={{ textDecoration: 'none', width: 'fit-content' }}>
-            <Button appearance="primary">Browse projects</Button>
-          </Link>
-        )}
-        {!runId && !needsProjectSelection && (
+        {!runId && (
           <div className={styles.suggestions} data-testid="assistant-suggested-prompts">
             {SUGGESTED_PROMPTS.map((prompt) => (
               <Button
@@ -533,7 +516,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         <Composer
           textareaRef={composerTextareaRef}
           value={input}
-          placeholder={needsProjectSelection ? 'Choose a project to start the assistant...' : 'Message the assistant...'}
+          placeholder="Message the assistant..."
           onChange={(value) => { setInput(value); setError(null); }}
           onSubmit={(_, data) => { if (data.value.trim()) void handleSubmit(); }}
           isSending={busy}
@@ -544,14 +527,12 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
           // itself is gated via disableSend, so the user can keep typing (and even queue
           // up their next message) while the previous one is still in flight; handleSubmit
           // already guards against a duplicate dispatch via `busy`/`sendingRef`.
-          disableSend={busy || !input.trim() || needsProjectSelection}
+          disableSend={busy || !input.trim()}
         />
         <Text className={styles.composerStatus} aria-live="polite">
-          {needsProjectSelection
-            ? 'Choose a project to enable the assistant.'
-            : runId
-              ? `Connected to operator run ${runId} · stream ${streamStatus}`
-              : 'Your first message creates an operator run.'}
+          {runId
+            ? `Connected to operator run ${runId} · stream ${streamStatus}`
+            : 'Your first message creates an operator run.'}
         </Text>
       </div>
     </div>
