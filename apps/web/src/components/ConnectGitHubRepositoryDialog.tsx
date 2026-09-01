@@ -1,5 +1,5 @@
 import { apiClient } from '../api/apiClient';
-import { formatApiErrorMessage } from '../api/errors';
+import { formatApiErrorMessage, isGitHubRepoAppConnectionRequired } from '../api/errors';
 import {
   Button,
   Dialog,
@@ -14,6 +14,7 @@ import {
   Link as FluentLink,
   makeStyles,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   Select,
   Spinner,
@@ -74,12 +75,15 @@ export function ConnectGitHubRepositoryDialog({
   const [owners, setOwners] = useState<RepositoryOwner[]>([]);
   const [ownersLoading, setOwnersLoading] = useState(false);
   const [ownersError, setOwnersError] = useState<string | null>(null);
+  const [ownersConnectionRequired, setOwnersConnectionRequired] = useState(false);
+  const [connectingRepoApp, setConnectingRepoApp] = useState(false);
   const [owner, setOwner] = useState('');
   const [name, setName] = useState('');
   const [isPrivate, setIsPrivate] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ sourceRepository: string; htmlUrl: string } | null>(null);
+  const [ownersReloadKey, setOwnersReloadKey] = useState(0);
 
   const defaultName = slugify(projectName);
 
@@ -88,6 +92,7 @@ export function ConnectGitHubRepositoryDialog({
     let cancelled = false;
     setOwnersLoading(true); // eslint-disable-line react-hooks/set-state-in-effect
     setOwnersError(null);
+    setOwnersConnectionRequired(false);
     setResult(null);
     setError(null);
     void apiClient.listProjectRepositoryOwners(projectId)
@@ -98,13 +103,24 @@ export function ConnectGitHubRepositoryDialog({
       })
       .catch((err) => {
         if (cancelled) return;
+        setOwnersConnectionRequired(isGitHubRepoAppConnectionRequired(err));
         setOwnersError(formatError(err));
       })
       .finally(() => {
         if (!cancelled) setOwnersLoading(false);
       });
     return () => { cancelled = true; };
-  }, [open, projectId]);
+  }, [open, projectId, ownersReloadKey]);
+
+  const connectRepoApp = async () => {
+    setConnectingRepoApp(true);
+    try {
+      const handoff = await apiClient.beginRepoAppAuthorization();
+      window.location.assign(handoff.authorization_url);
+    } catch {
+      setConnectingRepoApp(false);
+    }
+  };
 
   const handleCreate = async () => {
     if (!owner) return;
@@ -160,6 +176,15 @@ export function ConnectGitHubRepositoryDialog({
                 {ownersError && (
                   <MessageBar intent="error">
                     <MessageBarBody>{ownersError}</MessageBarBody>
+                    <MessageBarActions>
+                      {ownersConnectionRequired
+                        ? (
+                          <Button size="small" appearance="primary" disabled={connectingRepoApp} onClick={() => void connectRepoApp()}>
+                            {connectingRepoApp ? 'Opening GitHub…' : 'Connect GitHub'}
+                          </Button>
+                        )
+                        : <Button size="small" onClick={() => setOwnersReloadKey((k) => k + 1)}>Retry</Button>}
+                    </MessageBarActions>
                   </MessageBar>
                 )}
                 {!ownersLoading && !ownersError && (
@@ -202,7 +227,7 @@ export function ConnectGitHubRepositoryDialog({
             {!result && (
               <Button
                 appearance="primary"
-                disabled={!owner || saving || ownersLoading}
+                disabled={!owner || saving || ownersLoading || Boolean(ownersError)}
                 onClick={() => void handleCreate()}
                 style={{ whiteSpace: 'nowrap' }}
               >
