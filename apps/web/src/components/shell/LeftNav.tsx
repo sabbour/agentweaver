@@ -11,8 +11,6 @@ import {
 } from '@fluentui/react-components';
 import {
   AddRegular,
-  ChevronDownRegular,
-  ChevronRightRegular,
   PanelLeftContract24Regular,
   PanelLeftExpand24Regular,
   Settings24Regular,
@@ -35,7 +33,6 @@ import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
 const NAV_WIDTH = '260px';
 const NAV_WIDTH_COLLAPSED = '64px';
 const COLLAPSE_KEY = 'aw.nav.collapsed';
-const SESSIONS_EXPANDED_KEY = 'aw.nav.sessions.expanded';
 
 const useStyles = makeStyles({
   settingsMenuSurface: {
@@ -91,14 +88,6 @@ export function LeftNav({
       return false;
     }
   });
-  const [sessionsExpanded, setSessionsExpanded] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(SESSIONS_EXPANDED_KEY) !== '0';
-    } catch {
-      return true;
-    }
-  });
-
   const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
     globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions'),
     globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions'),
@@ -111,18 +100,6 @@ export function LeftNav({
       const next = !prev;
       try {
         localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0');
-      } catch {
-        /* localStorage unavailable — fall back to in-memory state only */
-      }
-      return next;
-    });
-  };
-
-  const toggleSessionsExpanded = () => {
-    setSessionsExpanded((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(SESSIONS_EXPANDED_KEY, next ? '1' : '0');
       } catch {
         /* localStorage unavailable — fall back to in-memory state only */
       }
@@ -194,20 +171,6 @@ export function LeftNav({
       );
     }
     return <Fragment key={item.key}>{linkEl}</Fragment>;
-  }
-
-  function renderGlobalChildItem(item: GlobalNavItemDef, label: string) {
-    const selected = activeKey === item.key;
-    return (
-      <Link
-        to={item.path}
-        aria-label={label}
-        aria-current={selected ? 'page' : undefined}
-        className={`aw-nav-item aw-nav-item--child${selected ? ' aw-nav-item--selected' : ''}`}
-      >
-        <span className="aw-nav-item__label">{label}</span>
-      </Link>
-    );
   }
 
   function renderSection(section: NavSectionDef, pId: string) {
@@ -340,21 +303,17 @@ export function LeftNav({
                 </Tooltip>
               </div>
             ) : (
-              <div role="group" aria-label="Sessions" className="aw-nav-section aw-nav-section--disclosure">
+              <div role="group" aria-label="Sessions" className="aw-nav-section">
                 <div className={`aw-nav-disclosure${activeKey === globalSessionsItem.key ? ' aw-nav-disclosure--selected' : ''}`}>
-                  <button
-                    type="button"
+                  <Link
+                    to={globalSessionsItem.path}
+                    aria-label={globalSessionsItem.label}
+                    aria-current={activeKey === globalSessionsItem.key ? 'page' : undefined}
                     className="aw-nav-disclosure__toggle"
-                    aria-expanded={sessionsExpanded}
-                    aria-controls="aw-nav-sessions-panel"
-                    onClick={toggleSessionsExpanded}
                   >
-                    <span className="aw-nav-disclosure__chevron" aria-hidden="true">
-                      {sessionsExpanded ? <ChevronDownRegular /> : <ChevronRightRegular />}
-                    </span>
                     <span className="aw-nav-item__icon" aria-hidden="true">{globalSessionsItem.icon}</span>
                     <span className="aw-nav-item__label">{globalSessionsItem.label}</span>
-                  </button>
+                  </Link>
                   <Tooltip content="New session" relationship="label" positioning="after">
                     <Button
                       appearance="subtle"
@@ -366,11 +325,6 @@ export function LeftNav({
                     />
                   </Tooltip>
                 </div>
-                {sessionsExpanded && (
-                  <div id="aw-nav-sessions-panel" className="aw-nav-subitems">
-                    {renderGlobalChildItem(globalSessionsItem, 'All sessions')}
-                  </div>
-                )}
               </div>
             )}
           </>
