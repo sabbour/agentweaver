@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectSettingsPage } from '../pages/ProjectSettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -14,6 +15,7 @@ import {
 import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
+    getAuthConfig: vi.fn(),
     getProject: vi.fn(),
     getServerInfo: vi.fn(),
     getSandboxPolicy: vi.fn(),
@@ -48,6 +50,15 @@ function renderPage(projectId: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(apiClient.getAuthConfig).mockResolvedValue({
+    mode: 'Entra',
+    entra: {
+      tenant_id: 'tenant-1',
+      client_id: 'client-1',
+      enterprise_app_object_id: null,
+      authority: 'https://login.microsoftonline.com/tenant-1/v2.0',
+    },
+  } as never);
   vi.mocked(apiClient.getProject).mockResolvedValue({
     project_id: 'proj-1',
     name: 'Demo',
@@ -241,6 +252,28 @@ describe('ProjectSettingsPage', () => {
 
     expect(await screen.findByText('Platform access')).toBeDefined();
     expect(screen.getByText('Ada Lovelace')).toBeDefined();
+  });
+
+  it('links Entra access management when the access overview endpoint is unavailable', async () => {
+    vi.mocked(apiClient.getProjectAccessOverview).mockRejectedValue(new ApiError(404, 'Not Found') as never);
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
+
+    expect(await screen.findByText('Access management is handled in Microsoft Entra ID for this deployment.')).toBeDefined();
+    expect((await screen.findByRole('link', { name: 'Manage in Microsoft Entra ID' })).getAttribute('href'))
+      .toBe('https://entra.microsoft.com/tenant-1/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/client-1/isMSAApp~/false');
+  });
+
+  it('uses the auth config mode as the authentication-mode fallback when access overview is unavailable', async () => {
+    vi.mocked(apiClient.getProjectAccessOverview).mockRejectedValue(new ApiError(404, 'Not Found') as never);
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+
+    expect(await screen.findByText('Entra ID')).toBeDefined();
+    expect(screen.queryByText(/^GitHub$/)).toBeNull();
   });
 
   it('adds a project member through Tank role-assignment contract', async () => {
