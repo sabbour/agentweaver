@@ -191,6 +191,7 @@ export function LeftNav({
         className={`aw-nav-section${section.anchorBottom ? ' aw-nav-section--bottom' : ''}`}
         style={{ gap: '2px' }}
       >
+        {!collapsed && <div className="aw-nav-section__heading">{label}</div>}
         {section.items.map((item) => renderProjectItem(item, pId))}
       </div>
     );
