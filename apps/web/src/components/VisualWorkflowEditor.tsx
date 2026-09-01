@@ -4,18 +4,15 @@ import { ApiError } from '../api/client';
 import {
   Badge,
   Button,
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
   Dropdown,
   Field,
   Input,
   makeStyles,
-  Menu,
-  MenuDivider,
-  MenuGroup,
-  MenuGroupHeader,
-  MenuItem,
-  MenuList,
-  MenuPopover,
-  MenuTrigger,
   MessageBar,
   MessageBarBody,
   Option,
@@ -195,6 +192,16 @@ const DEFAULT_BRANCHES: Record<string, string[]> = Object.fromEntries(
 
 // Groups the "Add node" palette buckets primitives into (FR-050 authoring UX, #558).
 type NodePaletteGroup = 'gates' | 'steps' | 'actions' | 'flow';
+type NodePaletteFilter = 'all' | NodePaletteGroup;
+
+const NODE_PALETTE_GROUP_LABELS: Record<NodePaletteGroup, string> = {
+  gates: 'Reviewers & gates',
+  steps: 'Agent steps',
+  actions: 'Actions',
+  flow: 'Flow control',
+};
+
+const NODE_PALETTE_GROUP_ORDER: NodePaletteGroup[] = ['gates', 'steps', 'actions', 'flow'];
 
 // Per-primitive palette metadata: a scannable icon + a one-line, plain-language
 // description + the group header it sits under. `build_test` is deliberately absent:
@@ -402,22 +409,103 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
   },
-  menuItemContent: {
+  addNodeDialogSurface: {
+    maxWidth: '760px',
+    width: 'min(760px, calc(100vw - 32px))',
+  },
+  addNodeDialogContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  addNodeFilterTabs: {
+    overflowX: 'auto',
+  },
+  addNodeSections: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
+  },
+  addNodeSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  addNodeSectionTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  addNodeGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: tokens.spacingHorizontalM,
+    '@media (max-width: 680px)': {
+      gridTemplateColumns: '1fr',
+    },
+  },
+  addNodeCard: {
+    justifyContent: 'flex-start',
+    alignItems: 'stretch',
+    width: '100%',
+    minHeight: '96px',
+    padding: tokens.spacingHorizontalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    ':hover': {
+      borderTopColor: tokens.colorNeutralStroke1,
+      borderRightColor: tokens.colorNeutralStroke1,
+      borderBottomColor: tokens.colorNeutralStroke1,
+      borderLeftColor: tokens.colorNeutralStroke1,
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+  },
+  addNodeCardContent: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalM,
+    width: '100%',
+    textAlign: 'left',
+  },
+  addNodeCardIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '36px',
+    height: '36px',
+    flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground2,
+  },
+  addNodeCardCopy: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
-    maxWidth: '320px',
-    whiteSpace: 'normal',
+    minWidth: 0,
   },
-  menuItemTitle: {
+  addNodeCardTitle: {
     fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
   },
-  menuItemDescription: {
+  addNodeCardDescription: {
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase200,
+    whiteSpace: 'normal',
+  },
+  addNodeEmptyState: {
+    color: tokens.colorNeutralForeground3,
   },
 });
+
+interface AddNodeOption {
+  key: string;
+  label: string;
+  description: string;
+  group: NodePaletteGroup;
+  Icon: ComponentType;
+  onSelect: () => void;
+}
 
 function parseApiError400(err: unknown): { message: string; line: number | null } {
   if (!(err instanceof ApiError) || err.status !== 400) {
@@ -438,6 +526,7 @@ function buildGraph(
   positions: Map<string, { x: number; y: number }>,
   selectedNodeId: string | null,
   selectedEdgeIndex: number | null,
+  validationBadges: Map<string, { label: string; title?: string }> = new Map(),
   editorActions?: {
     addNext: (nodeId: string) => void;
     rename: (nodeId: string) => void;
@@ -491,6 +580,7 @@ function buildGraph(
         interactionTestId: `workflow-node-${n.id}`,
         handleTestIdPrefix: `workflow-node-${n.id}-handle`,
         isStart: n.id === model.start,
+        editorBadge: validationBadges.get(n.id),
         editorActions: editorActions && (n.type === 'prompt' || n.type === 'publish') ? {
           addNext: () => editorActions.addNext(n.id),
           rename: () => editorActions.rename(n.id),
@@ -523,6 +613,18 @@ function unroutedVerdicts(model: WfModel): { nodeId: string; verdicts: string[] 
     if (missing.length > 0) result.push({ nodeId: n.id, verdicts: missing });
   }
   return result;
+}
+
+function buildNodeValidationBadges(model: WfModel): Map<string, { label: string; title?: string }> {
+  return new Map(
+    unroutedVerdicts(model).map((warning) => [
+      warning.nodeId,
+      {
+        label: 'Needs routing',
+        title: `Unrouted verdicts: ${warning.verdicts.join(', ')}`,
+      },
+    ]),
+  );
 }
 
 // React Flow's `fitView` prop only fits the viewport once, on initial mount — it does
@@ -582,6 +684,9 @@ export function VisualWorkflowEditor({
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [redoStack, setRedoStack] = useState<string[]>([]);
   const [validationResult, setValidationResult] = useState<{ intent: 'success' | 'error'; message: string } | null>(null);
+  const [addNodeDialogOpen, setAddNodeDialogOpen] = useState(false);
+  const [addNodeSearch, setAddNodeSearch] = useState('');
+  const [addNodeFilter, setAddNodeFilter] = useState<NodePaletteFilter>('all');
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<{ message: string; line: number | null } | null>(null);
@@ -674,11 +779,13 @@ export function VisualWorkflowEditor({
         }
 
         setModel(parsed);
+        const validationBadges = buildNodeValidationBadges(parsed);
         const { rfNodes, rfEdges } = buildGraph(
           parsed,
           positionsRef.current,
           selectedNodeIdRef.current,
           selectedEdgeIndex,
+          validationBadges,
           {
             addNext: addNextStep,
             rename: promptRenameNode,
@@ -817,6 +924,64 @@ export function VisualWorkflowEditor({
   const warnings = useMemo(() => (model ? unroutedVerdicts(model) : []), [model]);
   const scheduleTrigger = useMemo(() => getScheduleTrigger(yamlText), [yamlText]);
   const eventTrigger = useMemo(() => getEventTrigger(yamlText), [yamlText]);
+  const openAddNodeDialog = useCallback(() => {
+    setAddNodeSearch('');
+    setAddNodeFilter('all');
+    setAddNodeDialogOpen(true);
+  }, []);
+  const closeAddNodeDialog = useCallback(() => {
+    setAddNodeDialogOpen(false);
+    setAddNodeSearch('');
+    setAddNodeFilter('all');
+  }, []);
+  const addNodeOptions = useMemo<AddNodeOption[]>(() => [
+    ...SPECIAL_GATES.map((gate) => ({
+      key: gate.key,
+      label: gate.label,
+      description: gate.description,
+      group: 'gates' as const,
+      Icon: gate.Icon,
+      onSelect: () => {
+        closeAddNodeDialog();
+        handleAddSpecialGate(gate);
+      },
+    })),
+    ...AUTHORABLE_WORKFLOW_NODE_TYPES
+      .filter((type) => NODE_TYPE_META[type] !== undefined)
+      .map((type) => {
+        const meta = NODE_TYPE_META[type];
+        return {
+          key: type,
+          label: NODE_TYPE_LABELS[type] ?? type,
+          description: meta.description,
+          group: meta.group,
+          Icon: meta.Icon,
+          onSelect: () => {
+            closeAddNodeDialog();
+            handleAddNode(type);
+          },
+        };
+      }),
+  ], [closeAddNodeDialog, handleAddNode, handleAddSpecialGate]);
+  const filteredAddNodeOptions = useMemo(() => {
+    const query = addNodeSearch.trim().toLowerCase();
+    return addNodeOptions.filter((option) => {
+      const matchesFilter = addNodeFilter === 'all' || option.group === addNodeFilter;
+      const matchesQuery = query.length === 0 || option.label.toLowerCase().includes(query);
+      return matchesFilter && matchesQuery;
+    });
+  }, [addNodeFilter, addNodeOptions, addNodeSearch]);
+  const addNodeOptionsByGroup = useMemo(
+    () => Object.fromEntries(
+      NODE_PALETTE_GROUP_ORDER.map((group) => [
+        group,
+        filteredAddNodeOptions.filter((option) => option.group === group),
+      ]),
+    ) as Record<NodePaletteGroup, AddNodeOption[]>,
+    [filteredAddNodeOptions],
+  );
+  const visibleAddNodeGroups = addNodeFilter === 'all' ? NODE_PALETTE_GROUP_ORDER : [addNodeFilter];
+  const hasVisibleAddNodeOptions = visibleAddNodeGroups.some((group) => addNodeOptionsByGroup[group].length > 0);
 
   const handleRenameNode = useCallback((oldId: string, newId: string) => {
     if (!newId || newId === oldId) return;
@@ -943,29 +1108,6 @@ export function VisualWorkflowEditor({
     onClose?.();
   }, [onClose]);
 
-  const renderPresetItem = (g: (typeof SPECIAL_GATES)[number]) => (
-    <MenuItem key={g.key} icon={<g.Icon />} onClick={() => handleAddSpecialGate(g)}>
-      <div className={styles.menuItemContent}>
-        <span className={styles.menuItemTitle}>{g.label}</span>
-        <span className={styles.menuItemDescription}>{g.description}</span>
-      </div>
-    </MenuItem>
-  );
-
-  const renderPrimitiveItems = (group: NodePaletteGroup) =>
-    AUTHORABLE_WORKFLOW_NODE_TYPES.filter((t) => NODE_TYPE_META[t]?.group === group).map((t) => {
-      const meta = NODE_TYPE_META[t];
-      const Icon = meta.Icon;
-      return (
-        <MenuItem key={t} icon={<Icon />} onClick={() => handleAddNode(t)}>
-          <div className={styles.menuItemContent}>
-            <span className={styles.menuItemTitle}>{NODE_TYPE_LABELS[t] ?? t}</span>
-            <span className={styles.menuItemDescription}>{meta.description}</span>
-          </div>
-        </MenuItem>
-      );
-    });
-
   return (
     <div className={styles.root}>
       <div className={styles.compactHeader}>
@@ -987,35 +1129,9 @@ export function VisualWorkflowEditor({
       <div className={styles.split}>
         <div className={styles.canvasPane} data-testid="workflow-canvas">
           <div className={styles.canvasToolbar} role="toolbar" aria-label="Workflow canvas actions">
-            <Menu>
-              <MenuTrigger disableButtonEnhancement>
-                <Button appearance="primary" size="small" icon={<AddRegular />}>Add node</Button>
-              </MenuTrigger>
-              <MenuPopover>
-                <MenuList>
-                  <MenuGroup>
-                    <MenuGroupHeader>Reviewers &amp; gates</MenuGroupHeader>
-                    {SPECIAL_GATES.map(renderPresetItem)}
-                    {renderPrimitiveItems('gates')}
-                  </MenuGroup>
-                  <MenuDivider />
-                  <MenuGroup>
-                    <MenuGroupHeader>Agent steps</MenuGroupHeader>
-                    {renderPrimitiveItems('steps')}
-                  </MenuGroup>
-                  <MenuDivider />
-                  <MenuGroup>
-                    <MenuGroupHeader>Actions</MenuGroupHeader>
-                    {renderPrimitiveItems('actions')}
-                  </MenuGroup>
-                  <MenuDivider />
-                  <MenuGroup>
-                    <MenuGroupHeader>Flow control</MenuGroupHeader>
-                    {renderPrimitiveItems('flow')}
-                  </MenuGroup>
-                </MenuList>
-              </MenuPopover>
-            </Menu>
+            <Button appearance="primary" size="small" icon={<AddRegular />} onClick={openAddNodeDialog}>
+              Add node
+            </Button>
           </div>
           <div className={styles.canvasMessages} aria-live="polite">
             {parseError && (
@@ -1350,6 +1466,98 @@ export function VisualWorkflowEditor({
         onSave={handleScheduleSave}
         onRemove={handleScheduleRemove}
       />
+      {addNodeDialogOpen && (
+        <Dialog open onOpenChange={(_, data) => { if (!data.open) closeAddNodeDialog(); }}>
+          <DialogSurface className={styles.addNodeDialogSurface} data-testid="add-node-dialog">
+            <DialogBody>
+              <DialogTitle
+                action={
+                  <Button
+                    appearance="subtle"
+                    aria-label="Close add node dialog"
+                    icon={<DismissRegular />}
+                    onClick={closeAddNodeDialog}
+                  />
+                }
+              >
+                Add
+              </DialogTitle>
+              <DialogContent className={styles.addNodeDialogContent}>
+                <Input
+                  value={addNodeSearch}
+                  onChange={(_, data) => setAddNodeSearch(data.value)}
+                  placeholder="Search node types"
+                  aria-label="Search node types"
+                  contentAfter={addNodeSearch ? (
+                    <Button
+                      appearance="transparent"
+                      size="small"
+                      icon={<DismissRegular />}
+                      aria-label="Clear node search"
+                      onClick={() => setAddNodeSearch('')}
+                    />
+                  ) : undefined}
+                />
+                <TabList
+                  className={styles.addNodeFilterTabs}
+                  selectedValue={addNodeFilter}
+                  onTabSelect={(_, data) => setAddNodeFilter(data.value as NodePaletteFilter)}
+                  aria-label="Filter node types"
+                >
+                  <Tab value="all">All</Tab>
+                  {NODE_PALETTE_GROUP_ORDER.map((group) => (
+                    <Tab key={group} value={group}>
+                      {NODE_PALETTE_GROUP_LABELS[group]}
+                    </Tab>
+                  ))}
+                </TabList>
+                {hasVisibleAddNodeOptions ? (
+                  <div className={styles.addNodeSections}>
+                    {visibleAddNodeGroups.map((group) => {
+                      const options = addNodeOptionsByGroup[group];
+                      if (options.length === 0) return null;
+                      return (
+                        <div key={group} className={styles.addNodeSection}>
+                          {addNodeFilter === 'all' && (
+                            <Text className={styles.addNodeSectionTitle}>
+                              {NODE_PALETTE_GROUP_LABELS[group]}
+                            </Text>
+                          )}
+                          <div className={styles.addNodeGrid}>
+                            {options.map((option) => (
+                              <Button
+                                key={option.key}
+                                appearance="subtle"
+                                className={styles.addNodeCard}
+                                onClick={option.onSelect}
+                                data-testid={`add-node-option-${option.key}`}
+                              >
+                                <span className={styles.addNodeCardContent}>
+                                  <span className={styles.addNodeCardIcon} aria-hidden="true">
+                                    <option.Icon />
+                                  </span>
+                                  <span className={styles.addNodeCardCopy}>
+                                    <span className={styles.addNodeCardTitle}>{option.label}</span>
+                                    <span className={styles.addNodeCardDescription}>{option.description}</span>
+                                  </span>
+                                </span>
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <Text className={styles.addNodeEmptyState}>
+                    No node types match that search.
+                  </Text>
+                )}
+              </DialogContent>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+      )}
     </div>
   );
 }
