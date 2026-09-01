@@ -1,5 +1,5 @@
 export type ModelSource = 'github-copilot' | 'byok';
-export type AuthMode = 'entra';
+export type AuthMode = 'entra' | 'github-legacy';
 
 export interface ServerInfo {
   data_directory: string;
@@ -462,13 +462,13 @@ export interface AuthSessionResponse {
 }
 
 export interface AuthConfigResponse {
-  mode: 'Entra';
+  mode: 'Entra' | 'GitHubLegacy';
   entra: {
     client_id: string | null;
     tenant_id: string | null;
     enterprise_app_object_id: string | null;
     authority: string | null;
-  };
+  } | null;
 }
 
 export type ByokProviderType = 'openai' | 'azure' | 'anthropic';

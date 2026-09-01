@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { buildEntraAdminLink } from '../api/entraAdminLink';
 import { MCP_URL } from '../config';
 import {
   Button,
@@ -84,19 +85,7 @@ export function SettingsPage() {
     void apiClient.getAuthConfig()
       .then(({ entra }: AuthConfigResponse) => {
         if (cancelled) return;
-        if (entra.tenant_id && entra.client_id && entra.enterprise_app_object_id) {
-          setEntraAdminLink({
-            href: `https://ms.portal.azure.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Users/objectId/${encodeURIComponent(entra.enterprise_app_object_id)}/appId/${encodeURIComponent(entra.client_id)}`,
-            label: 'Manage users in Azure Portal',
-          });
-          return;
-        }
-        if (entra.tenant_id && entra.client_id) {
-          setEntraAdminLink({
-            href: `https://entra.microsoft.com/${encodeURIComponent(entra.tenant_id)}/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/${encodeURIComponent(entra.client_id)}/isMSAApp~/false`,
-            label: 'Manage in Microsoft Entra ID',
-          });
-        }
+        setEntraAdminLink(buildEntraAdminLink(entra));
       })
       .catch(() => {
         // The role list remains useful if the public Entra configuration is unavailable.
