@@ -143,7 +143,7 @@ describe('AppShell navigation', () => {
     expect(screen.getByText('Agents')).toBeDefined();
     expect(screen.getByText('Memories')).toBeDefined();
     expect(screen.getByText('Workflows')).toBeDefined();
-    expect(screen.getByText('Settings')).toBeDefined();
+    expect(screen.getByText('Project settings')).toBeDefined();
     expect(screen.getByText('Diagnostics')).toBeDefined();
     expect(screen.getByText('Heartbeat')).toBeDefined();
 
