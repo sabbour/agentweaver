@@ -416,8 +416,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             ? await _copilotCredentials.GetCredentialAsync(runId, ct).ConfigureAwait(false)
             : null;
         if (byokProvider is null && copilotCredential is null)
-            throw new InvalidOperationException(
-                $"Cannot launch AgentHost pod for run '{runId}' without a live run-bound Copilot capability snapshot.");
+        {
+            // _copilotCredentials being null is a genuine wiring/configuration bug (no provider
+            // registered at all) and must fail loudly. But when a provider IS registered and still
+            // returns null, the run's snapshot exists yet its underlying credential could not be
+            // redeemed (e.g. the bound GitHub Copilot App connection's Key Vault secret is missing
+            // or stale) — a normal, user-actionable "reconnect GitHub" condition, not an internal
+            // error. Surface it as such instead of leaking an opaque pod-launch failure.
+            if (_copilotCredentials is null)
+                throw new InvalidOperationException(
+                    $"Cannot launch AgentHost pod for run '{runId}' without a live run-bound Copilot capability snapshot.");
+            throw ProjectId.TryParse(configProjectId, out var connectionProjectId)
+                ? new GitHubCopilotConnectionRequiredException(connectionProjectId)
+                : new GitHubCopilotConnectionRequiredException();
+        }
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
         try
