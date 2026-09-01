@@ -114,6 +114,55 @@ public sealed class ClusterDiagnosticsServiceTests
     }
 
     [Fact]
+    public async Task GetClusterDiagnosticsAsync_ExposesWarmPoolInstances_WithClaimOwnership()
+    {
+        await using var db = await TestSqliteDatabase.CreateAsync();
+        var runStore = new SqliteRunStore(db.Db);
+        var projectId = ProjectId.New();
+        const string runId = "01234567-89ab-cdef-0123-456789abcdef";
+        await runStore.InsertAsync(new Run
+        {
+            Id = RunId.Parse(runId),
+            RepositoryPath = "C:\\repo",
+            OriginatingBranch = "feat/test",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "diagnostics",
+            SubmittingUser = "octocat",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = projectId,
+        });
+
+        var service = NewClusterService(
+            BuildConfiguration(db.Path),
+            ClientFor(WarmPoolTopologyHandler()),
+            db.Db);
+
+        var dto = await service.GetClusterDiagnosticsAsync();
+
+        dto.SandboxClaims.Should().ContainSingle();
+        dto.SandboxClaims[0].RunId.Should().Be(runId);
+
+        var pool = dto.WarmPools.Should().ContainSingle().Subject;
+        pool.Instances.Should().ContainEquivalentOf(new WarmPoolInstanceDto
+        {
+            Name = "agentweaver-sandbox-available",
+            Status = "available",
+            Claimed = false,
+        }, options => options.Excluding(x => x.AgeSeconds));
+
+        pool.Instances.Should().ContainEquivalentOf(new WarmPoolInstanceDto
+        {
+            Name = "agentweaver-sandbox-claimed",
+            Status = "claimed",
+            Claimed = true,
+            ClaimName = "agent-0123456789ab",
+            RunId = runId,
+            ProjectId = projectId.ToString(),
+        }, options => options.Excluding(x => x.AgeSeconds));
+    }
+
+    [Fact]
     public async Task GetSystemDiagnosticsAsync_UsesObjectQuotaHeadroom()
     {
         await using var db = await TestSqliteDatabase.CreateAsync();
@@ -132,9 +181,12 @@ public sealed class ClusterDiagnosticsServiceTests
         dto.AgentPodQuota.Limit.Should().Be(200);
     }
 
-    private static DiagnosticsService NewClusterService(IConfiguration configuration, IKubernetes client) =>
+    private static DiagnosticsService NewClusterService(
+        IConfiguration configuration,
+        IKubernetes client,
+        SqliteDb? db = null) =>
         new(
-            db: null!,
+            db: db!,
             projectStore: new EmptyProjectStore(),
             workspaceProvider: null!,
             heartbeatStore: new HeartbeatStatusStore(configuration),
@@ -213,7 +265,10 @@ public sealed class ClusterDiagnosticsServiceTests
                   "metadata": {
                     "name": "agent-0123456789ab",
                     "namespace": "agentweaver",
-                    "creationTimestamp": "2026-07-28T12:00:00Z"
+                    "creationTimestamp": "2026-07-28T12:00:00Z",
+                    "annotations": {
+                      "agentweaver.io/run-id": "01234567-89ab-cdef-0123-456789abcdef"
+                    }
                   },
                   "spec": {
                     "warmPoolRef": {
@@ -222,13 +277,79 @@ public sealed class ClusterDiagnosticsServiceTests
                   },
                   "status": {
                     "sandbox": {
-                      "name": "sandbox-0123456789ab"
+                      "name": "agentweaver-sandbox-claimed"
                     },
                     "conditions": [
                       {
                         "type": "Ready",
                         "status": "True"
                       }
+                    ]
+                  }
+                }
+              ]
+            }
+            """);
+        return handler;
+    }
+
+    private static FakeKubeHandler WarmPoolTopologyHandler()
+    {
+        var handler = ClaimsHandler();
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxwarmpools",
+            """
+            {
+              "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+              "kind": "SandboxWarmPoolList",
+              "items": [
+                {
+                  "metadata": {
+                    "name": "agentweaver-agent-host",
+                    "namespace": "agentweaver",
+                    "creationTimestamp": "2026-07-28T12:00:00Z"
+                  },
+                  "spec": {
+                    "replicas": 2
+                  },
+                  "status": {
+                    "readyReplicas": 2,
+                    "availableReplicas": 1
+                  }
+                }
+              ]
+            }
+            """);
+        handler.OnGet(
+            "/api/v1/namespaces/agentweaver/pods",
+            """
+            {
+              "apiVersion": "v1",
+              "kind": "PodList",
+              "items": [
+                {
+                  "metadata": {
+                    "name": "agentweaver-sandbox-claimed",
+                    "namespace": "agentweaver",
+                    "creationTimestamp": "2026-07-28T12:00:00Z"
+                  },
+                  "status": {
+                    "phase": "Running",
+                    "conditions": [
+                      { "type": "Ready", "status": "True" }
+                    ]
+                  }
+                },
+                {
+                  "metadata": {
+                    "name": "agentweaver-sandbox-available",
+                    "namespace": "agentweaver",
+                    "creationTimestamp": "2026-07-28T12:05:00Z"
+                  },
+                  "status": {
+                    "phase": "Running",
+                    "conditions": [
+                      { "type": "Ready", "status": "True" }
                     ]
                   }
                 }
