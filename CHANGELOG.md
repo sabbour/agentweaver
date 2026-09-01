@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.23.0
+
+### Minor Changes
+
+- 609eff4: Show individual warm-pool sandbox instances on the Cluster page, including which ones are idle versus claimed and deep links back to the owning orchestration run when that ownership can be resolved.
+
+### Patch Changes
+
+- 15d2a2a: Allow the `/assistant` page to start platform-wide sessions without a selected project by using the platform-default GitHub Copilot binding on the backend, while still honoring an explicit `?project=` scope when one is provided.
+- 8528d62: Respect the remembered project on the assistant page so starting a session from `/assistant` works without an explicit `?project=` query string, and show a single actionable project-selection state when no project is available.
+- 8805312: Clarify Project Settings background access UX by separating GitHub Copilot AI access from repository access requirements, and show when the platform-configured Copilot account is in use for background AI runs.
+- 1ea982f: Add an optional Entra enterprise application object ID setting so Account settings can deep-link directly to the Azure Portal users-and-groups blade when that deployment-specific object ID is configured.
+- 749a1c7: Fix the Project Settings Access tab on Entra deployments by linking administrators to the right Microsoft Entra or Azure Portal access page when the project access overview endpoint is unavailable, and show the configured authentication mode correctly.
+- 7dc2a92: Show a "Connect GitHub" action in the Create Project from GitHub dialog when repositories fail to load because the GitHub Repo App isn't connected yet, instead of a raw error message with only a "Retry" option.
+- dc49230: Improve Platform Settings page layout: widen the form, replace a misused
+  `Field` wrapper with an `AppCard` for the platform-default GitHub Copilot
+  connection status, and use `PageSection`'s `description` prop instead of a
+  manually-styled paragraph.
+  
+  Also default the BYOK provider picker to Azure (the most common deployment
+  choice) and clarify the Base URL hints per provider: "Azure" requires a bare
+  Azure OpenAI resource endpoint with no path, while "OpenAI-compatible" accepts
+  any full endpoint URL including a path (e.g. a Foundry project endpoint or an
+  Azure OpenAI `/openai/v1` endpoint).
+- fd2ed1d: Clarify the project left-nav Settings item to read "Project settings" so it is clearly distinct from the global Account Settings page.
+- 7dc2a92: Prevent unbounded disk growth from the demo recording harness: `scripts/demo-recording/.auth/edge-default-automation.refresh-*` temporary Edge profile copies were only cleaned up on the success/failure path of the process that created them, so a killed or interrupted `demo-recording signin` (e.g. closing the terminal) left a full copy of the Edge profile behind forever. The next `signin` now prunes any leftover refresh-temp copies before starting.
+- b170cea: Fix the Account Settings page action buttons ("Manage in Microsoft Entra ID" and "Manage Copilot connections in projects") so they size to their content instead of stretching full width.
+- fbb6ff6: Fix "Manage Copilot connections in projects" button on the Account settings page navigating to the generic project gallery. It now navigates to the currently selected project's settings page (the same project shown in the top switcher), or to the landing page if no project is selected.
+
 ## 0.22.1
 
 ### Patch Changes
