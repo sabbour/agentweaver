@@ -711,6 +711,8 @@ app.MapGet("/api/projects/{id}/github/repository-owners", async (
             owners.Value.Select(owner => new { login = owner.Login, type = owner.IsUser ? "user" : "org" })),
         GitHubRepositorySelectionOutcome.GitHubBindingUnavailable =>
             Results.Conflict(new { error = "github_binding_unavailable" }),
+        GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError =>
+            Results.Json(new { error = "github_capability_transient" }, statusCode: StatusCodes.Status503ServiceUnavailable),
         _ => Results.Conflict(new { error = "github_capability_unavailable" }),
     };
 })
