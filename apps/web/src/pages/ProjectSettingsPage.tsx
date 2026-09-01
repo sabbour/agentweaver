@@ -65,7 +65,6 @@ const emptyGenerationModels: GenerationModelState = {
 
 const AUTH_MODE_LABELS = {
   entra: 'Entra ID',
-  'github-legacy': 'GitHub',
 } as const;
 
 interface SectionDef {
