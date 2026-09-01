@@ -174,6 +174,40 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         body.GetProperty("error").GetString().Should().Be("github_capability_unavailable");
     }
 
+    [Fact]
+    public async Task ConnectExistingRepository_ForBlankProjectConsumesASelectionCode()
+    {
+        const string subject = "selection-subject";
+        using var factory = new RepositorySelectionWebApplicationFactory();
+        await factory.SeedRepoAppAuthorizationAsync(subject);
+        var client = factory.CreateAuthenticatedClientForObjectId(subject, PlatformRoles.ProjectCreator);
+        var created = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Blank project",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await created.Content.ReadFromJsonAsync<JsonElement>();
+
+        var issue = await client.PostAsJsonAsync(
+            "/api/github/repository-selections",
+            new { full_name = "octo/secure-repo" });
+        issue.StatusCode.Should().Be(HttpStatusCode.OK);
+        var issued = await issue.Content.ReadFromJsonAsync<JsonElement>();
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/projects/{project.GetProperty("project_id").GetString()}/github/repository/connection",
+            new { repository_selection_code = issued.GetProperty("selection_code").GetString() });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("source_repository").GetString().Should().Be("octo/secure-repo");
+        body.GetProperty("html_url").GetString().Should().Be("https://github.com/octo/secure-repo");
+        body.TryGetProperty("repository_id", out _).Should().BeFalse();
+        body.TryGetProperty("installation_id", out _).Should().BeFalse();
+    }
+
     private sealed class RepositorySelectionWebApplicationFactory(HttpMessageHandler? handler = null) : EntraWebApplicationFactory
     {
         private readonly HttpMessageHandler _handler = handler ?? new RepositoryHandler();
@@ -228,7 +262,7 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                     {
                         "/user" => """{"login":"octo"}""",
                         "/user/orgs" => """[{"login":"octo-org"}]""",
-                        _ => """[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main"}]""",
+                        _ => """[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]""",
                     },
                         Encoding.UTF8,
                         "application/json"),

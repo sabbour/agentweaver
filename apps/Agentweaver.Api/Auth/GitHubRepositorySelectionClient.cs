@@ -48,6 +48,7 @@ internal sealed class GitHubRepositorySelectionClient(IHttpClientFactory httpCli
                     repository.Owner!.Login!,
                     repository.Private,
                     repository.DefaultBranch ?? "main",
+                    repository.CloneUrl!,
                     repository.PushedAt)));
             if (batch.Count < PageSize)
                 break;
@@ -138,7 +139,8 @@ internal sealed class GitHubRepositorySelectionClient(IHttpClientFactory httpCli
     private static bool IsSafe(GitHubRepositoryResponse repository) =>
         repository.Id is > 0 &&
         !string.IsNullOrWhiteSpace(repository.FullName) &&
-        !string.IsNullOrWhiteSpace(repository.Owner?.Login);
+        !string.IsNullOrWhiteSpace(repository.Owner?.Login) &&
+        !string.IsNullOrWhiteSpace(repository.CloneUrl);
 
     private sealed class GitHubRepositoryResponse
     {
@@ -147,6 +149,7 @@ internal sealed class GitHubRepositorySelectionClient(IHttpClientFactory httpCli
         [JsonPropertyName("owner")] public GitHubRepositoryOwnerResponse? Owner { get; init; }
         [JsonPropertyName("private")] public bool Private { get; init; }
         [JsonPropertyName("default_branch")] public string? DefaultBranch { get; init; }
+        [JsonPropertyName("clone_url")] public string? CloneUrl { get; init; }
         [JsonPropertyName("pushed_at")] public DateTimeOffset? PushedAt { get; init; }
     }
 

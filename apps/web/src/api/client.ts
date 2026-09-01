@@ -29,6 +29,7 @@ import type {
   CommitResponse,
   ConfirmProposalRequest,
   ConnectedRepository,
+  ConnectProjectRepositoryRequest,
   CreateProjectRoleAssignmentRequest,
   CoordinatorChildResponse,
   CreateProjectRepositoryRequest,
@@ -567,6 +568,10 @@ export class AgentweaverApiClient {
 
   createProjectRepository(projectId: string, req: CreateProjectRepositoryRequest): Promise<ConnectedRepository> {
     return this.request<ConnectedRepository>('POST', `/projects/${encodeURIComponent(projectId)}/github/repository`, req);
+  }
+
+  connectProjectRepository(projectId: string, req: ConnectProjectRepositoryRequest): Promise<ConnectedRepository> {
+    return this.request<ConnectedRepository>('POST', `/projects/${encodeURIComponent(projectId)}/github/repository/connection`, req);
   }
 
   getProjectAccessOverview(projectId: string): Promise<ProjectAccessOverview> {

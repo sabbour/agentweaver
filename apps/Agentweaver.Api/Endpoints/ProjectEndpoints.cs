@@ -333,6 +333,7 @@ app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider, ICo
         auth_mode               = "entra",
         auth_mode_label         = "Entra ID",
         auth_mode_recommended   = true,
+        repo_app_install_url    = BuildGitHubAppInstallUrl(configuration["Auth:RepoApp:Slug"], configuration["Auth:RepoApp:BaseUrl"]),
     });
 }).AllowAnonymous();
 
@@ -682,6 +683,48 @@ app.MapPost("/api/projects/{id}/github/repository", async (
     };
 })
     .WithName("CreateProjectRepository")
+    .WithTags("Projects", "GitHub");
+
+app.MapPost("/api/projects/{id}/github/repository/connection", async (
+    HttpContext httpContext,
+    string id,
+    ConnectProjectRepositoryRequest request,
+    ProjectService projectService,
+    GitHubRepositorySelectionBroker repositorySelections,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    if (string.IsNullOrWhiteSpace(request.RepositorySelectionCode))
+        return Results.BadRequest(new { error = "repository_selection_code is required." });
+
+    var view = await projectService.GetViewAsync(projectId, ct).ConfigureAwait(false);
+    if (view is null) return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, view.Project, ProjectRole.Owner, ct) is { } forbidden)
+        return forbidden;
+    if (view.Project.Origin.Kind != ProjectOriginKind.Blank)
+        return Results.Conflict(new { error = "project_repository_already_connected" });
+
+    var resolved = await repositorySelections.TryConsumeAndResolveAsync(
+        request.RepositorySelectionCode.Trim(),
+        ApiKeyAuthMiddleware.GetCaller(httpContext),
+        ct).ConfigureAwait(false);
+    if (resolved is null)
+        return Results.Conflict(new { error = "github_repository_selection_unavailable" });
+
+    var connected = await projectService.ConnectCreatedRepositoryAsync(
+        projectId,
+        resolved.FullName,
+        resolved.CloneUrl,
+        resolved.AccessToken,
+        ct).ConfigureAwait(false);
+    return Results.Ok(new
+    {
+        source_repository = connected.Origin.SourceRepository,
+        html_url = resolved.SourceRepository,
+    });
+})
+    .WithName("ConnectProjectRepository")
     .WithTags("Projects", "GitHub");
 
 // DELETE /api/projects/{id}?confirm=true — record-only delete
@@ -1350,5 +1393,19 @@ private static string SlugifyRepositoryName(string value)
     while (slug.Contains("--", StringComparison.Ordinal))
         slug = slug.Replace("--", "-", StringComparison.Ordinal);
     return string.IsNullOrEmpty(slug) ? "project" : slug;
+}
+
+private static string? BuildGitHubAppInstallUrl(string? slug, string? baseUrl)
+{
+    if (string.IsNullOrWhiteSpace(slug) || !Regex.IsMatch(slug.Trim(), "^[a-z0-9]+(?:-[a-z0-9]+)*$", RegexOptions.CultureInvariant))
+        return null;
+
+    var origin = string.IsNullOrWhiteSpace(baseUrl) ? "https://github.com" : baseUrl.TrimEnd('/');
+    if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) ||
+        string.IsNullOrWhiteSpace(uri.Host) ||
+        (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        return null;
+
+    return $"{uri.GetLeftPart(UriPartial.Authority)}/apps/{Uri.EscapeDataString(slug.Trim())}/installations/new";
 }
 }
