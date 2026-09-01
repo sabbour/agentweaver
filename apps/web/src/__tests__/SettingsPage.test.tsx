@@ -2,7 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SettingsPage } from '../pages/SettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api/apiClient', () => ({
@@ -97,5 +97,40 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalled());
     expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/repo-app/authorize');
     assign.mockRestore();
+  });
+
+  it('navigates to the last active project\'s settings page when one is remembered', async () => {
+    localStorage.setItem('agentweaver:last-active-project-id', 'proj-a');
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider>
+          <Routes>
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/projects/:projectId/settings" element={<div>Project settings route</div>} />
+          </Routes>
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage Copilot connections in projects' }));
+    expect(await screen.findByText('Project settings route')).toBeDefined();
+    localStorage.removeItem('agentweaver:last-active-project-id');
+  });
+
+  it('navigates to the landing page when no project is remembered', async () => {
+    localStorage.removeItem('agentweaver:last-active-project-id');
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider>
+          <Routes>
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/" element={<div>Landing route</div>} />
+          </Routes>
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage Copilot connections in projects' }));
+    expect(await screen.findByText('Landing route')).toBeDefined();
   });
 });
