@@ -1,5 +1,5 @@
 export type ModelSource = 'github-copilot' | 'byok';
-export type AuthMode = 'entra' | 'github-legacy';
+export type AuthMode = 'entra';
 
 export interface ServerInfo {
   data_directory: string;
@@ -462,7 +462,7 @@ export interface AuthSessionResponse {
 }
 
 export interface AuthConfigResponse {
-  mode: 'Entra' | 'GitHubLegacy';
+  mode: 'Entra';
   entra: {
     client_id: string | null;
     tenant_id: string | null;
