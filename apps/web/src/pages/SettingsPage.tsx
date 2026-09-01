@@ -11,6 +11,8 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { getLastActiveProjectId } from '../components/shell/projectContext';
 import type { AuthConfigResponse, AuthSessionResponse } from '../api/types';
 import {
   Body,
@@ -58,6 +60,7 @@ function formatError(err: unknown): string {
 
 export function SettingsPage() {
   const styles = useStyles();
+  const navigate = useNavigate();
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -189,7 +192,13 @@ export function SettingsPage() {
               Copilot connections are selected per project, so the account used for AI can match that project’s needs.
             </Body>
             <div className={styles.formActions}>
-              <Button appearance="secondary" onClick={() => window.location.assign('/projects')}>
+              <Button
+                appearance="secondary"
+                onClick={() => {
+                  const lastActiveProjectId = getLastActiveProjectId();
+                  navigate(lastActiveProjectId ? `/projects/${encodeURIComponent(lastActiveProjectId)}/settings` : '/');
+                }}
+              >
                 Manage Copilot connections in projects
               </Button>
             </div>
