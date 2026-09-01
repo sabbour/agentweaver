@@ -117,6 +117,26 @@ public static class AuthEndpoints
                 : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
         });
 
+        app.MapGet("/api/auth/github/repo-app/authorization/status", async (
+            HttpContext httpContext,
+            IConfiguration configuration,
+            GitHubConnectionsPersistenceStore persistence,
+            ISecretStore secretStore,
+            IHttpClientFactory httpClientFactory,
+            CancellationToken ct) =>
+        {
+            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
+            var result = await service.GetConnectionAsync(
+                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+            return result.Outcome == RepoAppAuthorizationOutcome.Success
+                ? Results.Ok(new
+                {
+                    connected = result.Connected,
+                    github_login = result.GitHubLogin,
+                })
+                : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
+        });
+
         app.MapGet("/auth/github/repo-app/handoff/{transactionId}", async (
             HttpContext httpContext,
             string transactionId,

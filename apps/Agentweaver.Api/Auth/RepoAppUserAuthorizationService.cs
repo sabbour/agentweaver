@@ -41,6 +41,11 @@ public sealed record RepoAppAuthorizationPollResult(
     RepoAppAuthorizationOutcome Outcome,
     string? Status);
 
+public sealed record RepoAppConnectionResult(
+    RepoAppAuthorizationOutcome Outcome,
+    bool Connected,
+    string? GitHubLogin);
+
 public sealed record McpBrowserHandoffResult(
     RepoAppAuthorizationOutcome Outcome,
     string? TransactionId,
@@ -430,6 +435,36 @@ public sealed class RepoAppUserAuthorizationService(
         }
     }
 
+    public async Task<RepoAppConnectionResult> GetConnectionAsync(
+        CallerContext caller,
+        ClaimsPrincipal principal,
+        CancellationToken ct = default)
+    {
+        if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
+            return new(RepoAppAuthorizationOutcome.HumanEntraSubjectRequired, false, null);
+
+        var reference = await persistence.GetActiveRepoAppCredentialAsync(caller.EntraObjectId!, ct).ConfigureAwait(false);
+        if (reference is null)
+            return new(RepoAppAuthorizationOutcome.Success, false, null);
+
+        var secret = await secretStore.GetSecretAsync(reference.CredentialReference, ct).ConfigureAwait(false);
+        var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
+        if (credential is null || credential.Status != CredentialStatusSignedIn || string.IsNullOrWhiteSpace(credential.AccessToken))
+            return new(RepoAppAuthorizationOutcome.Success, false, null);
+
+        var login = IsGitHubLogin(credential.GitHubLogin)
+            ? credential.GitHubLogin
+            : await GetGitHubLoginAsync(credential.AccessToken, ct).ConfigureAwait(false);
+        if (!IsGitHubLogin(login))
+            return new(RepoAppAuthorizationOutcome.Success, false, null);
+
+        if (!string.Equals(credential.GitHubLogin, login, StringComparison.Ordinal))
+            await TryPersistGitHubLoginAsync(reference.CredentialReference, secret.ETag, credential, login!, ct)
+                .ConfigureAwait(false);
+
+        return new(RepoAppAuthorizationOutcome.Success, true, login);
+    }
+
     public async Task<RepoAppAuthorizationOutcome> RevokeAsync(
         CallerContext caller,
         ClaimsPrincipal principal,
@@ -542,11 +577,15 @@ public sealed class RepoAppUserAuthorizationService(
                 return null;
             var body = await ReadBoundedAsync(response.Content, timeout.Token).ConfigureAwait(false);
             var result = JsonSerializer.Deserialize<ProviderTokenResponse>(body);
-            return result is { Error: null, AccessToken: not null } && !string.IsNullOrWhiteSpace(result.AccessToken)
-                ? new(null, result.AccessToken, result.RefreshToken, result.ExpiresIn is > 0
+            if (result is not { Error: null, AccessToken: not null } || string.IsNullOrWhiteSpace(result.AccessToken))
+                return null;
+
+            var login = await GetGitHubLoginAsync(result.AccessToken, timeout.Token).ConfigureAwait(false);
+            return login is null
+                ? null
+                : new(null, result.AccessToken, result.RefreshToken, result.ExpiresIn is > 0
                     ? DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn.Value)
-                    : null)
-                : null;
+                    : null, login);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -557,6 +596,31 @@ public sealed class RepoAppUserAuthorizationService(
             return null;
         }
         catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<string?> GetGitHubLoginAsync(string accessToken, CancellationToken ct)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(ProviderTimeout);
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl.TrimEnd('/')}/user");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.Accept.ParseAdd("application/vnd.github+json");
+        request.Headers.UserAgent.ParseAdd("Agentweaver");
+        try
+        {
+            using var response = await httpClientFactory.CreateClient("github-authz")
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+            if (response.StatusCode != HttpStatusCode.OK || response.Content.Headers.ContentLength is > 64 * 1024)
+                return null;
+            var body = await ReadBoundedAsync(response.Content, timeout.Token).ConfigureAwait(false);
+            var provider = JsonSerializer.Deserialize<ProviderUserResponse>(body);
+            return provider is not null && IsGitHubLogin(provider.Login) ? provider.Login : null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException ||
+                                   (ex is OperationCanceledException && !ct.IsCancellationRequested))
         {
             return null;
         }
@@ -798,12 +862,47 @@ public sealed class RepoAppUserAuthorizationService(
     }
 
     private sealed record RateWindow(DateTimeOffset Start, int Count);
-    private sealed record RepoAppCredential(string? Status, string? AccessToken, string? RefreshToken, DateTimeOffset? ExpiresAt);
+    private async Task TryPersistGitHubLoginAsync(
+        string credentialReference,
+        string? etag,
+        RepoAppCredential credential,
+        string gitHubLogin,
+        CancellationToken ct)
+    {
+        try
+        {
+            await secretStore.SetSecretAsync(
+                credentialReference,
+                JsonSerializer.Serialize(credential with { GitHubLogin = gitHubLogin }),
+                etag,
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is SecretPreconditionFailedException or HttpRequestException)
+        {
+        }
+    }
+
+    private static bool IsGitHubLogin(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= 39 &&
+        value.All(character => char.IsLetterOrDigit(character) || character is '-');
+
+    private sealed record RepoAppCredential(
+        string? Status,
+        string? AccessToken,
+        string? RefreshToken,
+        DateTimeOffset? ExpiresAt,
+        string? GitHubLogin = null);
     private sealed class ProviderTokenResponse
     {
         [System.Text.Json.Serialization.JsonPropertyName("access_token")] public string? AccessToken { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("refresh_token")] public string? RefreshToken { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("expires_in")] public long? ExpiresIn { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("error")] public string? Error { get; init; }
+    }
+
+    private sealed class ProviderUserResponse
+    {
+        [JsonPropertyName("login")] public string? Login { get; init; }
     }
 }

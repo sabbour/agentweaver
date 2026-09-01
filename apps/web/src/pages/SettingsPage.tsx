@@ -11,10 +11,10 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getLastActiveProjectId } from '../components/shell/projectContext';
-import type { AuthConfigResponse, AuthSessionResponse } from '../api/types';
+import type { AuthConfigResponse, AuthSessionResponse, RepoAppConnectionStatus } from '../api/types';
 import {
   Body,
   Label,
@@ -62,12 +62,15 @@ function formatError(err: unknown): string {
 export function SettingsPage() {
   const styles = useStyles();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [entraAdminLink, setEntraAdminLink] = useState<{ href: string; label: string } | null>(null);
   const [repoAppConnecting, setRepoAppConnecting] = useState(false);
   const [repoAppError, setRepoAppError] = useState<string | null>(null);
+  const [repoAppConnection, setRepoAppConnection] = useState<RepoAppConnectionStatus | null>(null);
+  const [repoAppStatusLoading, setRepoAppStatusLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +101,44 @@ export function SettingsPage() {
     () => (session?.platform_roles ?? []).filter((role, index, all) => all.indexOf(role) === index),
     [session?.platform_roles],
   );
+
+  const loadRepoAppConnection = useCallback(async () => {
+    setRepoAppStatusLoading(true);
+    try {
+      const connection = await apiClient.getRepoAppConnectionStatus();
+      setRepoAppConnection(connection);
+      setRepoAppError(null);
+    } catch (err) {
+      setRepoAppConnection(null);
+      setRepoAppError(formatError(err));
+    } finally {
+      setRepoAppStatusLoading(false);
+      setRepoAppConnecting(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => { void loadRepoAppConnection(); });
+  }, [loadRepoAppConnection]);
+
+  useEffect(() => {
+    const repoAppAuth = searchParams.get('repo_app_auth');
+    if (!repoAppAuth) return;
+
+    if (repoAppAuth === 'success') {
+      queueMicrotask(() => { void loadRepoAppConnection(); });
+    } else {
+      queueMicrotask(() => {
+        setRepoAppError('The GitHub Repo App connection could not be completed. Start a new connection from Account settings.');
+        setRepoAppConnecting(false);
+        setRepoAppStatusLoading(false);
+      });
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.delete('repo_app_auth');
+    setSearchParams(next, { replace: true });
+  }, [loadRepoAppConnection, searchParams, setSearchParams]);
 
   const connectRepoApp = async () => {
     setRepoAppConnecting(true);
@@ -197,13 +238,23 @@ export function SettingsPage() {
             <Body tone="muted">
               Connect your GitHub account to browse, create, and manage repositories in projects.
             </Body>
-            <div className={styles.formActions}>
-              <Button appearance="primary" disabled={repoAppConnecting} onClick={() => void connectRepoApp()}>
-                {repoAppConnecting ? 'Opening GitHub…' : 'Connect GitHub Repo App'}
-              </Button>
-            </div>
             {repoAppError && (
               <MessageBar intent="error"><MessageBarBody>{repoAppError}</MessageBarBody></MessageBar>
+            )}
+            {repoAppStatusLoading ? (
+              <Spinner size="tiny" label="Checking GitHub Repo App connection" />
+            ) : repoAppConnection?.connected ? (
+              <MessageBar intent="success">
+                <MessageBarBody>
+                  Connected GitHub login: @{repoAppConnection.github_login ?? 'unknown'}
+                </MessageBarBody>
+              </MessageBar>
+            ) : (
+              <div className={styles.formActions}>
+                <Button appearance="primary" disabled={repoAppConnecting} onClick={() => void connectRepoApp()}>
+                  {repoAppConnecting ? 'Opening GitHub…' : 'Connect GitHub Repo App'}
+                </Button>
+              </div>
             )}
           </div>
         </div>

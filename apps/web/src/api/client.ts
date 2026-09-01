@@ -54,6 +54,7 @@ import type {
   Project,
   ProjectAccessOverview,
   ProjectCopilotConnection,
+  RepoAppConnectionStatus,
   RequestChangesResponse,
   RepositoryOwner,
   ReroleRequest,
@@ -555,6 +556,10 @@ export class AgentweaverApiClient {
 
   beginRepoAppAuthorization(): Promise<{ authorization_url: string; transaction_id: string; expires_at: string }> {
     return this.request('POST', '/auth/github/repo-app/authorizations', {});
+  }
+
+  getRepoAppConnectionStatus(): Promise<RepoAppConnectionStatus> {
+    return this.request<RepoAppConnectionStatus>('GET', '/auth/github/repo-app/authorization/status');
   }
 
   signOutSession(): Promise<void> {

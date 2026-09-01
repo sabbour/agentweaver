@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -164,6 +165,25 @@ public sealed class GitHubRepositorySelectionBrokerTests
         listed.Candidates.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task TryUseCredential_ListOwnersRecognizesInstallationScopedRepoAppAccess()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var broker = CreateBroker(options, secrets, RepositoriesAndInstallations(42));
+
+        var owners = await broker.TryUseCredentialAsync(
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            token => new GitHubRepositorySelectionClient(new StubHttpClientFactory(RepositoriesAndInstallations(42)))
+                .ListOwnersAsync(token, CancellationToken.None),
+            CancellationToken.None);
+
+        owners.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        owners.Value.Should().ContainSingle().Which.Should().BeEquivalentTo(new GitHubRepositoryOwner("octo", true));
+    }
+
     private static GitHubRepositorySelectionBroker CreateBroker(
         DbContextOptions<MemoryDbContext> options,
         InMemorySecretStore secrets,
@@ -196,8 +216,15 @@ public sealed class GitHubRepositorySelectionBrokerTests
         await db.SaveChangesAsync();
     }
 
-    private static HttpMessageHandler Repositories(long id) => new StaticHttpHandler(
-        $"[{{\"id\":{id},\"full_name\":\"octo/secure-repo\",\"owner\":{{\"login\":\"octo\"}},\"private\":true,\"default_branch\":\"main\",\"clone_url\":\"https://github.com/octo/secure-repo.git\"}}]");
+    private static HttpMessageHandler Repositories(long id) => RepositoriesAndInstallations(id);
+
+    private static HttpMessageHandler RepositoriesAndInstallations(long id) => new RouteHttpHandler(request =>
+        request.RequestUri!.AbsolutePath switch
+        {
+            "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/user/installations/72/repositories","permissions":{"administration":"write"}}]}""",
+            "/user/installations/72/repositories" => $$"""{"repositories":[{"id":{{id}},"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+            _ => "{}",
+        });
 
     private static async Task<SqliteConnection> OpenDatabaseAsync()
     {
@@ -216,14 +243,14 @@ public sealed class GitHubRepositorySelectionBrokerTests
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 
-    private sealed class StaticHttpHandler(string body) : HttpMessageHandler
+    private sealed class RouteHttpHandler(Func<HttpRequestMessage, string> route) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                Content = new StringContent(route(request), Encoding.UTF8, "application/json"),
             });
     }
 
