@@ -22,9 +22,7 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
     GitHubConnectionsPersistenceStore persistence,
 
     GitHubCapabilityBroker broker)
-
 {
-
     internal async Task<bool> PrepareForLaunchAsync(Run run, CancellationToken ct)
 
     {
@@ -101,8 +99,27 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
     /// </summary>
     internal async Task<bool> PrepareForUnattendedCopilotLaunchAsync(Run run, CancellationToken ct)
     {
-        if (!await PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
-            return false;
+        if (run.ProjectId is { })
+        {
+            if (!await PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+                return false;
+        }
+        else
+        {
+            var existing = await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString(), ct)
+                .ConfigureAwait(false);
+            if (existing.Count == 0)
+            {
+                if (!await persistence.TryCapturePlatformDefaultUnattendedCopilotSnapshotAsync(
+                        run.Id.ToString(),
+                        ct).ConfigureAwait(false))
+                    return false;
+            }
+            else if (!existing.Any(snapshot => snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot))
+            {
+                return false;
+            }
+        }
 
         var copilotSnapshot = (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString(), ct)
             .ConfigureAwait(false))
