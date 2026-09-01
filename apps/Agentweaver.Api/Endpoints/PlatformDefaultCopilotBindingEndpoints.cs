@@ -36,36 +36,6 @@ public static class PlatformDefaultCopilotBindingEndpoints
             .WithName("BeginPlatformDefaultCopilotAuthorization")
             .WithTags("Platform settings", "GitHub Copilot");
 
-        app.MapGet("/auth/github/platform-default-copilot/callback", async (
-            HttpContext httpContext,
-            string? code,
-            string? state,
-            string? error,
-            IConfiguration configuration,
-            BrowserEntraSessionService browserSessions,
-            GitHubConnectionsPersistenceStore persistence,
-            ISecretStore secretStore,
-            IGitHubConnectionsCredentialVault credentialVault,
-            IHttpClientFactory httpClientFactory,
-            CopilotAppRegistrationService registration,
-            ILogger<PlatformDefaultCopilotBindingService> logger,
-            CancellationToken ct) =>
-        {
-            var service = new PlatformDefaultCopilotBindingService(
-                configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, logger);
-            var cookie = PlatformDefaultCopilotBindingService.ReadCallbackCookie(httpContext);
-            PlatformDefaultCopilotBindingService.ClearCallbackCookie(httpContext);
-            var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
-            var outcome = await service.CompleteBrowserCallbackAsync(
-                browserSession?.Id,
-                browserSession?.EntraObjectId,
-                state,
-                string.IsNullOrWhiteSpace(error) ? code : null,
-                cookie,
-                ct).ConfigureAwait(false);
-            return Results.Redirect(await service.GetCallbackRedirectAsync(outcome, ct).ConfigureAwait(false));
-        }).AllowAnonymous();
-
         app.MapGet("/api/admin/platform-default-copilot/status", async (
             HttpContext httpContext,
             IConfiguration configuration,

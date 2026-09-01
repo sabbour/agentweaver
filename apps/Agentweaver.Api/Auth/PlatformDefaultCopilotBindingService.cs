@@ -44,8 +44,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
     ILogger<PlatformDefaultCopilotBindingService> logger)
 {
     private const string CookieName = "__Host-agentweaver-platform-copilot-app-auth";
-    private const string ProjectCallbackSuffix = "/auth/github/copilot-app/callback";
-    private const string PlatformCallbackSuffix = "/auth/github/platform-default-copilot/callback";
+    private const string CallbackSuffix = "/auth/github/copilot-app/callback";
     private static readonly TimeSpan TransactionLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(10);
 
@@ -327,8 +326,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
         !string.IsNullOrWhiteSpace(_clientId) &&
         !string.IsNullOrWhiteSpace(_clientSecret) &&
         !string.IsNullOrWhiteSpace(_configuredCallbackUrl) &&
-        _configuredCallbackUrl.EndsWith(ProjectCallbackSuffix, StringComparison.Ordinal) &&
-        !string.IsNullOrWhiteSpace(GetPlatformCallbackUrl()) &&
+        _configuredCallbackUrl.EndsWith(CallbackSuffix, StringComparison.Ordinal) &&
         string.IsNullOrWhiteSpace(configuration["Auth:CopilotApp:PrivateKey"]) &&
         !SameConfiguredValue(_clientId, configuration["Auth:RepoApp:ClientId"]) &&
         !SameConfiguredValue(_clientSecret, configuration["Auth:RepoApp:ClientSecret"]) &&
@@ -343,16 +341,11 @@ internal sealed class PlatformDefaultCopilotBindingService(
     private string BuildAuthorizationUrl(string state, string verifier) =>
         $"{_baseUrl.TrimEnd('/')}/login/oauth/authorize" +
         $"?client_id={Uri.EscapeDataString(_clientId!)}" +
-        $"&redirect_uri={Uri.EscapeDataString(GetPlatformCallbackUrl())}" +
+        $"&redirect_uri={Uri.EscapeDataString(_configuredCallbackUrl!)}" +
         $"&scope={Uri.EscapeDataString(_scopes)}" +
         $"&state={Uri.EscapeDataString(state)}" +
         $"&code_challenge={Uri.EscapeDataString(ProjectCopilotBindingService.CreateS256Challenge(verifier))}" +
         "&code_challenge_method=S256";
-
-    private string GetPlatformCallbackUrl() =>
-        _configuredCallbackUrl!.EndsWith(ProjectCallbackSuffix, StringComparison.Ordinal)
-            ? _configuredCallbackUrl[..^ProjectCallbackSuffix.Length] + PlatformCallbackSuffix
-            : throw new InvalidOperationException("Copilot App callback URL is invalid.");
 
     private async Task<CopilotCredential?> ExchangeCodeAsync(string code, string verifier, CancellationToken ct)
     {
@@ -365,7 +358,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
                 ["client_id"] = _clientId!,
                 ["client_secret"] = _clientSecret!,
                 ["code"] = code,
-                ["redirect_uri"] = GetPlatformCallbackUrl(),
+                ["redirect_uri"] = _configuredCallbackUrl!,
                 ["code_verifier"] = verifier,
             }),
         };
