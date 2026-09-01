@@ -97,9 +97,20 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
     /// capability is present and still fenced. A partial snapshot set is not sufficient: accepting
     /// it would defer a missing Copilot binding until after execution has started.
     /// </summary>
-    internal async Task<bool> PrepareForUnattendedCopilotLaunchAsync(Run run, CancellationToken ct)
+    /// <param name="platformScoped">
+    /// When <c>true</c>, the run's credential is always resolved from the PLATFORM-level Copilot
+    /// connection (<c>PlatformDefaultCopilotBindings</c>), even when <paramref name="run"/> carries a
+    /// non-null <see cref="Run.ProjectId"/>. This is for personal/Operator ("Assistant") sessions:
+    /// their <c>ProjectId</c> is only incidental UI context (e.g. the project the user happened to be
+    /// viewing when they opened the chat) — never a real, repo-scoped run — so their credential must
+    /// never depend on that project's own (possibly broken/missing) Copilot binding. Project-scoped
+    /// work (Coordinator runs, subtasks, retries) must keep passing <c>false</c> (the default) so it
+    /// continues to require ITS OWN project-bound capability snapshot.
+    /// </param>
+    internal async Task<bool> PrepareForUnattendedCopilotLaunchAsync(
+        Run run, CancellationToken ct, bool platformScoped = false)
     {
-        if (run.ProjectId is { })
+        if (run.ProjectId is { } && !platformScoped)
         {
             if (!await PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
                 return false;
