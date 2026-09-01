@@ -639,8 +639,10 @@ describe('VisualWorkflowEditor — stable drag targets (#557)', () => {
 
     expect(await screen.findByTestId('workflow-canvas')).toBeDefined();
     expect(await screen.findByTestId('workflow-node-implement')).toBeDefined();
-    expect(await screen.findByTestId('workflow-node-implement-handle-source')).toBeDefined();
-    expect(await screen.findByTestId('workflow-node-rai-check-handle-target')).toBeDefined();
+    // GRID routing (matches CoordinatorRunPage / WorkflowDefinitionInlinePanel) exposes four
+    // source and four target handles per node instead of a single source/target pair.
+    expect(await screen.findByTestId('workflow-node-implement-handle-source-right')).toBeDefined();
+    expect(await screen.findByTestId('workflow-node-rai-check-handle-target-left')).toBeDefined();
   });
 });
 
