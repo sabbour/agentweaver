@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.25.0
+
+### Minor Changes
+
+- cd0c761: Replaced the single-slot "BYOK provider" setting in Platform Settings with a "Model providers" list, matching the GitHub Copilot desktop app's Model providers dialog. GitHub Copilot is always shown first as a built-in, non-removable entry. Admins can now add, edit, and remove multiple custom providers (Custom endpoint, Azure OpenAI, Anthropic) via an "+ Add provider" picker and inline type-specific forms, and mark exactly one configured provider as "active" for inference — preserving the existing single-active-provider runtime behavior while allowing several providers to be pre-configured and kept ready with their saved API keys.
+
+### Patch Changes
+
+- 4027591: Fix "Connect GitHub" call-to-action not appearing when repository listing fails with
+  `github_capability_unavailable`. The shared `isGitHubRepoAppConnectionRequired` helper only
+  recognized `github_binding_unavailable`, so the "Create project from GitHub" dialog and the
+  "Connect existing repo" dialog (owner and repository pickers) fell back to a generic error with
+  a plain "Retry" button instead of offering to connect GitHub. Both codes now trigger the
+  "Connect GitHub" action.
+- 8a34f4f: Flatten the "Sessions" nav item to a single `[Sessions] [+]` row instead of an expandable
+  disclosure. The disclosure's only child link ("All sessions") pointed at the exact same route
+  as the parent item, so expanding it added a redundant click with no new information. Sessions
+  now behaves like the other global nav items — a direct link plus the "New session" action
+  button on the same row.
+
 ## 0.24.0
 
 ### Minor Changes
