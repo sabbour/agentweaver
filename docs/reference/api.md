@@ -93,7 +93,7 @@ Assistant endpoints back the **Sessions** feature (see [The Assistant and Sessio
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/projects` | Create a project (blank or from GitHub) |
-| `GET` | `/api/server/info` | Get server metadata |
+| `GET` | `/api/server/info` | Get server metadata, including the optional Repo App install URL when configured |
 | `GET` | `/api/projects` | List all projects |
 | `GET` | `/api/projects/{id}` | Get a project by id |
 | `PATCH` | `/api/projects/{id}` | Rename a project |
@@ -156,7 +156,9 @@ The GitHub branch of `POST /api/projects` accepts only `repository_selection_cod
 authority. It atomically consumes the code for the authenticated caller, verifies the active Repo
 App authorization is still usable, then resolves clone metadata server-side. It rejects
 client-supplied repository URLs, identifiers, owner/name,
-installation IDs, tokens, and permission maps.
+installation IDs, tokens, and permission maps. Project Settings uses the same browse +
+selection-code flow when attaching an existing repository to a blank-origin project through
+`POST /api/projects/{id}/github/repository/connection`.
 
 ### Memory
 

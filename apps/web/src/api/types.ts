@@ -7,6 +7,7 @@ export interface ServerInfo {
   auth_mode?: AuthMode;
   auth_mode_label?: string | null;
   auth_mode_recommended?: boolean;
+  repo_app_install_url?: string | null;
 }
 
 export type RunStatus =
@@ -515,6 +516,10 @@ export interface CreateProjectRepositoryRequest {
   owner: string;
   name?: string;
   private?: boolean;
+}
+
+export interface ConnectProjectRepositoryRequest {
+  repository_selection_code: string;
 }
 
 export interface ConnectedRepository {
