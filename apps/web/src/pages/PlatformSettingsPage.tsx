@@ -12,6 +12,7 @@ import {
   tokens,
   type RadioGroupOnChangeData,
 } from '@fluentui/react-components';
+import { Eye24Regular, EyeOff24Regular } from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { formatApiErrorMessage } from '../api/errors';
 import type {
@@ -128,6 +129,7 @@ export function PlatformSettingsPage({
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [connectingCopilot, setConnectingCopilot] = useState(false);
@@ -191,6 +193,7 @@ export function PlatformSettingsPage({
   const handleModeChange = (_: unknown, data: RadioGroupOnChangeData) => {
     const next = data.value as AiMode;
     setMode(next);
+    setShowApiKey(false);
     setSaveError(null);
     setSaveSuccess(false);
   };
@@ -210,6 +213,7 @@ export function PlatformSettingsPage({
       setExistingConfig(refreshed);
       setMode(refreshed ? 'byok' : 'copilot');
       setApiKey('');
+      setShowApiKey(false);
       setSaveSuccess(true);
       onRetryAccess?.();
     } catch (err) {
@@ -228,6 +232,7 @@ export function PlatformSettingsPage({
       setExistingConfig(null);
       setMode('copilot');
       setApiKey('');
+      setShowApiKey(false);
       setSaveSuccess(true);
       onRetryAccess?.();
     } catch (err) {
@@ -394,14 +399,12 @@ export function PlatformSettingsPage({
                     )}
                   </div>
                 </AppCard>
-                {existingConfig && (
-                  <div className={styles.formActions}>
-                    <Button appearance="primary" disabled={saving} onClick={() => void handleSwitchToCopilot()}>
-                      {saving ? 'Switching' : 'Switch to GitHub Copilot mode'}
-                    </Button>
-                    {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
-                  </div>
-                )}
+                <div className={styles.formActions}>
+                  <Button appearance="primary" disabled={saving} onClick={() => void handleSwitchToCopilot()}>
+                    {saving ? 'Saving' : 'Save AI inference source'}
+                  </Button>
+                  {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+                </div>
               </>
             )}
 
@@ -436,11 +439,21 @@ export function PlatformSettingsPage({
                 </Field>
                 <Field label="API key" required>
                   <Input
-                    type="password"
+                    type={showApiKey ? 'text' : 'password'}
                     value={apiKey}
                     onChange={(_, data) => setApiKey(data.value)}
                     placeholder={existingConfig ? 'Re-enter to change the saved key' : undefined}
                     disabled={saving}
+                    contentAfter={(
+                      <Button
+                        appearance="transparent"
+                        aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+                        icon={showApiKey ? <EyeOff24Regular /> : <Eye24Regular />}
+                        size="small"
+                        disabled={saving}
+                        onClick={() => setShowApiKey((current) => !current)}
+                      />
+                    )}
                   />
                 </Field>
                 <div className={styles.formActions}>
