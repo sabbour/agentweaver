@@ -16,7 +16,6 @@ import {
   People24Regular,
   Pulse24Regular,
   Server24Regular,
-  Settings24Regular,
   Stethoscope24Regular,
 } from '@fluentui/react-icons';
 import type { ReactElement } from 'react';
@@ -62,7 +61,6 @@ export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
   { key: 'overview', label: 'Overview', icon: <Home24Regular />, path: '/overview', matchPrefixes: ['/overview', '/'] },
   { key: 'projects', label: 'Projects', icon: <Apps24Regular />, path: '/projects', matchPrefixes: ['/projects'] },
   { key: 'sessions', label: 'Sessions', icon: <Chat24Regular />, path: '/sessions', matchPrefixes: ['/sessions'] },
-  { key: 'account-settings', label: 'Account settings', icon: <Settings24Regular />, path: '/settings', matchPrefixes: ['/settings'] },
   { key: 'platform-settings', label: 'Platform settings', icon: <Building24Regular />, path: '/platform-settings', matchPrefixes: ['/platform-settings'], requiresPlatformAdmin: true },
 ];
 

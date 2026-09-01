@@ -226,7 +226,7 @@ describe('AppShell navigation', () => {
     expect(resolveActiveKey('/overview', undefined)).toBe('overview');
     expect(resolveActiveKey('/projects', undefined)).toBe('projects');
     expect(resolveActiveKey('/sessions', undefined)).toBe('sessions');
-    expect(resolveActiveKey('/settings', undefined)).toBe('account-settings');
+    expect(resolveActiveKey('/settings', undefined)).toBe('overview');
     expect(resolveActiveKey('/platform-settings', undefined)).toBe('platform-settings');
   });
 
