@@ -34,6 +34,7 @@
   "AUTH_MODE": "Entra",
   "ENTRA_CLIENT_ID": "your-entra-app-client-id",
   "ENTRA_TENANT_ID": "your-entra-tenant-id",
+  "ENTRA_ENTERPRISE_APP_OBJECT_ID": "your-enterprise-app-object-id (optional)",
 
   // Optional overrides.
   // "PG_SERVER_NAME": "agentweaver-pg-staging", // Override the globally-unique Azure Flexible Server name if "agentweaver-pg" is already reserved.

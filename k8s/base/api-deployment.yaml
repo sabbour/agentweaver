@@ -167,6 +167,11 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: ENTRA_TENANT_ID
+            - name: Auth__Entra__EnterpriseAppObjectId
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: ENTRA_ENTERPRISE_APP_OBJECT_ID
             - name: Auth__Entra__RedirectUri
               valueFrom:
                 configMapKeyRef:

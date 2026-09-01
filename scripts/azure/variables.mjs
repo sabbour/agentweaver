@@ -230,6 +230,7 @@ export async function resolveVariables(options = {}) {
   const AUTH_MODE = env.AUTH_MODE || DEFAULTS.AUTH_MODE;
   const ENTRA_CLIENT_ID = env.ENTRA_CLIENT_ID || "";
   const ENTRA_TENANT_ID = env.ENTRA_TENANT_ID || "";
+  const ENTRA_ENTERPRISE_APP_OBJECT_ID = env.ENTRA_ENTERPRISE_APP_OBJECT_ID || "";
   // These are deliberately opt-in: a local Azure CLI timeout does not prove
   // whether a remote ACR build/import completed, so callers must reconcile
   // the target tag/digest before deciding whether a retry is safe.
@@ -298,6 +299,7 @@ export async function resolveVariables(options = {}) {
     AUTH_MODE,
     ENTRA_CLIENT_ID,
     ENTRA_TENANT_ID,
+    ENTRA_ENTERPRISE_APP_OBJECT_ID,
     ACR_BUILD_TIMEOUT_MS,
     ACR_IMPORT_TIMEOUT_MS,
     TENANT_ID,

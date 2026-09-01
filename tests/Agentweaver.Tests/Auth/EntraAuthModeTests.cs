@@ -5,6 +5,7 @@ using FluentAssertions;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Auth;
@@ -26,6 +27,26 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
         var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         json.RootElement.GetProperty("mode").GetString().Should().Be("Entra");
         json.RootElement.GetProperty("entra").GetProperty("client_id").GetString().Should().Be(EntraWebApplicationFactory.ClientId);
+        json.RootElement.GetProperty("entra").GetProperty("enterprise_app_object_id").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task AuthConfig_ReturnsConfiguredEnterpriseAppObjectId_WhenPresent()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureAppConfiguration((_, cfg) =>
+                cfg.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Auth:Entra:EnterpriseAppObjectId"] = "fef39db7-a690-4383-8cf2-32da2b27a3d3",
+                })));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/auth/config");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        json.RootElement.GetProperty("entra").GetProperty("enterprise_app_object_id").GetString()
+            .Should().Be("fef39db7-a690-4383-8cf2-32da2b27a3d3");
     }
 
     [Fact]

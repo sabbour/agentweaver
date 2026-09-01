@@ -61,7 +61,7 @@ export function SettingsPage() {
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [entraAdminUrl, setEntraAdminUrl] = useState<string | null>(null);
+  const [entraAdminLink, setEntraAdminLink] = useState<{ href: string; label: string } | null>(null);
   const [repoAppConnecting, setRepoAppConnecting] = useState(false);
   const [repoAppError, setRepoAppError] = useState<string | null>(null);
 
@@ -80,10 +80,20 @@ export function SettingsPage() {
       });
     void apiClient.getAuthConfig()
       .then(({ entra }: AuthConfigResponse) => {
-        if (!entra.tenant_id || !entra.client_id || cancelled) return;
-        setEntraAdminUrl(
-          `https://entra.microsoft.com/${encodeURIComponent(entra.tenant_id)}/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/${encodeURIComponent(entra.client_id)}/isMSAApp~/false`,
-        );
+        if (cancelled) return;
+        if (entra.tenant_id && entra.client_id && entra.enterprise_app_object_id) {
+          setEntraAdminLink({
+            href: `https://ms.portal.azure.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Users/objectId/${encodeURIComponent(entra.enterprise_app_object_id)}/appId/${encodeURIComponent(entra.client_id)}`,
+            label: 'Manage users in Azure Portal',
+          });
+          return;
+        }
+        if (entra.tenant_id && entra.client_id) {
+          setEntraAdminLink({
+            href: `https://entra.microsoft.com/${encodeURIComponent(entra.tenant_id)}/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/${encodeURIComponent(entra.client_id)}/isMSAApp~/false`,
+            label: 'Manage in Microsoft Entra ID',
+          });
+        }
       })
       .catch(() => {
         // The role list remains useful if the public Entra configuration is unavailable.
@@ -155,10 +165,10 @@ export function SettingsPage() {
                     <Label as="span" className={styles.emptyNote}>No Entra app roles are currently assigned.</Label>
                   )}
                 </div>
-                {entraAdminUrl && (
+                {entraAdminLink && (
                   <div className={styles.formActions}>
-                    <Button as="a" href={entraAdminUrl} target="_blank" rel="noreferrer" appearance="subtle">
-                      Manage in Microsoft Entra ID
+                    <Button as="a" href={entraAdminLink.href} target="_blank" rel="noreferrer" appearance="subtle">
+                      {entraAdminLink.label}
                     </Button>
                   </div>
                 )}

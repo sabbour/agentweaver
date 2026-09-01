@@ -318,6 +318,7 @@ export function buildRuntimeConfigLiterals(vars) {
     AUTH_MODE: authMode,
     ENTRA_CLIENT_ID: str(vars.ENTRA_CLIENT_ID),
     ENTRA_TENANT_ID: str(vars.ENTRA_TENANT_ID),
+    ENTRA_ENTERPRISE_APP_OBJECT_ID: str(vars.ENTRA_ENTERPRISE_APP_OBJECT_ID),
     ENTRA_REDIRECT_URI: isEntra ? `${entraOrigin}/auth/entra/callback` : host ? `https://${host}/auth/entra/callback` : "",
     ENTRA_FRONTEND_URL: isEntra ? entraOrigin : host ? `https://${host}` : "",
     COPILOT_APP_CALLBACK_URL: isEntra ? `${entraOrigin}/auth/github/copilot-app/callback` : host ? `https://${host}/auth/github/copilot-app/callback` : "",

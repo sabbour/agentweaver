@@ -466,6 +466,7 @@ export interface AuthConfigResponse {
   entra: {
     client_id: string | null;
     tenant_id: string | null;
+    enterprise_app_object_id: string | null;
     authority: string | null;
   };
 }

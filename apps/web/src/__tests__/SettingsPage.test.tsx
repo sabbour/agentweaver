@@ -22,6 +22,7 @@ beforeEach(() => {
     entra: {
       tenant_id: 'tenant-1',
       client_id: 'client-1',
+      enterprise_app_object_id: null,
       authority: 'https://login.microsoftonline.com/tenant-1/v2.0',
     },
   } as never);
@@ -39,7 +40,7 @@ beforeEach(() => {
 });
 
 describe('SettingsPage', () => {
-  it('shows Entra platform access and MCP configuration', async () => {
+  it('shows Entra platform access and falls back to the app-roles link when no enterprise app object ID is configured', async () => {
     render(
       <MemoryRouter>
         <AzureFluentProvider density="compact">
@@ -56,6 +57,29 @@ describe('SettingsPage', () => {
     expect(screen.getByDisplayValue(/\/mcp$/)).toBeDefined();
     expect(screen.queryByText('Sandbox policy')).toBeNull();
     expect(screen.queryByText(/Linked GitHub accounts/i)).toBeNull();
+  });
+
+  it('uses the Azure Portal users blade when the enterprise app object ID is configured', async () => {
+    vi.mocked(apiClient.getAuthConfig).mockResolvedValue({
+      mode: 'Entra',
+      entra: {
+        tenant_id: 'tenant-1',
+        client_id: 'client-1',
+        enterprise_app_object_id: 'enterprise app/object',
+        authority: 'https://login.microsoftonline.com/tenant-1/v2.0',
+      },
+    } as never);
+
+    render(
+      <MemoryRouter>
+        <AzureFluentProvider density="compact">
+          <SettingsPage />
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findByRole('link', { name: 'Manage users in Azure Portal' })).getAttribute('href'))
+      .toBe('https://ms.portal.azure.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Users/objectId/enterprise%20app%2Fobject/appId/client-1');
   });
 
   it('explains the two GitHub Apps and starts the Repo App connection', async () => {

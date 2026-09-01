@@ -24,6 +24,7 @@ public static class AuthEndpoints
                 {
                     client_id = configuration["Auth:Entra:ClientId"],
                     tenant_id = tenantId,
+                    enterprise_app_object_id = configuration["Auth:Entra:EnterpriseAppObjectId"],
                     authority,
                 },
             });

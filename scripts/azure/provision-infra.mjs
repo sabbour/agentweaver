@@ -81,7 +81,7 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
  * --image-mcp <ref>, --image-agent-host <ref> (or =value forms),
  * --params-file/--config <path>, --resource-group, --cluster-name,
  * --acr-name, --location, --monitoring-location, --node-vm-size, --keyvault-name, --postgres-server-name, --postgres-location, --postgres-ha-mode, --postgres-access-mode, --namespace,
- * --entra-client-id, --entra-tenant-id, -h/--help.
+ * --entra-client-id, --entra-tenant-id, --entra-enterprise-app-object-id, -h/--help.
  */
 export function parseArgs(argv = []) {
   const flags = {};
@@ -197,6 +197,10 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--entra-tenant-id");
       flags.ENTRA_TENANT_ID = value;
       i += consumed;
+    } else if (arg === "--entra-enterprise-app-object-id" || arg.startsWith("--entra-enterprise-app-object-id=")) {
+      const { value, consumed } = takeValue(i, "--entra-enterprise-app-object-id");
+      flags.ENTRA_ENTERPRISE_APP_OBJECT_ID = value;
+      i += consumed;
     } else {
       throw new Error(`Unknown argument: ${arg}. Run 'provision-infra --help' for usage.`);
     }
@@ -241,6 +245,8 @@ Flags:
   --namespace <name>
   --entra-client-id <id>       Required Entra app registration client (application) ID.
   --entra-tenant-id <id>       Required Entra tenant (directory) ID.
+  --entra-enterprise-app-object-id <id>
+                               Optional Entra enterprise application (service principal) object ID.
   -h, --help                  Show this help.
 
 Config precedence: flags > env > params-file > detected defaults > prompt.
@@ -500,6 +506,7 @@ function buildSchema({ prompt, az }) {
     },
     ENTRA_CLIENT_ID: { required: true, prompt: () => prompt.text("Microsoft Entra application (client) ID") },
     ENTRA_TENANT_ID: { required: true, prompt: () => prompt.text("Microsoft Entra tenant (directory) ID") },
+    ENTRA_ENTERPRISE_APP_OBJECT_ID: {},
   };
 }
 
@@ -606,6 +613,10 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   collected.AUTH_MODE = "Entra";
   collected.ENTRA_CLIENT_ID = await prompt.text("Microsoft Entra application (client) ID");
   collected.ENTRA_TENANT_ID = await prompt.text("Microsoft Entra tenant (directory) ID");
+  collected.ENTRA_ENTERPRISE_APP_OBJECT_ID = await prompt.text(
+    "Microsoft Entra enterprise application (service principal) object ID (optional, enables a direct 'Manage users' deep link)",
+    { default: "" },
+  );
 
   return collected;
 }
@@ -706,6 +717,9 @@ export async function run(opts = {}) {
   if (String(config.AUTH_MODE).toLowerCase() === "entra") {
     log.field("Entra client ID", config.ENTRA_CLIENT_ID);
     log.field("Entra tenant ID", config.ENTRA_TENANT_ID);
+    if (config.ENTRA_ENTERPRISE_APP_OBJECT_ID) {
+      log.field("Entra enterprise app object ID", config.ENTRA_ENTERPRISE_APP_OBJECT_ID);
+    }
   }
 
   const envOverride = {
@@ -724,6 +738,7 @@ export async function run(opts = {}) {
     AUTH_MODE: config.AUTH_MODE,
     ENTRA_CLIENT_ID: config.ENTRA_CLIENT_ID,
     ENTRA_TENANT_ID: config.ENTRA_TENANT_ID,
+    ENTRA_ENTERPRISE_APP_OBJECT_ID: config.ENTRA_ENTERPRISE_APP_OBJECT_ID,
     IMAGE_API: config.IMAGE_API,
     IMAGE_FRONTEND: config.IMAGE_FRONTEND,
     IMAGE_MCP: config.IMAGE_MCP,
