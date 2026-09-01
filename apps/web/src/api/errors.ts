@@ -20,6 +20,7 @@ export interface FormattedApiError {
 
 const GITHUB_CONNECTION_MESSAGES: Record<string, string> = {
   github_binding_unavailable: 'GitHub connections are temporarily unavailable. Connect GitHub and try again.',
+  github_capability_unavailable: 'GitHub repository capabilities are temporarily unavailable. Retry or reconnect GitHub.',
   github_copilot_auth_required: 'Connect your GitHub Copilot account to use AI features.',
   github_copilot_connection_required: 'Connect your GitHub Copilot account to continue.',
 };
