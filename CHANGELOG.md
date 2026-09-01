@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.23.1
+
+### Patch Changes
+
+- ccd6d4b: Unify Platform settings mode saving so each AI source has one clear save action, and add an API key reveal toggle for BYOK setup.
+- c1ca681: Fix the Cluster page resource-topology graph so it renders again while still showing warm-pool instance claim ownership and run links.
+- bc528ec: Add Connect GitHub Copilot App CTA to the repository-connect dialog when GitHub connections are temporarily unavailable, matching the existing create-project flow.
+- 6a40247: Fix the account menu sign-out flow and show actionable project GitHub status errors instead of generic failures.
+- 56b3b2e: Tone down the GitHub connection-required banners in the repository connect dialogs so the expected "Connect GitHub" state shows as a warning-style prompt instead of a red error.
+- 3a802bd: Fix assistant runs in platform-wide custom key mode so `/assistant` uses the configured BYOK provider instead of always requiring a GitHub Copilot connection.
+- 2ddbbd5: Improve GitHub connection error handling and diagnostics for Copilot and repository setup flows.
+- 7c498f7: Fix repository-connect UX by adding an existing-repository attach flow for blank projects and surfacing a direct Repo App install link when unattended readiness requires it.
+- 438ca82: Unify project and platform-default GitHub Copilot OAuth callbacks onto one shared `/auth/github/copilot-app/callback` endpoint so GitHub App sign-in no longer depends on registering multiple callback URLs.
+- ca0501f: Refresh the visual workflow editor's Add node picker into a centered searchable modal with grouped card options, and surface unrouted gate setup warnings directly on the canvas.
+
 ## 0.23.0
 
 ### Minor Changes
