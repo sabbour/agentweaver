@@ -1,36 +1,41 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Button,
+  Dropdown,
   Field,
   Input,
   MessageBar,
   MessageBarBody,
-  Radio,
-  RadioGroup,
+  Option,
   Spinner,
+  Textarea,
   makeStyles,
   tokens,
-  type RadioGroupOnChangeData,
 } from '@fluentui/react-components';
-import { Eye24Regular, EyeOff24Regular } from '@fluentui/react-icons';
+import {
+  AddRegular,
+  CheckmarkCircleFilled,
+  DeleteRegular,
+  EditRegular,
+  Eye24Regular,
+  EyeOff24Regular,
+} from '@fluentui/react-icons';
 import { apiClient } from '../api/apiClient';
 import { formatApiErrorMessage } from '../api/errors';
 import type {
   ByokProviderConfig,
+  ByokProviderRequest,
   ByokProviderType,
   PlatformDefaultCopilotConnection,
 } from '../api/types';
-import { AppCard, Body, Label, PageContainer, PageHeader, PageSection } from '../components/ui';
+import { AppCard, AppDialog, Body, Label, PageContainer, PageHeader, PageSection } from '../components/ui';
 import { useSearchParams } from 'react-router-dom';
-
-type AiMode = 'copilot' | 'byok';
 
 const useStyles = makeStyles({
   form: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-    maxWidth: '640px',
   },
   formActions: {
     display: 'flex',
@@ -42,37 +47,142 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
-  connectionCard: {
+  providerList: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
-  connectionLabel: {
+  providerCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  providerHeaderRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+  },
+  providerLabel: {
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXXS,
   },
+  activeBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    color: tokens.colorPaletteGreenForeground1,
+  },
+  typeList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  typeOption: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalM,
+    textAlign: 'left',
+    width: '100%',
+    height: 'auto',
+  },
 });
 
-const PROVIDER_LABELS: Record<ByokProviderType, string> = {
-  azure: 'Azure',
-  openai: 'OpenAI-compatible',
+// The three provider TYPES an admin can add. Foundry Local / Microsoft Foundry are
+// intentionally NOT listed here — this deployment has no Microsoft-internal Foundry
+// infrastructure to back them.
+const ADDABLE_PROVIDER_TYPES: { type: ByokProviderType; label: string; description: string }[] = [
+  {
+    type: 'openai',
+    label: 'Custom endpoint',
+    description: 'Any OpenAI-compatible HTTP endpoint (vLLM, OpenRouter, fine-tune, etc.)',
+  },
+  {
+    type: 'azure',
+    label: 'Azure OpenAI',
+    description: 'Service deployments via resource host, API version, and per-model deployment names',
+  },
+  {
+    type: 'anthropic',
+    label: 'Anthropic',
+    description: 'Hosted Claude models over the Messages API',
+  },
+];
+
+const PROVIDER_TYPE_LABELS: Record<ByokProviderType, string> = {
+  openai: 'Custom endpoint',
+  azure: 'Azure OpenAI',
   anthropic: 'Anthropic',
 };
 
-const BASE_URL_HINTS: Record<ByokProviderType, string> = {
-  azure: 'Bare Azure OpenAI resource endpoint, no path — e.g. https://<resource>.openai.azure.com. '
-    + 'For a Foundry project or OpenAI-compatible endpoint (with a path), use "OpenAI-compatible" instead.',
-  openai: 'Any full OpenAI-compatible endpoint, e.g. https://<resource>.openai.azure.com/openai/v1 or '
-    + 'https://<resource>.services.ai.azure.com/api/projects/<project>',
-  anthropic: 'e.g. https://api.anthropic.com',
-};
+// Agentweaver's BYOK client only understands "openai" / "azure" / "anthropic" as opaque
+// provider types routed through one generic HTTP client (see ByokProviderConfigurationService.cs
+// and GitHub.Copilot.ProviderConfig). Wire API, custom headers, and the Azure API version all map
+// onto real SDK fields (ProviderConfig.WireApi/Headers, AzureOptions.ApiVersion) — nothing here is
+// invented UI without a backend home.
+const DEFAULT_AZURE_API_VERSION = '2024-08-01-preview';
+const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 
-const BASE_URL_PLACEHOLDERS: Record<ByokProviderType, string> = {
-  azure: 'https://<resource>.openai.azure.com',
-  openai: 'https://api.example.com',
-  anthropic: 'https://api.anthropic.com',
-};
+interface ProviderFormState {
+  name: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  wireApi: 'completions' | 'responses';
+  headersText: string;
+  azureApiVersion: string;
+}
+
+function blankFormState(type: ByokProviderType): ProviderFormState {
+  return {
+    name: '',
+    baseUrl: type === 'anthropic' ? DEFAULT_ANTHROPIC_BASE_URL : '',
+    model: '',
+    apiKey: '',
+    wireApi: 'responses',
+    headersText: '',
+    azureApiVersion: type === 'azure' ? DEFAULT_AZURE_API_VERSION : '',
+  };
+}
+
+function formStateFromProvider(provider: ByokProviderConfig): ProviderFormState {
+  return {
+    name: provider.name,
+    baseUrl: provider.base_url,
+    model: provider.model,
+    apiKey: '',
+    wireApi: provider.wire_api ?? 'responses',
+    headersText: provider.headers && Object.keys(provider.headers).length > 0
+      ? JSON.stringify(provider.headers, null, 2)
+      : '',
+    azureApiVersion: provider.azure_api_version ?? (provider.type === 'azure' ? DEFAULT_AZURE_API_VERSION : ''),
+  };
+}
+
+/** Parses the optional custom-headers JSON textarea. Returns `undefined` when blank, the parsed
+ * flat string map on success, or throws a user-facing message on invalid input. */
+function parseHeadersText(text: string): Record<string, string> | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error('Custom headers must be valid JSON, e.g. {"X-Api-Version": "2024-01-01"}.');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Custom headers must be a flat JSON object of string values.');
+  }
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  if (entries.some(([, value]) => typeof value !== 'string')) {
+    throw new Error('Custom headers must be a flat JSON object of string values.');
+  }
+  return Object.fromEntries(entries as [string, string][]);
+}
 
 const PLATFORM_COPILOT_AUTH_RESULTS = {
   success: {
@@ -120,23 +230,29 @@ export function PlatformSettingsPage({
   const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [existingConfig, setExistingConfig] = useState<ByokProviderConfig | null>(null);
-  const [mode, setMode] = useState<AiMode>('copilot');
+  const [providers, setProviders] = useState<ByokProviderConfig[]>([]);
+  const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
   const [platformCopilotConnection, setPlatformCopilotConnection] = useState<PlatformDefaultCopilotConnection | null>(null);
   const [platformCopilotError, setPlatformCopilotError] = useState<string | null>(null);
 
-  const [providerType, setProviderType] = useState<ByokProviderType>('azure');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [model, setModel] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [showApiKey, setShowApiKey] = useState(false);
-
-  const [saving, setSaving] = useState(false);
   const [connectingCopilot, setConnectingCopilot] = useState(false);
   const [disconnectingCopilot, setDisconnectingCopilot] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [switchingActive, setSwitchingActive] = useState<string | 'copilot' | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const copilotAuthorizationResult = searchParams.get('copilot_app_auth');
+
+  // Add/edit dialog state. `pickerOpen` shows the searchable type list; once a type is chosen
+  // (for add) or an existing provider is being edited, `form` drives the type-specific fields.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [typeQuery, setTypeQuery] = useState('');
+  const [form, setForm] = useState<{ mode: 'add' | 'edit'; type: ByokProviderType; editingId?: string } | null>(null);
+  const [formState, setFormState] = useState<ProviderFormState>(blankFormState('openai'));
+  const [formError, setFormError] = useState<string | null>(null);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [removeTarget, setRemoveTarget] = useState<ByokProviderConfig | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const dismissCopilotAuthorizationResult = () => {
     const next = new URLSearchParams(searchParams);
@@ -144,123 +260,11 @@ export function PlatformSettingsPage({
     setSearchParams(next, { replace: true });
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    apiClient.getByokProviderConfig()
-      .then((config) => {
-        if (cancelled) return;
-        setExistingConfig(config);
-        setMode(config ? 'byok' : 'copilot');
-        if (config) {
-          setProviderType(config.type);
-          setBaseUrl(config.base_url);
-          setModel(config.model);
-        }
-        setLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setLoadError(formatApiErrorMessage(err));
-        setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (loading || mode !== 'copilot') return () => { cancelled = true; };
-
-    apiClient.getPlatformDefaultCopilotConnection()
-      .then((connection) => {
-        if (cancelled) return;
-        setPlatformCopilotConnection(connection);
-        setPlatformCopilotError(null);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setPlatformCopilotConnection(null);
-        setPlatformCopilotError(formatApiErrorMessage(err));
-      });
-
-    return () => { cancelled = true; };
-  }, [loading, mode]);
-
-  useEffect(() => {
-    if (!setupRequired || !onRetryAccess) return;
-    if (existingConfig || platformCopilotConnection?.connected) onRetryAccess();
-  }, [existingConfig, onRetryAccess, platformCopilotConnection?.connected, setupRequired]);
-
-  const handleModeChange = (_: unknown, data: RadioGroupOnChangeData) => {
-    const next = data.value as AiMode;
-    setMode(next);
-    setShowApiKey(false);
-    setSaveError(null);
-    setSaveSuccess(false);
-  };
-
-  const handleSaveByok = async () => {
-    setSaving(true);
-    setSaveError(null);
-    setSaveSuccess(false);
-    try {
-      await apiClient.setByokProviderConfig({
-        type: providerType,
-        base_url: baseUrl,
-        model,
-        api_key: apiKey,
-      });
-      const refreshed = await apiClient.getByokProviderConfig();
-      setExistingConfig(refreshed);
-      setMode(refreshed ? 'byok' : 'copilot');
-      setApiKey('');
-      setShowApiKey(false);
-      setSaveSuccess(true);
-      onRetryAccess?.();
-    } catch (err) {
-      setSaveError(formatApiErrorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleSwitchToCopilot = async () => {
-    setSaving(true);
-    setSaveError(null);
-    setSaveSuccess(false);
-    try {
-      await apiClient.clearByokProviderConfig();
-      setExistingConfig(null);
-      setMode('copilot');
-      setApiKey('');
-      setShowApiKey(false);
-      setSaveSuccess(true);
-      onRetryAccess?.();
-    } catch (err) {
-      setSaveError(formatApiErrorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDisconnectByok = async () => {
-    setSaving(true);
-    setSaveError(null);
-    setSaveSuccess(false);
-    try {
-      await apiClient.clearByokProviderConfig();
-      setExistingConfig(null);
-      setMode('copilot');
-      setProviderType('azure');
-      setBaseUrl('');
-      setModel('');
-      setApiKey('');
-      setShowApiKey(false);
-      setSaveSuccess(true);
-    } catch (err) {
-      setSaveError(formatApiErrorMessage(err));
-    } finally {
-      setSaving(false);
-    }
+  const refreshProviders = async () => {
+    const list = await apiClient.listByokProviders();
+    setProviders(list.providers);
+    setActiveProviderId(list.active_provider_id);
+    return list;
   };
 
   const refreshPlatformCopilotConnection = async () => {
@@ -273,6 +277,29 @@ export function PlatformSettingsPage({
       setPlatformCopilotError(formatApiErrorMessage(err));
     }
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([apiClient.listByokProviders(), apiClient.getPlatformDefaultCopilotConnection()])
+      .then(([list, connection]) => {
+        if (cancelled) return;
+        setProviders(list.providers);
+        setActiveProviderId(list.active_provider_id);
+        setPlatformCopilotConnection(connection);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError(formatApiErrorMessage(err));
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!setupRequired || !onRetryAccess) return;
+    if (activeProviderId !== null || platformCopilotConnection?.connected) onRetryAccess();
+  }, [activeProviderId, onRetryAccess, platformCopilotConnection?.connected, setupRequired]);
 
   const handleConnectPlatformCopilot = async () => {
     setConnectingCopilot(true);
@@ -293,12 +320,133 @@ export function PlatformSettingsPage({
       await apiClient.disconnectPlatformDefaultCopilotConnection();
       setPlatformCopilotConnection({ connected: false, github_login: null });
       await refreshPlatformCopilotConnection();
-      setSaveSuccess(true);
-      onRetryAccess?.();
     } catch (err) {
       setPlatformCopilotError(formatApiErrorMessage(err));
     } finally {
       setDisconnectingCopilot(false);
+    }
+  };
+
+  const handleActivateCopilot = async () => {
+    setSwitchingActive('copilot');
+    setNotice(null);
+    try {
+      await apiClient.deactivateByokProviders();
+      await refreshProviders();
+      setNotice('GitHub Copilot is now the active AI inference source.');
+      onRetryAccess?.();
+    } catch (err) {
+      setLoadError(formatApiErrorMessage(err));
+    } finally {
+      setSwitchingActive(null);
+    }
+  };
+
+  const handleActivateProvider = async (provider: ByokProviderConfig) => {
+    setSwitchingActive(provider.id);
+    setNotice(null);
+    try {
+      await apiClient.activateByokProvider(provider.id);
+      await refreshProviders();
+      setNotice(`"${provider.name}" is now the active AI inference source.`);
+      onRetryAccess?.();
+    } catch (err) {
+      setLoadError(formatApiErrorMessage(err));
+    } finally {
+      setSwitchingActive(null);
+    }
+  };
+
+  const openAddPicker = () => {
+    setTypeQuery('');
+    setPickerOpen(true);
+  };
+
+  const chooseType = (type: ByokProviderType) => {
+    setPickerOpen(false);
+    setForm({ mode: 'add', type });
+    setFormState(blankFormState(type));
+    setFormError(null);
+    setShowApiKey(false);
+  };
+
+  const openEdit = (provider: ByokProviderConfig) => {
+    setForm({ mode: 'edit', type: provider.type, editingId: provider.id });
+    setFormState(formStateFromProvider(provider));
+    setFormError(null);
+    setShowApiKey(false);
+  };
+
+  const closeForm = () => {
+    setForm(null);
+    setFormError(null);
+  };
+
+  const filteredTypes = useMemo(() => {
+    const q = typeQuery.trim().toLowerCase();
+    if (!q) return ADDABLE_PROVIDER_TYPES;
+    return ADDABLE_PROVIDER_TYPES.filter(
+      (t) => t.label.toLowerCase().includes(q) || t.description.toLowerCase().includes(q),
+    );
+  }, [typeQuery]);
+
+  const formRequiredFieldsFilled = !!form && !!formState.name.trim() && !!formState.baseUrl.trim() && !!formState.model.trim()
+    && (form.type === 'openai' || !!formState.apiKey.trim() || form.mode === 'edit');
+
+  const handleSubmitForm = async () => {
+    if (!form) return;
+    setSaving(true);
+    setFormError(null);
+    try {
+      let headers: Record<string, string> | undefined;
+      try {
+        headers = parseHeadersText(formState.headersText);
+      } catch (err) {
+        setFormError(err instanceof Error ? err.message : String(err));
+        setSaving(false);
+        return;
+      }
+
+      const request: ByokProviderRequest = {
+        name: formState.name.trim(),
+        type: form.type,
+        base_url: formState.baseUrl.trim(),
+        model: formState.model.trim(),
+        api_key: formState.apiKey.trim() || null,
+        wire_api: form.type === 'anthropic' ? null : formState.wireApi,
+        headers: headers ?? null,
+        azure_api_version: form.type === 'azure' ? (formState.azureApiVersion.trim() || null) : null,
+      };
+
+      if (form.mode === 'add') {
+        await apiClient.addByokProvider(request);
+        setNotice(`"${request.name}" was added. Use "Set active" to switch inference to it.`);
+      } else if (form.editingId) {
+        await apiClient.updateByokProvider(form.editingId, request);
+        setNotice(`"${request.name}" was updated.`);
+      }
+      await refreshProviders();
+      closeForm();
+    } catch (err) {
+      setFormError(formatApiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleConfirmRemove = async () => {
+    if (!removeTarget) return;
+    setRemoving(true);
+    try {
+      await apiClient.removeByokProvider(removeTarget.id);
+      setNotice(`"${removeTarget.name}" was removed.`);
+      setRemoveTarget(null);
+      await refreshProviders();
+      onRetryAccess?.();
+    } catch (err) {
+      setLoadError(formatApiErrorMessage(err));
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -310,6 +458,8 @@ export function PlatformSettingsPage({
         message: 'The GitHub Copilot connection could not be completed. Start a new connection from Platform settings.',
       }
       : null;
+
+  const copilotIsActive = activeProviderId === null;
 
   return (
     <PageContainer width="readable">
@@ -333,9 +483,16 @@ export function PlatformSettingsPage({
         </div>
       )}
       <PageSection
-        title="AI inference source"
-        description="Choose exactly one AI source for the whole deployment. This is not per-project or
-          per-person — it applies to everyone, including background and scheduled runs."
+        title="Model providers"
+        description="Choose exactly one active AI inference source for the whole deployment — this is not
+          per-project or per-person, it applies to everyone, including background and scheduled runs.
+          You can configure several providers ahead of time and keep their keys saved, but only one is
+          ever active at a time."
+        actions={(
+          <Button appearance="primary" icon={<AddRegular />} onClick={openAddPicker}>
+            Add provider
+          </Button>
+        )}
       >
         {authorizationResult && (
           <MessageBar intent={authorizationResult.intent}>
@@ -350,170 +507,300 @@ export function PlatformSettingsPage({
           <MessageBar intent="error"><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
         )}
         {!loading && !loadError && (
-          <div className={styles.form}>
-            <RadioGroup value={mode} onChange={handleModeChange} disabled={saving}>
-              <Radio value="copilot" label="GitHub Copilot mode — one platform-default Copilot account for unattended work" />
-              <Radio value="byok" label="Custom key mode — one shared key is used for everyone" />
-            </RadioGroup>
+          <div className={styles.providerList}>
+            {/* GitHub Copilot is always shown first, is never removable, and is implicitly
+                active whenever no configured BYOK provider is marked active. */}
+            <AppCard className={styles.providerCard}>
+              <div className={styles.providerHeaderRow}>
+                <div className={styles.providerLabel}>
+                  <Label>GitHub Copilot</Label>
+                  <Body tone="muted">From your GitHub Copilot subscription</Body>
+                </div>
+                {copilotIsActive
+                  ? (
+                    <span className={styles.activeBadge}>
+                      <CheckmarkCircleFilled aria-hidden="true" />
+                      <Body>Active</Body>
+                    </span>
+                  )
+                  : (
+                    <Button
+                      appearance="secondary"
+                      disabled={switchingActive !== null}
+                      onClick={() => void handleActivateCopilot()}
+                    >
+                      {switchingActive === 'copilot' ? 'Switching…' : 'Set active'}
+                    </Button>
+                  )}
+              </div>
+              {platformCopilotError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>{platformCopilotError}</MessageBarBody>
+                </MessageBar>
+              )}
+              {!platformCopilotError && platformCopilotConnection?.connected && (
+                <MessageBar intent="success">
+                  <MessageBarBody>
+                    Provided by your GitHub account @{platformCopilotConnection.github_login ?? 'unknown'}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {!platformCopilotError && platformCopilotConnection && !platformCopilotConnection.connected && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>No platform-default GitHub Copilot account is connected yet.</MessageBarBody>
+                </MessageBar>
+              )}
+              <div className={styles.formActions}>
+                <Button
+                  appearance={platformCopilotConnection?.connected ? 'secondary' : 'primary'}
+                  disabled={connectingCopilot || disconnectingCopilot}
+                  onClick={() => void handleConnectPlatformCopilot()}
+                >
+                  {connectingCopilot
+                    ? 'Opening GitHub…'
+                    : platformCopilotConnection?.connected
+                      ? 'Switch GitHub Copilot account'
+                      : 'Connect GitHub Copilot'}
+                </Button>
+                <Button
+                  appearance="secondary"
+                  disabled={connectingCopilot || disconnectingCopilot}
+                  onClick={() => void refreshPlatformCopilotConnection()}
+                >
+                  Refresh status
+                </Button>
+                {platformCopilotConnection?.connected && (
+                  <Button
+                    appearance="secondary"
+                    disabled={connectingCopilot || disconnectingCopilot}
+                    onClick={() => void handleDisconnectPlatformCopilot()}
+                  >
+                    {disconnectingCopilot ? 'Disconnecting' : 'Disconnect'}
+                  </Button>
+                )}
+                {(connectingCopilot || disconnectingCopilot) && (
+                  <Spinner size="extra-tiny" aria-hidden="true" />
+                )}
+              </div>
+            </AppCard>
 
-            {mode === 'copilot' && (
-              <>
-                <Body tone="muted">
-                  In this mode, a Platform Admin connects one deployment-wide GitHub Copilot account
-                  for unattended and background work. Project-scoped Copilot connections remain
-                  separate and can still be managed inside individual project settings.
-                </Body>
-                <AppCard className={styles.connectionCard}>
-                  <div className={styles.connectionLabel}>
-                    <Label>Platform-default GitHub Copilot account</Label>
+            {providers.map((provider) => (
+              <AppCard key={provider.id} className={styles.providerCard}>
+                <div className={styles.providerHeaderRow}>
+                  <div className={styles.providerLabel}>
+                    <Label>{provider.name}</Label>
                     <Body tone="muted">
-                      Used for deployment-wide GitHub Copilot mode when no BYOK provider is configured.
+                      {PROVIDER_TYPE_LABELS[provider.type]} · {provider.model}
+                      {!provider.has_api_key && ' · No API key'}
                     </Body>
                   </div>
-                  {platformCopilotError && (
-                    <MessageBar intent="error">
-                      <MessageBarBody>{platformCopilotError}</MessageBarBody>
-                    </MessageBar>
-                  )}
-                  {!platformCopilotError && platformCopilotConnection?.connected && (
-                    <MessageBar intent="success">
-                      <MessageBarBody>
-                        Connected GitHub login: @{platformCopilotConnection.github_login ?? 'unknown'}
-                      </MessageBarBody>
-                    </MessageBar>
-                  )}
-                  {!platformCopilotError && platformCopilotConnection && !platformCopilotConnection.connected && (
-                    <MessageBar intent="warning">
-                      <MessageBarBody>No platform-default GitHub Copilot account is connected yet.</MessageBarBody>
-                    </MessageBar>
-                  )}
-                  <div className={styles.formActions}>
-                    <Button
-                      appearance={platformCopilotConnection?.connected ? 'secondary' : 'primary'}
-                      disabled={connectingCopilot || disconnectingCopilot}
-                      onClick={() => void handleConnectPlatformCopilot()}
-                    >
-                      {connectingCopilot
-                        ? 'Opening GitHub…'
-                        : platformCopilotConnection?.connected
-                          ? 'Switch GitHub Copilot account'
-                          : 'Connect GitHub Copilot'}
-                    </Button>
-                    <Button
-                      appearance="secondary"
-                      disabled={connectingCopilot || disconnectingCopilot}
-                      onClick={() => void refreshPlatformCopilotConnection()}
-                    >
-                      Refresh status
-                    </Button>
-                    {platformCopilotConnection?.connected && (
+                  {provider.is_active
+                    ? (
+                      <span className={styles.activeBadge}>
+                        <CheckmarkCircleFilled aria-hidden="true" />
+                        <Body>Active</Body>
+                      </span>
+                    )
+                    : (
                       <Button
                         appearance="secondary"
-                        disabled={connectingCopilot || disconnectingCopilot}
-                        onClick={() => void handleDisconnectPlatformCopilot()}
+                        disabled={switchingActive !== null}
+                        onClick={() => void handleActivateProvider(provider)}
                       >
-                        {disconnectingCopilot ? 'Disconnecting' : 'Disconnect'}
+                        {switchingActive === provider.id ? 'Switching…' : 'Set active'}
                       </Button>
                     )}
-                    {(connectingCopilot || disconnectingCopilot) && (
-                      <Spinner size="extra-tiny" aria-hidden="true" />
-                    )}
-                  </div>
-                </AppCard>
-                <div className={styles.formActions}>
-                  <Button appearance="primary" disabled={saving} onClick={() => void handleSwitchToCopilot()}>
-                    {saving ? 'Saving' : 'Save AI inference source'}
-                  </Button>
-                  {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
                 </div>
-              </>
-            )}
-
-            {mode === 'byok' && (
-              <>
-                <Field label="Provider type" required>
-                  <RadioGroup
-                    value={providerType}
-                    onChange={(_, data) => setProviderType(data.value as ByokProviderType)}
-                    disabled={saving}
-                  >
-                    {(Object.keys(PROVIDER_LABELS) as ByokProviderType[]).map((type) => (
-                      <Radio key={type} value={type} label={PROVIDER_LABELS[type]} />
-                    ))}
-                  </RadioGroup>
-                </Field>
-                <Field label="Base URL" required hint={BASE_URL_HINTS[providerType]}>
-                  <Input
-                    value={baseUrl}
-                    onChange={(_, data) => setBaseUrl(data.value)}
-                    placeholder={BASE_URL_PLACEHOLDERS[providerType]}
-                    disabled={saving}
-                  />
-                </Field>
-                <Field label="Model" required>
-                  <Input
-                    value={model}
-                    onChange={(_, data) => setModel(data.value)}
-                    placeholder="gpt-4o"
-                    disabled={saving}
-                  />
-                </Field>
-                <Field label="API key" required>
-                  <Input
-                    type={showApiKey ? 'text' : 'password'}
-                    value={apiKey}
-                    onChange={(_, data) => setApiKey(data.value)}
-                    placeholder={existingConfig ? 'Re-enter to change the saved key' : undefined}
-                    disabled={saving}
-                    contentAfter={(
-                      <Button
-                        appearance="transparent"
-                        aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
-                        icon={showApiKey ? <EyeOff24Regular /> : <Eye24Regular />}
-                        size="small"
-                        disabled={saving}
-                        onClick={() => setShowApiKey((current) => !current)}
-                      />
-                    )}
-                  />
-                </Field>
                 <div className={styles.formActions}>
-                  <Button
-                    appearance="primary"
-                    disabled={saving || !baseUrl || !model || !apiKey}
-                    onClick={() => void handleSaveByok()}
-                  >
-                    {saving ? 'Saving' : 'Save AI inference source'}
+                  <Button appearance="secondary" icon={<EditRegular />} onClick={() => openEdit(provider)}>
+                    Edit
                   </Button>
-                  {existingConfig && (
-                    <Button
-                      appearance="secondary"
-                      disabled={saving}
-                      onClick={() => void handleDisconnectByok()}
-                    >
-                      Disconnect
-                    </Button>
-                  )}
-                  {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  <Button appearance="secondary" icon={<DeleteRegular />} onClick={() => setRemoveTarget(provider)}>
+                    Remove
+                  </Button>
                 </div>
-                {existingConfig && (
-                  <Body tone="muted">
-                    A custom key is already configured. Re-enter the API key above (the backend
-                    never returns it) to change any field.
-                  </Body>
-                )}
-              </>
-            )}
+              </AppCard>
+            ))}
 
-            {saveError && (
-              <MessageBar intent="error"><MessageBarBody>{saveError}</MessageBarBody></MessageBar>
-            )}
-            {saveSuccess && (
-              <MessageBar intent="success"><MessageBarBody>Configuration saved.</MessageBarBody></MessageBar>
+            {notice && (
+              <MessageBar intent="success">
+                <MessageBarBody>{notice}</MessageBarBody>
+              </MessageBar>
             )}
           </div>
         )}
       </PageSection>
+
+      {/* "+ Add provider" picker: a searchable list of the fixed set of provider TYPES. */}
+      <AppDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        title="Add provider"
+        description="Choose the kind of inference provider to configure."
+      >
+        <div className={styles.form}>
+          <Input
+            placeholder="Search provider types"
+            value={typeQuery}
+            onChange={(_, data) => setTypeQuery(data.value)}
+          />
+          <div className={styles.typeList}>
+            {filteredTypes.map((t) => (
+              <Button
+                key={t.type}
+                appearance="secondary"
+                className={styles.typeOption}
+                onClick={() => chooseType(t.type)}
+              >
+                <Label>{t.label}</Label>
+                <Body tone="muted">{t.description}</Body>
+              </Button>
+            ))}
+            {filteredTypes.length === 0 && (
+              <Body tone="muted">No provider type matches "{typeQuery}".</Body>
+            )}
+          </div>
+        </div>
+      </AppDialog>
+
+      {/* Inline type-specific add/edit form. */}
+      <AppDialog
+        open={form !== null}
+        onOpenChange={(open) => { if (!open) closeForm(); }}
+        title={form ? `${form.mode === 'add' ? 'Add' : 'Edit'} ${PROVIDER_TYPE_LABELS[form.type]}` : undefined}
+      >
+        {form && (
+          <div className={styles.form}>
+            <Field label="Display name" required>
+              <Input
+                value={formState.name}
+                onChange={(_, data) => setFormState((s) => ({ ...s, name: data.value }))}
+                placeholder="My provider"
+                disabled={saving}
+              />
+            </Field>
+            <Field
+              label="Base URL"
+              required
+              hint={form.type === 'openai'
+                ? 'Include the OpenAI-compatible root, e.g. "https://api.openai.com/v1" or "https://api.together.xyz/v1".'
+                : form.type === 'azure'
+                  ? 'The bare Azure OpenAI resource endpoint, no path.'
+                  : undefined}
+            >
+              <Input
+                value={formState.baseUrl}
+                onChange={(_, data) => setFormState((s) => ({ ...s, baseUrl: data.value }))}
+                placeholder={form.type === 'openai'
+                  ? 'https://api.example.com/v1'
+                  : form.type === 'azure'
+                    ? 'https://my-resource.openai.azure.com'
+                    : 'https://api.anthropic.com'}
+                disabled={saving}
+              />
+            </Field>
+            {form.type === 'azure' && (
+              <Field label="API version" required>
+                <Input
+                  value={formState.azureApiVersion}
+                  onChange={(_, data) => setFormState((s) => ({ ...s, azureApiVersion: data.value }))}
+                  placeholder={DEFAULT_AZURE_API_VERSION}
+                  disabled={saving}
+                />
+              </Field>
+            )}
+            <Field label="Model" required hint={form.type === 'azure' ? 'The deployment name to use.' : undefined}>
+              <Input
+                value={formState.model}
+                onChange={(_, data) => setFormState((s) => ({ ...s, model: data.value }))}
+                placeholder="gpt-4o"
+                disabled={saving}
+              />
+            </Field>
+            {form.type !== 'anthropic' && (
+              <Field label="Wire API">
+                <Dropdown
+                  value={formState.wireApi === 'completions' ? 'Completions' : 'Responses'}
+                  selectedOptions={[formState.wireApi]}
+                  disabled={saving}
+                  onOptionSelect={(_, data) => {
+                    if (data.optionValue) {
+                      setFormState((s) => ({ ...s, wireApi: data.optionValue as 'completions' | 'responses' }));
+                    }
+                  }}
+                >
+                  <Option value="responses">Responses</Option>
+                  <Option value="completions">Completions</Option>
+                </Dropdown>
+              </Field>
+            )}
+            <Field
+              label="API key"
+              required={form.type !== 'openai'}
+              hint={form.type === 'openai'
+                ? "Optional — leave blank if your endpoint doesn't require auth."
+                : undefined}
+            >
+              <Input
+                type={showApiKey ? 'text' : 'password'}
+                value={formState.apiKey}
+                onChange={(_, data) => setFormState((s) => ({ ...s, apiKey: data.value }))}
+                placeholder={form.mode === 'edit' ? 'Leave blank to keep the saved key' : undefined}
+                disabled={saving}
+                contentAfter={(
+                  <Button
+                    appearance="transparent"
+                    aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
+                    icon={showApiKey ? <EyeOff24Regular /> : <Eye24Regular />}
+                    size="small"
+                    disabled={saving}
+                    onClick={() => setShowApiKey((current) => !current)}
+                  />
+                )}
+              />
+            </Field>
+            <Field label="Custom headers" hint="Optional JSON object of extra HTTP headers to send with every request.">
+              <Textarea
+                value={formState.headersText}
+                onChange={(_, data) => setFormState((s) => ({ ...s, headersText: data.value }))}
+                placeholder={'{"X-Api-Version": "2024-01-01"}'}
+                disabled={saving}
+                resize="vertical"
+              />
+            </Field>
+            {formError && (
+              <MessageBar intent="error"><MessageBarBody>{formError}</MessageBarBody></MessageBar>
+            )}
+            <div className={styles.formActions}>
+              <Button appearance="secondary" disabled={saving} onClick={closeForm}>Cancel</Button>
+              <Button
+                appearance="primary"
+                disabled={saving || !formRequiredFieldsFilled}
+                onClick={() => void handleSubmitForm()}
+              >
+                {saving ? 'Saving…' : form.mode === 'add' ? 'Add provider' : 'Save changes'}
+              </Button>
+              {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
+            </div>
+          </div>
+        )}
+      </AppDialog>
+
+      {/* Remove confirmation — never a silent delete. */}
+      <AppDialog
+        open={removeTarget !== null}
+        onOpenChange={(open) => { if (!open) setRemoveTarget(null); }}
+        title="Remove provider?"
+        description={removeTarget
+          ? `This deletes the saved configuration and API key for "${removeTarget.name}". `
+            + (removeTarget.is_active ? 'It is currently active — removing it switches the deployment back to GitHub Copilot.' : '')
+          : undefined}
+        primaryAction={{
+          label: removing ? 'Removing…' : 'Remove provider',
+          onClick: () => void handleConfirmRemove(),
+          loading: removing,
+        }}
+      />
     </PageContainer>
   );
 }

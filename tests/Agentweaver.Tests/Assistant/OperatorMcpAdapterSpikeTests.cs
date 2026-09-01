@@ -132,6 +132,8 @@ public sealed class OperatorMcpAdapterSpikeTests : IAsyncLifetime
         await using var session = await provider.ConnectAsync("caller-token-byok", CancellationToken.None);
 
         var byok = new Agentweaver.Domain.ByokProviderConfiguration(
+            Id: "test-provider",
+            Name: "Test Azure provider",
             Type: "azure",
             BaseUrl: "https://byok-resource.openai.azure.com",
             Model: "gpt-4.1",

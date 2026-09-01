@@ -156,7 +156,7 @@ describe('AppShell navigation', () => {
     expect(screen.getByText('Overview')).toBeDefined();
     expect(screen.getByText('Projects')).toBeDefined();
     expect(screen.getByRole('group', { name: 'Sessions' })).toBeDefined();
-    expect(screen.getByText('All sessions')).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Sessions' })).toBeDefined();
     expect(screen.getByRole('link', { name: 'Agents' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('data-scrollbar-mode')).toBe('hover');
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('tabindex')).toBe('0');

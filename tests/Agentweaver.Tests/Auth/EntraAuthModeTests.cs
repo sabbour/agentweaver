@@ -92,7 +92,7 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
         using (var scope = _factory.Services.CreateScope())
         {
             var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
-            await secrets.DeleteSecretAsync("byok-provider-configuration");
+            await secrets.DeleteSecretAsync("byok-provider-configurations");
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
             await db.SaveChangesAsync();
@@ -113,9 +113,9 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
         {
             var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
             await secrets.SetSecretAsync(
-                "byok-provider-configuration",
+                "byok-provider-configurations",
                 """
-                {"type":"openai","baseUrl":"https://api.example.com","model":"gpt-4o","apiKey":"sk-test"}
+                {"active_provider_id":"p1","providers":[{"id":"p1","name":"Test","type":"openai","baseUrl":"https://api.example.com","model":"gpt-4o","apiKey":"sk-test"}]}
                 """);
         }
         using var client = _factory.CreateAuthenticatedClient(PlatformRoles.Contributor);
@@ -178,7 +178,7 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
                 BoundAt = DateTimeOffset.UtcNow,
             });
             await secrets.DeleteSecretAsync("copilot-app-platform-default-missing");
-            await secrets.DeleteSecretAsync("byok-provider-configuration");
+            await secrets.DeleteSecretAsync("byok-provider-configurations");
             await db.SaveChangesAsync();
         }
         using var client = _factory.CreateAuthenticatedClient(PlatformRoles.Contributor);
@@ -198,7 +198,7 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
             var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
-            await secrets.SetSecretAsync("byok-provider-configuration", "{\"type\":\"openai\"");
+            await secrets.SetSecretAsync("byok-provider-configurations", "{\"active_provider_id\":\"p1\"");
             await db.SaveChangesAsync();
         }
         using var client = _factory.CreateAuthenticatedClient(PlatformRoles.PlatformAdmin);
@@ -229,7 +229,7 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
                 BoundAt = DateTimeOffset.UtcNow,
             });
             await secrets.SetSecretAsync("copilot-app-platform-default-invalid-shape", "\"signed-in\"");
-            await secrets.DeleteSecretAsync("byok-provider-configuration");
+            await secrets.DeleteSecretAsync("byok-provider-configurations");
             await db.SaveChangesAsync();
         }
         using var client = _factory.CreateAuthenticatedClient(PlatformRoles.PlatformAdmin);

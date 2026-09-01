@@ -426,7 +426,9 @@ public sealed class OperatorAssistantAgent(
                 Type = byokProviderConfiguration.Type,
                 BaseUrl = byokProviderConfiguration.BaseUrl,
                 ApiKey = byokProviderConfiguration.ApiKey,
-                WireApi = "responses",
+                WireApi = byokProviderConfiguration.WireApi ?? "responses",
+                Headers = ByokProviderConfigMapper.ToHeaderDictionary(byokProviderConfiguration.Headers),
+                Azure = ByokProviderConfigMapper.ToAzureOptions(byokProviderConfiguration),
             },
             Tools = tools.ToList(),
             // SECURITY (assistant sandbox, #346): the operator assistant runs IN-PROCESS in the API
