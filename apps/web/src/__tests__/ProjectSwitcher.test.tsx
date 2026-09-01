@@ -62,7 +62,7 @@ describe('projectSwitchTarget — preserve page category across projects', () =>
     expect(projectSwitchTarget('/projects/A/board', 'A', 'B')).toBe('/projects/B/board');
     expect(projectSwitchTarget('/projects/A/flow', 'A', 'B')).toBe('/projects/B/flow');
     expect(projectSwitchTarget('/projects/A/orchestrations', 'A', 'B')).toBe('/projects/B/orchestrations');
-    expect(projectSwitchTarget('/projects/A/settings', 'A', 'B')).toBe('/projects/B/settings');
+    expect(projectSwitchTarget('/projects/A/settings', 'A', 'B')).toBe('/projects/B');
     expect(projectSwitchTarget('/projects/A/team', 'A', 'B')).toBe('/projects/B/team');
     expect(projectSwitchTarget('/projects/A/memories', 'A', 'B')).toBe('/projects/B/memories');
     expect(projectSwitchTarget('/projects/A/workflows', 'A', 'B')).toBe('/projects/B/workflows');
