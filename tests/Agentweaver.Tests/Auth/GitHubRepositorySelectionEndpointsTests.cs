@@ -150,9 +150,33 @@ public sealed class GitHubRepositorySelectionEndpointsTests
             .Should().Contain("octo");
     }
 
-    private sealed class RepositorySelectionWebApplicationFactory : EntraWebApplicationFactory
+    [Fact]
+    public async Task ListRepositoryOwners_ReturnsCapabilityUnavailableWhenGitHubLookupFailsAfterAuthorization()
     {
-        private readonly HttpMessageHandler _handler = new RepositoryHandler();
+        const string subject = "selection-subject";
+        using var factory = new RepositorySelectionWebApplicationFactory(new FailingRepositoryHandler(HttpStatusCode.Forbidden));
+        await factory.SeedRepoAppAuthorizationAsync(subject);
+        var client = factory.CreateAuthenticatedClientForObjectId(subject, PlatformRoles.ProjectCreator);
+        var created = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Blank project",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await created.Content.ReadFromJsonAsync<JsonElement>();
+
+        var response = await client.GetAsync(
+            $"/api/projects/{project.GetProperty("project_id").GetString()}/github/repository-owners");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("github_capability_unavailable");
+    }
+
+    private sealed class RepositorySelectionWebApplicationFactory(HttpMessageHandler? handler = null) : EntraWebApplicationFactory
+    {
+        private readonly HttpMessageHandler _handler = handler ?? new RepositoryHandler();
 
         public async Task SeedRepoAppAuthorizationAsync(string subject)
         {
@@ -209,6 +233,17 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                         Encoding.UTF8,
                         "application/json"),
                 });
+    }
+
+    private sealed class FailingRepositoryHandler(HttpStatusCode statusCode) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            });
     }
 
 }
