@@ -13,7 +13,7 @@
 # Go-based helper tools are built in a separate stage so we can pin the Go
 # patch line that Trivy evaluates and override transitive Go modules when
 # upstream binary releases lag a fix.
-FROM golang:1.26.6 AS go-tools
+FROM golang:1.27.0 AS go-tools
 ARG GH_CLI_VERSION=2.98.0
 ARG BUILDCTL_VERSION=0.32.2
 WORKDIR /src
