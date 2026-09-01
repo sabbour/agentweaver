@@ -99,7 +99,8 @@ public interface IOperatorAssistantAgent
 public sealed class OperatorAssistantAgent(
     GitHubCopilotClientFactory factory,
     IAgentweaverMcpToolProvider mcpToolProvider,
-    ILogger<OperatorAssistantAgent> logger) : IOperatorAssistantAgent
+    ILogger<OperatorAssistantAgent> logger,
+    IByokProviderConfigurationProvider? byokProviderConfiguration = null) : IOperatorAssistantAgent
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -126,7 +127,12 @@ public sealed class OperatorAssistantAgent(
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (string.IsNullOrWhiteSpace(request.RunId))
+        var byokProvider = byokProviderConfiguration is null
+            ? null
+            : await byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
+        var modelSource = byokProvider is null ? ModelSource.GitHubCopilot : ModelSource.Byok;
+
+        if (byokProvider is null && string.IsNullOrWhiteSpace(request.RunId))
             throw new AgentProviderException(
                 ModelSource.GitHubCopilot,
                 AgentProviderFailureKind.Authorization,
@@ -143,12 +149,14 @@ public sealed class OperatorAssistantAgent(
             "Operator assistant connected to MCP server: {ToolCount} tools available for conversation {ConversationId}",
             toolDeclarations.Count, request.ConversationId);
 
-        await using var client = await factory.CreateClientAsync(request.RunId, request.ModelId, ct).ConfigureAwait(false);
+        await using var client = byokProvider is null
+            ? await factory.CreateClientAsync(request.RunId!, request.ModelId, ct).ConfigureAwait(false)
+            : factory.CreateByokClient();
         try
         {
             await client.StartAsync(ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, "operator") is { } providerFailure)
+        catch (Exception ex) when (AgentProviderException.Classify(modelSource, ex, "operator") is { } providerFailure)
         {
             logger.LogWarning(ex, "Operator assistant provider failure while starting client: {Code}", providerFailure.ErrorCode);
             throw providerFailure;
@@ -158,7 +166,8 @@ public sealed class OperatorAssistantAgent(
             request.ConversationId,
             BuildSystemPrompt(request),
             toolDeclarations,
-            request.ModelId);
+            request.ModelId,
+            byokProvider);
 
         var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: "Agentweaver Operator", description: null);
         AgentSession session;
@@ -166,7 +175,7 @@ public sealed class OperatorAssistantAgent(
         {
             session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, "operator") is { } providerFailure)
+        catch (Exception ex) when (AgentProviderException.Classify(modelSource, ex, "operator") is { } providerFailure)
         {
             logger.LogWarning(ex, "Operator assistant provider failure while creating session: {Code}", providerFailure.ErrorCode);
             throw providerFailure;
@@ -238,7 +247,7 @@ public sealed class OperatorAssistantAgent(
                 }
             }
         }
-        catch (Exception ex) when (AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, "operator") is { } providerFailure)
+        catch (Exception ex) when (AgentProviderException.Classify(modelSource, ex, "operator") is { } providerFailure)
         {
             logger.LogWarning(ex, "Operator assistant provider failure: {Code}", providerFailure.ErrorCode);
             throw providerFailure;
@@ -387,7 +396,8 @@ public sealed class OperatorAssistantAgent(
         string conversationId,
         string systemPrompt,
         IReadOnlyList<AIFunctionDeclaration> tools,
-        string? modelId) =>
+        string? modelId,
+        ByokProviderConfiguration? byokProviderConfiguration = null) =>
         new()
         {
             EnableConfigDiscovery = false,
@@ -410,7 +420,14 @@ public sealed class OperatorAssistantAgent(
             // timeout/restart continuity.
             EnableSessionStore = false,
             InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
-            Model = modelId,
+            Model = byokProviderConfiguration?.Model ?? modelId,
+            Provider = byokProviderConfiguration is null ? null : new GitHub.Copilot.ProviderConfig
+            {
+                Type = byokProviderConfiguration.Type,
+                BaseUrl = byokProviderConfiguration.BaseUrl,
+                ApiKey = byokProviderConfiguration.ApiKey,
+                WireApi = "responses",
+            },
             Tools = tools.ToList(),
             // SECURITY (assistant sandbox, #346): the operator assistant runs IN-PROCESS in the API
             // pod with NO OS-level sandbox (unlike sandboxed agent runs, which are contained by the

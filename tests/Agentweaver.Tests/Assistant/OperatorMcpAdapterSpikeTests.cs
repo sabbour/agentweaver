@@ -126,6 +126,34 @@ public sealed class OperatorMcpAdapterSpikeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task OperatorSessionConfig_UsesByokProviderConfiguration_WhenPresent()
+    {
+        var provider = new AgentweaverMcpToolProvider(new AgentweaverMcpConnectionOptions { Endpoint = _mcpEndpoint });
+        await using var session = await provider.ConnectAsync("caller-token-byok", CancellationToken.None);
+
+        var byok = new Agentweaver.Domain.ByokProviderConfiguration(
+            Type: "azure",
+            BaseUrl: "https://byok-resource.openai.azure.com",
+            Model: "gpt-4.1",
+            ApiKey: "test-byok-key");
+
+        var config = OperatorAssistantAgent.BuildSessionConfig(
+            conversationId: "conv-byok",
+            systemPrompt: OperatorAssistantAgent.BuildSystemPromptForTests("# Agentweaver Driver", session.Tools.Count),
+            tools: session.AsToolDeclarations(),
+            modelId: "claude-sonnet-4.6",
+            byokProviderConfiguration: byok);
+
+        config.Model.Should().Be("gpt-4.1",
+            "BYOK operator turns must use the deployment-wide custom-provider model rather than a Copilot model override");
+        config.Provider.Should().NotBeNull();
+        config.Provider!.Type.Should().Be("azure");
+        config.Provider.BaseUrl.Should().Be("https://byok-resource.openai.azure.com");
+        config.Provider.ApiKey.Should().Be("test-byok-key");
+        config.Provider.WireApi.Should().Be("responses");
+    }
+
+    [Fact]
     public async Task OperatorSessionConfig_RestrictsToolSurfaceToMcpToolsOnly_NoSdkBuiltins()
     {
         // SECURITY regression (#346): the operator assistant runs in-process in the API pod with no
