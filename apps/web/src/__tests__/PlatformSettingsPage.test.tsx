@@ -101,6 +101,26 @@ describe('PlatformSettingsPage', () => {
     expect(await screen.findByText('Configuration saved.')).toBeDefined();
   });
 
+  it('shows exactly one save button for the selected mode section', async () => {
+    vi.mocked(apiClient.getByokProviderConfig).mockResolvedValue({
+      type: 'openai',
+      base_url: 'https://api.example.com',
+      model: 'gpt-4o',
+      configured: true,
+    });
+    renderPage();
+
+    await screen.findByDisplayValue('https://api.example.com');
+    expect(screen.getAllByRole('button', { name: /^Save/i })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Save custom key configuration' })).toBeDefined();
+
+    fireEvent.click(screen.getByLabelText(/GitHub Copilot mode/));
+
+    expect(await screen.findByRole('button', { name: 'Save AI inference source' })).toBeDefined();
+    expect(screen.getAllByRole('button', { name: /^Save/i })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /Switch to GitHub Copilot mode/ })).toBeNull();
+  });
+
   it('switches back to GitHub Copilot mode by clearing the saved configuration', async () => {
     const onRetryAccess = vi.fn();
     vi.mocked(apiClient.getByokProviderConfig).mockResolvedValue({
@@ -119,10 +139,26 @@ describe('PlatformSettingsPage', () => {
     );
 
     fireEvent.click(await screen.findByLabelText(/GitHub Copilot mode/));
-    fireEvent.click(screen.getByRole('button', { name: /Switch to GitHub Copilot mode/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save AI inference source' }));
 
     await waitFor(() => expect(apiClient.clearByokProviderConfig).toHaveBeenCalled());
     expect(onRetryAccess).toHaveBeenCalled();
+  });
+
+  it('toggles API key visibility with the reveal button', async () => {
+    vi.mocked(apiClient.getByokProviderConfig).mockResolvedValue(null);
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText(/Custom key mode/));
+
+    const apiKeyInput = screen.getByLabelText(/^API key/) as HTMLInputElement;
+    expect(apiKeyInput.type).toBe('password');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show API key' }));
+    expect(apiKeyInput.type).toBe('text');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide API key' }));
+    expect(apiKeyInput.type).toBe('password');
   });
 
   it('starts the platform-default Copilot OAuth redirect', async () => {
