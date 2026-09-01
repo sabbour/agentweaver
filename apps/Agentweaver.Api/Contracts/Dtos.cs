@@ -635,6 +635,12 @@ public sealed record GitHubRepositorySelectionCodeResponse
     [JsonPropertyName("expires_at")] public required DateTimeOffset ExpiresAt { get; init; }
 }
 
+/// <summary>Request body for connecting an existing Repo-App-authorized repository to a blank project.</summary>
+public sealed record ConnectProjectRepositoryRequest
+{
+    [JsonPropertyName("repository_selection_code")] public string? RepositorySelectionCode { get; init; }
+}
+
 /// <summary>Request body for renaming a project.</summary>
 public sealed record UpdateProjectNameRequest
 {

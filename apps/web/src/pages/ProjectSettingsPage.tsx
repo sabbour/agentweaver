@@ -30,6 +30,7 @@ import type {
   Project,
   ProjectAccessOverview,
   SandboxPolicy,
+  ServerInfo,
   UnattendedReadiness,
   UpdateProjectProviderSettingsRequest,
 } from '../api/types';
@@ -365,6 +366,7 @@ export function ProjectSettingsPage() {
   const [unattendedReadiness, setUnattendedReadiness] = useState<UnattendedReadiness | null>(null);
   const [unattendedLoading, setUnattendedLoading] = useState(true);
   const [unattendedError, setUnattendedError] = useState<string | null>(null);
+  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
 
   const formatError = (err: unknown): string => formatApiErrorMessage(err);
 
@@ -400,6 +402,18 @@ export function ProjectSettingsPage() {
       })
       .catch(() => {
         if (!cancelled) setAuthConfig(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiClient.getServerInfo()
+      .then((info) => {
+        if (!cancelled) setServerInfo(info);
+      })
+      .catch(() => {
+        if (!cancelled) setServerInfo(null);
       });
     return () => { cancelled = true; };
   }, []);
@@ -1055,6 +1069,17 @@ export function ProjectSettingsPage() {
                     </>
                   )}
                   <div className={styles.formActions}>
+                    {unattendedReadiness?.reason_code === 'repo_app_installation_required' && serverInfo?.repo_app_install_url && (
+                      <Button
+                        as="a"
+                        href={serverInfo.repo_app_install_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        appearance="primary"
+                      >
+                        Install GitHub Repo App
+                      </Button>
+                    )}
                     <Button appearance="secondary" disabled={unattendedLoading} onClick={() => void refreshUnattendedReadiness()}>
                       Refresh status
                     </Button>
@@ -1072,9 +1097,9 @@ export function ProjectSettingsPage() {
                   <TitleText>Connect a GitHub repository</TitleText>
                   <Body as="p" tone="muted">
                     This project was started without a connected GitHub repository, so runs can't
-                    open pull requests. Create a new repository (or connect one you own) to enable
-                    publishing. GitHub actions use the project capability authorization, so make sure
-                    you've linked an account first.
+                    open pull requests. Create a new repository or connect one you already have to
+                    enable publishing. GitHub actions use the project capability authorization, so
+                    make sure you've linked an account first.
                   </Body>
                   <div className={styles.formActions}>
                     <Button appearance="primary" onClick={() => setConnectRepoOpen(true)}>

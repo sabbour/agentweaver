@@ -80,6 +80,12 @@ Settings are organized in a left rail:
 
 Manage Agentweaver project members.
 
+### Repository
+
+If a project started without a GitHub origin, the **Repository** section can either create a new
+repository or attach an existing Repo-App-authorized repository so runs can publish branches and
+pull requests.
+
 ### Sandbox policy
 
 Controls how agent commands execute and what they can reach. Options include:
@@ -99,7 +105,9 @@ credentials. Its **GitHub Copilot account** control shows the verified login bou
 project (when connected), or lets a Project Owner connect or switch that account through
 GitHub's secure browser page. A Project Owner can start the separate Copilot App binding when
 that is the missing prerequisite, but this page has no automation enablement or activation
-control; activation consent is a separate step.
+control; activation consent is a separate step. When readiness reports
+`repo_app_installation_required` and the deployment configures a Repo App slug, the page also
+shows a direct **Install GitHub Repo App** link.
 
 Project Settings does not include legacy account-link controls, webhook provisioning, or
 webhook-secret controls. Repository event delivery is configured through the Repo App's
