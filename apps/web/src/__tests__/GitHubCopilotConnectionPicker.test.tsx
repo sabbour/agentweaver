@@ -179,6 +179,6 @@ describe('GitHubCopilotConnectionPicker', () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText('GitHub connections are temporarily unavailable. Connect GitHub and try again.')).toBeDefined();
+    expect(await screen.findByText('Connect GitHub to see your repositories.')).toBeDefined();
   });
 });
