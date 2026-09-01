@@ -13,7 +13,7 @@ import {
 } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ProjectCopilotConnection } from '../api/types';
+import type { PlatformDefaultCopilotConnection, ProjectCopilotConnection } from '../api/types';
 
 const CONNECTION_LOAD_ERROR = 'Could not load this project’s GitHub Copilot connection. Refresh and try again.';
 const GITHUB_APPS_EXPLANATION = 'GitHub Copilot provides AI access. The separate Repo App provides repository access.';
@@ -22,13 +22,16 @@ export function GitHubCopilotConnectionPicker({
   projectId,
   triggerLabel = 'Manage GitHub Copilot',
   showConnectionStatus = false,
+  suppressProjectOverrideWhenPlatformDefault = false,
 }: {
   projectId: string;
   triggerLabel?: string;
   showConnectionStatus?: boolean;
+  suppressProjectOverrideWhenPlatformDefault?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [connection, setConnection] = useState<ProjectCopilotConnection | null>(null);
+  const [platformDefaultConnection, setPlatformDefaultConnection] = useState<PlatformDefaultCopilotConnection | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -40,17 +43,24 @@ export function GitHubCopilotConnectionPicker({
     setLoading(true);
     setLoadError(null);
     try {
-      const nextConnection = await apiClient.getProjectCopilotConnection(projectId);
+      const [nextConnection, nextPlatformDefaultConnection] = await Promise.all([
+        apiClient.getProjectCopilotConnection(projectId),
+        suppressProjectOverrideWhenPlatformDefault
+          ? apiClient.getPlatformDefaultCopilotConnection().catch(() => null)
+          : Promise.resolve(null),
+      ]);
       if (generation !== refreshGeneration.current) return;
       setConnection(nextConnection);
+      setPlatformDefaultConnection(nextPlatformDefaultConnection);
     } catch {
       if (generation !== refreshGeneration.current) return;
       setConnection(null);
+      setPlatformDefaultConnection(null);
       setLoadError(CONNECTION_LOAD_ERROR);
     } finally {
       if (generation === refreshGeneration.current) setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, suppressProjectOverrideWhenPlatformDefault]);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,8 +88,24 @@ export function GitHubCopilotConnectionPicker({
   };
 
   const connected = connection?.status === 'connected';
+  const platformDefaultConnected = suppressProjectOverrideWhenPlatformDefault &&
+    !connected &&
+    platformDefaultConnection?.connected === true;
   const accountLabel = connection?.github_login
     ? `@${connection.github_login}`
+    : platformDefaultConnection?.github_login
+      ? `@${platformDefaultConnection.github_login}`
+      : 'a GitHub account';
+  const canManageProjectConnection = !platformDefaultConnected;
+  const noConnectionMessage = 'No GitHub Copilot account is connected for this project’s background AI access.';
+  const platformDefaultMessage = `This project uses the platform-configured GitHub Copilot account for background AI access: ${accountLabel}. Manage it in Platform settings.`;
+  const projectConnectionMessage = `GitHub Copilot background AI access is connected to this project as ${accountLabel}. ${GITHUB_APPS_EXPLANATION}`;
+  const dialogDescription = (
+    'Choose the GitHub account with Copilot access in GitHub’s secure browser page. '
+    + `${GITHUB_APPS_EXPLANATION} Agentweaver keeps credentials private and uses this account only for this project’s background AI access.`
+  );
+  const dialogConnectedMessage = connection?.github_login
+    ? `Connected project GitHub account: @${connection.github_login}`
     : 'a GitHub account';
 
   return (
@@ -92,19 +118,26 @@ export function GitHubCopilotConnectionPicker({
           )}
           {!loading && !loadError && connected && (
             <MessageBar intent="success">
-              <MessageBarBody>GitHub Copilot is connected as {accountLabel}. {GITHUB_APPS_EXPLANATION}</MessageBarBody>
+              <MessageBarBody>{projectConnectionMessage}</MessageBarBody>
             </MessageBar>
           )}
-          {!loading && !loadError && !connected && (
+          {!loading && !loadError && platformDefaultConnected && (
+            <MessageBar intent="info">
+              <MessageBarBody>{platformDefaultMessage}</MessageBarBody>
+            </MessageBar>
+          )}
+          {!loading && !loadError && !connected && !platformDefaultConnected && (
             <MessageBar intent="warning">
-              <MessageBarBody>No GitHub account is connected to this project for Copilot. {GITHUB_APPS_EXPLANATION}</MessageBarBody>
+              <MessageBarBody>{noConnectionMessage} {GITHUB_APPS_EXPLANATION}</MessageBarBody>
             </MessageBar>
           )}
         </div>
       )}
-      <Button appearance={connected ? 'secondary' : 'primary'} onClick={() => setOpen(true)}>
-        {triggerLabel}
-      </Button>
+      {canManageProjectConnection && (
+        <Button appearance={connected ? 'secondary' : 'primary'} onClick={() => setOpen(true)}>
+          {triggerLabel}
+        </Button>
+      )}
       <Dialog open={open} onOpenChange={(_, data) => setOpen(data.open)}>
         <DialogSurface>
           <DialogBody>
@@ -117,24 +150,21 @@ export function GitHubCopilotConnectionPicker({
                   onClick={() => setOpen(false)}
                 />
               }
-            >Connect GitHub Copilot</DialogTitle>
+            >Connect GitHub Copilot for background AI</DialogTitle>
             <DialogContent>
-              <p>
-                Choose the GitHub account with Copilot access in GitHub’s secure browser page.
-                {` ${GITHUB_APPS_EXPLANATION}`} Agentweaver keeps credentials private and uses this account only for this project.
-              </p>
+              <p>{dialogDescription}</p>
               {loading && <Spinner label="Loading GitHub connection" />}
               {!loading && loadError && (
                 <MessageBar intent="error"><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
               )}
               {!loading && !loadError && connected && (
                 <MessageBar intent="success">
-                  <MessageBarBody>Connected GitHub account: {accountLabel}</MessageBarBody>
+                  <MessageBarBody>{dialogConnectedMessage}</MessageBarBody>
                 </MessageBar>
               )}
               {!loading && !loadError && !connected && (
                 <MessageBar intent="warning">
-                  <MessageBarBody>No GitHub account is connected to this project for Copilot. {GITHUB_APPS_EXPLANATION}</MessageBarBody>
+                  <MessageBarBody>{noConnectionMessage} {GITHUB_APPS_EXPLANATION}</MessageBarBody>
                 </MessageBar>
               )}
               {connectionError && (

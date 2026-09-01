@@ -28,6 +28,7 @@ vi.mock('../api/apiClient', () => ({
     getUnattendedReadiness: vi.fn(),
     beginProjectCopilotAuthorization: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
+    getPlatformDefaultCopilotConnection: vi.fn(),
   },
 }));
 
@@ -120,6 +121,10 @@ beforeEach(() => {
     status: 'not_connected',
     github_login: null,
   });
+  vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
+    connected: false,
+    github_login: null,
+  });
 });
 
 afterEach(() => {
@@ -170,9 +175,47 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Background/i }));
 
     expect(await screen.findByText('Background automation readiness')).toBeDefined();
+    expect(screen.getByText(
+      'This controls the GitHub Copilot account used for this project’s background AI and other Copilot-powered generation. It does not control repository access.',
+    )).toBeDefined();
+    expect(screen.getByText(
+      'These server-verified prerequisites apply after you connect a GitHub repository. They cover repository access for background branch, push, and pull-request work and are separate from the GitHub Copilot AI access shown above.',
+    )).toBeDefined();
     expect(screen.getByText('copilot_binding_required')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
     expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
+  });
+
+  it('uses connected-repository wording for background requirements when a repo is attached', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      project_id: 'proj-1',
+      name: 'Demo',
+      origin: 'github',
+      source_repository: 'sabbour/agentweaver',
+      working_directory: 'C:/demo',
+      default_branch: 'main',
+      owner: 'sabbour',
+      default_provider: 'github-copilot',
+      default_model_github_copilot: 'gpt-4',
+      default_model_microsoft_foundry: null,
+      blueprint_generation_model: null,
+      workflow_generation_model: 'claude-sonnet-4.6',
+      outcome_spec_generation_model: null,
+      preview_approval_timeout_minutes: 30,
+      available: true,
+      state: 'active',
+      created_at: '2026-07-07T00:00:00Z',
+      updated_at: '2026-07-07T00:00:00Z',
+    } as never);
+
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
+
+    expect(await screen.findByText(
+      'These server-verified prerequisites cover repository access for background branch, push, and pull-request work on this project’s connected GitHub repository. They are separate from the GitHub Copilot AI access shown above.',
+    )).toBeDefined();
   });
 
   it('removes legacy identity and webhook controls', async () => {

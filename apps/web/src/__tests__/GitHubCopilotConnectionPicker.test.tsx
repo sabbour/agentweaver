@@ -9,6 +9,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     beginProjectCopilotAuthorization: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
+    getPlatformDefaultCopilotConnection: vi.fn(),
   },
 }));
 
@@ -20,6 +21,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'not_connected',
+    github_login: null,
+  });
+  vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
+    connected: false,
     github_login: null,
   });
 });
@@ -48,15 +53,15 @@ describe('GitHubCopilotConnectionPicker', () => {
         <GitHubCopilotConnectionPicker projectId="project-b" showConnectionStatus />
       </Wrapper>,
     );
-    expect(await screen.findByText(/GitHub Copilot is connected as @project-b/)).toBeDefined();
+    expect(await screen.findByText(/GitHub Copilot background AI access is connected to this project as @project-b/)).toBeDefined();
 
     await act(async () => {
       resolveOldConnection!({ status: 'connected', github_login: 'project-a' });
       await oldConnection;
     });
 
-    expect(screen.getByText(/GitHub Copilot is connected as @project-b/)).toBeDefined();
-    expect(screen.queryByText('GitHub Copilot is connected as @project-a.')).toBeNull();
+    expect(screen.getByText(/GitHub Copilot background AI access is connected to this project as @project-b/)).toBeDefined();
+    expect(screen.queryByText(/GitHub Copilot background AI access is connected to this project as @project-a/)).toBeNull();
   });
 
   it('shows an explicit, accessible connection picker when no account is connected', async () => {
@@ -66,11 +71,11 @@ describe('GitHubCopilotConnectionPicker', () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText(/No GitHub account is connected to this project for Copilot/)).toBeDefined();
+    expect(await screen.findByText(/No GitHub Copilot account is connected for this project’s background AI access/)).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub Copilot' }));
 
     expect(await screen.findByRole('dialog')).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Connect GitHub Copilot' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Connect GitHub Copilot for background AI' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Close' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Connect GitHub account' })).toBeDefined();
   });
@@ -88,7 +93,7 @@ describe('GitHubCopilotConnectionPicker', () => {
       </Wrapper>,
     );
 
-    await screen.findByText(/No GitHub account is connected to this project for Copilot/);
+    await screen.findByText(/No GitHub Copilot account is connected for this project’s background AI access/);
     fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub Copilot' }));
     vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
       status: 'connected',
@@ -96,11 +101,33 @@ describe('GitHubCopilotConnectionPicker', () => {
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Refresh' }));
 
-    expect(await screen.findByText('Connected GitHub account: @octocat')).toBeDefined();
+    expect(await screen.findByText('Connected project GitHub account: @octocat')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Switch GitHub account' }));
     await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('project-1'));
     expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/copilot-app/authorize');
     assign.mockRestore();
+  });
+
+  it('shows the platform-configured account and hides project override controls when requested', async () => {
+    vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
+      connected: true,
+      github_login: 'platform-bot',
+    });
+    render(
+      <Wrapper>
+        <GitHubCopilotConnectionPicker
+          projectId="project-1"
+          showConnectionStatus
+          suppressProjectOverrideWhenPlatformDefault
+        />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText(
+      'This project uses the platform-configured GitHub Copilot account for background AI access: @platform-bot. Manage it in Platform settings.',
+    )).toBeDefined();
+    expect(apiClient.getPlatformDefaultCopilotConnection).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Manage GitHub Copilot' })).toBeNull();
   });
 
   it('keeps the picker usable and shows a clear error when the handoff cannot start', async () => {

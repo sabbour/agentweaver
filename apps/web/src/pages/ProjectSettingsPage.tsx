@@ -1029,13 +1029,19 @@ export function ProjectSettingsPage() {
                   </Body>
                   <TitleText>GitHub Copilot account</TitleText>
                   <Body as="p" tone="muted">
-                    Connect or switch the project-scoped GitHub account used for Copilot capabilities.
+                    This controls the GitHub Copilot account used for this project’s background AI and other Copilot-powered generation. It does not control repository access.
                   </Body>
-                  <GitHubCopilotConnectionPicker projectId={projectId} showConnectionStatus />
+                  <GitHubCopilotConnectionPicker
+                    projectId={projectId}
+                    showConnectionStatus
+                    suppressProjectOverrideWhenPlatformDefault
+                  />
                   <Divider />
                   <TitleText>Background requirements</TitleText>
                   <Body as="p" tone="muted">
-                    Background runs need the following server-verified prerequisites.
+                    {project.source_repository
+                      ? 'These server-verified prerequisites cover repository access for background branch, push, and pull-request work on this project’s connected GitHub repository. They are separate from the GitHub Copilot AI access shown above.'
+                      : 'These server-verified prerequisites apply after you connect a GitHub repository. They cover repository access for background branch, push, and pull-request work and are separate from the GitHub Copilot AI access shown above.'}
                   </Body>
                   {unattendedLoading && <Spinner label="Checking automation readiness" size="extra-tiny" />}
                   {unattendedReadiness && (
