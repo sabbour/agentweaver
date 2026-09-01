@@ -123,6 +123,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     private readonly IToolApprovalGate _approvalGate;
     private readonly AssistantRunOptions _options;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IByokProviderConfigurationProvider _byokProviderConfigurationProvider;
     private readonly bool _agentHostEnabled;
     private readonly ILogger<AssistantRunService> _logger;
 
@@ -146,6 +147,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         IToolApprovalGate approvalGate,
         IOptions<AssistantRunOptions> options,
         IServiceScopeFactory scopeFactory,
+        IByokProviderConfigurationProvider byokProviderConfigurationProvider,
         IConfiguration configuration,
         ILogger<AssistantRunService> logger)
     {
@@ -155,6 +157,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         _approvalGate = approvalGate;
         _options = options.Value;
         _scopeFactory = scopeFactory;
+        _byokProviderConfigurationProvider = byokProviderConfigurationProvider;
         _agentHostEnabled = string.Equals(
             configuration["Sandbox:AgentExecutionMode"],
             "pod-per-run",
@@ -250,6 +253,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         try
         {
             ProjectId? project = ProjectId.TryParse(projectId, out var pid) ? pid : null;
+            var modelSource = await ResolveAssistantModelSourceAsync(ct).ConfigureAwait(false);
             var run = new Run
             {
                 Id = runId,
@@ -257,7 +261,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 // empty placeholders satisfy the required Run fields without implying a workspace.
                 RepositoryPath = string.Empty,
                 OriginatingBranch = string.Empty,
-                ModelSource = ModelSource.GitHubCopilot,
+                ModelSource = modelSource,
                 Task = firstMessage ?? "Operator assistant conversation",
                 SubmittingUser = caller.User,
                 Status = RunStatus.InProgress,
@@ -296,9 +300,14 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         return new StartAssistantRunResult(runId, RunStatus.InProgress, firstTurn);
     }
 
+    private async Task<ModelSource> ResolveAssistantModelSourceAsync(CancellationToken ct) =>
+        await _byokProviderConfigurationProvider.GetAsync(ct).ConfigureAwait(false) is null
+            ? ModelSource.GitHubCopilot
+            : ModelSource.Byok;
+
     private async Task PrepareAgentHostCapabilityAsync(Run run, CancellationToken ct)
     {
-        if (!_agentHostEnabled)
+        if (!_agentHostEnabled || run.ModelSource != ModelSource.GitHubCopilot)
             return;
 
         await using var scope = _scopeFactory.CreateAsyncScope();

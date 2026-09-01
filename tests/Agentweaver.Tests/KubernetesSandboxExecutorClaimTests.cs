@@ -61,12 +61,14 @@ public sealed class KubernetesSandboxExecutorClaimTests
         IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null,
         IPodNameRegistry? podRegistry = null,
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
-        IGitHubCopilotCapabilityCredentialProvider? copilotCredentials = null) =>
+        IGitHubCopilotCapabilityCredentialProvider? copilotCredentials = null,
+        IByokProviderConfigurationProvider? byokProviderConfiguration = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions,
             copilotCredentials: copilotCredentials ?? new FixedGitHubCopilotCapabilityCredentialProvider(),
-            previewService: previewService);
+            previewService: previewService,
+            byokProviderConfiguration: byokProviderConfiguration);
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
@@ -355,6 +357,45 @@ public sealed class KubernetesSandboxExecutorClaimTests
             "the real warm-pool configure payload must enable lifecycle-aware policy reads");
         configuredState.ToolApprovalApiAccess!.BearerToken.Should().Be(
             body.GetProperty("turnBearerToken").GetString());
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_with_byok_configuration_posts_provider_without_copilot_credential()
+    {
+        const string runId = "run-byok-configure";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            byokProviderConfiguration: new FixedByokProviderConfigurationProvider(
+                new ByokProviderConfiguration(
+                    Type: "azure",
+                    BaseUrl: "https://byok-resource.openai.azure.com",
+                    Model: "gpt-4.1",
+                    ApiKey: "test-byok-key")));
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        var body = doc.RootElement;
+        body.TryGetProperty("copilotCredential", out var copilotCredential).Should().BeTrue();
+        copilotCredential.ValueKind.Should().Be(JsonValueKind.Null,
+            "BYOK AgentHost launches must not require or transmit a Copilot capability snapshot");
+        var byok = body.GetProperty("byokProviderConfiguration");
+        byok.GetProperty("type").GetString().Should().Be("azure");
+        byok.GetProperty("baseUrl").GetString().Should().Be("https://byok-resource.openai.azure.com");
+        byok.GetProperty("model").GetString().Should().Be("gpt-4.1");
+        byok.GetProperty("apiKey").GetString().Should().Be("test-byok-key");
     }
 
     [Fact]
@@ -893,5 +934,12 @@ public sealed class KubernetesSandboxExecutorClaimTests
 
         public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class FixedByokProviderConfigurationProvider(ByokProviderConfiguration configuration)
+        : IByokProviderConfigurationProvider
+    {
+        public Task<ByokProviderConfiguration?> GetAsync(CancellationToken ct) =>
+            Task.FromResult<ByokProviderConfiguration?>(configuration);
     }
 }
