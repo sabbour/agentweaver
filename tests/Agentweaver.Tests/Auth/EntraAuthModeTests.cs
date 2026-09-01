@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using FluentAssertions;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
@@ -238,5 +239,39 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SignOut_ClearsBrowserSessionCookie_AndRevokesPersistedBrowserSession()
+    {
+        const string objectId = "entra-user-signout";
+        const string sessionId = "browser-session-signout";
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.BrowserEntraSessions.Add(new BrowserEntraSession
+            {
+                Id = sessionId,
+                EntraObjectId = objectId,
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using var client = _factory.CreateAuthenticatedClientForObjectId(objectId, PlatformRoles.Contributor);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/session/sign-out");
+        request.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
+
+        using var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        response.Headers.TryGetValues("Set-Cookie", out var cookies).Should().BeTrue();
+        cookies.Should().Contain(cookie =>
+            cookie.StartsWith($"{BrowserEntraSessionService.CookieName}=", StringComparison.Ordinal) &&
+            cookie.Contains("expires=thu, 01 jan 1970", StringComparison.OrdinalIgnoreCase));
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verifyDb.BrowserEntraSessions.FindAsync([sessionId])).Should().BeNull();
     }
 }
