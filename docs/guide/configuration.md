@@ -188,7 +188,7 @@ allow public client flows.
 `Auth:Entra:EnterpriseAppObjectId` is optional. When set, the Account settings page links
 directly to the Azure Portal **Enterprise application → Users and groups** blade for this
 deployment's Entra app. Find this value in **Microsoft Entra admin center → Enterprise
-applications → <your app> → Object ID**. Do **not** copy the Application (client) ID from the
+applications → *your app* → Object ID**. Do **not** copy the Application (client) ID from the
 app registration; the deep link requires the Enterprise Application's service principal object ID.
 
 ::: tip AKS deploy pipeline wiring
