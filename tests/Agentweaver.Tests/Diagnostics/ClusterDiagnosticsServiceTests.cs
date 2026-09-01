@@ -146,14 +146,14 @@ public sealed class ClusterDiagnosticsServiceTests
         var pool = dto.WarmPools.Should().ContainSingle().Subject;
         pool.Instances.Should().ContainEquivalentOf(new WarmPoolInstanceDto
         {
-            Name = "agentweaver-sandbox-available",
+            Name = "agentweaver-agent-host-available",
             Status = "available",
             Claimed = false,
         }, options => options.Excluding(x => x.AgeSeconds));
 
         pool.Instances.Should().ContainEquivalentOf(new WarmPoolInstanceDto
         {
-            Name = "agentweaver-sandbox-claimed",
+            Name = "agentweaver-agent-host-claimed",
             Status = "claimed",
             Claimed = true,
             ClaimName = "agent-0123456789ab",
@@ -277,7 +277,7 @@ public sealed class ClusterDiagnosticsServiceTests
                   },
                   "status": {
                     "sandbox": {
-                      "name": "agentweaver-sandbox-claimed"
+                      "name": "agentweaver-agent-host-claimed"
                     },
                     "conditions": [
                       {
@@ -329,7 +329,7 @@ public sealed class ClusterDiagnosticsServiceTests
               "items": [
                 {
                   "metadata": {
-                    "name": "agentweaver-sandbox-claimed",
+                    "name": "agentweaver-agent-host-claimed",
                     "namespace": "agentweaver",
                     "creationTimestamp": "2026-07-28T12:00:00Z"
                   },
@@ -342,7 +342,7 @@ public sealed class ClusterDiagnosticsServiceTests
                 },
                 {
                   "metadata": {
-                    "name": "agentweaver-sandbox-available",
+                    "name": "agentweaver-agent-host-available",
                     "namespace": "agentweaver",
                     "creationTimestamp": "2026-07-28T12:05:00Z"
                   },

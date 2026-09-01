@@ -55,9 +55,6 @@ public sealed class DiagnosticsService
     /// <summary>Key Vault CSI secret required for API authentication and worker loopback calls.</summary>
     private const string KeyVaultProbeSecretName = "mcp-api-key";
 
-    /// <summary>Name prefix of warm-pool sandbox pods (<c>agentweaver-sandbox-*</c>).</summary>
-    private const string WarmPoolPodPrefix = "agentweaver-sandbox-";
-
     /// <summary>Per-check timeout for the detailed diagnostics suite.</summary>
     private static readonly TimeSpan DetailedCheckTimeout = TimeSpan.FromSeconds(5);
 
@@ -269,7 +266,6 @@ public sealed class DiagnosticsService
         var podsTask = GetAgentPodInventoryAsync(ct);
         var pendingTask = GetPendingCapacityRunsAsync(ct);
         var warmPoolSnapshotsTask = GetWarmPoolSnapshotInventoryAsync(ct);
-        var warmPoolPodsTask = GetWarmPoolPodInventoryAsync(ct);
         var claimsTask = GetSandboxClaimInventoryAsync(ct);
 
         await Task.WhenAll(
@@ -277,16 +273,20 @@ public sealed class DiagnosticsService
             podsTask,
             pendingTask,
             warmPoolSnapshotsTask,
-            warmPoolPodsTask,
             claimsTask).ConfigureAwait(false);
 
         var checks = await checksTask.ConfigureAwait(false);
         var (active, orphaned) = await podsTask.ConfigureAwait(false);
         var pending = await pendingTask.ConfigureAwait(false);
         var claims = await claimsTask.ConfigureAwait(false);
+        var warmPoolSnapshots = await warmPoolSnapshotsTask.ConfigureAwait(false);
+        // Warm-pool pod matching depends on the pool names just resolved above (pods are named
+        // "<pool-name>-<suffix>" via the SandboxWarmPool's pod-template generateName), so this
+        // must run after warmPoolSnapshotsTask rather than concurrently with it.
+        var warmPoolPods = await GetWarmPoolPodInventoryAsync(warmPoolSnapshots, ct).ConfigureAwait(false);
         var warmPools = BuildWarmPoolInventory(
-            await warmPoolSnapshotsTask.ConfigureAwait(false),
-            await warmPoolPodsTask.ConfigureAwait(false),
+            warmPoolSnapshots,
+            warmPoolPods,
             claims,
             await ResolveRunProjectIdsAsync(claims.Select(c => c.RunId), ct).ConfigureAwait(false));
 
@@ -644,12 +644,25 @@ public sealed class DiagnosticsService
         catch { return Array.Empty<WarmPoolSnapshot>(); }
     }
 
-    private async Task<IReadOnlyList<WarmPoolPodSnapshot>> GetWarmPoolPodInventoryAsync(CancellationToken ct)
+    /// <summary>
+    /// Lists warm-pool sandbox pods and attributes each to its owning SandboxWarmPool. Sandbox pods
+    /// are generated from the pool's pod template with <c>generateName: "&lt;pool-name&gt;-"</c>
+    /// (e.g. pool <c>agentweaver-agent-host</c> produces pods like
+    /// <c>agentweaver-agent-host-jbn86</c>), so a pod is matched to the pool whose name is the
+    /// longest matching <c>"&lt;pool-name&gt;-"</c> prefix of the pod name. Best-effort: returns
+    /// empty on any failure.
+    /// </summary>
+    private async Task<IReadOnlyList<WarmPoolPodSnapshot>> GetWarmPoolPodInventoryAsync(
+        IReadOnlyList<WarmPoolSnapshot> pools, CancellationToken ct)
     {
-        if (_k8s is null) return Array.Empty<WarmPoolPodSnapshot>();
+        if (_k8s is null || pools.Count == 0) return Array.Empty<WarmPoolPodSnapshot>();
 
         var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
-        var agentHostWarmPoolName = _configuration["Sandbox:Kubernetes:AgentHostWarmPoolRef"] ?? "agentweaver-agent-host";
+        var poolPrefixes = pools
+            .Where(p => !string.IsNullOrWhiteSpace(p.Name))
+            .Select(p => p.Name + "-")
+            .OrderByDescending(p => p.Length)
+            .ToList();
         try
         {
             var list = await _k8s.CoreV1.ListNamespacedPodAsync(ns, cancellationToken: ct).ConfigureAwait(false);
@@ -659,8 +672,11 @@ public sealed class DiagnosticsService
             foreach (var pod in list.Items)
             {
                 var name = pod.Metadata?.Name;
-                if (string.IsNullOrWhiteSpace(name) ||
-                    !name.StartsWith(WarmPoolPodPrefix, StringComparison.Ordinal))
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                var poolPrefix = poolPrefixes.FirstOrDefault(prefix => name.StartsWith(prefix, StringComparison.Ordinal));
+                if (poolPrefix is null)
                     continue;
 
                 double? age = null;
@@ -668,7 +684,7 @@ public sealed class DiagnosticsService
                     age = (now - created).TotalSeconds;
 
                 result.Add(new WarmPoolPodSnapshot(
-                    agentHostWarmPoolName,
+                    poolPrefix[..^1],
                     name,
                     IsPodReady(pod),
                     age));
