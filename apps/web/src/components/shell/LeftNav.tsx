@@ -1,10 +1,21 @@
-import { Badge, Button, Tooltip } from '@fluentui/react-components';
+import {
+  Badge,
+  Button,
+  Divider,
+  Popover,
+  PopoverSurface,
+  PopoverTrigger,
+  Tooltip,
+  makeStyles,
+  tokens,
+} from '@fluentui/react-components';
 import {
   AddRegular,
   ChevronDownRegular,
   ChevronRightRegular,
   PanelLeftContract24Regular,
   PanelLeftExpand24Regular,
+  Settings24Regular,
 } from '@fluentui/react-icons';
 import { GLOBAL_NAV_ITEMS, NAV_SECTIONS, navItemPath } from './navConfig';
 import { useAppVersion } from '../../hooks/useAppVersion';
@@ -25,6 +36,18 @@ const NAV_WIDTH = '260px';
 const NAV_WIDTH_COLLAPSED = '64px';
 const COLLAPSE_KEY = 'aw.nav.collapsed';
 const SESSIONS_EXPANDED_KEY = 'aw.nav.sessions.expanded';
+
+const useStyles = makeStyles({
+  settingsMenuSurface: {
+    minWidth: '220px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+  },
+  settingsMenuItem: {
+    justifyContent: 'flex-start',
+  },
+});
 
 export interface LeftNavProps {
   projectId: string | undefined;
@@ -56,6 +79,7 @@ export function LeftNav({
   onFallbackProjectMissing,
   isPlatformAdmin = false,
 }: LeftNavProps) {
+  const styles = useStyles();
   const version = useAppVersion();
   const versionLabel = formatVersionBadge(version);
   const footerVersionText = versionLabel ? `v${versionLabel}` : 'Alpha';
@@ -76,13 +100,11 @@ export function LeftNav({
   });
 
   const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
-    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter(
-      (item) => item.key !== 'sessions' && (!item.requiresPlatformAdmin || isPlatformAdmin),
-    ),
+    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions'),
     globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions'),
     primarySections: NAV_SECTIONS.filter((section) => !section.anchorBottom),
     bottomSections: NAV_SECTIONS.filter((section) => section.anchorBottom),
-  }), [isPlatformAdmin]);
+  }), []);
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
@@ -111,6 +133,13 @@ export function LeftNav({
   const startNewSession = () => {
     const search = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
     navigate(`/assistant${search}`);
+  };
+
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+
+  const goTo = (path: string) => {
+    setSettingsMenuOpen(false);
+    navigate(path);
   };
 
   // Keep --app-nav-width in sync so fixed-position panels can offset correctly.
@@ -211,6 +240,52 @@ export function LeftNav({
           {!collapsed && <span className="aw-rail-brand__label">Agentweaver</span>}
         </Link>
         <div className="aw-rail-chrome__actions">
+          <Popover
+            open={settingsMenuOpen}
+            onOpenChange={(_, data) => setSettingsMenuOpen(data.open)}
+            positioning="below-end"
+          >
+            <PopoverTrigger disableButtonEnhancement>
+              <Tooltip content="Settings" relationship="label">
+                <Button
+                  appearance="subtle"
+                  icon={<Settings24Regular />}
+                  aria-label="Settings"
+                  data-testid="settings-menu-button"
+                />
+              </Tooltip>
+            </PopoverTrigger>
+            <PopoverSurface className={styles.settingsMenuSurface} data-testid="settings-menu-popover">
+              {isPlatformAdmin && (
+                <Button
+                  appearance="subtle"
+                  className={styles.settingsMenuItem}
+                  onClick={() => goTo('/platform-settings')}
+                >
+                  Platform settings
+                </Button>
+              )}
+              <Button
+                appearance="subtle"
+                className={styles.settingsMenuItem}
+                onClick={() => goTo('/settings')}
+              >
+                Account settings
+              </Button>
+              {projectId && (
+                <>
+                  <Divider />
+                  <Button
+                    appearance="subtle"
+                    className={styles.settingsMenuItem}
+                    onClick={() => goTo(`/projects/${projectId}/settings`)}
+                  >
+                    Project settings
+                  </Button>
+                </>
+              )}
+            </PopoverSurface>
+          </Popover>
           <NotificationBell />
           <Button
             appearance="subtle"
