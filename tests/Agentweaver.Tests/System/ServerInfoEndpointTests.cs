@@ -20,7 +20,7 @@ public sealed class ServerInfoEndpointTests
     [Fact]
     public async Task GetServerInfo_InEntraMode_IsAnonymousAndReportsEntra()
     {
-        using var factory = new ServerInfoWebApplicationFactory("Entra");
+        using var factory = new ServerInfoWebApplicationFactory("Entra", "agentweaver-repo");
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/api/server/info");
@@ -31,12 +31,13 @@ public sealed class ServerInfoEndpointTests
         body.GetProperty("auth_mode_label").GetString().Should().Be("Entra ID");
         body.GetProperty("auth_mode_recommended").GetBoolean().Should().BeTrue();
         body.TryGetProperty("data_directory", out _).Should().BeTrue();
+        body.GetProperty("repo_app_install_url").GetString().Should().Be("https://github.com/apps/agentweaver-repo/installations/new");
     }
 
     [Fact]
     public async Task GetServerInfo_WithBogusBearerToken_StillSucceeds()
     {
-        using var factory = new ServerInfoWebApplicationFactory("Entra");
+        using var factory = new ServerInfoWebApplicationFactory("Entra", null);
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "not-a-real-token");
@@ -51,7 +52,7 @@ public sealed class ServerInfoEndpointTests
 /// Factory that runs the real auth pipeline (no <c>Testing:BypassGitHubTokenAuth</c>), so an
 /// unauthenticated request genuinely exercises the middleware allowlists.
 /// </summary>
-file sealed class ServerInfoWebApplicationFactory(string authMode) : WebApplicationFactory<Program>
+file sealed class ServerInfoWebApplicationFactory(string authMode, string? repoAppSlug) : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -67,6 +68,7 @@ file sealed class ServerInfoWebApplicationFactory(string authMode) : WebApplicat
                 ["Auth:Entra:TenantId"] = "72f988bf-86f1-41af-91ab-2d7cd011db47",
                 ["Auth:Entra:ClientId"] = "11111111-2222-3333-4444-555555555555",
                 ["Auth:ApiKey"] = "server-info-test-key",
+                ["Auth:RepoApp:Slug"] = repoAppSlug,
                 ["Auth:User"] = "server-info-test-user",
                 ["Git:Author:Name"] = "Test",
                 ["Git:Author:Email"] = "test@localhost",

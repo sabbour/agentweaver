@@ -21,6 +21,7 @@ internal sealed record GitHubRepositorySelectionCandidate(
     string OwnerLogin,
     bool IsPrivate,
     string DefaultBranch,
+    string CloneUrl,
     DateTimeOffset? PushedAt);
 
 internal sealed record GitHubRepositorySelectionIssueResult(
@@ -37,7 +38,9 @@ internal sealed record GitHubRepositoryCredentialUseResult<T>(
 /// cross an HTTP or MCP response boundary.
 /// </summary>
 internal sealed record ResolvedGitHubRepositorySelection(
+    string FullName,
     string SourceRepository,
+    string CloneUrl,
     string AccessToken);
 
 /// <summary>
@@ -244,7 +247,9 @@ internal sealed class GitHubRepositorySelectionBroker(
             return null;
 
         return new ResolvedGitHubRepositorySelection(
+            repository.FullName,
             $"https://github.com/{repository.FullName}",
+            repository.CloneUrl,
             accessToken);
     }
 

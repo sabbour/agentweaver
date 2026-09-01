@@ -70,6 +70,7 @@ App-level receiver implemented by the API; do not configure per-project webhook 
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `Auth:RepoApp:AppId` | none | Numeric Repo App ID used as the App-JWT issuer |
+| `Auth:RepoApp:Slug` | none | Public GitHub App slug used to build the Project Settings installation deep link |
 | `Auth:RepoApp:PrivateKeySecretName` | none | Secret-store name of the Repo App PEM, readable only by the API |
 | `Auth:RepoApp:WebhookSecretName` | none | Secret-store name of the active webhook HMAC secret |
 | `Auth:RepoApp:PreviousWebhookSecretName` | none | Secret-store name of the prior HMAC secret during a rotation |

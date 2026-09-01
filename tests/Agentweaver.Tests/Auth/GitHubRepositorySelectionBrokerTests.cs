@@ -129,7 +129,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
             .ListAsync("entra-one", CancellationToken.None);
         listed.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
         listed.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(new GitHubRepositorySelectionCandidate(
-            42, "octo/secure-repo", "octo", true, "main", null));
+            42, "octo/secure-repo", "octo", true, "main", "https://github.com/octo/secure-repo.git", null));
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
     }
 
     private static HttpMessageHandler Repositories(long id) => new StaticHttpHandler(
-        $"[{{\"id\":{id},\"full_name\":\"octo/secure-repo\",\"owner\":{{\"login\":\"octo\"}},\"private\":true,\"default_branch\":\"main\"}}]");
+        $"[{{\"id\":{id},\"full_name\":\"octo/secure-repo\",\"owner\":{{\"login\":\"octo\"}},\"private\":true,\"default_branch\":\"main\",\"clone_url\":\"https://github.com/octo/secure-repo.git\"}}]");
 
     private static async Task<SqliteConnection> OpenDatabaseAsync()
     {

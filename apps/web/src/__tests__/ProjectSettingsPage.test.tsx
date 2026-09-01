@@ -83,7 +83,10 @@ beforeEach(() => {
   vi.mocked(apiClient.updateProjectPreviewSettings).mockResolvedValue({
     approval_timeout_minutes: 45,
   } as never);
-  vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: 'C:/data' } as never);
+  vi.mocked(apiClient.getServerInfo).mockResolvedValue({
+    data_directory: 'C:/data',
+    repo_app_install_url: 'https://github.com/apps/agentweaver-repo/installations/new',
+  } as never);
   vi.mocked(apiClient.getSandboxPolicy).mockResolvedValue({
     repository_path: 'C:/demo',
     shell_enabled: true,
@@ -184,6 +187,25 @@ describe('ProjectSettingsPage', () => {
     expect(screen.getByText('copilot_binding_required')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
     expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
+  });
+
+  it('shows an install link when the Repo App installation is required', async () => {
+    vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
+      status: 'not_ready',
+      reason_code: 'repo_app_installation_required',
+      message: 'Install the Repo App for this project before unattended work can run.',
+      repo_app_installation_connected: false,
+    } as never);
+
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
+
+    const installLink = await screen.findByRole('link', { name: 'Install GitHub Repo App' });
+    expect(installLink.getAttribute('href')).toBe('https://github.com/apps/agentweaver-repo/installations/new');
+    expect(installLink.getAttribute('target')).toBe('_blank');
+    expect(screen.getByRole('button', { name: 'Refresh status' })).toBeDefined();
   });
 
   it('uses connected-repository wording for background requirements when a repo is attached', async () => {
