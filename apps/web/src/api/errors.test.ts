@@ -9,7 +9,20 @@ describe('githubConnectionErrorMessage', () => {
     [401, { error: 'github_copilot_auth_required' }],
     [409, { error: 'github_copilot_connection_required' }],
   ])('returns an actionable message for GitHub connection error %s', (status, body) => {
-    expect(githubConnectionErrorMessage(new ApiError(status, JSON.stringify(body)))).toMatch(/Connect GitHub|reconnect GitHub|Connect your GitHub/i);
+    expect(githubConnectionErrorMessage(new ApiError(status, JSON.stringify(body)))).toMatch(/Connect GitHub|Connect your GitHub/i);
+  });
+
+  it.each([
+    [409, { error: 'github_binding_unavailable' }],
+    [409, { error: 'github_capability_unavailable' }],
+  ])('does not mention retry when only a "Connect GitHub" action is offered (%s)', (status, body) => {
+    expect(githubConnectionErrorMessage(new ApiError(status, JSON.stringify(body)))).not.toMatch(/retry/i);
+  });
+
+  it('returns a distinct, non-connect message for a transient capability failure', () => {
+    const message = githubConnectionErrorMessage(new ApiError(503, JSON.stringify({ error: 'github_capability_transient' })));
+    expect(message).toMatch(/temporarily unavailable/i);
+    expect(message).not.toMatch(/connect github/i);
   });
 });
 
@@ -23,5 +36,9 @@ describe('isGitHubRepoAppConnectionRequired', () => {
 
   it('returns false for unrelated error codes', () => {
     expect(isGitHubRepoAppConnectionRequired(new ApiError(409, JSON.stringify({ error: 'no_team' })))).toBe(false);
+  });
+
+  it('returns false for a transient capability failure while still connected', () => {
+    expect(isGitHubRepoAppConnectionRequired(new ApiError(503, JSON.stringify({ error: 'github_capability_transient' })))).toBe(false);
   });
 });

@@ -18,15 +18,23 @@ export interface FormattedApiError {
   detail?: string;
 }
 
+// Shown whenever isGitHubRepoAppConnectionRequired(err) is true, regardless of which of the
+// connection-required codes triggered it, so the text always matches the single "Connect GitHub"
+// action offered in that state — never mentions "retry", since no retry option is shown.
+const GITHUB_CONNECTION_REQUIRED_MESSAGE = 'Connect GitHub to see your repositories.';
+
 const GITHUB_CONNECTION_MESSAGES: Record<string, string> = {
-  github_binding_unavailable: 'GitHub connections are temporarily unavailable. Connect GitHub and try again.',
-  github_capability_unavailable: 'GitHub repository capabilities are temporarily unavailable. Retry or reconnect GitHub.',
+  // A live Repo App connection exists, but the GitHub API call itself failed transiently
+  // (network error, timeout, GitHub outage). Reconnecting would not help, so this pairs with a
+  // "Retry" action rather than "Connect GitHub".
+  github_capability_transient: 'GitHub is temporarily unavailable. Try again in a moment.',
   github_copilot_auth_required: 'Connect your GitHub Copilot account to use AI features.',
   github_copilot_connection_required: 'Connect your GitHub Copilot account to continue.',
 };
 
 export function githubConnectionErrorMessage(err: unknown): string | null {
   if (!(err instanceof ApiError)) return null;
+  if (isGitHubRepoAppConnectionRequired(err)) return GITHUB_CONNECTION_REQUIRED_MESSAGE;
   const body = parseApiBody(err.body);
   const code = body.error;
   if (code && GITHUB_CONNECTION_MESSAGES[code]) return GITHUB_CONNECTION_MESSAGES[code];

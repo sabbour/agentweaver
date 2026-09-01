@@ -184,6 +184,38 @@ public sealed class GitHubRepositorySelectionBrokerTests
         owners.Value.Should().ContainSingle().Which.Should().BeEquivalentTo(new GitHubRepositoryOwner("octo", true));
     }
 
+    [Fact]
+    public async Task List_ReturnsTransientErrorDistinctFromCapabilityUnavailableWhenTheLiveGitHubCallFails()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var broker = CreateBroker(options, secrets, new ThrowingHttpHandler());
+
+        var result = await broker.ListAsync("entra-one", CancellationToken.None);
+
+        result.Outcome.Should().Be(GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError);
+    }
+
+    [Fact]
+    public async Task TryUseCredential_ReturnsTransientErrorDistinctFromCapabilityUnavailableWhenTheLiveGitHubCallFails()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var broker = CreateBroker(options, secrets, new ThrowingHttpHandler());
+
+        var owners = await broker.TryUseCredentialAsync(
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            token => new GitHubRepositorySelectionClient(new StubHttpClientFactory(new ThrowingHttpHandler()))
+                .ListOwnersAsync(token, CancellationToken.None),
+            CancellationToken.None);
+
+        owners.Outcome.Should().Be(GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError);
+    }
+
     private static GitHubRepositorySelectionBroker CreateBroker(
         DbContextOptions<MemoryDbContext> options,
         InMemorySecretStore secrets,
@@ -252,6 +284,15 @@ public sealed class GitHubRepositorySelectionBrokerTests
             {
                 Content = new StringContent(route(request), Encoding.UTF8, "application/json"),
             });
+    }
+
+    /// <summary>Simulates a transient network failure (timeout, DNS, connection reset) reaching GitHub.</summary>
+    private sealed class ThrowingHttpHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            throw new HttpRequestException("Simulated transient network failure reaching GitHub.");
     }
 
 }

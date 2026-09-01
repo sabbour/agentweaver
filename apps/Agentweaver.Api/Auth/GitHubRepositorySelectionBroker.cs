@@ -13,6 +13,14 @@ internal enum GitHubRepositorySelectionOutcome
     Issued,
     GitHubBindingUnavailable,
     GitHubCapabilityUnavailable,
+
+    /// <summary>
+    /// A live Repo App credential exists, but the live GitHub API call itself failed (network
+    /// error, timeout, GitHub-side failure) rather than the caller lacking a usable connection.
+    /// Distinct from <see cref="GitHubCapabilityUnavailable"/> so callers don't tell an already
+    /// connected user to reconnect when reconnecting would not fix a transient failure.
+    /// </summary>
+    GitHubCapabilityTransientError,
 }
 
 internal sealed record GitHubRepositorySelectionCandidate(
@@ -162,7 +170,7 @@ internal sealed class GitHubRepositorySelectionBroker(
                 ex,
                 "Repo App capability operation failed for subject {EntraObjectId}.",
                 subject);
-            return new(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, default);
+            return new(GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError, default);
         }
 
         if (result is null)
@@ -296,7 +304,11 @@ internal sealed class GitHubRepositorySelectionBroker(
         catch (Exception ex) when (!ct.IsCancellationRequested &&
                                    (ex is HttpRequestException || ex is JsonException || ex is TaskCanceledException))
         {
-            return (GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, null, null);
+            logger?.LogWarning(
+                ex,
+                "Repo App capability operation failed for subject {EntraObjectId}.",
+                entraObjectId);
+            return (GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError, null, null);
         }
 
         if (candidates is null ||
