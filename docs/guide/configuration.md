@@ -191,6 +191,8 @@ directly to the Azure Portal **Enterprise application → Users and groups** bla
 deployment's Entra app. Find this value in **Microsoft Entra admin center → Enterprise
 applications → *your app* → Object ID**. Do **not** copy the Application (client) ID from the
 app registration; the deep link requires the Enterprise Application's service principal object ID.
+The same Account settings page also shows the verified GitHub login currently connected through
+the Repo App after the account-level authorization flow succeeds.
 
 ::: tip AKS deploy pipeline wiring
 On the AKS deploy pipeline, `Auth:Mode`/`Auth:Entra:ClientId`/`Auth:Entra:TenantId` are

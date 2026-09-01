@@ -146,8 +146,9 @@ public sealed class GitHubRepositorySelectionEndpointsTests
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var owners = await response.Content.ReadFromJsonAsync<JsonElement>();
-        owners.EnumerateArray().Select(owner => owner.GetProperty("login").GetString())
-            .Should().Contain("octo");
+        owners.EnumerateArray().Should().ContainSingle(owner =>
+            owner.GetProperty("login").GetString() == "octo" &&
+            owner.GetProperty("type").GetString() == "user");
     }
 
     [Fact]
@@ -208,6 +209,32 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         body.TryGetProperty("installation_id", out _).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task CreateRepository_ForBlankProjectUsesAnInstallationBackedOwner()
+    {
+        const string subject = "selection-subject";
+        using var factory = new RepositorySelectionWebApplicationFactory();
+        await factory.SeedRepoAppAuthorizationAsync(subject);
+        var client = factory.CreateAuthenticatedClientForObjectId(subject, PlatformRoles.ProjectCreator);
+        var created = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Blank project",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await created.Content.ReadFromJsonAsync<JsonElement>();
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/projects/{project.GetProperty("project_id").GetString()}/github/repository",
+            new { owner = "octo", name = "new-repo", @private = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("source_repository").GetString().Should().Be("octo/new-repo");
+        body.GetProperty("html_url").GetString().Should().Be("https://github.com/octo/new-repo");
+    }
+
     private sealed class RepositorySelectionWebApplicationFactory(HttpMessageHandler? handler = null) : EntraWebApplicationFactory
     {
         private readonly HttpMessageHandler _handler = handler ?? new RepositoryHandler();
@@ -260,12 +287,16 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                 Content = new StringContent(
                     request.RequestUri!.AbsolutePath switch
                     {
-                        "/user" => """{"login":"octo"}""",
-                        "/user/orgs" => """[{"login":"octo-org"}]""",
-                        _ => """[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]""",
+                        "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/user/installations/72/repositories","permissions":{"administration":"write"}}]}""",
+                        "/user/installations/72/repositories" => """{"repositories":[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+                        "/user/repos" when request.Method == HttpMethod.Post => """{"full_name":"octo/new-repo","clone_url":"https://github.com/octo/new-repo.git"}""",
+                        _ => "{}",
                     },
                         Encoding.UTF8,
                         "application/json"),
+                StatusCode = request.RequestUri!.AbsolutePath == "/user/repos" && request.Method == HttpMethod.Post
+                    ? HttpStatusCode.Created
+                    : HttpStatusCode.OK,
                 });
     }
 

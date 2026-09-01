@@ -584,6 +584,11 @@ export interface PlatformDefaultCopilotConnection {
   github_login: string | null;
 }
 
+export interface RepoAppConnectionStatus {
+  connected: boolean;
+  github_login: string | null;
+}
+
 
 // --- Casting / Team types ---
 
