@@ -616,7 +616,11 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
       </Field>
 
       {reposError && (
-        <MessageBar intent="error">
+        <MessageBar
+          intent={reposConnectionRequired ? 'warning' : 'error'}
+          data-testid="create-from-github-repositories-error"
+          data-intent={reposConnectionRequired ? 'warning' : 'error'}
+        >
           <MessageBarBody>{reposError}</MessageBarBody>
           <MessageBarActions>
             {reposConnectionRequired

@@ -158,7 +158,11 @@ export function ConnectGitHubRepositoryDialog({
               <>
                 {ownersLoading && <Spinner label="Loading GitHub accounts" />}
                 {ownersError && (
-                  <MessageBar intent="error">
+                  <MessageBar
+                    intent={ownersConnectionRequired ? 'warning' : 'error'}
+                    data-testid="connect-github-repository-owners-error"
+                    data-intent={ownersConnectionRequired ? 'warning' : 'error'}
+                  >
                     <MessageBarBody>{ownersError}</MessageBarBody>
                   </MessageBar>
                 )}
