@@ -4,6 +4,7 @@ using System.Text.Json;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Auth;
 
@@ -27,6 +28,10 @@ internal sealed record GitHubRepositorySelectionIssueResult(
     string? Code,
     DateTimeOffset? ExpiresAt);
 
+internal sealed record GitHubRepositoryCredentialUseResult<T>(
+    GitHubRepositorySelectionOutcome Outcome,
+    T? Value);
+
 /// <summary>
 /// Server-only clone input recovered after an atomically consumed selection code. It must never
 /// cross an HTTP or MCP response boundary.
@@ -43,7 +48,8 @@ internal sealed record ResolvedGitHubRepositorySelection(
 internal sealed class GitHubRepositorySelectionBroker(
     GitHubConnectionsPersistenceStore persistence,
     IGitHubConnectionsCredentialVault vault,
-    GitHubRepositorySelectionClient repositories)
+    GitHubRepositorySelectionClient repositories,
+    ILogger<GitHubRepositorySelectionBroker>? logger = null)
 {
     internal static readonly TimeSpan SelectionCodeLifetime = TimeSpan.FromMinutes(5);
     private static readonly JsonSerializerOptions CredentialJsonOptions = new(JsonSerializerDefaults.Web);
@@ -108,7 +114,7 @@ internal sealed class GitHubRepositorySelectionBroker(
             ct);
 
     /// <summary>Uses the caller's live Repo App credential only inside a server-side operation.</summary>
-    internal async Task<T> TryUseCredentialAsync<T>(
+    internal async Task<GitHubRepositoryCredentialUseResult<T>> TryUseCredentialAsync<T>(
         CallerContext caller,
         Func<string, Task<T>> operation,
         CancellationToken ct)
@@ -116,7 +122,7 @@ internal sealed class GitHubRepositorySelectionBroker(
         var subject = GetCallerSubject(caller);
         var credential = await persistence.GetLiveRepoAppCredentialAsync(subject, ct).ConfigureAwait(false);
         if (credential is null)
-            return default!;
+            return new(GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, default);
 
         SecretGetResult secret;
         try
@@ -126,16 +132,47 @@ internal sealed class GitHubRepositorySelectionBroker(
         }
         catch (ArgumentException)
         {
-            return default!;
+            logger?.LogWarning(
+                "Repo App credential reference {CredentialReference} for subject {EntraObjectId} is invalid.",
+                credential.CredentialReference,
+                subject);
+            return new(GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, default);
         }
 
         if (!secret.Found || !TryGetUsableAccessToken(secret.Value, out var token))
-            return default!;
+        {
+            logger?.LogWarning(
+                "Repo App credential secret for subject {EntraObjectId} was missing, revoked, or unusable.",
+                subject);
+            return new(GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, default);
+        }
 
-        var result = await operation(token!).ConfigureAwait(false);
+        T result;
+        try
+        {
+            result = await operation(token!).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested &&
+                                   ex is HttpRequestException or JsonException or TaskCanceledException)
+        {
+            logger?.LogWarning(
+                ex,
+                "Repo App capability operation failed for subject {EntraObjectId}.",
+                subject);
+            return new(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, default);
+        }
+
+        if (result is null)
+        {
+            logger?.LogWarning(
+                "Repo App capability operation returned no result for subject {EntraObjectId}.",
+                subject);
+            return new(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, default);
+        }
+
         return await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false)
-            ? result
-            : default!;
+            ? new(GitHubRepositorySelectionOutcome.Issued, result)
+            : new(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, default);
     }
 
     /// <summary>

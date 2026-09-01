@@ -568,9 +568,14 @@ app.MapGet("/api/projects/{id}/github/repository-owners", async (
         ApiKeyAuthMiddleware.GetCaller(httpContext),
         token => repositories.ListOwnersAsync(token, ct),
         ct).ConfigureAwait(false);
-    return owners is null
-        ? Results.Conflict(new { error = "github_binding_unavailable" })
-        : Results.Ok(owners.Select(owner => new { login = owner.Login, type = owner.IsUser ? "user" : "org" }));
+    return owners.Outcome switch
+    {
+        GitHubRepositorySelectionOutcome.Issued when owners.Value is not null => Results.Ok(
+            owners.Value.Select(owner => new { login = owner.Login, type = owner.IsUser ? "user" : "org" })),
+        GitHubRepositorySelectionOutcome.GitHubBindingUnavailable =>
+            Results.Conflict(new { error = "github_binding_unavailable" }),
+        _ => Results.Conflict(new { error = "github_capability_unavailable" }),
+    };
 })
     .WithName("ListProjectRepositoryOwners")
     .WithTags("Projects", "GitHub");
@@ -612,9 +617,17 @@ app.MapPost("/api/projects/{id}/github/repository", async (
                     projectId, repository.FullName, repository.CloneUrl, token, ct).ConfigureAwait(false);
         },
         ct).ConfigureAwait(false);
-    return connected is null
-        ? Results.Conflict(new { error = "github_repository_creation_unavailable" })
-        : Results.Ok(new { source_repository = connected.Origin.SourceRepository, html_url = $"https://github.com/{connected.Origin.SourceRepository}" });
+    return connected.Outcome switch
+    {
+        GitHubRepositorySelectionOutcome.Issued when connected.Value is not null => Results.Ok(new
+        {
+            source_repository = connected.Value.Origin.SourceRepository,
+            html_url = $"https://github.com/{connected.Value.Origin.SourceRepository}",
+        }),
+        GitHubRepositorySelectionOutcome.GitHubBindingUnavailable =>
+            Results.Conflict(new { error = "github_binding_unavailable" }),
+        _ => Results.Conflict(new { error = "github_repository_creation_unavailable" }),
+    };
 })
     .WithName("CreateProjectRepository")
     .WithTags("Projects", "GitHub");
