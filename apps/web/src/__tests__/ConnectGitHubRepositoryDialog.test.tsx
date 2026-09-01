@@ -51,6 +51,7 @@ describe('ConnectGitHubRepositoryDialog', () => {
     );
 
     await screen.findByRole('button', { name: 'Connect GitHub' });
+    expect(screen.getByTestId('connect-github-repository-owners-error').getAttribute('data-intent')).toBe('warning');
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
@@ -72,6 +73,7 @@ describe('ConnectGitHubRepositoryDialog', () => {
     );
 
     await screen.findByRole('button', { name: 'Retry' });
+    expect(screen.getByTestId('connect-github-repository-owners-error').getAttribute('data-intent')).toBe('error');
     expect(screen.queryByRole('button', { name: 'Connect GitHub' })).toBeNull();
   });
 });
