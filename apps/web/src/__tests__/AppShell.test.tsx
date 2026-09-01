@@ -8,7 +8,7 @@ import {
 import { projectIdFromPath } from '../components/shell/projectIdFromPath';
 import { resolveActiveKey } from '../components/shell/navConfig';
 import * as useAppVersionModule from '../hooks/useAppVersion';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -130,9 +130,15 @@ describe('AppShell navigation', () => {
   it('renders all section groups when a project is in scope', async () => {
     renderShellAt('/projects/proj-1/team');
 
+    expect(screen.getByText('Work', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Squad', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Operations', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Observability', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('System', { selector: '.aw-nav-section__heading' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'Work' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'Squad' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'Operations' })).toBeDefined();
+    expect(screen.getByRole('group', { name: 'Observability' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'System' })).toBeDefined();
 
     // Existing destinations present, with Team relabelled to Agents.
@@ -143,7 +149,6 @@ describe('AppShell navigation', () => {
     expect(screen.getByText('Agents')).toBeDefined();
     expect(screen.getByText('Memories')).toBeDefined();
     expect(screen.getByText('Workflows')).toBeDefined();
-    expect(screen.getByText('Project settings')).toBeDefined();
     expect(screen.getByText('Diagnostics')).toBeDefined();
     expect(screen.getByText('Heartbeat')).toBeDefined();
 
@@ -171,14 +176,36 @@ describe('AppShell navigation', () => {
     expect(screen.getByText('Overview')).toBeDefined();
     expect(screen.getByText('Projects')).toBeDefined();
     expect(screen.getByRole('group', { name: 'Sessions' })).toBeDefined();
-    expect(screen.queryByRole('link', { name: 'Platform settings' })).toBeNull();
     expect(screen.queryByText('Work')).toBeNull();
     expect(screen.queryByText('System')).toBeNull();
   });
 
-  it('shows Platform settings only to platform admins', () => {
+  it('shows the settings gear menu items conditionally', async () => {
+    renderShellAt('/overview');
+
+    fireEvent.click(screen.getByTestId('settings-menu-button'));
+    let settingsSurface = await screen.findByTestId('settings-menu-popover');
+    expect(within(settingsSurface).getByText('Account settings')).toBeDefined();
+    expect(within(settingsSurface).queryByText('Platform settings')).toBeNull();
+    expect(within(settingsSurface).queryByText('Project settings')).toBeNull();
+
+    cleanup();
     renderShellAt('/overview', true);
-    expect(screen.getByRole('link', { name: 'Platform settings' })).toBeDefined();
+
+    fireEvent.click(screen.getByTestId('settings-menu-button'));
+    settingsSurface = await screen.findByTestId('settings-menu-popover');
+    expect(within(settingsSurface).getByText('Account settings')).toBeDefined();
+    expect(within(settingsSurface).getByText('Platform settings')).toBeDefined();
+    expect(within(settingsSurface).queryByText('Project settings')).toBeNull();
+
+    cleanup();
+    renderShellAt('/projects/proj-1/team', true);
+
+    fireEvent.click(screen.getByTestId('settings-menu-button'));
+    settingsSurface = await screen.findByTestId('settings-menu-popover');
+    expect(within(settingsSurface).getByText('Account settings')).toBeDefined();
+    expect(within(settingsSurface).getByText('Platform settings')).toBeDefined();
+    expect(within(settingsSurface).getByText('Project settings')).toBeDefined();
   });
 
   it('shows the shared GitHub Copilot connection action for a typed capability requirement', async () => {
@@ -216,7 +243,7 @@ describe('AppShell navigation', () => {
     expect(resolveActiveKey('/projects/p1/observability', 'p1')).toBe('observability');
     expect(resolveActiveKey('/projects/p1/observability/traces', 'p1')).toBe('observability');
     expect(resolveActiveKey('/projects/p1/workflows', 'p1')).toBe('workflows');
-    expect(resolveActiveKey('/projects/p1/settings', 'p1')).toBe('settings');
+    expect(resolveActiveKey('/projects/p1/settings', 'p1')).toBe('dashboard');
     // Removed run-page routes are no longer special-cased; orchestration detail keeps Orchestrations active.
     expect(resolveActiveKey('/projects/p1/runs/r1/workflow', 'p1')).toBe('dashboard');
     expect(resolveActiveKey('/projects/p1/runs/r1/execution/e1', 'p1')).toBe('dashboard');
@@ -227,7 +254,7 @@ describe('AppShell navigation', () => {
     expect(resolveActiveKey('/projects', undefined)).toBe('projects');
     expect(resolveActiveKey('/sessions', undefined)).toBe('sessions');
     expect(resolveActiveKey('/settings', undefined)).toBe('overview');
-    expect(resolveActiveKey('/platform-settings', undefined)).toBe('platform-settings');
+    expect(resolveActiveKey('/platform-settings', undefined)).toBe('overview');
   });
 
   it('extracts the project id from project-scoped paths', () => {
@@ -240,6 +267,11 @@ describe('AppShell navigation', () => {
     renderShellAt('/projects/proj-1');
 
     // Expanded by default: section groups exist and item text is visible.
+    expect(screen.getByText('Work', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Squad', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Operations', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Observability', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('System', { selector: '.aw-nav-section__heading' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'Work' })).toBeDefined();
     expect(screen.getByText('Board')).toBeDefined();
     expect(screen.getByTestId('app-navigation-menu').getAttribute('data-collapsed')).toBe('false');
@@ -248,7 +280,11 @@ describe('AppShell navigation', () => {
     fireEvent.click(collapse);
 
     // Collapsed: text labels gone, but items remain reachable via aria-label.
-    expect(screen.queryByText('Work')).toBeNull();
+    expect(screen.queryByText('Work', { selector: '.aw-nav-section__heading' })).toBeNull();
+    expect(screen.queryByText('Squad', { selector: '.aw-nav-section__heading' })).toBeNull();
+    expect(screen.queryByText('Operations', { selector: '.aw-nav-section__heading' })).toBeNull();
+    expect(screen.queryByText('Observability', { selector: '.aw-nav-section__heading' })).toBeNull();
+    expect(screen.queryByText('System', { selector: '.aw-nav-section__heading' })).toBeNull();
     expect(screen.queryByText('Board')).toBeNull();
     expect(screen.getByRole('link', { name: 'Board' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeDefined();

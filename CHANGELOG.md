@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.24.0
+
+### Minor Changes
+
+- 89d627e: Move platform, account, and project settings into a shared gear menu in the left-rail chrome so the sidebar stays focused on core navigation.
+
+### Patch Changes
+
+- e66eeb8: Disable automatic Dependabot pull requests (set open-pull-requests-limit to 0 for all ecosystems) to stop CI noise from routine dependency bump PRs.
+- 1197f5e: Restore visible sidebar section headings for project navigation groups so the locked information architecture labels are shown in the expanded rail again.
+
 ## 0.23.2
 
 ### Patch Changes
