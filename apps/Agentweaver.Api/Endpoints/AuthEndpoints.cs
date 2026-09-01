@@ -294,6 +294,19 @@ public static class AuthEndpoints
             await browserSessions.IssueAsync(httpContext, claims, ct).ConfigureAwait(false);
             return Results.Ok(new SessionExchangeResponse(accessToken, login));
         }).AllowAnonymous();
+
+        app.MapPost("/api/auth/session/sign-out", async (
+            HttpContext httpContext,
+            BrowserEntraSessionService browserSessions,
+            CancellationToken ct) =>
+        {
+            await browserSessions.RevokeCurrentAsync(httpContext, ct).ConfigureAwait(false);
+            EntraOAuthStateCookie.Clear(httpContext);
+            RepoAppUserAuthorizationService.ClearCallbackCookie(httpContext);
+            ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
+            PlatformDefaultCopilotBindingService.ClearCallbackCookie(httpContext);
+            return Results.NoContent();
+        });
     }
 
     private static async Task<bool> HasUsablePlatformDefaultCopilotBindingAsync(

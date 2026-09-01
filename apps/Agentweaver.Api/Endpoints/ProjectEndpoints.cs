@@ -356,6 +356,58 @@ app.MapGet("/api/projects/{id}", GetProjectAsync)
         return Task.CompletedTask;
     });
 
+// GET /api/projects/{id}/access — current caller/project access snapshot for Entra mode UI.
+app.MapGet("/api/projects/{id}/access", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    ProjectRoleAssignmentService roleAssignments,
+    IProjectRoleAuthorizationService authorization,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+
+    var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+    if (project is null) return Results.NotFound();
+    if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+
+    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var effectiveRole = await authorization.GetEffectiveRoleAsync(caller, projectId, ct).ConfigureAwait(false);
+    var assignments = await roleAssignments.ListAsync(projectId, ct).ConfigureAwait(false);
+    var canManage = effectiveRole is { } role && role.Satisfies(ProjectRole.Owner);
+
+    return Results.Ok(new
+    {
+        auth_mode = "entra",
+        platform_roles = caller.PlatformRoles,
+        platform_roles_source = "entra",
+        current_user_project_role = effectiveRole?.ToApiString(),
+        can_manage_role_assignments = canManage,
+        can_manage_project_github_identity = canManage,
+        project_role_assignments = assignments.Select(assignment => new
+        {
+            assignment_id = assignment.PrincipalId,
+            principal_id = assignment.PrincipalId,
+            display_name = (string?)null,
+            email = (string?)null,
+            role = assignment.Role.ToApiString(),
+            scope = assignment.Scope,
+        }),
+        github_identity_override_login = (string?)null,
+        effective_github_login = (string?)null,
+        effective_github_permission = (string?)null,
+        github_identity_permissions = Array.Empty<object>(),
+    });
+})
+    .WithName("GetProjectAccessOverview")
+    .WithTags("Projects")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description ??= "Returns the caller's Entra/project access snapshot used by the project settings and identity UI.";
+        return Task.CompletedTask;
+    });
+
 // GET /api/projects/{id}/role-assignments — list explicit Tier-2 project members.
 app.MapGet("/api/projects/{id}/role-assignments", async (
     HttpContext httpContext,

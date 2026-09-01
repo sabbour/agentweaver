@@ -1,6 +1,8 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { GitHubIdentityBadge } from '../components/GitHubIdentityBadge';
+import { SESSION_LOGIN_STORAGE_KEY, SESSION_TOKEN_STORAGE_KEY } from '../config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -23,6 +25,7 @@ function renderBadge(props: { projectId?: string; collapsed?: boolean } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
   vi.mocked(apiClient.getAuthSession).mockResolvedValue({
     authenticated: true,
     auth_mode: 'entra',
@@ -75,14 +78,56 @@ describe('GitHubIdentityBadge', () => {
 
   it('signs out and returns to the app root', async () => {
     const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, 'session-token');
+    sessionStorage.setItem(SESSION_LOGIN_STORAGE_KEY, 'ada');
     renderBadge();
 
     fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
 
     await waitFor(() => expect(apiClient.signOutSession).toHaveBeenCalled());
+    expect(sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY)).toBeNull();
+    expect(sessionStorage.getItem(SESSION_LOGIN_STORAGE_KEY)).toBeNull();
     expect(assign).toHaveBeenCalledWith('/');
     assign.mockRestore();
+  });
+
+  it('shows the backend sign-out failure detail instead of a generic message', async () => {
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, 'session-token');
+    vi.mocked(apiClient.signOutSession).mockRejectedValue(
+      new ApiError(500, JSON.stringify({ message: 'The Entra browser session could not be cleared.' })) as never,
+    );
+
+    renderBadge();
+
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+
+    expect(await screen.findByText(/The Entra browser session could not be cleared\./)).toBeDefined();
+    expect(sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY)).toBe('session-token');
+    expect(assign).not.toHaveBeenCalled();
+    assign.mockRestore();
+  });
+
+  it('shows specific project GitHub status failures without hiding successful status lines', async () => {
+    vi.mocked(apiClient.getProjectCopilotConnection).mockRejectedValue(
+      new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })) as never,
+    );
+    vi.mocked(apiClient.getProjectAccessOverview).mockRejectedValue(
+      new ApiError(404, 'Not Found') as never,
+    );
+
+    renderBadge({ projectId: 'proj-1' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
+
+    expect(await screen.findByText(
+      'Repository access status is unavailable because this deployment did not return a project access snapshot.',
+    )).toBeDefined();
+    expect(screen.getByText(
+      'The project’s GitHub Copilot connection is currently unavailable. Retry, or reconnect it from Project settings.',
+    )).toBeDefined();
   });
 
   it('keeps the trigger icon-only when the navigation rail is collapsed', async () => {
