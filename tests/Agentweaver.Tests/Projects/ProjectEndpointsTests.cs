@@ -68,7 +68,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
         await db.SaveChangesAsync();
         await secrets.DeleteSecretAsync("copilot-app-platform-default");
-        await secrets.DeleteSecretAsync("byok-provider-configuration");
+        await secrets.DeleteSecretAsync("byok-provider-configurations");
     }
 
     private async Task SeedPlatformDefaultCopilotBindingAsync(string login = "platform-bot")
@@ -99,13 +99,16 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         await ResetBackgroundAiConfigurationAsync();
         await using var scope = _factory.Services.CreateAsyncScope();
         var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
-        await settings.SetAsync(
+        var created = await settings.AddAsync(
             new ByokProviderConfiguration(
+                Id: string.Empty,
+                Name: "Test Azure provider",
                 Type: "azure",
                 BaseUrl: "https://byok-resource.openai.azure.com",
                 Model: "gpt-4.1",
                 ApiKey: "test-byok-key"),
             CancellationToken.None);
+        await settings.SetActiveAsync(created.Id, CancellationToken.None);
     }
 
     private async Task SeedRepoAppInstallationAsync(string projectId)

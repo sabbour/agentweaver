@@ -552,7 +552,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 Type = _activeByokProviderConfiguration.Type,
                 BaseUrl = _activeByokProviderConfiguration.BaseUrl,
                 ApiKey = _activeByokProviderConfiguration.ApiKey,
-                WireApi = "responses",
+                WireApi = _activeByokProviderConfiguration.WireApi ?? "responses",
+                Headers = ByokProviderConfigMapper.ToHeaderDictionary(_activeByokProviderConfiguration.Headers),
+                Azure = ByokProviderConfigMapper.ToAzureOptions(_activeByokProviderConfiguration),
             },
             // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
             // cross-session retrieval and the shared SQLite store causes "database is locked" under
