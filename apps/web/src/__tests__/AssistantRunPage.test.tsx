@@ -105,6 +105,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.removeItem('agentweaver:last-active-project-id');
   mockRunStreamState.current = {
     events: [],
     droppedEventCount: 0,
@@ -123,14 +124,14 @@ afterEach(() => {
 
 describe('AssistantRunPage', () => {
   it('renders the page with the empty invitation state before a run exists', () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     expect(screen.getByTestId('assistant-run-page')).toBeTruthy();
     expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
     expect(screen.getByPlaceholderText('Message the assistant...')).toBeTruthy();
   });
 
   it('shows suggested prompt buttons on the empty state and hides them once a run exists', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     const suggestions = screen.getAllByTestId('assistant-suggested-prompt');
     // A small, curated set — not a huge list.
     expect(suggestions.length).toBeGreaterThanOrEqual(3);
@@ -144,7 +145,7 @@ describe('AssistantRunPage', () => {
   });
 
   it('clicking a suggested prompt populates and focuses the composer without submitting it', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     const [firstSuggestion] = screen.getAllByTestId('assistant-suggested-prompt');
     const expectedText = firstSuggestion.textContent ?? '';
     expect(expectedText.length).toBeGreaterThan(0);
@@ -186,8 +187,45 @@ describe('AssistantRunPage', () => {
     });
   });
 
+  it('falls back to the remembered project when /assistant has no explicit project query', async () => {
+    localStorage.setItem('agentweaver:last-active-project-id', 'proj-remembered');
+
+    render(<Wrapper><AssistantRoute /></Wrapper>);
+    typeAndSend('what projects exist?');
+
+    await waitFor(() => {
+      expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1);
+    });
+    expect(apiClient.createAssistantRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'what projects exist?',
+        project_id: 'proj-remembered',
+      }),
+    );
+  });
+
+  it('shows a single actionable project-selection state when no project is remembered', async () => {
+    render(<Wrapper><AssistantRoute /></Wrapper>);
+
+    expect(screen.getByTestId('assistant-project-required').textContent).toBe(
+      'Choose a project before starting an AgentHost assistant session.',
+    );
+    expect(screen.getAllByText('Choose a project before starting an AgentHost assistant session.')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Browse projects' }).getAttribute('href')).toBe('/projects');
+    expect(screen.queryByTestId('assistant-suggested-prompts')).toBeNull();
+
+    const textarea = screen.getByPlaceholderText('Choose a project to start the assistant...') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() => {
+      expect(apiClient.createAssistantRun).not.toHaveBeenCalled();
+    });
+    expect(screen.getAllByText('Choose a project before starting an AgentHost assistant session.')).toHaveLength(1);
+  });
+
   it('creates a run on the first composer submit using real backend shape', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     typeAndSend('what projects exist?');
 
     await waitFor(() => {
@@ -210,7 +248,7 @@ describe('AssistantRunPage', () => {
     const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
     vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
 
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     typeAndSend('  what projects exist?  ');
 
     await waitFor(() => {
@@ -226,7 +264,7 @@ describe('AssistantRunPage', () => {
   });
 
   it('sends subsequent messages via real send-message endpoint once a run exists', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
 
     typeAndSend('first message');
     await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
@@ -247,7 +285,7 @@ describe('AssistantRunPage', () => {
     const messageRequest = deferred<typeof REAL_MESSAGE_RESPONSE>();
     vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(messageRequest.promise);
 
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     typeAndSend('first message');
     await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
 
@@ -271,7 +309,7 @@ describe('AssistantRunPage', () => {
     const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
     vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
 
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     typeAndSend('hello');
     await waitFor(() => {
       expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
@@ -288,7 +326,7 @@ describe('AssistantRunPage', () => {
     const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
     vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
 
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     const textarea = screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement;
 
     fireEvent.change(textarea, { target: { value: '   ' } });
@@ -313,7 +351,7 @@ describe('AssistantRunPage', () => {
     const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
     vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
 
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     const textarea = screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement;
     textarea.focus();
     expect(document.activeElement).toBe(textarea);
@@ -346,7 +384,7 @@ describe('AssistantRunPage', () => {
       ],
     };
 
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
 
     // Create the run so the stream (and thus approvals) bind.
     typeAndSend('please start a run');
@@ -367,7 +405,7 @@ describe('AssistantRunPage', () => {
     const err = new ApiError(429, JSON.stringify({ error: 'operator_run_limit', message: 'Limit reached.' }));
     vi.mocked(apiClient.createAssistantRun).mockRejectedValue(err);
 
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
     typeAndSend('hello');
 
     await waitFor(() => {
@@ -380,8 +418,29 @@ describe('AssistantRunPage', () => {
     expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
   });
 
+  it('renders a backend validation message only once when createAssistantRun fails with a direct message', async () => {
+    const err = new ApiError(
+      400,
+      JSON.stringify({
+        error: 'project_context_required',
+        message: 'Choose a project before starting an AgentHost assistant session.',
+      }),
+    );
+    vi.mocked(apiClient.createAssistantRun).mockRejectedValue(err);
+
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
+    typeAndSend('hello');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-error')).toBeTruthy();
+    });
+    expect(screen.getByTestId('assistant-error').textContent).toBe(
+      'Choose a project before starting an AgentHost assistant session.',
+    );
+  });
+
   it('shows a conversation-gone message and resets on 404 run_not_found from sendAssistantMessage', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
 
     // First message creates the run.
     typeAndSend('first message');
@@ -404,7 +463,7 @@ describe('AssistantRunPage', () => {
   });
 
   it('passes resume_from_run_id on the next new-run request after a 404 run_not_found reset', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
 
     // First message creates the run — this is the run that will later turn out to be gone.
     typeAndSend('first message');
@@ -431,7 +490,7 @@ describe('AssistantRunPage', () => {
   });
 
   it('shows a conversation-ended message and resets on 409 operator_run_closed from sendAssistantMessage', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
 
     // First message creates the run.
     typeAndSend('first message');
@@ -458,7 +517,7 @@ describe('AssistantRunPage', () => {
   });
 
   it('passes resume_from_run_id on the next new-run request after a 409 operator_run_closed reset', async () => {
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRunPage projectId="proj-7" /></Wrapper>);
 
     // First message creates the run — this is the run that will later be sealed as closed.
     typeAndSend('first message');
@@ -487,3 +546,4 @@ describe('AssistantRunPage', () => {
     );
   });
 });
+
