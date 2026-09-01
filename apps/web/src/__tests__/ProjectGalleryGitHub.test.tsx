@@ -1,5 +1,4 @@
 import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectListProvider } from '../hooks/useProjectList';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
