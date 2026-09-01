@@ -2,7 +2,7 @@ import { AzureFluentProvider } from '../copilot-fluent-system';
 import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
 import { apiClient } from '../api/apiClient';
 import { parseWorkflowYaml } from '../utils/workflowYaml';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 /**
@@ -342,43 +342,71 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
       expect(warning.textContent).toContain('safety-failed');
       expect(warning.textContent).toContain('no-changes');
     });
+
+    expect(screen.getByTestId('workflow-node-rai-check').textContent).toContain('Needs routing');
   });
 
-  it('offers gates, actions, and primitives in a grouped add-node palette, but never Merge/Scribe', async () => {
+  it('opens a centered add-node dialog with grouped cards, but never Merge/Scribe', async () => {
     const user = userEvent.setup();
     renderEditor(YAML_WITH_UNROUTED_RAI);
 
     await user.click(await screen.findByRole('button', { name: /add node/i }));
+    const addDialog = await screen.findByTestId('add-node-dialog');
+    expect(addDialog).toBeDefined();
+    expect(screen.getByPlaceholderText('Search node types')).toBeDefined();
 
     await waitFor(() => {
-      expect(screen.getByRole('menuitem', { name: /rai check/i })).toBeDefined();
-      expect(screen.getByRole('menuitem', { name: /rubberduck review/i })).toBeDefined();
-      expect(screen.getByRole('menuitem', { name: /human review/i })).toBeDefined();
+      expect(within(addDialog).getByTestId('add-node-option-rai')).toBeDefined();
+      expect(within(addDialog).getByTestId('add-node-option-rubberduck')).toBeDefined();
+      expect(within(addDialog).getByTestId('add-node-option-human-review')).toBeDefined();
       // "Build & Test" must now appear EXACTLY once (#558). It previously showed
       // twice — once as the pre-configured SPECIAL_GATES preset and once as the raw
       // build_test node-type — with identical labels, which was confusing. The raw
       // primitive is dropped from the palette; the preset is the single entry point.
-      expect(screen.getAllByRole('menuitem', { name: /build & test/i })).toHaveLength(1);
-      expect(screen.getByRole('menuitem', { name: /open pull request/i })).toBeDefined();
-      expect(screen.getByRole('menuitem', { name: /^publish/i })).toBeDefined();
+      expect(within(addDialog).getAllByTestId('add-node-option-build-test')).toHaveLength(1);
+      expect(within(addDialog).getByTestId('add-node-option-open_pull_request')).toBeDefined();
+      expect(within(addDialog).getByTestId('add-node-option-publish')).toBeDefined();
     });
 
-    // The palette is grouped under scannable headers (#558).
-    expect(screen.getByText('Reviewers & gates')).toBeDefined();
-    expect(screen.getByText('Agent steps')).toBeDefined();
-    expect(screen.getByText('Actions')).toBeDefined();
-    expect(screen.getByText('Flow control')).toBeDefined();
+    // The dialog keeps the existing groups as scannable sections/tabs.
+    expect(within(addDialog).getByText('All')).toBeDefined();
+    expect(within(addDialog).getAllByText('Reviewers & gates').length).toBeGreaterThan(0);
+    expect(within(addDialog).getAllByText('Agent steps').length).toBeGreaterThan(0);
+    expect(within(addDialog).getAllByText('Actions').length).toBeGreaterThan(0);
+    expect(within(addDialog).getAllByText('Flow control').length).toBeGreaterThan(0);
 
     // Representative primitives remain reachable in their groups.
-    expect(screen.getByRole('menuitem', { name: /prompt \(agent turn\)/i })).toBeDefined();
-    expect(screen.getByRole('menuitem', { name: /peer review/i })).toBeDefined();
-    expect(screen.getByRole('menuitem', { name: /fan-out/i })).toBeDefined();
+    expect(within(addDialog).getByTestId('add-node-option-prompt')).toBeDefined();
+    expect(within(addDialog).getByTestId('add-node-option-peer_review')).toBeDefined();
+    expect(within(addDialog).getByTestId('add-node-option-fan_out')).toBeDefined();
 
-    expect(screen.queryByRole('menuitem', { name: /^merge$/i })).toBeNull();
-    expect(screen.queryByRole('menuitem', { name: /^scribe$/i })).toBeNull();
+    expect(within(addDialog).queryByTestId('add-node-option-merge')).toBeNull();
+    expect(within(addDialog).queryByTestId('add-node-option-scribe')).toBeNull();
+  });
 
-    await user.click(screen.getByRole('menuitem', { name: /^publish/i }));
+  it('filters the add-node dialog by label and still adds the selected node type', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await user.click(await screen.findByRole('button', { name: /add node/i }));
+    const dialog = await screen.findByTestId('add-node-dialog');
+    expect(dialog).toBeDefined();
+
+    await user.type(screen.getByPlaceholderText('Search node types'), 'publish');
+
+    await waitFor(() => {
+      expect(within(dialog).getByTestId('add-node-option-publish')).toBeDefined();
+    });
+    expect(within(dialog).queryByTestId('add-node-option-rai')).toBeNull();
+
+    await user.click(within(dialog).getByTestId('add-node-option-publish'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('add-node-dialog')).toBeNull();
+    });
     expect(await screen.findByRole('textbox', { name: 'Prompt' })).toBeDefined();
+    await user.click(screen.getByRole('tab', { name: 'YAML' }));
+    expect((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value)
+      .toContain('type: publish');
   });
 
   it('renders existing merge/scribe tail nodes read-only for backward compatibility', async () => {
@@ -407,7 +435,7 @@ describe('VisualWorkflowEditor — viewport re-fit on add (#540)', () => {
     fitViewSpy.mockClear();
 
     await user.click(await screen.findByRole('button', { name: /add node/i }));
-    await user.click(await screen.findByRole('menuitem', { name: /rubberduck review/i }));
+    await user.click(await screen.findByTestId('add-node-option-rubberduck'));
 
     await waitFor(() => {
       expect(fitViewSpy).toHaveBeenCalled();
