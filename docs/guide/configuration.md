@@ -32,6 +32,7 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 | `Auth:Mode` | `Entra` | Microsoft Entra browser sign-in mode |
 | `Auth:Entra:ClientId` | none | Entra application (client) ID |
 | `Auth:Entra:TenantId` | none | Entra tenant (directory) ID |
+| `Auth:Entra:EnterpriseAppObjectId` | none | Optional Enterprise Application (service principal) object ID for the Account Settings "Manage users" deep link |
 | `Auth:Entra:RedirectUri` | none | Exact Entra application callback URL |
 | `Auth:Entra:FrontendUrl` | none | Exact browser origin for Entra callback completion |
 
@@ -155,6 +156,7 @@ public client flows and no client secret is configured).
 | `Auth:Entra:ClientId` | none | Entra app registration (client) ID — **required** for Entra sign-in |
 | `Auth:Entra:ClientSecret` | none | Optional Entra client secret for confidential-client token redemption. Omit it when the tenant blocks password credentials and the app registration has public client flows enabled (`isFallbackPublicClient: true`) |
 | `Auth:Entra:TenantId` | none | Entra tenant (directory) ID GUID — **required** for Entra sign-in and token validation |
+| `Auth:Entra:EnterpriseAppObjectId` | none | Optional Enterprise Application (service principal) object ID used only for the Account Settings "Manage users in Azure Portal" deep link |
 | `Auth:Entra:Authority` | none | Optional Entra authority URL (e.g. `https://login.microsoftonline.com/<tenant>/v2.0`); when set, it must name the configured tenant |
 | `Auth:Entra:RedirectUri` | none | Redirect URI registered on the Entra app; must exactly match the `/auth/entra/callback` URL |
 | `Auth:Entra:Scopes` | `openid profile email <ClientId>/.default` | Space-delimited scopes requested at authorize time. The `<ClientId>/.default` scope yields an access token whose `aud` is the app itself and carries the platform App Roles claim |
@@ -183,12 +185,19 @@ If your tenant blocks client secrets, leave `Auth:Entra:ClientSecret` unset. Age
 redeem the authorization code with PKCE only, which works with Entra app registrations that
 allow public client flows.
 
+`Auth:Entra:EnterpriseAppObjectId` is optional. When set, the Account settings page links
+directly to the Azure Portal **Enterprise application → Users and groups** blade for this
+deployment's Entra app. Find this value in **Microsoft Entra admin center → Enterprise
+applications → <your app> → Object ID**. Do **not** copy the Application (client) ID from the
+app registration; the deep link requires the Enterprise Application's service principal object ID.
+
 ::: tip AKS deploy pipeline wiring
 On the AKS deploy pipeline, `Auth:Mode`/`Auth:Entra:ClientId`/`Auth:Entra:TenantId` are
 set from the deploy-time `AUTH_MODE`/`ENTRA_CLIENT_ID`/`ENTRA_TENANT_ID` environment
-variables. `Auth:Entra:RedirectUri` and `Auth:Entra:FrontendUrl` are derived from the
-public `HOST` as `https://<host>/auth/entra/callback` and `https://<host>`, respectively;
-see `scripts/azure/variables.mjs`, `scripts/azure/lib/kustomize.mjs`, and
+variables. `Auth:Entra:EnterpriseAppObjectId` is optionally set from
+`ENTRA_ENTERPRISE_APP_OBJECT_ID`. `Auth:Entra:RedirectUri` and `Auth:Entra:FrontendUrl` are
+derived from the public `HOST` as `https://<host>/auth/entra/callback` and `https://<host>`,
+respectively; see `scripts/azure/variables.mjs`, `scripts/azure/lib/kustomize.mjs`, and
 `k8s/base/api-deployment.yaml`. `Auth:Entra:ClientSecret` (`Auth__Entra__ClientSecret`) is
 deliberately **not** wired through the deploy pipeline: this environment is PKCE-only per the
 tenant policy noted above, so there is no deploy-time env var / ConfigMap key for it. If a

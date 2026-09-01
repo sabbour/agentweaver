@@ -86,6 +86,7 @@ configMapGenerator:
       - "AUTH_MODE=Entra"
       - "ENTRA_CLIENT_ID="
       - "ENTRA_TENANT_ID="
+      - "ENTRA_ENTERPRISE_APP_OBJECT_ID="
       - "ENTRA_REDIRECT_URI=https://agentweaver.example.com/auth/entra/callback"
       - "ENTRA_FRONTEND_URL=https://agentweaver.example.com"
       - "COPILOT_APP_CALLBACK_URL=https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/auth/github/copilot-app/callback"
