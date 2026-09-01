@@ -156,9 +156,11 @@ export function SettingsPage() {
                   )}
                 </div>
                 {entraAdminUrl && (
-                  <Button as="a" href={entraAdminUrl} target="_blank" rel="noreferrer" appearance="subtle">
-                    Manage in Microsoft Entra ID
-                  </Button>
+                  <div className={styles.formActions}>
+                    <Button as="a" href={entraAdminUrl} target="_blank" rel="noreferrer" appearance="subtle">
+                      Manage in Microsoft Entra ID
+                    </Button>
+                  </div>
                 )}
               </div>
             </>
@@ -176,9 +178,11 @@ export function SettingsPage() {
             <Body tone="muted">
               Copilot connections are selected per project, so the account used for AI can match that project’s needs.
             </Body>
-            <Button appearance="secondary" onClick={() => window.location.assign('/projects')}>
-              Manage Copilot connections in projects
-            </Button>
+            <div className={styles.formActions}>
+              <Button appearance="secondary" onClick={() => window.location.assign('/projects')}>
+                Manage Copilot connections in projects
+              </Button>
+            </div>
           </div>
           <div className={styles.subBlock}>
             <TitleText>GitHub Repo App</TitleText>
