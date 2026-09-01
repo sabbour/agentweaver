@@ -7,7 +7,6 @@ export interface EntraAdminLink {
 
 export function authConfigModeToAuthMode(mode: AuthConfigResponse['mode'] | null | undefined): AuthMode | null {
   if (mode === 'Entra') return 'entra';
-  if (mode === 'GitHubLegacy') return 'github-legacy';
   return null;
 }
 
