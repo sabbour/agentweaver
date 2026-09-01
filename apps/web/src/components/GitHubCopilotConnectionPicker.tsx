@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { formatApiErrorMessage } from '../api/errors';
 import {
   Button,
   Dialog,
@@ -52,11 +53,11 @@ export function GitHubCopilotConnectionPicker({
       if (generation !== refreshGeneration.current) return;
       setConnection(nextConnection);
       setPlatformDefaultConnection(nextPlatformDefaultConnection);
-    } catch {
+    } catch (err) {
       if (generation !== refreshGeneration.current) return;
       setConnection(null);
       setPlatformDefaultConnection(null);
-      setLoadError(CONNECTION_LOAD_ERROR);
+      setLoadError(formatApiErrorMessage(err, CONNECTION_LOAD_ERROR));
     } finally {
       if (generation === refreshGeneration.current) setLoading(false);
     }

@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { GitHubCopilotConnectionPicker } from '../components/GitHubCopilotConnectionPicker';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -143,5 +144,18 @@ describe('GitHubCopilotConnectionPicker', () => {
 
     expect(await screen.findByText('The GitHub Copilot App connection could not be started. Try again.')).toBeDefined();
     expect((screen.getByRole('button', { name: 'Connect GitHub account' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('surfaces actionable API errors while loading the current connection', async () => {
+    vi.mocked(apiClient.getProjectCopilotConnection).mockRejectedValue(
+      new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
+    );
+    render(
+      <Wrapper>
+        <GitHubCopilotConnectionPicker projectId="project-1" showConnectionStatus />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText('GitHub connections are temporarily unavailable. Connect GitHub and try again.')).toBeDefined();
   });
 });
