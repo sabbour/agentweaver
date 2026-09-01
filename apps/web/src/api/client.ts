@@ -19,7 +19,8 @@ import type {
   BacklogSettingsDto,
   BacklogTaskDto,
   ByokProviderConfig,
-  ByokProviderConfigRequest,
+  ByokProviderListResponse,
+  ByokProviderRequest,
   Blueprint,
   BlueprintSkillDefaultsPreviewResponse,
   BoardDto,
@@ -524,18 +525,30 @@ export class AgentweaverApiClient {
   }
 
   // Deployment-wide "bring your own key" inference provider configuration.
-  // Presence of a saved configuration IS the AI mode switch: configured = Custom key
-  // mode, absent = GitHub Copilot mode (see Platform settings page).
-  getByokProviderConfig(): Promise<ByokProviderConfig | null> {
-    return this.request<ByokProviderConfig | null>('GET', '/admin/byok-provider');
+  // Multiple providers can be configured and their keys kept at once; exactly one may be
+  // marked active (active_provider_id) — a null active id means GitHub Copilot mode.
+  listByokProviders(): Promise<ByokProviderListResponse> {
+    return this.request<ByokProviderListResponse>('GET', '/admin/byok-providers');
   }
 
-  setByokProviderConfig(req: ByokProviderConfigRequest): Promise<void> {
-    return this.request<void>('PUT', '/admin/byok-provider', req);
+  addByokProvider(req: ByokProviderRequest): Promise<ByokProviderConfig> {
+    return this.request<ByokProviderConfig>('POST', '/admin/byok-providers', req);
   }
 
-  clearByokProviderConfig(): Promise<void> {
-    return this.request<void>('DELETE', '/admin/byok-provider');
+  updateByokProvider(id: string, req: ByokProviderRequest): Promise<ByokProviderConfig> {
+    return this.request<ByokProviderConfig>('PUT', `/admin/byok-providers/${encodeURIComponent(id)}`, req);
+  }
+
+  removeByokProvider(id: string): Promise<void> {
+    return this.request<void>('DELETE', `/admin/byok-providers/${encodeURIComponent(id)}`);
+  }
+
+  activateByokProvider(id: string): Promise<void> {
+    return this.request<void>('POST', `/admin/byok-providers/${encodeURIComponent(id)}/activate`);
+  }
+
+  deactivateByokProviders(): Promise<void> {
+    return this.request<void>('POST', '/admin/byok-providers/deactivate');
   }
 
   beginPlatformDefaultCopilotAuthorization(): Promise<{

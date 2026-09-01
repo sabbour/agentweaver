@@ -379,6 +379,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
             httpClientFactory: new StubHttpClientFactory(configureHandler),
             byokProviderConfiguration: new FixedByokProviderConfigurationProvider(
                 new ByokProviderConfiguration(
+                    Id: "test-provider",
+                    Name: "Test Azure provider",
                     Type: "azure",
                     BaseUrl: "https://byok-resource.openai.azure.com",
                     Model: "gpt-4.1",
