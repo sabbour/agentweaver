@@ -202,6 +202,17 @@
   gap: 4px;
 }
 
+.aw-nav-section__heading {
+  color: var(--colorNeutralForeground3);
+  font-size: var(--fontSizeBase200);
+  font-weight: var(--fontWeightSemibold);
+  line-height: var(--lineHeightBase200);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0 var(--spacingHorizontalS);
+  margin: 6px 0 4px;
+}
+
 /* Thin horizontal rule separating nav groups — replaces uppercase eyebrow labels */
 .aw-nav-divider {
   border: none;

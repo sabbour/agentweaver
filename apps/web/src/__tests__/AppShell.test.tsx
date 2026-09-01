@@ -130,9 +130,15 @@ describe('AppShell navigation', () => {
   it('renders all section groups when a project is in scope', async () => {
     renderShellAt('/projects/proj-1/team');
 
+    expect(screen.getByText('Work', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Squad', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Operations', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Observability', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('System', { selector: '.aw-nav-section__heading' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'Work' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'Squad' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'Operations' })).toBeDefined();
+    expect(screen.getByRole('group', { name: 'Observability' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'System' })).toBeDefined();
 
     // Existing destinations present, with Team relabelled to Agents.
@@ -240,6 +246,11 @@ describe('AppShell navigation', () => {
     renderShellAt('/projects/proj-1');
 
     // Expanded by default: section groups exist and item text is visible.
+    expect(screen.getByText('Work', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Squad', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Operations', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('Observability', { selector: '.aw-nav-section__heading' })).toBeDefined();
+    expect(screen.getByText('System', { selector: '.aw-nav-section__heading' })).toBeDefined();
     expect(screen.getByRole('group', { name: 'Work' })).toBeDefined();
     expect(screen.getByText('Board')).toBeDefined();
     expect(screen.getByTestId('app-navigation-menu').getAttribute('data-collapsed')).toBe('false');
@@ -248,7 +259,11 @@ describe('AppShell navigation', () => {
     fireEvent.click(collapse);
 
     // Collapsed: text labels gone, but items remain reachable via aria-label.
-    expect(screen.queryByText('Work')).toBeNull();
+    expect(screen.queryByText('Work', { selector: '.aw-nav-section__heading' })).toBeNull();
+    expect(screen.queryByText('Squad', { selector: '.aw-nav-section__heading' })).toBeNull();
+    expect(screen.queryByText('Operations', { selector: '.aw-nav-section__heading' })).toBeNull();
+    expect(screen.queryByText('Observability', { selector: '.aw-nav-section__heading' })).toBeNull();
+    expect(screen.queryByText('System', { selector: '.aw-nav-section__heading' })).toBeNull();
     expect(screen.queryByText('Board')).toBeNull();
     expect(screen.getByRole('link', { name: 'Board' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeDefined();
