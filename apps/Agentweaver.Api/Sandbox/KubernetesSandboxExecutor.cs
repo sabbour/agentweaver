@@ -412,9 +412,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
             : (null, null);
 
-        var copilotCredential = _copilotCredentials is null
-            ? null
-            : await _copilotCredentials.GetCredentialAsync(runId, ct).ConfigureAwait(false);
+        var copilotCredential = byokProvider is null && _copilotCredentials is not null
+            ? await _copilotCredentials.GetCredentialAsync(runId, ct).ConfigureAwait(false)
+            : null;
         if (byokProvider is null && copilotCredential is null)
             throw new InvalidOperationException(
                 $"Cannot launch AgentHost pod for run '{runId}' without a live run-bound Copilot capability snapshot.");

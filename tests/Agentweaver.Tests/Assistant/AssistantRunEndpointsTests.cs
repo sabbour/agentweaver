@@ -116,6 +116,31 @@ public sealed class AssistantRunEndpointsTests
     }
 
     [Fact]
+    public async Task StartRun_AgentHostWithByokConfigured_StartsWithoutCopilotBinding_AndPersistsByokModelSource()
+    {
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        await SeedByokProviderConfigurationAsync(factory);
+        var client = AuthedClient(factory);
+
+        var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        {
+            message = "Start a platform-wide AgentHost assistant session in BYOK mode",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = body.GetProperty("run_id").GetString();
+        runId.Should().NotBeNullOrWhiteSpace();
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var run = await runStore.GetAsync(RunId.Parse(runId!), CancellationToken.None);
+        run.Should().NotBeNull();
+        run!.ModelSource.Should().Be(ModelSource.Byok,
+            "assistant runs must follow the deployment-wide BYOK mode instead of always hardcoding GitHub Copilot");
+        factory.Agent.Requests.Should().ContainSingle(request => request.ProjectId == null);
+    }
+
+    [Fact]
     public async Task StartRun_AgentHostWithoutProjectAndWithoutPlatformDefault_ReturnsPlatformConnectionRequirement()
     {
         await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
@@ -529,6 +554,7 @@ public sealed class AssistantRunEndpointsTests
             runStore, eventStream, factory.Agent, gate,
             Microsoft.Extensions.Options.Options.Create(new AssistantRunOptions()),
             factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            factory.Services.GetRequiredService<IByokProviderConfigurationProvider>(),
             factory.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AssistantRunService>.Instance);
         var caller = new Agentweaver.Api.Security.CallerContext { User = AssistantWebApplicationFactory.TestUser };
@@ -947,6 +973,19 @@ public sealed class AssistantRunEndpointsTests
         await db.SaveChangesAsync();
     }
 
+    private static async Task SeedByokProviderConfigurationAsync(AssistantWebApplicationFactory factory)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+        await settings.SetAsync(
+            new ByokProviderConfiguration(
+                Type: "azure",
+                BaseUrl: "https://byok-resource.openai.azure.com",
+                Model: "gpt-4.1",
+                ApiKey: "test-byok-key"),
+            CancellationToken.None);
+    }
+
     private sealed record EventRow(int Sequence, string Type, JsonElement Payload);
 }
 
@@ -996,6 +1035,7 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["Providers:GitHubCopilot:ApiKey"] = "test-copilot-key",
                 ["Providers:GitHubCopilot:Endpoint"] = "https://api.githubcopilot.com",
                 ["Providers:GitHubCopilot:Model"] = "gpt-4o",
+                ["Providers:Byok:ApiKey"] = "test-byok-key",
                 ["Providers:MicrosoftFoundry:ApiKey"] = "test-foundry-key",
                 ["Providers:MicrosoftFoundry:Endpoint"] = "https://test.openai.azure.com",
                 ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
