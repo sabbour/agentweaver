@@ -274,6 +274,23 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         body.TryGetProperty("refresh_token", out _).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task GetProjectAccessOverview_ReturnsCurrentRoleSnapshot()
+    {
+        var id = await CreateBlankProjectAsync();
+
+        var response = await _client.GetAsync($"/api/projects/{id}/access");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("auth_mode").GetString().Should().Be("entra");
+        body.GetProperty("current_user_project_role").GetString().Should().Be("Owner");
+        body.GetProperty("can_manage_role_assignments").GetBoolean().Should().BeTrue();
+        body.GetProperty("can_manage_project_github_identity").GetBoolean().Should().BeTrue();
+        body.GetProperty("project_role_assignments").ValueKind.Should().Be(JsonValueKind.Array);
+        body.GetProperty("effective_github_login").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
     // =========================================================================
     // PE-07: DELETE /api/projects/{id}?confirm=true returns 204
     // =========================================================================

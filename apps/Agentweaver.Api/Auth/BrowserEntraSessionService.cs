@@ -46,6 +46,22 @@ public sealed class BrowserEntraSessionService(MemoryDbContext db)
         return session;
     }
 
+    public async Task RevokeCurrentAsync(HttpContext context, CancellationToken ct = default)
+    {
+        if (context.Request.Cookies.TryGetValue(CookieName, out var sessionId) &&
+            !string.IsNullOrWhiteSpace(sessionId))
+        {
+            var session = await db.BrowserEntraSessions.FindAsync([sessionId], ct).ConfigureAwait(false);
+            if (session is not null)
+            {
+                db.BrowserEntraSessions.Remove(session);
+                await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+        }
+
+        Clear(context);
+    }
+
     public static void Clear(HttpContext context) =>
         context.Response.Cookies.Append(CookieName, string.Empty, CookieOptions(DateTimeOffset.UnixEpoch));
 

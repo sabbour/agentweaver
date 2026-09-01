@@ -1,4 +1,6 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { formatApiErrorMessage, parseApiBody } from '../api/errors';
 import {
   Button,
   Divider,
@@ -15,6 +17,7 @@ import {
 } from '@fluentui/react-components';
 import { ChevronDownRegular, PersonRegular, SignOutRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
+import { clearSessionAuth } from '../config';
 import type { AuthSessionResponse, ProjectAccessOverview, ProjectCopilotConnection } from '../api/types';
 
 const useStyles = makeStyles({
@@ -122,6 +125,27 @@ function repositoryStatus(access: ProjectAccessOverview | null): string {
     : 'Repository access: not connected';
 }
 
+function formatProjectAccessStatusError(err: unknown): string {
+  if (err instanceof ApiError && err.status === 404) {
+    return 'Repository access status is unavailable because this deployment did not return a project access snapshot.';
+  }
+  return formatApiErrorMessage(err, 'Could not load the repository access status.');
+}
+
+function formatProjectCopilotStatusError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (parseApiBody(err.body).error) {
+      case 'project_owner_required':
+        return 'Only a project owner can view this project’s GitHub Copilot connection.';
+      case 'human_entra_subject_required':
+        return 'Sign in with your Microsoft Entra work account to view this project’s GitHub status.';
+      case 'github_binding_unavailable':
+        return 'The project’s GitHub Copilot connection is currently unavailable. Retry, or reconnect it from Project settings.';
+    }
+  }
+  return formatApiErrorMessage(err, 'Could not load the project Copilot connection status.');
+}
+
 export interface GitHubIdentityBadgeProps {
   projectId?: string;
   collapsed?: boolean;
@@ -134,8 +158,9 @@ export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadg
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [connection, setConnection] = useState<ProjectCopilotConnection | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [access, setAccess] = useState<ProjectAccessOverview | null>(null);
+  const [accessError, setAccessError] = useState<string | null>(null);
+  const [copilotConnectionError, setCopilotConnectionError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
@@ -161,16 +186,26 @@ export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadg
     queueMicrotask(() => {
       if (!active) return;
       setConnectionLoading(true);
-      setConnectionError(null);
-      void Promise.all([
+      setAccessError(null);
+      setCopilotConnectionError(null);
+      void Promise.allSettled([
         apiClient.getProjectCopilotConnection(projectId),
         apiClient.getProjectAccessOverview(projectId),
-      ]).then(([nextConnection, nextAccess]) => {
+      ]).then(([connectionResult, accessResult]) => {
         if (!active) return;
-        setConnection(nextConnection);
-        setAccess(nextAccess);
-      }).catch(() => {
-        if (active) setConnectionError('Could not load this project’s GitHub connection status.');
+        if (connectionResult.status === 'fulfilled') {
+          setConnection(connectionResult.value);
+        } else {
+          setConnection(null);
+          setCopilotConnectionError(formatProjectCopilotStatusError(connectionResult.reason));
+        }
+
+        if (accessResult.status === 'fulfilled') {
+          setAccess(accessResult.value);
+        } else {
+          setAccess(null);
+          setAccessError(formatProjectAccessStatusError(accessResult.reason));
+        }
       }).finally(() => {
         if (active) setConnectionLoading(false);
       });
@@ -185,9 +220,10 @@ export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadg
     setSigningOut(true);
     try {
       await apiClient.signOutSession();
+      clearSessionAuth();
       window.location.assign('/');
-    } catch {
-      setSessionError('Could not sign out. Try again.');
+    } catch (err) {
+      setSessionError(formatApiErrorMessage(err, 'Could not sign out. Try again.'));
       setSigningOut(false);
     }
   };
@@ -249,11 +285,14 @@ export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadg
               <div className={styles.section}>
                 <Text weight="semibold">Project GitHub status</Text>
                 {connectionLoading && <Spinner label="Loading GitHub connection status" size="extra-tiny" />}
-                {!connectionLoading && connectionError && <Text size={200} className={styles.secondary}>{connectionError}</Text>}
-                {!connectionLoading && !connectionError && (
+                {!connectionLoading && (
                   <>
-                    <Text size={200} className={styles.secondary}>{repositoryStatus(access)}</Text>
-                    <Text size={200} className={styles.secondary}>AI source: GitHub Copilot — {connectionStatus(connection)}</Text>
+                    <Text size={200} className={styles.secondary}>
+                      {accessError ?? repositoryStatus(access)}
+                    </Text>
+                    <Text size={200} className={styles.secondary}>
+                      {copilotConnectionError ?? `AI source: GitHub Copilot — ${connectionStatus(connection)}`}
+                    </Text>
                   </>
                 )}
                 <Link href={`/projects/${encodeURIComponent(projectId)}/settings`}>
