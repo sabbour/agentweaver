@@ -90,7 +90,7 @@ describe('PlatformSettingsPage', () => {
     });
     fireEvent.change(screen.getByPlaceholderText('gpt-4o'), { target: { value: 'gpt-4o' } });
     fireEvent.change(screen.getByLabelText(/^API key/), { target: { value: 'sk-test' } });
-    fireEvent.click(screen.getByRole('button', { name: /Save custom key configuration/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save AI inference source' }));
 
     await waitFor(() => expect(apiClient.setByokProviderConfig).toHaveBeenCalledWith({
       type: 'openai',
@@ -101,7 +101,7 @@ describe('PlatformSettingsPage', () => {
     expect(await screen.findByText('Configuration saved.')).toBeDefined();
   });
 
-  it('shows exactly one save button for the selected mode section', async () => {
+  it('uses the same save button label in both modes', async () => {
     vi.mocked(apiClient.getByokProviderConfig).mockResolvedValue({
       type: 'openai',
       base_url: 'https://api.example.com',
@@ -112,7 +112,7 @@ describe('PlatformSettingsPage', () => {
 
     await screen.findByDisplayValue('https://api.example.com');
     expect(screen.getAllByRole('button', { name: /^Save/i })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Save custom key configuration' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Save AI inference source' })).toBeDefined();
 
     fireEvent.click(screen.getByLabelText(/GitHub Copilot mode/));
 
@@ -143,6 +143,35 @@ describe('PlatformSettingsPage', () => {
 
     await waitFor(() => expect(apiClient.clearByokProviderConfig).toHaveBeenCalled());
     expect(onRetryAccess).toHaveBeenCalled();
+  });
+
+  it('shows the BYOK disconnect button only when a custom key configuration exists and clears it', async () => {
+    vi.mocked(apiClient.getByokProviderConfig).mockResolvedValue({
+      type: 'openai',
+      base_url: 'https://api.example.com',
+      model: 'gpt-4o',
+      configured: true,
+    });
+    vi.mocked(apiClient.clearByokProviderConfig).mockResolvedValue(undefined);
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Disconnect' })).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+    await waitFor(() => expect(apiClient.clearByokProviderConfig).toHaveBeenCalled());
+    expect(await screen.findByRole('button', { name: 'Save AI inference source' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull();
+    expect(screen.queryByDisplayValue('https://api.example.com')).toBeNull();
+    expect(screen.queryByDisplayValue('gpt-4o')).toBeNull();
+  });
+
+  it('does not show the BYOK disconnect button on a blank custom key form', async () => {
+    vi.mocked(apiClient.getByokProviderConfig).mockResolvedValue(null);
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText(/Custom key mode/));
+
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull();
   });
 
   it('toggles API key visibility with the reveal button', async () => {

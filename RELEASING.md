@@ -61,7 +61,29 @@ from its exact matching section; do not run another changelog generator.
 
 4. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
    fragments as `chore(release): prepare vX.Y.Z`.
-5. Promote the prepared branch to `main` through a green PR.
+5. Before opening the promotion PR, merge `main` into the release branch so
+   the branch carries real ancestry from `main`:
+
+   ```bash
+   git merge -X ours origin/main --no-ff -m "merge: resolve main into release/vX.Y.Z"
+   ```
+
+   `-X ours` resolves the (expected, cosmetic) conflicts in favor of the
+   release branch's content; review the resulting diff (`git show --stat
+   HEAD`) to confirm it only carries forward genuinely main-only files (e.g.
+   docs assets added directly on `main`), then push the release branch.
+6. Promote the prepared branch to `main` through a green PR, merged with
+   **"Rebase and merge"** (not squash — see note below).
+
+> **Merge strategy for the promotion PR: use "Rebase and merge", not
+> "Squash and merge."** Squashing a release PR into `main` gives the
+> resulting `main` commit a single parent on `main`'s own line, so `main`
+> and `dev` never share real git ancestry — every subsequent release then
+> requires the manual `merge -X ours origin/main` conflict-resolution step
+> above just to make the next promotion PR mergeable (its diff otherwise
+> balloons to the entire repository, since git falls back to an ancient
+> merge-base). Rebasing (or a real merge commit) preserves ancestry going
+> forward, so future releases won't need that workaround.
 
 > `release:prepare` runs from a normal dev checkout — you do **not** need to
 > delete `node_modules/` or build output first (the script itself invokes the

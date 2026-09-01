@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.23.2
+
+### Patch Changes
+
+- d72cfb3: Fix project background GitHub status so Background settings recognize platform-default Copilot and BYOK AI sources, and surface the Repo App install action when repo access is the remaining blocker.
+- 79fc738: Fix platform settings AI inference source button labels and BYOK disconnect action.
+- e34a9a8: Fix the Repo App connection flow so Account settings shows the connected GitHub login and repository creation/selection uses installation-aware GitHub capability checks.
+- 27e4e9c: Remove the Account settings item from the main sidebar so account GitHub connections are managed from the identity menu instead.
+
 ## 0.23.1
 
 ### Patch Changes

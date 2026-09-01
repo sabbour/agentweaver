@@ -111,6 +111,14 @@ function identityLabel(session: AuthSessionResponse | null): string {
 }
 
 function connectionStatus(connection: ProjectCopilotConnection | null): string {
+  if (connection?.effective_source === 'byok') {
+    return 'Custom key configured in Platform settings';
+  }
+  if (connection?.effective_source === 'platform_default') {
+    return connection.github_login
+      ? `Platform default @${connection.github_login}`
+      : 'Platform default configured';
+  }
   if (connection?.status === 'connected') {
     return connection.github_login
       ? `Connected as @${connection.github_login}`

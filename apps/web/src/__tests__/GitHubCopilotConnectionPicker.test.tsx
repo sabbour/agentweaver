@@ -23,6 +23,7 @@ beforeEach(() => {
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'not_connected',
     github_login: null,
+    effective_source: 'none',
   });
   vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
     connected: false,
@@ -110,9 +111,10 @@ describe('GitHubCopilotConnectionPicker', () => {
   });
 
   it('shows the platform-configured account and hides project override controls when requested', async () => {
-    vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
-      connected: true,
+    vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
+      status: 'not_connected',
       github_login: 'platform-bot',
+      effective_source: 'platform_default',
     });
     render(
       <Wrapper>
@@ -127,7 +129,28 @@ describe('GitHubCopilotConnectionPicker', () => {
     expect(await screen.findByText(
       'This project uses the platform-configured GitHub Copilot account for background AI access: @platform-bot. Manage it in Platform settings.',
     )).toBeDefined();
-    expect(apiClient.getPlatformDefaultCopilotConnection).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Manage GitHub Copilot' })).toBeNull();
+  });
+
+  it('shows that background AI uses the deployment custom key when BYOK is active', async () => {
+    vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
+      status: 'not_connected',
+      github_login: null,
+      effective_source: 'byok',
+    });
+    render(
+      <Wrapper>
+        <GitHubCopilotConnectionPicker
+          projectId="project-1"
+          showConnectionStatus
+          suppressProjectOverrideWhenPlatformDefault
+        />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText(
+      'This project uses the deployment’s custom key AI configuration for background AI. GitHub Copilot is not used while Platform settings is in Custom key mode.',
+    )).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Manage GitHub Copilot' })).toBeNull();
   });
 

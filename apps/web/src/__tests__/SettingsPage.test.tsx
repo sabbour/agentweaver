@@ -10,6 +10,7 @@ vi.mock('../api/apiClient', () => ({
     getAuthConfig: vi.fn(),
     getAuthSession: vi.fn(),
     beginRepoAppAuthorization: vi.fn(),
+    getRepoAppConnectionStatus: vi.fn(),
   },
 }));
 
@@ -36,6 +37,10 @@ beforeEach(() => {
     entra_object_id: 'entra-1',
     platform_roles: ['PlatformAdmin', 'ProjectCreator'],
     ai_configured: true,
+  } as never);
+  vi.mocked(apiClient.getRepoAppConnectionStatus).mockResolvedValue({
+    connected: false,
+    github_login: null,
   } as never);
 });
 
@@ -97,6 +102,24 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalled());
     expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/repo-app/authorize');
     assign.mockRestore();
+  });
+
+  it('shows the connected Repo App login and refreshes it after a successful callback redirect', async () => {
+    vi.mocked(apiClient.getRepoAppConnectionStatus)
+      .mockResolvedValueOnce({ connected: false, github_login: null } as never)
+      .mockResolvedValueOnce({ connected: true, github_login: 'sabbour' } as never);
+
+    render(
+      <MemoryRouter initialEntries={['/settings?repo_app_auth=success']}>
+        <AzureFluentProvider density="compact">
+          <SettingsPage />
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/Connected GitHub login: @sabbour/)).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Connect GitHub Repo App' })).toBeNull();
+    await waitFor(() => expect(apiClient.getRepoAppConnectionStatus).toHaveBeenCalledTimes(2));
   });
 
   it('navigates to the last active project\'s settings page when one is remembered', async () => {

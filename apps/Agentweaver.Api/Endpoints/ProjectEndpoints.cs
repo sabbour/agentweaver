@@ -1,4 +1,5 @@
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using LibGit2Sharp;
@@ -263,6 +264,7 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
+    ByokProviderConfigurationService byokSettings,
     ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
@@ -276,13 +278,30 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
         persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.GetConnectionAsync(
         ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
-    return result.Outcome == CopilotBindingOutcome.Success
-        ? Results.Ok(new
-        {
-            status = result.Connected ? "connected" : "not_connected",
-            github_login = result.GitHubLogin,
-        })
-        : CopilotBindingFailure(result.Outcome);
+    if (result.Outcome is not (CopilotBindingOutcome.Success or CopilotBindingOutcome.GitHubBindingUnavailable))
+        return CopilotBindingFailure(result.Outcome);
+
+    var platformDefaultConnection = await GetPlatformDefaultCopilotConnectionAsync(
+        persistence, secretStore, ct).ConfigureAwait(false);
+    var byokConfigured = await HasByokConfigurationAsync(byokSettings, ct).ConfigureAwait(false);
+    var effectiveSource = byokConfigured
+        ? "byok"
+        : result.Connected
+            ? "project"
+            : platformDefaultConnection.Connected
+                ? "platform_default"
+                : "none";
+    if (result.Outcome == CopilotBindingOutcome.GitHubBindingUnavailable && effectiveSource == "none")
+        return CopilotBindingFailure(result.Outcome);
+
+    return Results.Ok(new
+    {
+        status = result.Connected ? "connected" : "not_connected",
+        github_login = result.Connected ? result.GitHubLogin : platformDefaultConnection.GitHubLogin,
+        effective_source = effectiveSource,
+        platform_default_connected = platformDefaultConnection.Connected,
+        byok_configured = byokConfigured,
+    });
 })
     .WithName("GetProjectCopilotConnection")
     .WithTags("Projects", "GitHub Copilot")
@@ -333,6 +352,9 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
     IProjectStore projectStore,
     MemoryDbContext db,
     CopilotAppRegistrationService registration,
+    GitHubConnectionsPersistenceStore persistence,
+    ISecretStore secretStore,
+    ByokProviderConfigurationService byokSettings,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -348,8 +370,11 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
         .AnyAsync(x => x.ProjectId == projectKey &&
                        x.AppKind == GitHubAppKind.Repo &&
                        x.RevokedAt == null, ct).ConfigureAwait(false);
+    var hasPlatformDefaultCopilotBinding = (await GetPlatformDefaultCopilotConnectionAsync(
+        persistence, secretStore, ct).ConfigureAwait(false)).Connected;
+    var hasByokConfiguration = await HasByokConfigurationAsync(byokSettings, ct).ConfigureAwait(false);
     var registrationState = await registration.ValidateAsync(ct).ConfigureAwait(false);
-    if (registrationState != CopilotAppRegistrationState.Ready)
+    if (!hasByokConfiguration && !hasPlatformDefaultCopilotBinding && registrationState != CopilotAppRegistrationState.Ready)
         return Results.Ok(CreateUnattendedReadiness(registrationState, hasInstallation));
 
     var hasBinding = await db.ProjectCopilotBindings.AsNoTracking()
@@ -358,6 +383,8 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
         .AnyAsync(x => x.ProjectId == projectKey && x.RevokedAt == null, ct).ConfigureAwait(false);
     return Results.Ok(CreateUnattendedReadiness(
         hasBinding,
+        hasPlatformDefaultCopilotBinding,
+        hasByokConfiguration,
         hasInstallation,
         hasRepositoryGrant));
 })
@@ -1398,15 +1425,17 @@ private static object CreateUnattendedReadiness(
 
 private static object CreateUnattendedReadiness(
     bool hasCopilotBinding,
+    bool hasPlatformDefaultCopilotBinding,
+    bool hasByokConfiguration,
     bool hasRepoAppInstallation,
     bool hasRepositoryGrant)
 {
-    if (!hasCopilotBinding)
+    if (!hasByokConfiguration && !hasCopilotBinding && !hasPlatformDefaultCopilotBinding)
         return new
         {
             status = "not_ready",
             reason_code = "copilot_binding_required",
-            message = "Connect a project Copilot App identity before unattended work can run.",
+            message = "Connect a project GitHub Copilot account or configure a platform-default GitHub Copilot account before unattended work can run.",
             repo_app_installation_connected = hasRepoAppInstallation,
         };
     if (!hasRepoAppInstallation)
@@ -1432,6 +1461,66 @@ private static object CreateUnattendedReadiness(
         message = "This project is ready for unattended automation when activation consent is granted.",
         repo_app_installation_connected = true,
     };
+}
+
+private static async Task<(bool Connected, string? GitHubLogin)> GetPlatformDefaultCopilotConnectionAsync(
+    GitHubConnectionsPersistenceStore persistence,
+    ISecretStore secretStore,
+    CancellationToken ct)
+{
+    var binding = await persistence.GetActivePlatformDefaultCopilotBindingAsync(ct).ConfigureAwait(false);
+    if (binding is null)
+        return (false, null);
+
+    var secret = await secretStore.GetSecretAsync(binding.CredentialReference, ct).ConfigureAwait(false);
+    if (!secret.Found || string.IsNullOrWhiteSpace(secret.Value))
+        return (false, null);
+
+    try
+    {
+        using var document = JsonDocument.Parse(secret.Value);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            return (false, null);
+
+        var status = GetJsonString(document.RootElement, "status");
+        var accessToken = GetJsonString(document.RootElement, "accessToken");
+        if (!string.Equals(status, "signed-in", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(accessToken))
+            return (false, null);
+
+        return (true, GetJsonString(document.RootElement, "GitHubLogin", "githubLogin", "github_login"));
+    }
+    catch (JsonException)
+    {
+        return (false, null);
+    }
+}
+
+private static async Task<bool> HasByokConfigurationAsync(
+    ByokProviderConfigurationService byokSettings,
+    CancellationToken ct)
+{
+    try
+    {
+        return await byokSettings.GetAsync(ct).ConfigureAwait(false) is not null;
+    }
+    catch (JsonException)
+    {
+        return false;
+    }
+}
+
+private static string? GetJsonString(JsonElement element, params string[] propertyNames)
+{
+    foreach (var property in element.EnumerateObject())
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                return property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null;
+        }
+    }
+
+    return null;
 }
 
 private static IResult CopilotBindingFailure(CopilotBindingOutcome outcome)

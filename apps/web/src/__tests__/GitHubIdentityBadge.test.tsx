@@ -40,6 +40,7 @@ beforeEach(() => {
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'connected',
     github_login: 'octocat',
+    effective_source: 'project',
   });
   vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
     effective_github_login: 'octocat',
@@ -128,6 +129,20 @@ describe('GitHubIdentityBadge', () => {
     expect(screen.getByText(
       'The project’s GitHub Copilot connection is currently unavailable. Retry, or reconnect it from Project settings.',
     )).toBeDefined();
+  });
+
+  it('shows the platform default AI source when the project uses the shared Copilot account', async () => {
+    vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
+      status: 'not_connected',
+      github_login: 'platform-bot',
+      effective_source: 'platform_default',
+    });
+
+    renderBadge({ projectId: 'proj-1' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
+
+    expect(await screen.findByText('AI source: GitHub Copilot — Platform default @platform-bot')).toBeDefined();
   });
 
   it('keeps the trigger icon-only when the navigation rail is collapsed', async () => {

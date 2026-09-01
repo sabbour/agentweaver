@@ -101,11 +101,11 @@ Controls how agent commands execute and what they can reach. Options include:
 
 The **Unattended** section reports a project-scoped, read-only automation readiness status and
 a fixed reason code. It never reveals repository names, installation IDs, permission maps, or
-credentials. Its **GitHub Copilot account** control shows the verified login bound to this
-project (when connected), or lets a Project Owner connect or switch that account through
-GitHub's secure browser page. A Project Owner can start the separate Copilot App binding when
-that is the missing prerequisite, but this page has no automation enablement or activation
-control; activation consent is a separate step. When readiness reports
+credentials. Its **GitHub Copilot account** control shows the effective background AI source:
+the verified login bound to this project, the platform-default GitHub Copilot account, or the
+deployment's custom-key mode when BYOK is active. A Project Owner can start the separate
+Copilot App binding when that is the missing prerequisite, but this page has no automation
+enablement or activation control; activation consent is a separate step. When readiness reports
 `repo_app_installation_required` and the deployment configures a Repo App slug, the page also
 shows a direct **Install GitHub Repo App** link.
 

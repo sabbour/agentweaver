@@ -577,9 +577,17 @@ export interface UnattendedReadiness {
 export interface ProjectCopilotConnection {
   status: 'connected' | 'not_connected';
   github_login: string | null;
+  effective_source?: 'project' | 'platform_default' | 'byok' | 'none';
+  platform_default_connected?: boolean;
+  byok_configured?: boolean;
 }
 
 export interface PlatformDefaultCopilotConnection {
+  connected: boolean;
+  github_login: string | null;
+}
+
+export interface RepoAppConnectionStatus {
   connected: boolean;
   github_login: string | null;
 }

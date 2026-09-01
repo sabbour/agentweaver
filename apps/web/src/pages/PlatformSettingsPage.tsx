@@ -242,6 +242,27 @@ export function PlatformSettingsPage({
     }
   };
 
+  const handleDisconnectByok = async () => {
+    setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
+    try {
+      await apiClient.clearByokProviderConfig();
+      setExistingConfig(null);
+      setMode('copilot');
+      setProviderType('azure');
+      setBaseUrl('');
+      setModel('');
+      setApiKey('');
+      setShowApiKey(false);
+      setSaveSuccess(true);
+    } catch (err) {
+      setSaveError(formatApiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const refreshPlatformCopilotConnection = async () => {
     try {
       const connection = await apiClient.getPlatformDefaultCopilotConnection();
@@ -462,8 +483,17 @@ export function PlatformSettingsPage({
                     disabled={saving || !baseUrl || !model || !apiKey}
                     onClick={() => void handleSaveByok()}
                   >
-                    {saving ? 'Saving' : 'Save custom key configuration'}
+                    {saving ? 'Saving' : 'Save AI inference source'}
                   </Button>
+                  {existingConfig && (
+                    <Button
+                      appearance="secondary"
+                      disabled={saving}
+                      onClick={() => void handleDisconnectByok()}
+                    >
+                      Disconnect
+                    </Button>
+                  )}
                   {saving && <Spinner size="extra-tiny" aria-hidden="true" />}
                 </div>
                 {existingConfig && (

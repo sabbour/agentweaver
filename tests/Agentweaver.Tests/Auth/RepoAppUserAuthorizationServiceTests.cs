@@ -189,6 +189,27 @@ public sealed class RepoAppUserAuthorizationServiceTests
     }
 
     [Fact]
+    public async Task ConnectionStatus_ReturnsTheVerifiedGitHubLoginAndPersistsAUsableCredential()
+    {
+        await using var database = await OpenDatabaseAsync();
+        var secrets = new InMemorySecretStore();
+        var service = CreateService(database, secrets, new StubHttpClientFactory(TokenResponse(), UserResponse("sabbour")));
+        var begin = await service.BeginAsync(Human("entra"), HumanPrincipal(), "settings");
+
+        (await service.CompleteAsync(
+            Human("entra"), HumanPrincipal(), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+
+        var connection = await service.GetConnectionAsync(Human("entra"), HumanPrincipal());
+
+        connection.Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+        connection.Connected.Should().BeTrue();
+        connection.GitHubLogin.Should().Be("sabbour");
+        var credentialReference = (await database.GitHubAppAuthorizations.SingleAsync()).CredentialReference;
+        (await secrets.GetSecretAsync(credentialReference)).Value.Should().Contain("\"GitHubLogin\":\"sabbour\"");
+    }
+
+    [Fact]
     public async Task Refresh_PreservesStableGrantVersion_AndRevokeWritesTombstone()
     {
         await using var database = await OpenDatabaseAsync();
@@ -411,6 +432,9 @@ public sealed class RepoAppUserAuthorizationServiceTests
         string refreshToken = "refresh-original") =>
         $$"""{"access_token":"{{accessToken}}","refresh_token":"{{refreshToken}}","expires_in":3600,"error":null}""";
 
+    private static string UserResponse(string login = "octocat") =>
+        $$"""{"login":"{{login}}"}""";
+
     private sealed class StubHttpClientFactory(params string[] responses) : IHttpClientFactory
     {
         private readonly Queue<string> _responses = new(responses.Length == 0 ? [TokenResponse()] : responses);
@@ -424,9 +448,16 @@ public sealed class RepoAppUserAuthorizationServiceTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             bodies.Add(request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(ct));
+            var body = request.RequestUri?.AbsolutePath switch
+            {
+                "/user" => responses.Count > 0 && responses.Peek().Contains("\"login\"", StringComparison.Ordinal)
+                    ? responses.Dequeue()
+                    : UserResponse(),
+                _ => responses.Count > 0 ? responses.Dequeue() : TokenResponse(),
+            };
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(responses.Count > 0 ? responses.Dequeue() : TokenResponse()),
+                Content = new StringContent(body),
             };
         }
     }
