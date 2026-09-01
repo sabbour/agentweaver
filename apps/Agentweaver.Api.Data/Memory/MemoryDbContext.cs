@@ -737,7 +737,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.Purpose).HasColumnName("purpose");
             e.Property(x => x.AppKind).HasColumnName("app_kind");
             e.Property(x => x.SourceKind).HasColumnName("source_kind");
-            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.ProjectId).HasColumnName("project_id").IsRequired(false);
             e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
             e.Property(x => x.SourceAuthorizationId).HasColumnName("source_authorization_id");
             e.Property(x => x.SourceBindingId).HasColumnName("source_binding_id");
@@ -750,7 +750,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.SnapshotExpiresAt).HasColumnName("snapshot_expires_at");
             e.HasIndex(x => new { x.RunId, x.Purpose }).IsUnique()
                 .HasDatabaseName("UX_run_github_capability_snapshots_run_purpose");
-            ConfigureProjectForeignKey(e, "FK_run_github_capability_snapshots_projects_project_id");
+            e.HasOne<ProjectRecord>().WithMany().HasForeignKey(x => x.ProjectId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_run_github_capability_snapshots_projects_project_id");
         });
 
         model.Entity<MarketplaceCopilotCapabilityRecord>(e =>

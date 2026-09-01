@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { buildEntraAdminLink } from '../api/entraAdminLink';
 import { MCP_URL } from '../config';
 import {
   Button,
@@ -11,6 +12,8 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { getLastActiveProjectId } from '../components/shell/projectContext';
 import type { AuthConfigResponse, AuthSessionResponse } from '../api/types';
 import {
   Body,
@@ -58,10 +61,11 @@ function formatError(err: unknown): string {
 
 export function SettingsPage() {
   const styles = useStyles();
+  const navigate = useNavigate();
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [entraAdminUrl, setEntraAdminUrl] = useState<string | null>(null);
+  const [entraAdminLink, setEntraAdminLink] = useState<{ href: string; label: string } | null>(null);
   const [repoAppConnecting, setRepoAppConnecting] = useState(false);
   const [repoAppError, setRepoAppError] = useState<string | null>(null);
 
@@ -80,10 +84,8 @@ export function SettingsPage() {
       });
     void apiClient.getAuthConfig()
       .then(({ entra }: AuthConfigResponse) => {
-        if (!entra.tenant_id || !entra.client_id || cancelled) return;
-        setEntraAdminUrl(
-          `https://entra.microsoft.com/${encodeURIComponent(entra.tenant_id)}/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/${encodeURIComponent(entra.client_id)}/isMSAApp~/false`,
-        );
+        if (cancelled) return;
+        setEntraAdminLink(buildEntraAdminLink(entra));
       })
       .catch(() => {
         // The role list remains useful if the public Entra configuration is unavailable.
@@ -155,10 +157,12 @@ export function SettingsPage() {
                     <Label as="span" className={styles.emptyNote}>No Entra app roles are currently assigned.</Label>
                   )}
                 </div>
-                {entraAdminUrl && (
-                  <Button as="a" href={entraAdminUrl} target="_blank" rel="noreferrer" appearance="subtle">
-                    Manage in Microsoft Entra ID
-                  </Button>
+                {entraAdminLink && (
+                  <div className={styles.formActions}>
+                    <Button as="a" href={entraAdminLink.href} target="_blank" rel="noreferrer" appearance="subtle">
+                      {entraAdminLink.label}
+                    </Button>
+                  </div>
                 )}
               </div>
             </>
@@ -176,9 +180,17 @@ export function SettingsPage() {
             <Body tone="muted">
               Copilot connections are selected per project, so the account used for AI can match that project’s needs.
             </Body>
-            <Button appearance="secondary" onClick={() => window.location.assign('/projects')}>
-              Manage Copilot connections in projects
-            </Button>
+            <div className={styles.formActions}>
+              <Button
+                appearance="secondary"
+                onClick={() => {
+                  const lastActiveProjectId = getLastActiveProjectId();
+                  navigate(lastActiveProjectId ? `/projects/${encodeURIComponent(lastActiveProjectId)}/settings` : '/');
+                }}
+              >
+                Manage Copilot connections in projects
+              </Button>
+            </div>
           </div>
           <div className={styles.subBlock}>
             <TitleText>GitHub Repo App</TitleText>

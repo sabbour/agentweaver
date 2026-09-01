@@ -2,6 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ClusterPage } from '../pages/ClusterPage';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
   afterEach,
@@ -38,6 +39,7 @@ function renderPage(projectId = 'proj-001') {
       <MemoryRouter initialEntries={[`/projects/${projectId}/cluster`]}>
         <Routes>
           <Route path="/projects/:projectId/cluster" element={<ClusterPage />} />
+          <Route path="/projects/:projectId/orchestrations/:runId" element={<div>Run detail</div>} />
         </Routes>
       </MemoryRouter>
     </Wrapper>,
@@ -69,6 +71,23 @@ const sampleData: ClusterDiagnosticsDto = {
       ready_replicas: 2,
       available_replicas: 1,
       status: 'healthy',
+      instances: [
+        {
+          name: 'agentweaver-sandbox-unclaimed',
+          status: 'available',
+          claimed: false,
+          age_seconds: 120,
+        },
+        {
+          name: 'agentweaver-sandbox-claimed',
+          status: 'claimed',
+          claimed: true,
+          claim_name: 'claim-abc123',
+          run_id: 'run-001',
+          project_id: 'proj-001',
+          age_seconds: 180,
+        },
+      ],
       age_seconds: 300,
     },
   ],
@@ -77,6 +96,8 @@ const sampleData: ClusterDiagnosticsDto = {
       name: 'claim-abc123',
       phase: 'bound',
       ready: true,
+      run_id: 'run-001',
+      bound_sandbox: 'agentweaver-sandbox-claimed',
       warm_pool: 'default-pool',
       age_seconds: 60,
     },
@@ -131,6 +152,8 @@ describe('ClusterPage', () => {
     expect(screen.getByTestId('cluster-topology-graph')).toBeDefined();
     expect(screen.getByLabelText('Cluster: 3 / 3 checks healthy')).toBeDefined();
     expect(screen.getByLabelText('default-pool: Warm pool · 2 / 2 ready')).toBeDefined();
+    expect(screen.getAllByLabelText('agentweaver-sandbox-unclaimed: Warm instance · available').length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: 'run-001' })).toBeDefined();
     expect(screen.getByLabelText('claim-abc123: Sandbox claim · bound')).toBeDefined();
     expect(screen.getByLabelText('agent-abc123: Agent pod · ready')).toBeDefined();
 
@@ -190,6 +213,19 @@ describe('ClusterPage', () => {
 
     await waitFor(() => {
       expect((screen.getByRole('switch', { name: 'Auto-refresh' }) as HTMLInputElement).checked).toBe(true);
+    });
+  });
+
+  it('navigates from a claimed warm-pool instance to the owning run', async () => {
+    const user = userEvent.setup();
+    getClusterMock().mockResolvedValue(sampleData);
+
+    renderPage();
+
+    await user.click(await screen.findByRole('link', { name: 'run-001' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Run detail')).toBeDefined();
     });
   });
 });

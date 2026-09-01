@@ -1257,7 +1257,7 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
         };
         return !isLive
             ? null
-            : new(snapshotRef, snapshot.Purpose, snapshot.AppKind, snapshot.ProjectId,
+            : new(snapshotRef, snapshot.Purpose, snapshot.AppKind, snapshot.ProjectId ?? string.Empty,
                 snapshot.RepositoryId, snapshot.InstallationId, snapshot.GrantDigest)
             {
                 CredentialLocator = snapshot.SourceKind switch
@@ -1515,6 +1515,40 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
             .Where(snapshot => snapshot.RunId == runId)
             .OrderBy(snapshot => snapshot.Purpose)
             .ToListAsync(ct);
+
+    internal async Task<bool> TryCapturePlatformDefaultUnattendedCopilotSnapshotAsync(
+        string runId,
+        CancellationToken ct = default)
+    {
+        var binding = await db.PlatformDefaultCopilotBindings.AsNoTracking()
+            .Where(x => x.Id == PlatformDefaultCopilotBindingRecord.SingletonId &&
+                        x.Status == GitHubBindingStatus.Active &&
+                        x.DeactivatedAt == null)
+            .Select(x => new CopilotBindingSnapshotSource(
+                x.Id,
+                x.CredentialReference,
+                x.CredentialVersion,
+                x.GrantDigest))
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (binding is null)
+            return false;
+
+        return await TryInsertCapabilitySnapshotAsync(new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value,
+            RunId = runId,
+            Purpose = GitHubCapabilityPurpose.UnattendedCopilot,
+            AppKind = GitHubAppKind.Copilot,
+            SourceKind = GitHubCapabilitySnapshotSourceKind.CopilotBinding,
+            ProjectId = null,
+            SourceBindingId = binding.Id,
+            CredentialReference = binding.CredentialReference,
+            CredentialVersion = binding.CredentialVersion,
+            GrantDigest = binding.GrantDigest,
+            CapturedAt = DateTimeOffset.UtcNow,
+        }, ct).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Atomically creates fresh opaque references for a child or retry from the exact immutable
@@ -1950,25 +1984,27 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
     private static void EnsureCapabilitySnapshot(RunGitHubCapabilitySnapshotRecord snapshot)
     {
         _ = new SnapshotRef(snapshot.SnapshotRef);
-        if (string.IsNullOrWhiteSpace(snapshot.RunId) || string.IsNullOrWhiteSpace(snapshot.ProjectId) ||
-            string.IsNullOrWhiteSpace(snapshot.GrantDigest))
-            throw new ArgumentException("Capability snapshots require run, project, and grant identity.", nameof(snapshot));
+        if (string.IsNullOrWhiteSpace(snapshot.RunId) || string.IsNullOrWhiteSpace(snapshot.GrantDigest))
+            throw new ArgumentException("Capability snapshots require run and grant identity.", nameof(snapshot));
 
         var valid = snapshot.Purpose switch
         {
-            GitHubCapabilityPurpose.InteractiveRepository => snapshot.AppKind == GitHubAppKind.Repo &&
+            GitHubCapabilityPurpose.InteractiveRepository => !string.IsNullOrWhiteSpace(snapshot.ProjectId) &&
+                snapshot.AppKind == GitHubAppKind.Repo &&
                 snapshot.SourceKind == GitHubCapabilitySnapshotSourceKind.UserAuthorization &&
                 snapshot.EntraObjectId is not null && snapshot.SourceAuthorizationId is not null &&
                 snapshot.SourceBindingId is null && snapshot.InstallationId is null &&
                 snapshot.RepositoryId is not null && snapshot.CredentialReference is not null &&
                 snapshot.CredentialVersion is not null,
-            GitHubCapabilityPurpose.InteractiveCopilot => snapshot.AppKind == GitHubAppKind.Repo &&
+            GitHubCapabilityPurpose.InteractiveCopilot => !string.IsNullOrWhiteSpace(snapshot.ProjectId) &&
+                snapshot.AppKind == GitHubAppKind.Repo &&
                 snapshot.SourceKind == GitHubCapabilitySnapshotSourceKind.UserAuthorization &&
                 snapshot.EntraObjectId is not null && snapshot.SourceAuthorizationId is not null &&
                 snapshot.SourceBindingId is null && snapshot.InstallationId is null &&
                 snapshot.RepositoryId is null && snapshot.CredentialReference is not null &&
                 snapshot.CredentialVersion is not null,
-            GitHubCapabilityPurpose.UnattendedRepository => snapshot.AppKind == GitHubAppKind.Repo &&
+            GitHubCapabilityPurpose.UnattendedRepository => !string.IsNullOrWhiteSpace(snapshot.ProjectId) &&
+                snapshot.AppKind == GitHubAppKind.Repo &&
                 snapshot.SourceKind == GitHubCapabilitySnapshotSourceKind.RepositoryGrant &&
                 snapshot.EntraObjectId is null && snapshot.SourceAuthorizationId is null &&
                 snapshot.SourceBindingId is null && snapshot.InstallationId is not null &&
@@ -1978,7 +2014,11 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
                 snapshot.SourceKind == GitHubCapabilitySnapshotSourceKind.CopilotBinding &&
                 snapshot.EntraObjectId is null && snapshot.SourceAuthorizationId is null &&
                 snapshot.SourceBindingId is not null && snapshot.InstallationId is null &&
-                snapshot.RepositoryId is null && snapshot.CredentialReference is not null &&
+                snapshot.RepositoryId is null &&
+                (string.Equals(snapshot.SourceBindingId, PlatformDefaultCopilotBindingRecord.SingletonId, StringComparison.Ordinal)
+                    ? snapshot.ProjectId is null || !string.IsNullOrWhiteSpace(snapshot.ProjectId)
+                    : !string.IsNullOrWhiteSpace(snapshot.ProjectId)) &&
+                snapshot.CredentialReference is not null &&
                 snapshot.CredentialVersion is not null,
             _ => false,
         };

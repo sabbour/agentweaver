@@ -134,8 +134,24 @@ public sealed record WarmPoolStatusDto
     [JsonPropertyName("available_replicas")] public required int AvailableReplicas { get; init; }
     /// <summary><c>"healthy"</c>, <c>"warning"</c>, or <c>"critical"</c>.</summary>
     [JsonPropertyName("status")]          public required string Status          { get; init; }
+    [JsonPropertyName("instances")]       public required IReadOnlyList<WarmPoolInstanceDto> Instances { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("age_seconds")]     public double?         AgeSeconds      { get; init; }
+}
+
+public sealed record WarmPoolInstanceDto
+{
+    [JsonPropertyName("name")]         public required string Name      { get; init; }
+    [JsonPropertyName("status")]       public required string Status    { get; init; }
+    [JsonPropertyName("claimed")]      public required bool Claimed     { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("claim_name")]   public string? ClaimName         { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("run_id")]       public string? RunId             { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("project_id")]   public string? ProjectId         { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("age_seconds")]  public double? AgeSeconds        { get; init; }
 }
 
 /// <summary>Status snapshot for one SandboxClaim object.</summary>

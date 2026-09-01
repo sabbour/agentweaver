@@ -105,6 +105,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.removeItem('agentweaver:last-active-project-id');
   mockRunStreamState.current = {
     events: [],
     droppedEventCount: 0,
@@ -184,6 +185,48 @@ describe('AssistantRunPage', () => {
       expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
       expect(screen.getByTestId('location-probe').textContent).toBe('/assistant?project=proj-7');
     });
+  });
+
+  it('starts a platform-wide run when /assistant has no explicit project query', async () => {
+    localStorage.setItem('agentweaver:last-active-project-id', 'proj-remembered');
+
+    render(<Wrapper><AssistantRoute /></Wrapper>);
+    typeAndSend('what projects exist?');
+
+    await waitFor(() => {
+      expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1);
+    });
+    const [firstCallArgs] = vi.mocked(apiClient.createAssistantRun).mock.calls[0];
+    expect(firstCallArgs).toEqual(
+      expect.objectContaining({
+        message: 'what projects exist?',
+      }),
+    );
+    expect(firstCallArgs.project_id).toBeUndefined();
+  });
+
+  it('still uses an explicit project query when one is present', async () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?project=proj-7']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    typeAndSend('project-scoped request');
+
+    await waitFor(() => {
+      expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1);
+    });
+    expect(apiClient.createAssistantRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'project-scoped request',
+        project_id: 'proj-7',
+      }),
+    );
   });
 
   it('creates a run on the first composer submit using real backend shape', async () => {
@@ -380,6 +423,27 @@ describe('AssistantRunPage', () => {
     expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
   });
 
+  it('renders a backend validation message only once when createAssistantRun fails with a direct message', async () => {
+    const err = new ApiError(
+      400,
+      JSON.stringify({
+        error: 'project_context_required',
+        message: 'Choose a project before starting an AgentHost assistant session.',
+      }),
+    );
+    vi.mocked(apiClient.createAssistantRun).mockRejectedValue(err);
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    typeAndSend('hello');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-error')).toBeTruthy();
+    });
+    expect(screen.getByTestId('assistant-error').textContent).toBe(
+      'Choose a project before starting an AgentHost assistant session.',
+    );
+  });
+
   it('shows a conversation-gone message and resets on 404 run_not_found from sendAssistantMessage', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
 
@@ -487,3 +551,4 @@ describe('AssistantRunPage', () => {
     );
   });
 });
+

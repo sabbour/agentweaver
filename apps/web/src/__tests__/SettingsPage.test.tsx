@@ -2,7 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SettingsPage } from '../pages/SettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api/apiClient', () => ({
@@ -22,6 +22,7 @@ beforeEach(() => {
     entra: {
       tenant_id: 'tenant-1',
       client_id: 'client-1',
+      enterprise_app_object_id: null,
       authority: 'https://login.microsoftonline.com/tenant-1/v2.0',
     },
   } as never);
@@ -39,7 +40,7 @@ beforeEach(() => {
 });
 
 describe('SettingsPage', () => {
-  it('shows Entra platform access and MCP configuration', async () => {
+  it('shows Entra platform access and falls back to the app-roles link when no enterprise app object ID is configured', async () => {
     render(
       <MemoryRouter>
         <AzureFluentProvider density="compact">
@@ -58,6 +59,29 @@ describe('SettingsPage', () => {
     expect(screen.queryByText(/Linked GitHub accounts/i)).toBeNull();
   });
 
+  it('uses the Azure Portal users blade when the enterprise app object ID is configured', async () => {
+    vi.mocked(apiClient.getAuthConfig).mockResolvedValue({
+      mode: 'Entra',
+      entra: {
+        tenant_id: 'tenant-1',
+        client_id: 'client-1',
+        enterprise_app_object_id: 'enterprise app/object',
+        authority: 'https://login.microsoftonline.com/tenant-1/v2.0',
+      },
+    } as never);
+
+    render(
+      <MemoryRouter>
+        <AzureFluentProvider density="compact">
+          <SettingsPage />
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findByRole('link', { name: 'Manage users in Azure Portal' })).getAttribute('href'))
+      .toBe('https://ms.portal.azure.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Users/objectId/enterprise%20app%2Fobject/appId/client-1');
+  });
+
   it('explains the two GitHub Apps and starts the Repo App connection', async () => {
     const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
     vi.mocked(apiClient.beginRepoAppAuthorization).mockResolvedValue({
@@ -73,5 +97,40 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalled());
     expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/repo-app/authorize');
     assign.mockRestore();
+  });
+
+  it('navigates to the last active project\'s settings page when one is remembered', async () => {
+    localStorage.setItem('agentweaver:last-active-project-id', 'proj-a');
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider>
+          <Routes>
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/projects/:projectId/settings" element={<div>Project settings route</div>} />
+          </Routes>
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage Copilot connections in projects' }));
+    expect(await screen.findByText('Project settings route')).toBeDefined();
+    localStorage.removeItem('agentweaver:last-active-project-id');
+  });
+
+  it('navigates to the landing page when no project is remembered', async () => {
+    localStorage.removeItem('agentweaver:last-active-project-id');
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider>
+          <Routes>
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/" element={<div>Landing route</div>} />
+          </Routes>
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage Copilot connections in projects' }));
+    expect(await screen.findByText('Landing route')).toBeDefined();
   });
 });

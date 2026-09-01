@@ -98,7 +98,7 @@ export const NAV_SECTIONS: NavSectionDef[] = [
     items: [
       // Workflows (formerly the "Flow" item) — route unchanged at /workflows.
       { key: 'workflows', label: 'Workflows', icon: <Flowchart24Regular />, segment: 'workflows' },
-      { key: 'settings', label: 'Settings', icon: <Options24Regular />, segment: 'settings' },
+      { key: 'settings', label: 'Project settings', icon: <Options24Regular />, segment: 'settings' },
     ],
   },
   {

@@ -19,7 +19,7 @@ import type {
   ByokProviderType,
   PlatformDefaultCopilotConnection,
 } from '../api/types';
-import { Body, PageContainer, PageHeader, PageSection } from '../components/ui';
+import { AppCard, Body, Label, PageContainer, PageHeader, PageSection } from '../components/ui';
 import { useSearchParams } from 'react-router-dom';
 
 type AiMode = 'copilot' | 'byok';
@@ -29,7 +29,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-    maxWidth: '480px',
+    maxWidth: '640px',
   },
   formActions: {
     display: 'flex',
@@ -41,12 +41,36 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
   },
+  connectionCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  connectionLabel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+  },
 });
 
 const PROVIDER_LABELS: Record<ByokProviderType, string> = {
-  openai: 'OpenAI-compatible',
   azure: 'Azure',
+  openai: 'OpenAI-compatible',
   anthropic: 'Anthropic',
+};
+
+const BASE_URL_HINTS: Record<ByokProviderType, string> = {
+  azure: 'Bare Azure OpenAI resource endpoint, no path — e.g. https://<resource>.openai.azure.com. '
+    + 'For a Foundry project or OpenAI-compatible endpoint (with a path), use "OpenAI-compatible" instead.',
+  openai: 'Any full OpenAI-compatible endpoint, e.g. https://<resource>.openai.azure.com/openai/v1 or '
+    + 'https://<resource>.services.ai.azure.com/api/projects/<project>',
+  anthropic: 'e.g. https://api.anthropic.com',
+};
+
+const BASE_URL_PLACEHOLDERS: Record<ByokProviderType, string> = {
+  azure: 'https://<resource>.openai.azure.com',
+  openai: 'https://api.example.com',
+  anthropic: 'https://api.anthropic.com',
 };
 
 const PLATFORM_COPILOT_AUTH_RESULTS = {
@@ -100,7 +124,7 @@ export function PlatformSettingsPage({
   const [platformCopilotConnection, setPlatformCopilotConnection] = useState<PlatformDefaultCopilotConnection | null>(null);
   const [platformCopilotError, setPlatformCopilotError] = useState<string | null>(null);
 
-  const [providerType, setProviderType] = useState<ByokProviderType>('openai');
+  const [providerType, setProviderType] = useState<ByokProviderType>('azure');
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -282,11 +306,11 @@ export function PlatformSettingsPage({
           )}
         </div>
       )}
-      <PageSection title="AI inference source">
-        <Body tone="muted" style={{ marginBottom: tokens.spacingVerticalM }}>
-          Choose exactly one AI source for the whole deployment. This is not per-project or
-          per-person — it applies to everyone, including background and scheduled runs.
-        </Body>
+      <PageSection
+        title="AI inference source"
+        description="Choose exactly one AI source for the whole deployment. This is not per-project or
+          per-person — it applies to everyone, including background and scheduled runs."
+      >
         {authorizationResult && (
           <MessageBar intent={authorizationResult.intent}>
             <MessageBarBody>{authorizationResult.message}</MessageBarBody>
@@ -313,64 +337,63 @@ export function PlatformSettingsPage({
                   for unattended and background work. Project-scoped Copilot connections remain
                   separate and can still be managed inside individual project settings.
                 </Body>
-                <div className={styles.stack}>
-                  <Field
-                    label="Platform-default GitHub Copilot account"
-                    hint="Used for deployment-wide GitHub Copilot mode when no BYOK provider is configured."
-                  >
-                    <div className={styles.stack}>
-                      {platformCopilotError && (
-                        <MessageBar intent="error">
-                          <MessageBarBody>{platformCopilotError}</MessageBarBody>
-                        </MessageBar>
-                      )}
-                      {!platformCopilotError && platformCopilotConnection?.connected && (
-                        <MessageBar intent="success">
-                          <MessageBarBody>
-                            Connected GitHub login: @{platformCopilotConnection.github_login ?? 'unknown'}
-                          </MessageBarBody>
-                        </MessageBar>
-                      )}
-                      {!platformCopilotError && platformCopilotConnection && !platformCopilotConnection.connected && (
-                        <MessageBar intent="warning">
-                          <MessageBarBody>No platform-default GitHub Copilot account is connected yet.</MessageBarBody>
-                        </MessageBar>
-                      )}
-                      <div className={styles.formActions}>
-                        <Button
-                          appearance={platformCopilotConnection?.connected ? 'secondary' : 'primary'}
-                          disabled={connectingCopilot || disconnectingCopilot}
-                          onClick={() => void handleConnectPlatformCopilot()}
-                        >
-                          {connectingCopilot
-                            ? 'Opening GitHub…'
-                            : platformCopilotConnection?.connected
-                              ? 'Switch GitHub Copilot account'
-                              : 'Connect GitHub Copilot'}
-                        </Button>
-                        <Button
-                          appearance="secondary"
-                          disabled={connectingCopilot || disconnectingCopilot}
-                          onClick={() => void refreshPlatformCopilotConnection()}
-                        >
-                          Refresh status
-                        </Button>
-                        {platformCopilotConnection?.connected && (
-                          <Button
-                            appearance="secondary"
-                            disabled={connectingCopilot || disconnectingCopilot}
-                            onClick={() => void handleDisconnectPlatformCopilot()}
-                          >
-                            {disconnectingCopilot ? 'Disconnecting' : 'Disconnect'}
-                          </Button>
-                        )}
-                        {(connectingCopilot || disconnectingCopilot) && (
-                          <Spinner size="extra-tiny" aria-hidden="true" />
-                        )}
-                      </div>
-                    </div>
-                  </Field>
-                </div>
+                <AppCard className={styles.connectionCard}>
+                  <div className={styles.connectionLabel}>
+                    <Label>Platform-default GitHub Copilot account</Label>
+                    <Body tone="muted">
+                      Used for deployment-wide GitHub Copilot mode when no BYOK provider is configured.
+                    </Body>
+                  </div>
+                  {platformCopilotError && (
+                    <MessageBar intent="error">
+                      <MessageBarBody>{platformCopilotError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {!platformCopilotError && platformCopilotConnection?.connected && (
+                    <MessageBar intent="success">
+                      <MessageBarBody>
+                        Connected GitHub login: @{platformCopilotConnection.github_login ?? 'unknown'}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                  {!platformCopilotError && platformCopilotConnection && !platformCopilotConnection.connected && (
+                    <MessageBar intent="warning">
+                      <MessageBarBody>No platform-default GitHub Copilot account is connected yet.</MessageBarBody>
+                    </MessageBar>
+                  )}
+                  <div className={styles.formActions}>
+                    <Button
+                      appearance={platformCopilotConnection?.connected ? 'secondary' : 'primary'}
+                      disabled={connectingCopilot || disconnectingCopilot}
+                      onClick={() => void handleConnectPlatformCopilot()}
+                    >
+                      {connectingCopilot
+                        ? 'Opening GitHub…'
+                        : platformCopilotConnection?.connected
+                          ? 'Switch GitHub Copilot account'
+                          : 'Connect GitHub Copilot'}
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      disabled={connectingCopilot || disconnectingCopilot}
+                      onClick={() => void refreshPlatformCopilotConnection()}
+                    >
+                      Refresh status
+                    </Button>
+                    {platformCopilotConnection?.connected && (
+                      <Button
+                        appearance="secondary"
+                        disabled={connectingCopilot || disconnectingCopilot}
+                        onClick={() => void handleDisconnectPlatformCopilot()}
+                      >
+                        {disconnectingCopilot ? 'Disconnecting' : 'Disconnect'}
+                      </Button>
+                    )}
+                    {(connectingCopilot || disconnectingCopilot) && (
+                      <Spinner size="extra-tiny" aria-hidden="true" />
+                    )}
+                  </div>
+                </AppCard>
                 {existingConfig && (
                   <div className={styles.formActions}>
                     <Button appearance="primary" disabled={saving} onClick={() => void handleSwitchToCopilot()}>
@@ -395,11 +418,11 @@ export function PlatformSettingsPage({
                     ))}
                   </RadioGroup>
                 </Field>
-                <Field label="Base URL" required>
+                <Field label="Base URL" required hint={BASE_URL_HINTS[providerType]}>
                   <Input
                     value={baseUrl}
                     onChange={(_, data) => setBaseUrl(data.value)}
-                    placeholder="https://api.example.com"
+                    placeholder={BASE_URL_PLACEHOLDERS[providerType]}
                     disabled={saving}
                   />
                 </Field>

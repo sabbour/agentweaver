@@ -239,7 +239,7 @@ public sealed class RunGitHubCapabilitySnapshotRecord
     public GitHubCapabilityPurpose Purpose { get; set; }
     public GitHubAppKind AppKind { get; set; }
     public GitHubCapabilitySnapshotSourceKind SourceKind { get; set; }
-    public string ProjectId { get; set; } = "";
+    public string? ProjectId { get; set; }
     public string? EntraObjectId { get; set; }
     public string? SourceAuthorizationId { get; set; }
     public string? SourceBindingId { get; set; }

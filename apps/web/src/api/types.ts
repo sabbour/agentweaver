@@ -466,8 +466,9 @@ export interface AuthConfigResponse {
   entra: {
     client_id: string | null;
     tenant_id: string | null;
+    enterprise_app_object_id: string | null;
     authority: string | null;
-  };
+  } | null;
 }
 
 export type ByokProviderType = 'openai' | 'azure' | 'anthropic';
@@ -1202,6 +1203,17 @@ export interface WarmPoolStatusDto {
   ready_replicas: number;
   available_replicas: number;
   status: string; // 'healthy' | 'warning' | 'critical'
+  instances?: WarmPoolInstanceDto[];
+  age_seconds?: number | null;
+}
+
+export interface WarmPoolInstanceDto {
+  name: string;
+  status: string; // 'available' | 'claimed' | 'warming'
+  claimed: boolean;
+  claim_name?: string | null;
+  run_id?: string | null;
+  project_id?: string | null;
   age_seconds?: number | null;
 }
 

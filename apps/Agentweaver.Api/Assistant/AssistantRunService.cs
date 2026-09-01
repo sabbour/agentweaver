@@ -300,18 +300,13 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     {
         if (!_agentHostEnabled)
             return;
-        if (run.ProjectId is not { } projectId)
-        {
-            throw new AssistantRunHttpException(
-                StatusCodes.Status400BadRequest,
-                "project_context_required",
-                "Choose a project before starting an AgentHost assistant session.");
-        }
 
         await using var scope = _scopeFactory.CreateAsyncScope();
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
-            throw new GitHubCopilotConnectionRequiredException(projectId);
+            throw run.ProjectId is { } projectId
+                ? new GitHubCopilotConnectionRequiredException(projectId)
+                : new GitHubCopilotConnectionRequiredException();
     }
 
     public Task<OperatorAssistantResponse> SendMessageAsync(

@@ -55,6 +55,7 @@ const VARS = {
   APPINSIGHTS_WORKSPACE_ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
   ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
   ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
+  ENTRA_ENTERPRISE_APP_OBJECT_ID: "77777777-8888-9999-0000-111111111111",
 };
 
 test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IMAGE_TAG/AGENTHOST_IMAGE_TAG", () => {
@@ -94,6 +95,7 @@ test("buildRuntimeConfigLiterals() derives public Entra URLs from HOST and defau
   assert.equal(literals.AUTH_MODE, "Entra");
   assert.equal(literals.ENTRA_CLIENT_ID, VARS.ENTRA_CLIENT_ID);
   assert.equal(literals.ENTRA_TENANT_ID, VARS.ENTRA_TENANT_ID);
+  assert.equal(literals.ENTRA_ENTERPRISE_APP_OBJECT_ID, VARS.ENTRA_ENTERPRISE_APP_OBJECT_ID);
   assert.equal(
     literals.ENTRA_REDIRECT_URI,
     "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/entra/callback",
@@ -109,16 +111,18 @@ test("buildRuntimeConfigLiterals() derives public Entra URLs from HOST and defau
   );
 });
 
-test("buildRuntimeConfigLiterals() passes AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID through when set", () => {
+test("buildRuntimeConfigLiterals() passes AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID through and allows an optional enterprise app object ID", () => {
   const literals = buildRuntimeConfigLiterals({
     ...VARS,
     AUTH_MODE: "Entra",
     ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
     ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
+    ENTRA_ENTERPRISE_APP_OBJECT_ID: "",
   });
   assert.equal(literals.AUTH_MODE, "Entra");
   assert.equal(literals.ENTRA_CLIENT_ID, "11111111-2222-3333-4444-555555555555");
   assert.equal(literals.ENTRA_TENANT_ID, "66666666-7777-8888-9999-000000000000");
+  assert.equal(literals.ENTRA_ENTERPRISE_APP_OBJECT_ID, "");
 });
 
 test("buildRuntimeConfigLiterals() throws when AUTH_MODE=Entra but ENTRA_CLIENT_ID is missing", () => {
@@ -173,6 +177,7 @@ test("rewriteOverlayKustomization() rewrites every images: entry and configMapGe
   assert.match(rewritten, /- "AUTH_MODE=Entra"/);
   assert.match(rewritten, /- "ENTRA_CLIENT_ID=11111111-2222-3333-4444-555555555555"/);
   assert.match(rewritten, /- "ENTRA_TENANT_ID=66666666-7777-8888-9999-000000000000"/);
+  assert.match(rewritten, /- "ENTRA_ENTERPRISE_APP_OBJECT_ID=77777777-8888-9999-0000-111111111111"/);
   assert.match(
     rewritten,
     /- "ENTRA_REDIRECT_URI=https:\/\/agentweaver\.abc123def456\.westus2\.staging\.aksapp\.io\/auth\/entra\/callback"/,
@@ -218,6 +223,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__Mode\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: AUTH_MODE\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__ClientId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_CLIENT_ID\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__TenantId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_TENANT_ID\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__Entra__EnterpriseAppObjectId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_ENTERPRISE_APP_OBJECT_ID\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__RedirectUri\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_REDIRECT_URI\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__CopilotApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: COPILOT_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);

@@ -1,5 +1,6 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { authConfigModeToAuthMode, buildEntraAdminLink } from '../api/entraAdminLink';
 import { formatApiErrorMessage } from '../api/errors';
 import { GitHubCopilotConnectionPicker } from '../components/GitHubCopilotConnectionPicker';
 import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
@@ -12,6 +13,7 @@ import {
   Field,
   Input,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   Select,
   Spinner,
@@ -24,6 +26,7 @@ import { Branch24Regular, Delete24Regular, People24Regular, Settings24Regular, S
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
+  AuthConfigResponse,
   Project,
   ProjectAccessOverview,
   SandboxPolicy,
@@ -350,6 +353,8 @@ export function ProjectSettingsPage() {
   const [accessOverview, setAccessOverview] = useState<ProjectAccessOverview | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
   const [accessError, setAccessError] = useState<string | null>(null);
+  const [accessOverviewUnavailable, setAccessOverviewUnavailable] = useState(false);
+  const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
   const [principalId, setPrincipalId] = useState('');
   const [principalDisplayName, setPrincipalDisplayName] = useState('');
   const [projectRole, setProjectRole] = useState('Viewer');
@@ -387,10 +392,23 @@ export function ProjectSettingsPage() {
     return () => { cancelled = true; };
   }, [projectId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void apiClient.getAuthConfig()
+      .then((config) => {
+        if (!cancelled) setAuthConfig(config);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthConfig(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   const refreshAccessOverview = useCallback(async () => {
     if (!projectId) return;
     setAccessLoading(true);
     setAccessError(null);
+    setAccessOverviewUnavailable(false);
     try {
       // Assumption for Tank's authz rollout: a single access snapshot endpoint returns
       // the current auth mode, platform-role view, and project role assignments.
@@ -398,7 +416,7 @@ export function ProjectSettingsPage() {
       setAccessOverview(overview);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
-        setAccessError('Access management is not available on this deployment yet.');
+        setAccessOverviewUnavailable(true);
       } else {
         setAccessError(formatError(err));
       }
@@ -643,7 +661,15 @@ export function ProjectSettingsPage() {
     ? activeSection
     : 'unattended';
   const activeDef = visibleSections.find((s) => s.id === displayedSection) ?? visibleSections[0];
-  const authModeLabel = accessOverview ? AUTH_MODE_LABELS[accessOverview.auth_mode] : 'GitHub';
+  const fallbackAuthMode = authConfigModeToAuthMode(authConfig?.mode);
+  const resolvedAuthMode = accessOverview?.auth_mode ?? fallbackAuthMode;
+  const authModeLabel = resolvedAuthMode ? AUTH_MODE_LABELS[resolvedAuthMode] : 'GitHub';
+  const entraAdminLink = buildEntraAdminLink(authConfig?.entra);
+  const accessStatusMessage = accessOverviewUnavailable
+    ? resolvedAuthMode === 'entra'
+      ? 'Access management is handled in Microsoft Entra ID for this deployment.'
+      : 'Access management is not available on this deployment yet.'
+    : accessError;
   const projectRoleSummary = accessOverview?.current_user_project_role ?? (project?.owner ? `Owner (${project.owner})` : 'Unspecified');
 
   return (
@@ -848,9 +874,22 @@ export function ProjectSettingsPage() {
             {displayedSection === 'access' && (
               <div className={styles.section}>
                 {accessLoading && <Spinner label="Loading access settings" size="extra-tiny" />}
-                {accessError && (
+                {accessStatusMessage && (
                   <MessageBar intent="warning">
-                    <MessageBarBody>{accessError}</MessageBarBody>
+                    <MessageBarBody>{accessStatusMessage}</MessageBarBody>
+                    {accessOverviewUnavailable && resolvedAuthMode === 'entra' && entraAdminLink && (
+                      <MessageBarActions>
+                        <Button
+                          as="a"
+                          href={entraAdminLink.href}
+                          target="_blank"
+                          rel="noreferrer"
+                          size="small"
+                        >
+                          {entraAdminLink.label}
+                        </Button>
+                      </MessageBarActions>
+                    )}
                   </MessageBar>
                 )}
                 {accessOverview && (
@@ -989,13 +1028,19 @@ export function ProjectSettingsPage() {
                   </Body>
                   <TitleText>GitHub Copilot account</TitleText>
                   <Body as="p" tone="muted">
-                    Connect or switch the project-scoped GitHub account used for Copilot capabilities.
+                    This controls the GitHub Copilot account used for this project’s background AI and other Copilot-powered generation. It does not control repository access.
                   </Body>
-                  <GitHubCopilotConnectionPicker projectId={projectId} showConnectionStatus />
+                  <GitHubCopilotConnectionPicker
+                    projectId={projectId}
+                    showConnectionStatus
+                    suppressProjectOverrideWhenPlatformDefault
+                  />
                   <Divider />
                   <TitleText>Background requirements</TitleText>
                   <Body as="p" tone="muted">
-                    Background runs need the following server-verified prerequisites.
+                    {project.source_repository
+                      ? 'These server-verified prerequisites cover repository access for background branch, push, and pull-request work on this project’s connected GitHub repository. They are separate from the GitHub Copilot AI access shown above.'
+                      : 'These server-verified prerequisites apply after you connect a GitHub repository. They cover repository access for background branch, push, and pull-request work and are separate from the GitHub Copilot AI access shown above.'}
                   </Body>
                   {unattendedLoading && <Spinner label="Checking automation readiness" size="extra-tiny" />}
                   {unattendedReadiness && (

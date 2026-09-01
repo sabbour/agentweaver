@@ -268,16 +268,27 @@ public sealed class DiagnosticsService
 
         var podsTask = GetAgentPodInventoryAsync(ct);
         var pendingTask = GetPendingCapacityRunsAsync(ct);
-        var warmPoolsTask = GetWarmPoolInventoryAsync(ct);
+        var warmPoolSnapshotsTask = GetWarmPoolSnapshotInventoryAsync(ct);
+        var warmPoolPodsTask = GetWarmPoolPodInventoryAsync(ct);
         var claimsTask = GetSandboxClaimInventoryAsync(ct);
 
-        await Task.WhenAll(checksTask, podsTask, pendingTask, warmPoolsTask, claimsTask).ConfigureAwait(false);
+        await Task.WhenAll(
+            checksTask,
+            podsTask,
+            pendingTask,
+            warmPoolSnapshotsTask,
+            warmPoolPodsTask,
+            claimsTask).ConfigureAwait(false);
 
         var checks = await checksTask.ConfigureAwait(false);
         var (active, orphaned) = await podsTask.ConfigureAwait(false);
         var pending = await pendingTask.ConfigureAwait(false);
-        var warmPools = await warmPoolsTask.ConfigureAwait(false);
         var claims = await claimsTask.ConfigureAwait(false);
+        var warmPools = BuildWarmPoolInventory(
+            await warmPoolSnapshotsTask.ConfigureAwait(false),
+            await warmPoolPodsTask.ConfigureAwait(false),
+            claims,
+            await ResolveRunProjectIdsAsync(claims.Select(c => c.RunId), ct).ConfigureAwait(false));
 
         overallSw.Stop();
 
@@ -585,9 +596,9 @@ public sealed class DiagnosticsService
     /// <summary>
     /// Lists all SandboxWarmPool CRD objects in the namespace. Best-effort: returns empty on any failure.
     /// </summary>
-    private async Task<IReadOnlyList<WarmPoolStatusDto>> GetWarmPoolInventoryAsync(CancellationToken ct)
+    private async Task<IReadOnlyList<WarmPoolSnapshot>> GetWarmPoolSnapshotInventoryAsync(CancellationToken ct)
     {
-        if (_k8s is null) return Array.Empty<WarmPoolStatusDto>();
+        if (_k8s is null) return Array.Empty<WarmPoolSnapshot>();
 
         var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
         try
@@ -599,7 +610,7 @@ public sealed class DiagnosticsService
             var json = System.Text.Json.JsonSerializer.Serialize(list);
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var now = DateTimeOffset.UtcNow;
-            var result = new List<WarmPoolStatusDto>();
+            var result = new List<WarmPoolSnapshot>();
 
             if (!doc.RootElement.TryGetProperty("items", out var items)) return result;
             foreach (var item in items.EnumerateArray())
@@ -619,20 +630,171 @@ public sealed class DiagnosticsService
                     : ready > 0 ? "warning"
                     : "critical";
 
-                result.Add(new WarmPoolStatusDto
-                {
-                    Name              = name,
-                    DesiredReplicas   = desired,
-                    ReadyReplicas     = ready,
-                    AvailableReplicas = available,
-                    Status            = poolStatus,
-                    AgeSeconds        = age,
-                });
+                result.Add(new WarmPoolSnapshot(
+                    name,
+                    desired,
+                    ready,
+                    available,
+                    poolStatus,
+                    age));
             }
             return result;
         }
         catch (OperationCanceledException) { throw; }
-        catch { return Array.Empty<WarmPoolStatusDto>(); }
+        catch { return Array.Empty<WarmPoolSnapshot>(); }
+    }
+
+    private async Task<IReadOnlyList<WarmPoolPodSnapshot>> GetWarmPoolPodInventoryAsync(CancellationToken ct)
+    {
+        if (_k8s is null) return Array.Empty<WarmPoolPodSnapshot>();
+
+        var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
+        var agentHostWarmPoolName = _configuration["Sandbox:Kubernetes:AgentHostWarmPoolRef"] ?? "agentweaver-agent-host";
+        try
+        {
+            var list = await _k8s.CoreV1.ListNamespacedPodAsync(ns, cancellationToken: ct).ConfigureAwait(false);
+            var now = DateTimeOffset.UtcNow;
+            var result = new List<WarmPoolPodSnapshot>();
+
+            foreach (var pod in list.Items)
+            {
+                var name = pod.Metadata?.Name;
+                if (string.IsNullOrWhiteSpace(name) ||
+                    !name.StartsWith(WarmPoolPodPrefix, StringComparison.Ordinal))
+                    continue;
+
+                double? age = null;
+                if (pod.Metadata?.CreationTimestamp is { } created)
+                    age = (now - created).TotalSeconds;
+
+                result.Add(new WarmPoolPodSnapshot(
+                    agentHostWarmPoolName,
+                    name,
+                    IsPodReady(pod),
+                    age));
+            }
+            return result;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch { return Array.Empty<WarmPoolPodSnapshot>(); }
+    }
+
+    private static bool IsPodReady(k8s.Models.V1Pod pod)
+    {
+        if (pod.Status?.Conditions is { Count: > 0 } conditions)
+        {
+            foreach (var condition in conditions)
+            {
+                if (string.Equals(condition.Type, "Ready", StringComparison.Ordinal) &&
+                    string.Equals(condition.Status, "True", StringComparison.Ordinal))
+                    return true;
+            }
+        }
+
+        return string.Equals(pod.Status?.Phase, "Running", StringComparison.Ordinal);
+    }
+
+    private static IReadOnlyList<WarmPoolStatusDto> BuildWarmPoolInventory(
+        IReadOnlyList<WarmPoolSnapshot> pools,
+        IReadOnlyList<WarmPoolPodSnapshot> pods,
+        IReadOnlyList<SandboxClaimObjectDto> claims,
+        IReadOnlyDictionary<string, string> runProjects)
+    {
+        var claimsByPool = claims
+            .Where(c => !string.IsNullOrWhiteSpace(c.WarmPool))
+            .GroupBy(c => c.WarmPool!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+        var podsByPool = pods
+            .GroupBy(p => p.WarmPoolName, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.OrderBy(p => p.PodName, StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
+
+        var result = new List<WarmPoolStatusDto>(pools.Count);
+        foreach (var pool in pools)
+        {
+            var instances = new List<WarmPoolInstanceDto>();
+            var seenNames = new HashSet<string>(StringComparer.Ordinal);
+            var poolClaims = claimsByPool.TryGetValue(pool.Name, out var matchingClaims)
+                ? matchingClaims
+                : [];
+            var claimsBySandbox = poolClaims
+                .Where(c => !string.IsNullOrWhiteSpace(c.BoundSandbox))
+                .GroupBy(c => c.BoundSandbox!, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+            if (podsByPool.TryGetValue(pool.Name, out var poolPods))
+            {
+                foreach (var pod in poolPods)
+                {
+                    seenNames.Add(pod.PodName);
+                    if (claimsBySandbox.TryGetValue(pod.PodName, out var claim))
+                    {
+                        instances.Add(new WarmPoolInstanceDto
+                        {
+                            Name = pod.PodName,
+                            Status = "claimed",
+                            Claimed = true,
+                            ClaimName = claim.Name,
+                            RunId = claim.RunId,
+                            ProjectId = claim.RunId is { Length: > 0 } && runProjects.TryGetValue(claim.RunId, out var projectId)
+                                ? projectId
+                                : null,
+                            AgeSeconds = pod.AgeSeconds ?? claim.AgeSeconds,
+                        });
+                    }
+                    else
+                    {
+                        instances.Add(new WarmPoolInstanceDto
+                        {
+                            Name = pod.PodName,
+                            Status = pod.Ready ? "available" : "warming",
+                            Claimed = false,
+                            AgeSeconds = pod.AgeSeconds,
+                        });
+                    }
+                }
+            }
+
+            foreach (var claim in poolClaims.Where(c => !string.IsNullOrWhiteSpace(c.BoundSandbox)))
+            {
+                if (!seenNames.Add(claim.BoundSandbox!))
+                    continue;
+
+                instances.Add(new WarmPoolInstanceDto
+                {
+                    Name = claim.BoundSandbox!,
+                    Status = "claimed",
+                    Claimed = true,
+                    ClaimName = claim.Name,
+                    RunId = claim.RunId,
+                    ProjectId = claim.RunId is { Length: > 0 } && runProjects.TryGetValue(claim.RunId, out var projectId)
+                        ? projectId
+                        : null,
+                    AgeSeconds = claim.AgeSeconds,
+                });
+            }
+
+            result.Add(new WarmPoolStatusDto
+            {
+                Name = pool.Name,
+                DesiredReplicas = pool.DesiredReplicas,
+                ReadyReplicas = pool.ReadyReplicas,
+                AvailableReplicas = pool.AvailableReplicas,
+                Status = pool.Status,
+                Instances = instances
+                    .OrderBy(i => i.Status switch
+                    {
+                        "available" => 0,
+                        "warming" => 1,
+                        _ => 2,
+                    })
+                    .ThenBy(i => i.Name, StringComparer.Ordinal)
+                    .ToList(),
+                AgeSeconds = pool.AgeSeconds,
+            });
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -661,9 +823,13 @@ public sealed class DiagnosticsService
                 var name = meta.ValueKind != System.Text.Json.JsonValueKind.Undefined && meta.TryGetProperty("name", out var n) ? n.GetString() : null;
                 if (name is null) continue;
 
-                // Infer run ID from claim name (agent-{first12hex})
-                string? runId = name.StartsWith(SandboxClaimConventions.AgentHostClaimPrefix, StringComparison.Ordinal)
-                    ? name[SandboxClaimConventions.AgentHostClaimPrefix.Length..] : null;
+                var annotatedRunId = SandboxClaimConventions.TryGetRunIdAnnotation(item);
+                string? runId = annotatedRunId;
+                if (string.IsNullOrWhiteSpace(runId) &&
+                    name.StartsWith(SandboxClaimConventions.AgentHostClaimPrefix, StringComparison.Ordinal))
+                {
+                    runId = name[SandboxClaimConventions.AgentHostClaimPrefix.Length..];
+                }
 
                 var st = item.TryGetProperty("status", out var s) ? s : default;
                 var ready = false;
@@ -1267,4 +1433,79 @@ public sealed class DiagnosticsService
     {
         public double Headroom => Math.Min(PodLimit - PodUsed, SandboxClaimLimit - SandboxClaimUsed);
     }
+
+    private async Task<IReadOnlyDictionary<string, string>> ResolveRunProjectIdsAsync(
+        IEnumerable<string?> runIds,
+        CancellationToken ct)
+    {
+        var ids = runIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (ids.Count == 0)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var provider = _configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
+        if (provider is "postgres" or "postgresql")
+        {
+            if (_scopeFactory is null)
+                return new Dictionary<string, string>(StringComparer.Ordinal);
+
+            using var scope = _scopeFactory.CreateScope();
+            var memDb = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var rows = await memDb.Runs.AsNoTracking()
+                .Where(r => r.ProjectId != null && ids.Contains(r.RunId))
+                .Select(r => new { r.RunId, r.ProjectId })
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+            return rows
+                .Where(r => !string.IsNullOrWhiteSpace(r.ProjectId))
+                .ToDictionary(r => r.RunId, r => r.ProjectId!, StringComparer.Ordinal);
+        }
+
+        if (_db is null)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        await using var conn = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = conn.CreateCommand();
+        var paramNames = new List<string>(ids.Count);
+        for (var i = 0; i < ids.Count; i++)
+        {
+            var paramName = $"$runId{i}";
+            paramNames.Add(paramName);
+            command.Parameters.AddWithValue(paramName, ids[i]);
+        }
+
+        command.CommandText =
+            $"SELECT run_id, project_id FROM runs WHERE project_id IS NOT NULL AND run_id IN ({string.Join(", ", paramNames)});";
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+        {
+            if (reader.IsDBNull(1))
+                continue;
+
+            var runId = reader.GetString(0);
+            var projectId = reader.GetString(1);
+            if (!string.IsNullOrWhiteSpace(runId) && !string.IsNullOrWhiteSpace(projectId))
+                result[runId] = projectId;
+        }
+
+        return result;
+    }
+
+    private sealed record WarmPoolSnapshot(
+        string Name,
+        int DesiredReplicas,
+        int ReadyReplicas,
+        int AvailableReplicas,
+        string Status,
+        double? AgeSeconds);
+
+    private sealed record WarmPoolPodSnapshot(
+        string WarmPoolName,
+        string PodName,
+        bool Ready,
+        double? AgeSeconds);
 }

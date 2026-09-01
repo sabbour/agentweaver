@@ -6,10 +6,12 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -87,6 +89,50 @@ public sealed class AssistantRunEndpointsTests
         {
             try { Directory.Delete(projectDirectory, recursive: true); } catch { /* best effort */ }
         }
+    }
+
+    [Fact]
+    public async Task StartRun_AgentHostWithoutProject_UsesPlatformDefaultCopilotBinding()
+    {
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        await SeedPlatformDefaultCopilotBindingAsync(factory);
+        var client = AuthedClient(factory);
+
+        var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        {
+            message = "Start a platform-wide AgentHost assistant session",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = body.GetProperty("run_id").GetString();
+        runId.Should().NotBeNullOrWhiteSpace();
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var run = await runStore.GetAsync(RunId.Parse(runId!), CancellationToken.None);
+        run.Should().NotBeNull();
+        run!.ProjectId.Should().BeNull("the assistant route is platform-wide unless a project is explicitly supplied");
+        factory.Agent.Requests.Should().ContainSingle(request => request.ProjectId == null);
+    }
+
+    [Fact]
+    public async Task StartRun_AgentHostWithoutProjectAndWithoutPlatformDefault_ReturnsPlatformConnectionRequirement()
+    {
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        var client = AuthedClient(factory);
+
+        var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        {
+            message = "Start a platform-wide AgentHost assistant session",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var requirement = await response.Content.ReadFromJsonAsync<GitHubCopilotConnectionRequirement>();
+        requirement.Should().NotBeNull();
+        requirement!.Message.Should().Be(GitHubCopilotConnectionRequirement.PlatformDefaultRequirementMessage);
+        requirement.Action.ProjectId.Should().BeEmpty();
+        factory.Agent.Requests.Should().BeEmpty(
+            "the AgentHost path must stop before any assistant work can run without a redeemable platform-default Copilot binding");
     }
 
     [Fact]
@@ -883,6 +929,23 @@ public sealed class AssistantRunEndpointsTests
 
     private static Task<string> WaitForApprovalRequestIdAsync(FakeOperatorAssistantAgent agent) =>
         agent.ApprovalRequestId.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+    private static async Task SeedPlatformDefaultCopilotBindingAsync(AssistantWebApplicationFactory factory)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "platform-version",
+            GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
 
     private sealed record EventRow(int Sequence, string Type, JsonElement Payload);
 }

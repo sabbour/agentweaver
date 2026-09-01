@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectSettingsPage } from '../pages/ProjectSettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -14,6 +15,7 @@ import {
 import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
+    getAuthConfig: vi.fn(),
     getProject: vi.fn(),
     getServerInfo: vi.fn(),
     getSandboxPolicy: vi.fn(),
@@ -26,6 +28,7 @@ vi.mock('../api/apiClient', () => ({
     getUnattendedReadiness: vi.fn(),
     beginProjectCopilotAuthorization: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
+    getPlatformDefaultCopilotConnection: vi.fn(),
   },
 }));
 
@@ -47,6 +50,15 @@ function renderPage(projectId: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(apiClient.getAuthConfig).mockResolvedValue({
+    mode: 'Entra',
+    entra: {
+      tenant_id: 'tenant-1',
+      client_id: 'client-1',
+      enterprise_app_object_id: null,
+      authority: 'https://login.microsoftonline.com/tenant-1/v2.0',
+    },
+  } as never);
   vi.mocked(apiClient.getProject).mockResolvedValue({
     project_id: 'proj-1',
     name: 'Demo',
@@ -109,6 +121,10 @@ beforeEach(() => {
     status: 'not_connected',
     github_login: null,
   });
+  vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
+    connected: false,
+    github_login: null,
+  });
 });
 
 afterEach(() => {
@@ -159,9 +175,47 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Background/i }));
 
     expect(await screen.findByText('Background automation readiness')).toBeDefined();
+    expect(screen.getByText(
+      'This controls the GitHub Copilot account used for this project’s background AI and other Copilot-powered generation. It does not control repository access.',
+    )).toBeDefined();
+    expect(screen.getByText(
+      'These server-verified prerequisites apply after you connect a GitHub repository. They cover repository access for background branch, push, and pull-request work and are separate from the GitHub Copilot AI access shown above.',
+    )).toBeDefined();
     expect(screen.getByText('copilot_binding_required')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
     expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
+  });
+
+  it('uses connected-repository wording for background requirements when a repo is attached', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      project_id: 'proj-1',
+      name: 'Demo',
+      origin: 'github',
+      source_repository: 'sabbour/agentweaver',
+      working_directory: 'C:/demo',
+      default_branch: 'main',
+      owner: 'sabbour',
+      default_provider: 'github-copilot',
+      default_model_github_copilot: 'gpt-4',
+      default_model_microsoft_foundry: null,
+      blueprint_generation_model: null,
+      workflow_generation_model: 'claude-sonnet-4.6',
+      outcome_spec_generation_model: null,
+      preview_approval_timeout_minutes: 30,
+      available: true,
+      state: 'active',
+      created_at: '2026-07-07T00:00:00Z',
+      updated_at: '2026-07-07T00:00:00Z',
+    } as never);
+
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
+
+    expect(await screen.findByText(
+      'These server-verified prerequisites cover repository access for background branch, push, and pull-request work on this project’s connected GitHub repository. They are separate from the GitHub Copilot AI access shown above.',
+    )).toBeDefined();
   });
 
   it('removes legacy identity and webhook controls', async () => {
@@ -198,6 +252,28 @@ describe('ProjectSettingsPage', () => {
 
     expect(await screen.findByText('Platform access')).toBeDefined();
     expect(screen.getByText('Ada Lovelace')).toBeDefined();
+  });
+
+  it('links Entra access management when the access overview endpoint is unavailable', async () => {
+    vi.mocked(apiClient.getProjectAccessOverview).mockRejectedValue(new ApiError(404, 'Not Found') as never);
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
+
+    expect(await screen.findByText('Access management is handled in Microsoft Entra ID for this deployment.')).toBeDefined();
+    expect((await screen.findByRole('link', { name: 'Manage in Microsoft Entra ID' })).getAttribute('href'))
+      .toBe('https://entra.microsoft.com/tenant-1/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/client-1/isMSAApp~/false');
+  });
+
+  it('uses the auth config mode as the authentication-mode fallback when access overview is unavailable', async () => {
+    vi.mocked(apiClient.getProjectAccessOverview).mockRejectedValue(new ApiError(404, 'Not Found') as never);
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+
+    expect(await screen.findByText('Entra ID')).toBeDefined();
+    expect(screen.queryByText(/^GitHub$/)).toBeNull();
   });
 
   it('adds a project member through Tank role-assignment contract', async () => {

@@ -707,6 +707,51 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     }
 
     [Fact]
+    public async Task CapabilitySnapshotLifecycle_AgentHostAllowsProjectlessRunWithPlatformDefaultCopilotBinding()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "platform-version",
+            GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var run = RunForSnapshotLifecycle(projectId: null);
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeTrue();
+        var snapshots = await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString());
+        snapshots.Should().ContainSingle(snapshot =>
+            snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+            snapshot.SourceBindingId == PlatformDefaultCopilotBindingRecord.SingletonId &&
+            snapshot.ProjectId == null &&
+            snapshot.CredentialReference == "copilot-app-platform-default-version" &&
+            snapshot.CredentialVersion == "platform-version" &&
+            snapshot.GrantDigest == "platform-digest");
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeTrue(
+            "resume must continue accepting the existing project-less platform-default Copilot snapshot");
+
+        var revokedAt = DateTimeOffset.UtcNow;
+        await db.PlatformDefaultCopilotBindings
+            .Where(binding => binding.Id == PlatformDefaultCopilotBindingRecord.SingletonId)
+            .ExecuteUpdateAsync(update => update
+                .SetProperty(binding => binding.Status, GitHubBindingStatus.Revoked)
+                .SetProperty(binding => binding.DeactivatedAt, revokedAt));
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenGitHubOriginProjectHasNoHistoryAtAll()
     {
         // Smith's proven defect: a GitHub-origin project that has never recorded ANY GitHub App

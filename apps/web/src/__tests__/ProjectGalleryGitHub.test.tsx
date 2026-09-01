@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectListProvider } from '../hooks/useProjectList';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
@@ -17,6 +18,7 @@ vi.mock('../api/apiClient', () => ({
     suggestBlueprint: vi.fn(),
     listGitHubRepositorySelections: vi.fn(),
     issueGitHubRepositorySelection: vi.fn(),
+    beginRepoAppAuthorization: vi.fn(),
   },
 }));
 
@@ -71,5 +73,30 @@ describe('ProjectGalleryPage repository authorization', () => {
     expect(await screen.findByText(/The Copilot App is connected to this project/)).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByText(/The Copilot App is connected to this project/)).toBeNull();
+  });
+
+  it('offers a Connect GitHub action when the Repo App is not yet connected', async () => {
+    vi.mocked(apiClient.listGitHubRepositorySelections).mockRejectedValue(
+      new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
+    );
+    vi.mocked(apiClient.beginRepoAppAuthorization).mockResolvedValue({
+      authorization_url: 'https://github.com/login/oauth/authorize?client_id=repo-app',
+      transaction_id: 'txn-1',
+      expires_at: '2026-08-28T00:05:00+00:00',
+    });
+    const assignSpy = vi.fn();
+    vi.stubGlobal('location', { ...window.location, assign: assignSpy });
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
+
+    const connectButton = await screen.findByRole('button', { name: 'Connect GitHub' });
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+
+    fireEvent.click(connectButton);
+    await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalled());
+    await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?client_id=repo-app'));
+
+    vi.unstubAllGlobals();
   });
 });
