@@ -195,10 +195,14 @@ public sealed class RemoteOperatorAssistantAgent(
             return;
 
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
-        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
-            throw run.ProjectId is { } projectId
-                ? new ModelProviderConnectionRequiredException(projectId)
-                : new ModelProviderConnectionRequiredException();
+
+        // Operator/Assistant turns are personal sessions, not project-scoped work: run.ProjectId
+        // (when present) is only incidental UI context, so credential resolution must always go
+        // through the PLATFORM-level Copilot connection rather than that project's own (possibly
+        // broken/missing) binding. A failure always surfaces the platform-settings CTA.
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
+                .ConfigureAwait(false))
+            throw new ModelProviderConnectionRequiredException();
     }
 
     /// <summary>
