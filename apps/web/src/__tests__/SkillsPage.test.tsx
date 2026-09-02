@@ -204,6 +204,7 @@ describe('SkillsPage — catalog', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('code-review')).toBeTruthy());
+    expect(screen.getByRole('heading', { level: 2, name: 'code-review' })).toBeTruthy();
     expect(screen.getByText('Reviews code for correctness.')).toBeTruthy();
     expect(screen.getByText('active')).toBeTruthy();
     expect(screen.getByText('connected-repo-sync')).toBeTruthy();
@@ -253,6 +254,7 @@ describe('SkillsPage — assignments', () => {
     await waitFor(() => expect(screen.getByText('code-review')).toBeTruthy());
     fireEvent.click(screen.getByRole('tab', { name: 'Assignments' }));
 
+    expect(screen.getByRole('heading', { level: 2, name: 'code-review' })).toBeTruthy();
     await waitFor(() => expect(screen.getByText('Smith — Lead PM')).toBeTruthy());
     expect(screen.getByText('Neo — Lead Architect')).toBeTruthy();
 
