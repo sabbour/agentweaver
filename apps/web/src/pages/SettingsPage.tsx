@@ -3,6 +3,7 @@ import { buildEntraAdminLink } from '../api/entraAdminLink';
 import { MCP_URL } from '../config';
 import {
   Button,
+  Divider,
   Field,
   Input,
   MessageBar,
@@ -22,7 +23,6 @@ import {
   PageContainer,
   PageHeader,
   PageSection,
-  SetupReadiness,
   TitleText,
 } from '../components/ui';
 
@@ -131,7 +131,7 @@ export function SettingsPage() {
       queueMicrotask(() => { void loadRepoAppConnection(); });
     } else {
       queueMicrotask(() => {
-        setRepoAppError('The GitHub Repo App connection failed. Start a new connection from Account settings.');
+        setRepoAppError('The GitHub Repo App connection could not be completed. Start a new connection from Account settings.');
         setRepoAppConnecting(false);
         setRepoAppStatusLoading(false);
       });
@@ -215,7 +215,7 @@ export function SettingsPage() {
 
       <PageSection
         title="GitHub connections"
-        description="GitHub Copilot provides AI access. The Repo App provides repository access."
+        description="GitHub Copilot provides AI access. The separate Repo App provides repository access."
       >
         <div className={styles.section}>
           <div className={styles.subBlock}>
@@ -235,32 +235,30 @@ export function SettingsPage() {
               </Button>
             </div>
           </div>
+          <Divider />
           <div className={styles.subBlock}>
-            <SetupReadiness
-              compact
-              model={{
-                title: 'Repository access',
-                description: 'Local agent work can continue without repository access.',
-                loading: repoAppStatusLoading,
-                loadingLabel: 'Loading repository access status',
-                error: repoAppError,
-                items: [{
-                  id: 'repository-access',
-                  title: 'GitHub Repo App',
-                  description: repoAppConnection?.connected
-                    ? `Repository access is ready for @${repoAppConnection.github_login ?? 'unknown'}. Scope: Account.`
-                    : 'Pull-request publishing and GitHub repository operations require repository access.',
-                  requirement: 'optional',
-                  status: repoAppConnection?.connected ? 'ready' : 'optional',
-                }],
-              }}
-              onRetry={() => void loadRepoAppConnection()}
-              primaryAction={!repoAppConnection?.connected ? (
+            <TitleText>GitHub Repo App</TitleText>
+            <Body tone="muted">
+              Connect your GitHub account to browse, create, and manage repositories in projects.
+            </Body>
+            {repoAppError && (
+              <MessageBar intent="error"><MessageBarBody>{repoAppError}</MessageBarBody></MessageBar>
+            )}
+            {repoAppStatusLoading ? (
+              <Spinner size="tiny" label="Checking GitHub Repo App connection" />
+            ) : repoAppConnection?.connected ? (
+              <MessageBar intent="success">
+                <MessageBarBody>
+                  Connected GitHub login: @{repoAppConnection.github_login ?? 'unknown'}
+                </MessageBarBody>
+              </MessageBar>
+            ) : (
+              <div className={styles.formActions}>
                 <Button appearance="primary" disabled={repoAppConnecting} onClick={() => void connectRepoApp()}>
-                  {repoAppConnecting ? 'Opening GitHub' : 'Authorize repository access'}
+                  {repoAppConnecting ? 'Opening GitHub…' : 'Connect GitHub Repo App'}
                 </Button>
-              ) : undefined}
-            />
+              </div>
+            )}
           </div>
         </div>
       </PageSection>
