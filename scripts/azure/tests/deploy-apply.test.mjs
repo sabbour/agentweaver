@@ -113,7 +113,7 @@ function makeFakes({
   };
 
   const log = {
-    info: () => {},
+    info: (msg) => calls.push({ type: "info", msg }),
     section: () => {},
     field: () => {},
     ok: () => {},
@@ -253,6 +253,19 @@ test("run(): accepts a valid wildcard managed domain and renders its public host
     1,
     "a valid managed domain must proceed to manifest rendering",
   );
+});
+
+test("run(): prints the exact non-secret Copilot callback registration guidance", async () => {
+  const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes();
+  await run(CFG, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT });
+  const infoMessages = calls.filter((call) => call.type === "info").map((call) => call.msg);
+  const callbackUrl =
+    "https://agentweaver.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io/auth/github/copilot-app/callback";
+
+  assert.ok(infoMessages.includes(`  Copilot callback to register: ${callbackUrl}`));
+  assert.ok(infoMessages.includes("  GitHub App callback matching: exact URL; wildcard matching disabled."));
+  const callbackGuidance = infoMessages.filter((message) => /callback/i.test(message ?? ""));
+  assert.equal(callbackGuidance.some((message) => /client.?id|secret|token|credential/i.test(message)), false);
 });
 
 test("run(): applied manifests carry real kustomize-resolved values, not the committed overlay's placeholders", async () => {

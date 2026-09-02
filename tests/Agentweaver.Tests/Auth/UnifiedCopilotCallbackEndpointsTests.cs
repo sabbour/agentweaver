@@ -78,6 +78,18 @@ public sealed class UnifiedCopilotCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task RetiredPlatformDefaultCallbackRoute_IsNotMapped()
+    {
+        await using var factory = new CopilotCallbackWebApplicationFactory();
+        using var browser = factory.CreateClient(NoRedirectNoCookies);
+
+        using var response = await browser.GetAsync(
+            "/auth/github/platform-default-copilot/callback?state=retired-state&code=test-code");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
     public async Task SharedCallback_ReturnsProjectInvalidRedirectForUnknownProjectState()
     {
         await using var factory = new CopilotCallbackWebApplicationFactory();

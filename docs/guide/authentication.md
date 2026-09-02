@@ -47,6 +47,35 @@ GitHub authorization does not replace your Entra identity. It does not grant an 
 Project roles in Agentweaver do not translate to GitHub permissions. Repository and
 Copilot capabilities are granted only through their respective GitHub Apps.
 
+## Callback registration
+
+For v0.23.1 and later, one exact Copilot App callback serves exactly two OAuth
+completion flows: project-scoped and platform-default. The MCP browser handoff
+enters the project-scoped flow; it is not a third completion flow.
+
+```
+https://<public-host>/auth/github/copilot-app/callback
+```
+
+Register it with wildcard matching disabled. GitHub currently allows up to 10
+callback URLs. Apps created before 2026-08-03 with one callback URL may have
+wildcard matching enabled by default; explicitly inspect and disable it for
+exact matching. Repo App authorization uses the separate
+`/auth/github/repo-app/callback`, while Entra sign-in uses
+`/auth/entra/callback`; each belongs on its corresponding application. A
+wildcard for one callback path does not match a sibling path.
+
+When migrating a Copilot App client ID shared by older deployments, add the new
+exact URL first. Keep the old exact URL temporarily, inventory deployment
+versions and the shared client ID, upgrade everything to v0.23.1 or later, then
+wait 15 minutes after the last older deployment stops before removing the old
+URL. On deployed staging, verify all three entry points: project-scoped, MCP
+browser handoff into the project-scoped flow, and platform-default. Local
+end-to-end testing may be impossible when Entra redirects are deployment-only,
+so deployed staging is the end-to-end proof. See
+[Configuration](configuration.md#project-copilot-app-binding) for the full
+operator sequence.
+
 ## Signing out and errors
 
 To sign out, open the account menu and select **Sign out**. In-flight runs continue on the server.
