@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -33,5 +34,20 @@ public sealed class ModelProviderConnectionRequirementTests
         requirement.Action.Type.Should().Be(ModelProviderConnectionAction.ConfigurePlatformModelProvider);
         requirement.Action.Type.Should().NotBe(ModelProviderConnectionAction.ConfigureProjectModelProvider);
         requirement.Action.ProjectId.Should().Be(string.Empty);
+    }
+
+    [Fact]
+    public void Exception_is_a_non_retryable_copilot_authorization_failure_with_the_stable_requirement_code()
+    {
+        var projectId = ProjectId.New();
+
+        var exception = new ModelProviderConnectionRequiredException(projectId);
+
+        exception.ModelSource.Should().Be(ModelSource.GitHubCopilot);
+        exception.FailureKind.Should().Be(AgentProviderFailureKind.Authorization);
+        exception.ErrorCode.Should().Be(ModelProviderConnectionRequirement.RequirementCode);
+        exception.UserMessage.Should().Be(ModelProviderConnectionRequirement.ProjectRequirementMessage);
+        exception.IsRetryable.Should().BeFalse();
+        exception.Requirement.Should().Be(ModelProviderConnectionRequirement.ForProject(projectId));
     }
 }

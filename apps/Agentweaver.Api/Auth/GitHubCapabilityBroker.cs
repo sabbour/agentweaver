@@ -92,11 +92,12 @@ internal sealed class GitHubCapabilityBroker(
             return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
 
         var secret = await vault.ReadCurrentAsync(fenced.CredentialLocator!, ct).ConfigureAwait(false);
-        if (!secret.Found || !TryGetUsableAccessToken(secret.Value, now, out var token, out var expiresAt) ||
-            expiresAt <= now)
+        if (!secret.Found || !TryGetUsableCopilotCredential(secret.Value, now, out var credential))
         {
             return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
         }
+        var token = credential.AccessToken;
+        var expiresAt = credential.ExpiresAt;
         var maximumExpiresAt = now.Add(MaximumCapabilityLifetime);
         if (expiresAt > maximumExpiresAt)
             expiresAt = maximumExpiresAt;
@@ -155,9 +156,10 @@ internal sealed class GitHubCapabilityBroker(
         try
         {
             var secret = await vault.ReadCurrentAsync(capability.CredentialLocator!, ct).ConfigureAwait(false);
-            if (!secret.Found || !TryGetUsableAccessToken(secret.Value, now, out var token, out var expiresAt) ||
-                expiresAt <= now)
+            if (!secret.Found || !TryGetUsableCopilotCredential(secret.Value, now, out var credential))
                 return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
+            var token = credential.AccessToken;
+            var expiresAt = credential.ExpiresAt;
 
             if (!await persistence.IsClaimedMarketplaceCopilotCapabilityLiveAsync(capability, ct).ConfigureAwait(false))
                 return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
@@ -192,29 +194,28 @@ internal sealed class GitHubCapabilityBroker(
             _ => false,
         };
 
-    private static bool TryGetUsableAccessToken(
+    internal static bool TryGetUsableCopilotCredential(
         string? value,
         DateTimeOffset now,
-        out string accessToken,
-        out DateTimeOffset expiresAt)
+        out CopilotCredential credential)
     {
-        accessToken = string.Empty;
-        expiresAt = now.Add(MaximumCapabilityLifetime);
+        credential = default!;
         if (string.IsNullOrWhiteSpace(value))
             return false;
         try
         {
-            var credential = JsonSerializer.Deserialize<Credential>(value, CredentialJsonOptions);
-            if (!string.Equals(credential?.Status, "signed-in", StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(credential?.AccessToken))
+            var stored = JsonSerializer.Deserialize<StoredCopilotCredential>(value, CredentialJsonOptions);
+            if (!string.Equals(stored?.Status, "signed-in", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(stored?.AccessToken))
             {
                 return false;
             }
 
-            if (credential!.ExpiresAt is { } expiry)
-                expiresAt = expiry;
+            var expiresAt = stored.ExpiresAt ?? now.Add(MaximumCapabilityLifetime);
+            if (expiresAt <= now)
+                return false;
 
-            accessToken = credential.AccessToken!;
+            credential = new CopilotCredential(stored.AccessToken!, expiresAt, stored.GitHubLogin);
             return true;
         }
         catch (JsonException)
@@ -223,5 +224,11 @@ internal sealed class GitHubCapabilityBroker(
         }
     }
 
-    private sealed record Credential(string? Status, string? AccessToken, DateTimeOffset? ExpiresAt);
+    internal sealed record CopilotCredential(string AccessToken, DateTimeOffset ExpiresAt, string? GitHubLogin);
+
+    private sealed record StoredCopilotCredential(
+        string? Status,
+        string? AccessToken,
+        DateTimeOffset? ExpiresAt,
+        string? GitHubLogin);
 }

@@ -1,7 +1,10 @@
 using System.Net;
 using System.Text.Json;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Domain;
 using FluentAssertions;
 using k8s;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -87,6 +90,43 @@ public sealed class KubernetesPodAgentEndpointResolverTests
         lifecycle.LaunchCalls.Should().Be(1);
     }
 
+    [Fact]
+    public async Task Provider_failure_is_rethrown_unchanged_and_failed_launch_cache_is_cleared()
+    {
+        const string runId = "run-stale-project-credential";
+        var projectId = ProjectId.New();
+        var registry = new PodNameRegistry();
+        var failure = new ModelProviderConnectionRequiredException(projectId);
+        var lifecycle = new RecoveringProviderFailurePodLifecycle(
+            registry,
+            "agenthost-authorized",
+            failure);
+        var client = new Kubernetes(
+            new KubernetesClientConfiguration { Host = "http://localhost:8080" },
+            new ReadyPodHandler("agenthost-authorized", "10.0.0.43"));
+        var resolver = new KubernetesPodAgentEndpointResolver(
+            client,
+            registry,
+            "agentweaver",
+            new SandboxAgentOptions { RequireMtls = false },
+            NullLogger<KubernetesPodAgentEndpointResolver>.Instance,
+            lifecycle);
+
+        var first = () => resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+
+        var exception = await first.Should().ThrowAsync<ModelProviderConnectionRequiredException>();
+        exception.Which.Should().BeSameAs(failure);
+        exception.Which.ErrorCode.Should().Be(ModelProviderConnectionRequirement.RequirementCode);
+        exception.Which.FailureKind.Should().Be(AgentProviderFailureKind.Authorization);
+        exception.Which.IsRetryable.Should().BeFalse();
+
+        var endpoint = await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+
+        endpoint.Should().Be("http://10.0.0.43:8088/a2a/agent");
+        lifecycle.LaunchCalls.Should().Be(2,
+            "the typed provider failure must be removed from the launch cache before it propagates");
+    }
+
     private sealed class RegisteringPodLifecycle(IPodNameRegistry registry, string replacementPod)
         : IAgentHostPodLifecycle
     {
@@ -97,6 +137,33 @@ public sealed class KubernetesPodAgentEndpointResolverTests
             LaunchCalls++;
             registry.Register(runId, replacementPod);
             return Task.FromResult("http://replacement");
+        }
+
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            string? workingDirectoryOverride,
+            CancellationToken ct = default) =>
+            LaunchAgentHostPodAsync(runId, ct);
+
+        public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecoveringProviderFailurePodLifecycle(
+        IPodNameRegistry registry,
+        string podName,
+        AgentProviderException failure) : IAgentHostPodLifecycle
+    {
+        public int LaunchCalls { get; private set; }
+
+        public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            LaunchCalls++;
+            if (LaunchCalls == 1)
+                return Task.FromException<string>(failure);
+
+            registry.Register(runId, podName);
+            return Task.FromResult("http://authorized");
         }
 
         public Task<string> LaunchAgentHostPodAsync(
@@ -156,6 +223,23 @@ public sealed class KubernetesPodAgentEndpointResolverTests
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
             {
                 Content = new StringContent("""{"kind":"Status","code":404}"""),
+                RequestMessage = request,
+            });
+    }
+
+    private sealed class ReadyPodHandler(string podName, string podIp) : DelegatingHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new
+                {
+                    kind = "Pod",
+                    metadata = new { name = podName },
+                    status = new { podIP = podIp },
+                })),
                 RequestMessage = request,
             });
     }
