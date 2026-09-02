@@ -96,9 +96,6 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     minWidth: 0,
   },
-  emptyCopy: {
-    maxWidth: '72ch',
-  },
   row: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) auto',
@@ -306,14 +303,9 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
     return (
       <div className={styles.pendingPanel}>
         <div className={styles.panelHeader}>
-          <TitleText as="h2">Model usage pending</TitleText>
-          <Body tone="muted">No model usage, AI credit, or latency signals are available for this range yet.</Body>
+          <TitleText as="h2">No model data for this range</TitleText>
+          <Body tone="muted">Complete an agent task to add model usage, AI credits, and response-time data.</Body>
         </div>
-        <EmptyState
-          className={styles.emptyCopy}
-          title="No data yet"
-          description="Run or complete an agent task to populate model mix, AI credit usage, response duration, and first-token timing."
-        />
       </div>
     );
   }
@@ -322,29 +314,29 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
     <div className={styles.diagnostics}>
       <div className={mergeClasses(styles.panel, styles.trendPanel)}>
         <div className={styles.panelHeader}>
-          <TitleText as="h2">Model signal trend</TitleText>
-          <Body tone="muted">Run creation is shown as activity context; AI credit movement is the model evidence used for optimization.</Body>
+          <TitleText as="h2">Usage over time</TitleText>
+          <Body tone="muted">Compare runs created with AI credits used.</Body>
         </div>
         <div className={styles.chartStack}>
           <div className={styles.chartSlot}>
             <Text className={styles.slotTitle}>Runs created</Text>
             {invocationTrend.length === 0 || !hasInvocationTrend ? (
-              <EmptyState title="No run-creation data yet." />
+              <EmptyState title="No runs were created in this range." />
             ) : (
               <LineChart points={invocationTrend} valueOf={(point) => 'count' in point ? point.count : 0} label="Runs created over time" />
             )}
           </div>
           <div className={styles.chartSlot}>
-            <Text className={styles.slotTitle}>AI credit usage</Text>
+            <Text className={styles.slotTitle}>AI credits used</Text>
             {aiCreditUsageTrend.length === 0 || !hasAiCreditTrend ? (
-              <EmptyState title="No AI credit usage data yet." />
+              <EmptyState title="No data for AI credits in this range." />
             ) : (
               // TODO(ai-credits): chart axis formatter needs a plain string, not the <AiCredits> control — left as text.
               <LineChart
                 points={aiCreditUsageTrend}
                 valueOf={(point) => 'totalNanoAiu' in point ? point.totalNanoAiu : 0}
                 formatMax={(value) => costChipLabel(value, 0)?.replace(' AIC', '') ?? String(value)}
-                label="AI credit usage over time"
+                label="AI credits used over time"
               />
             )}
           </div>
@@ -353,13 +345,13 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
 
       <div className={styles.panel}>
         <div className={styles.panelHeader}>
-          <TitleText as="h2">Model mix</TitleText>
-          <Body tone="muted">Compare spend and invocation share for the models that have emitted usage events.</Body>
+          <TitleText as="h2">Usage by model</TitleText>
+          <Body tone="muted">Compare AI credit use and call share for each model.</Body>
         </div>
         <div className={styles.subsection}>
-          <Text className={styles.slotTitle}>AI credit usage by model</Text>
+          <Text className={styles.slotTitle}>AI credits used by model</Text>
           {modelUsage.length === 0 ? (
-            <EmptyState title="No AI credit usage data yet." />
+            <EmptyState title="No data for AI credits in this range." />
           ) : (
             // TODO(ai-credits): BarList valueLabel requires a plain string, not the <AiCredits> hover control — left as text.
             <BarList
@@ -370,9 +362,9 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
           )}
         </div>
         <div className={styles.subsection}>
-          <Text className={styles.slotTitle}>Invocation share</Text>
+          <Text className={styles.slotTitle}>Call share</Text>
           {modelUsage.length === 0 ? (
-            <EmptyState title="No model invocation data yet." />
+            <EmptyState title="No model call data for this range." />
           ) : (
             <BarList
               rows={modelUsage}
@@ -385,17 +377,17 @@ export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto
 
       <div className={mergeClasses(styles.panel, styles.latencyPanel)}>
         <div className={styles.panelHeader}>
-          <TitleText as="h2">Latency checkpoints</TitleText>
-          <Body tone="muted">P50 and P95 duration and first-token timing stay grouped so slow models are visible without another card row.</Body>
+          <TitleText as="h2">Response times</TitleText>
+          <Body tone="muted">Compare P50 and P95 response times for each model.</Body>
         </div>
         <div className={styles.latencyGrid}>
           <div className={styles.subsection}>
-            <Text className={styles.slotTitle}>Response duration by model</Text>
-            <PercentilesTable rows={responseDuration} emptyLabel="No response-duration data yet." />
+            <Text className={styles.slotTitle}>Response time by model</Text>
+            <PercentilesTable rows={responseDuration} emptyLabel="No response-time data for this range." />
           </div>
           <div className={styles.subsection}>
             <Text className={styles.slotTitle}>Time to first token by model</Text>
-            <PercentilesTable rows={ttft} emptyLabel="No first-token timing data available yet." />
+            <PercentilesTable rows={ttft} emptyLabel="No first-token data for this range." />
           </div>
         </div>
       </div>
