@@ -33,7 +33,7 @@ import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, T
 import { Pager } from '../copilot-fluent-system';
 import { ENTRA_AUTHORIZE_URL } from '../config';
 import { useProjectList } from '../hooks/useProjectList';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   CreateProjectRequest,
@@ -219,8 +219,12 @@ const useStyles = makeStyles({
   githubMark: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralForeground1, color: tokens.colorNeutralBackground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightBold, flexShrink: 0 },
 });
 
-function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Project) => void) {
-  const [open, setOpen] = useState(false);
+function useCreateProjectDialog(
+  origin: 'blank' | 'github',
+  onCreated: (p: Project) => void,
+  initiallyOpen = false,
+) {
+  const [open, setOpen] = useState(initiallyOpen);
   const [name, setName] = useState('');
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [sourceRepository, setSourceRepository] = useState('');
@@ -514,19 +518,31 @@ function useGitHubData(open: boolean) {
   };
 }
 
+function repositoryAuthorizationError(result: string | null): string | null {
+  if (!result || result === 'success') return null;
+  const messages: Record<string, string> = {
+    human_entra_subject_required: 'Authorize repository access while signed in with your work account.',
+    authorization_transaction_invalid: 'Repository authorization could not be completed. Start a new authorization.',
+    authorization_transaction_consumed: 'This repository authorization has already been used. Start a new authorization.',
+    github_binding_unavailable: 'Repository authorization is currently unavailable. Try again later.',
+    rate_limited: 'GitHub is receiving too many authorization requests. Wait a moment and try again.',
+  };
+  return messages[result] ?? 'Repository authorization could not be completed. Start a new authorization.';
+}
+
 
 function CreateFromGitHubDialog({
   onCreated,
   dataDir,
   workspaceAutoAssigned,
-  resumeSignal = 0,
-  resumeResult = null,
+  initiallyOpen = false,
+  authorizationResult = null,
 }: {
   onCreated: (p: Project) => void;
   dataDir: string | null;
   workspaceAutoAssigned: boolean;
-  resumeSignal?: number;
-  resumeResult?: string | null;
+  initiallyOpen?: boolean;
+  authorizationResult?: string | null;
 }) {
   const styles = useStyles();
   const location = useLocation();
@@ -540,8 +556,8 @@ function CreateFromGitHubDialog({
   const d = useCreateProjectDialog('github', (project) => {
     cleanupReturnQuery();
     onCreated(project);
-  });
-  const { open, setOpen } = d;
+  }, initiallyOpen);
+  const { open } = d;
   const { repos, reposLoading, reposError, reposConnectionRequired, reloadRepos } = useGitHubData(open);
   const [repoFilter, setRepoFilter] = useState('');
   const [pasteRepo, setPasteRepo] = useState('');
@@ -549,35 +565,10 @@ function CreateFromGitHubDialog({
   const [folderEdited, setFolderEdited] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
   const [connectingRepoApp, setConnectingRepoApp] = useState(false);
-  const [repoAppConnectionError, setRepoAppConnectionError] = useState<string | null>(null);
+  const [repoAppConnectionError, setRepoAppConnectionError] = useState<string | null>(
+    () => repositoryAuthorizationError(authorizationResult),
+  );
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
-
-  useEffect(() => {
-    if (resumeSignal <= 0) return;
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      setOpen(true);
-      if (resumeResult === 'success') {
-        setRepoAppConnectionError(null);
-        reloadRepos();
-        return;
-      }
-      const messages: Record<string, string> = {
-        human_entra_subject_required: 'Authorize repository access while signed in with your work account.',
-        authorization_transaction_invalid: 'Repository authorization could not be completed. Start a new authorization.',
-        authorization_transaction_consumed: 'This repository authorization has already been used. Start a new authorization.',
-        github_binding_unavailable: 'Repository authorization is currently unavailable. Try again later.',
-        rate_limited: 'GitHub is receiving too many authorization requests. Wait a moment and try again.',
-      };
-      setRepoAppConnectionError(
-        resumeResult
-          ? messages[resumeResult] ?? 'Repository authorization could not be completed. Start a new authorization.'
-          : null,
-      );
-    });
-    return () => { cancelled = true; };
-  }, [reloadRepos, resumeResult, resumeSignal, setOpen]);
 
   const connectRepoApp = async () => {
     setConnectingRepoApp(true);
@@ -822,9 +813,7 @@ export function ProjectGalleryPage() {
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [workspaceAutoAssigned, setWorkspaceAutoAssigned] = useState(false);
   const [highlightId, setHighlightId] = useState<string | null>(null);
-  const [resumeCreateFromGitHubSignal, setResumeCreateFromGitHubSignal] = useState(0);
-  const [repoAppAuthorizationResult, setRepoAppAuthorizationResult] = useState<string | null>(null);
-  const createFromGitHubIntentHandled = useRef(false);
+  const [repoAppAuthorizationResult] = useState(() => searchParams.get('repo_app_auth'));
   const toasterId = useId('project-gallery-toaster');
   const { dispatchToast } = useToastController(toasterId);
 
@@ -939,27 +928,18 @@ export function ProjectGalleryPage() {
 
   const createFromGitHubIntent = searchParams.get('create') === 'github';
   const repoAppAuth = searchParams.get('repo_app_auth');
+  const openCreateFromGitHub = createFromGitHubIntent || repoAppAuth !== null;
 
   useEffect(() => {
-    if (!createFromGitHubIntent && !repoAppAuth) return;
+    if (!repoAppAuth) return;
     queueMicrotask(() => {
       if (location.pathname !== '/projects') return;
-      if (repoAppAuth) {
-        createFromGitHubIntentHandled.current = true;
-        setRepoAppAuthorizationResult(repoAppAuth);
-        setResumeCreateFromGitHubSignal((current) => current + 1);
-        const next = new URLSearchParams(searchParams);
-        next.delete('repo_app_auth');
-        setSearchParams(next, { replace: true });
-        return;
-      }
-      if (!createFromGitHubIntentHandled.current) {
-        createFromGitHubIntentHandled.current = true;
-        setRepoAppAuthorizationResult(null);
-        setResumeCreateFromGitHubSignal((current) => current + 1);
-      }
+      const next = new URLSearchParams(searchParams);
+      next.set('create', 'github');
+      next.delete('repo_app_auth');
+      setSearchParams(next, { replace: true });
     });
-  }, [createFromGitHubIntent, location.pathname, repoAppAuth, searchParams, setSearchParams]);
+  }, [location.pathname, repoAppAuth, searchParams, setSearchParams]);
 
   return (
     <PageContainer>
@@ -974,8 +954,8 @@ export function ProjectGalleryPage() {
               onCreated={handleCreated}
               dataDir={dataDir}
               workspaceAutoAssigned={workspaceAutoAssigned}
-              resumeSignal={resumeCreateFromGitHubSignal}
-              resumeResult={repoAppAuthorizationResult}
+              initiallyOpen={openCreateFromGitHub}
+              authorizationResult={repoAppAuthorizationResult}
             />
           </>
         ) : undefined}
@@ -1024,8 +1004,8 @@ export function ProjectGalleryPage() {
                 onCreated={handleCreated}
                 dataDir={dataDir}
                 workspaceAutoAssigned={workspaceAutoAssigned}
-                resumeSignal={resumeCreateFromGitHubSignal}
-                resumeResult={repoAppAuthorizationResult}
+                initiallyOpen={openCreateFromGitHub}
+                authorizationResult={repoAppAuthorizationResult}
               />
             </div>
           }

@@ -4,6 +4,7 @@ import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectListProvider } from '../hooks/useProjectList';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
@@ -164,9 +165,26 @@ describe('ProjectGalleryPage repository authorization', () => {
     expect(screen.getByTestId('location-search').textContent).toContain('create=github');
   });
 
-  it('reopens the modal from explicit create=github intent', async () => {
+  it('keeps explicit GitHub creation open while editing and clears intent on close', async () => {
+    const user = userEvent.setup();
     render(<Wrapper initialEntries={['/projects?create=github']}><ProjectGalleryPage /></Wrapper>);
 
     expect(await screen.findByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();
+    await user.type(screen.getByPlaceholderText('My project'), 'Explicit project');
+    expect(screen.getByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();
+    expect(screen.getByDisplayValue('Explicit project')).toBeDefined();
+
+    const repository = await screen.findByRole('combobox', { name: 'Repository' });
+    await waitFor(() => expect(repository.hasAttribute('disabled')).toBe(false));
+    await user.click(repository);
+    await user.click(await screen.findByRole('option', { name: /octocat.*hello-world/i }));
+
+    expect(screen.getByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();
+    expect(screen.getByDisplayValue('octocat/hello-world')).toBeDefined();
+    expect(screen.getByDisplayValue('Explicit project')).toBeDefined();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Create project from GitHub' })).toBeNull());
+    expect(screen.getByTestId('location-search').textContent).toBe('');
   });
 });

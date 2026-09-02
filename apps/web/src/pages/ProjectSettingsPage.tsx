@@ -73,29 +73,40 @@ function modelProviderReadiness(readiness: UnattendedReadiness) {
   };
 }
 
-function repositoryReadiness(readiness: UnattendedReadiness, repositoryRequired: boolean) {
+function repositoryReadiness(
+  readiness: UnattendedReadiness,
+  repositoryRequired: boolean,
+): NonNullable<UnattendedReadiness['repository']> {
   if (readiness.repository) return readiness.repository;
+  if (!repositoryRequired) {
+    return {
+      required: false,
+      status: 'not_required',
+      reason_code: 'not_required',
+      repo_app_installation_connected: readiness.repo_app_installation_connected,
+    };
+  }
+  if (!readiness.repo_app_installation_connected) {
+    return {
+      required: true,
+      status: 'not_ready',
+      reason_code: 'repo_app_installation_required',
+      repo_app_installation_connected: false,
+    };
+  }
   if (readiness.reason_code === 'repo_app_installation_required'
     || readiness.reason_code === 'repo_app_repository_grant_required') {
     return {
       required: true,
-      status: 'not_ready' as const,
+      status: 'not_ready',
       reason_code: readiness.reason_code,
-      repo_app_installation_connected: readiness.repo_app_installation_connected,
-    };
-  }
-  if (!repositoryRequired) {
-    return {
-      required: false,
-      status: 'not_required' as const,
-      reason_code: 'not_required' as const,
       repo_app_installation_connected: readiness.repo_app_installation_connected,
     };
   }
   return {
     required: true,
-    status: 'ready' as const,
-    reason_code: 'ready' as const,
+    status: 'ready',
+    reason_code: 'ready',
     repo_app_installation_connected: readiness.repo_app_installation_connected,
   };
 }
