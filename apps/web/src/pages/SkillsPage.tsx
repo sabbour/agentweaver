@@ -42,12 +42,15 @@ import {
   PuzzlePiece20Regular,
 } from '@fluentui/react-icons';
 import {
+  Body,
   EmptyState,
   ErrorState,
+  Label,
   LoadingState,
   MetricRow,
   PageContainer,
   PageHeader,
+  TitleText,
 } from '../components/ui';
 import { collectFilesFromDataTransfer, supportsEntryApi } from '../utils/skillDrop';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -75,11 +78,14 @@ const useStyles = makeStyles({
   },
   tabContent: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
-  syncHint: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase100,
-    lineHeight: '1.5',
-    maxWidth: '640px',
+  supportingLabel: {
+    display: 'block',
+    maxWidth: '75ch',
+  },
+  supportingBody: {
+    display: 'block',
+    maxWidth: '75ch',
+    margin: 0,
   },
   empty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   itemList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
@@ -91,10 +97,37 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
-  itemHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
-  itemTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300, flexGrow: 1 },
+  itemHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+  },
+  itemTitle: {
+    flex: '1 1 240px',
+    minWidth: 0,
+    margin: 0,
+    overflowWrap: 'anywhere',
+  },
+  itemHeaderMeta: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+    minWidth: 0,
+  },
   itemMeta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 },
-  itemDesc: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1, lineHeight: '1.5' },
+  itemDescription: {
+    maxWidth: '75ch',
+    margin: 0,
+    overflowWrap: 'anywhere',
+  },
+  catalogMeta: {
+    margin: 0,
+    overflowWrap: 'anywhere',
+  },
   agentChips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
   formGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
@@ -811,7 +844,7 @@ export function SkillsPage() {
   };
 
   return (
-    <PageContainer>
+    <PageContainer width="readable">
       <PageHeader
         title="Skills"
         description="Import, sync, and assign reusable agent skills for this project."
@@ -859,16 +892,16 @@ export function SkillsPage() {
           Preview blueprint defaults
         </Button>
       </div>
-      <Text id="blueprint-defaults-availability" className={styles.syncHint}>
+      <Label id="blueprint-defaults-availability" tone="muted" className={styles.supportingLabel}>
         {!defaultsProjectResolved
           ? 'Checking whether blueprint skill defaults are available for this project.'
           : defaultsUnavailableReason ?? 'Preview bundled defaults for a predefined blueprint, or use the supported fallback for projects without source metadata.'}
-      </Text>
-      <Text as="p" className={styles.syncHint}>
+      </Label>
+      <Body as="p" tone="muted" className={styles.supportingBody}>
         Sync scans the project&apos;s already-connected repo working directory (no separate fetch) for <code>&lt;skill-name&gt;/SKILL.md</code>,
         one level deep, at the repo root or in <code>.github/skills</code>, <code>.copilot/skills</code>, <code>.claude/skills</code>, or <code>.agents/skills</code>.
         Any other files next to SKILL.md are picked up as bundled resources. Re-syncing is safe to repeat — unchanged skills are skipped, changed ones are updated, and skills whose folder disappears are flagged as Missing instead of deleted.
-      </Text>
+      </Body>
 
       <TabList
         selectedValue={selectedTab}
@@ -900,14 +933,18 @@ export function SkillsPage() {
                 {skills.map((s) => (
                   <div key={s.id} className={styles.item}>
                     <div className={styles.itemHeader}>
-                      <span className={styles.itemTitle}>{s.name}</span>
-                      <Badge appearance="tint" color={statusColor(s.status)}>{s.status}</Badge>
-                      <Badge appearance="outline">{s.provenance}</Badge>
-                      <span className={styles.itemMeta}>{new Date(s.updated_at).toLocaleString()}</span>
+                      <TitleText as="h2" className={styles.itemTitle}>{s.name}</TitleText>
+                      <div className={styles.itemHeaderMeta}>
+                        <Badge appearance="tint" color={statusColor(s.status)}>{s.status}</Badge>
+                        <Badge appearance="outline">{s.provenance}</Badge>
+                        <Label tone="quiet">{new Date(s.updated_at).toLocaleString()}</Label>
+                      </div>
                     </div>
-                    <span className={styles.itemDesc}>{s.description}</span>
+                    <Body as="p" className={styles.itemDescription}>{s.description}</Body>
                     {s.source_location && (
-                      <span className={styles.itemMeta}>{s.source_repository ? `${s.source_repository} · ` : ''}{s.source_location}</span>
+                      <Label as="p" tone="quiet" className={styles.catalogMeta}>
+                        {s.source_repository ? `${s.source_repository} · ` : ''}{s.source_location}
+                      </Label>
                     )}
                     {s.assigned_agents.length > 0 && (
                       <div className={styles.agentChips}>
@@ -934,10 +971,12 @@ export function SkillsPage() {
                   {skills.map((s) => (
                     <div key={s.id} className={styles.item}>
                       <div className={styles.itemHeader}>
-                        <span className={styles.itemTitle}>{s.name}</span>
-                        <Badge appearance="tint" color={statusColor(s.status)}>{s.status}</Badge>
+                        <TitleText as="h2" className={styles.itemTitle}>{s.name}</TitleText>
+                        <div className={styles.itemHeaderMeta}>
+                          <Badge appearance="tint" color={statusColor(s.status)}>{s.status}</Badge>
+                        </div>
                       </div>
-                      <span className={styles.itemDesc}>{s.description}</span>
+                      <Body as="p" className={styles.itemDescription}>{s.description}</Body>
                       <div className={styles.assignGrid}>
                         <div className={styles.assignRow}>
                           {members.map((m) => {
