@@ -139,15 +139,15 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
             {
                 Id = PlatformDefaultCopilotBindingRecord.SingletonId,
                 EntraObjectId = "platform-admin",
-                CredentialReference = "copilot-app-platform-default",
+                CredentialReference = "copilot-app-platform-default-version",
                 CredentialVersion = "version",
                 GrantDigest = "digest",
                 Status = GitHubBindingStatus.Active,
                 BoundAt = DateTimeOffset.UtcNow,
             });
             await secrets.SetSecretAsync(
-                "copilot-app-platform-default",
-                """{"Status":"signed-in","AccessToken":"ghu_platform","GitHubLogin":"octocat"}""");
+                "copilot-app-platform-default-version",
+                """{"status":"signed-in","accessToken":"ghu_platform","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"octocat"}""");
             await db.SaveChangesAsync();
         }
         using var client = _factory.CreateAuthenticatedClient(PlatformRoles.Contributor);
