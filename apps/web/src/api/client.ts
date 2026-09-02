@@ -99,6 +99,7 @@ import type {
   WorkspaceNode,
   WorkspaceRefsResponse,
   UnattendedReadiness,
+  AutomationActivationStatus,
 } from './types';
 /** A skill file paired with the folder-relative path it should keep on the server (folder drag-and-drop). */
 export interface SkillUploadItem {
@@ -436,6 +437,29 @@ export class AgentweaverApiClient {
     return this.request<UnattendedReadiness>(
       'GET',
       `/projects/${encodeURIComponent(projectId)}/github/unattended-readiness`,
+    );
+  }
+
+  getAutomationStatus(projectId: string): Promise<AutomationActivationStatus> {
+    return this.request<AutomationActivationStatus>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/automation/status`,
+    );
+  }
+
+  activateAutomation(projectId: string): Promise<AutomationActivationStatus> {
+    return this.request<AutomationActivationStatus>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/automation/activate`,
+      {},
+    );
+  }
+
+  deactivateAutomation(projectId: string): Promise<AutomationActivationStatus> {
+    return this.request<AutomationActivationStatus>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/automation/deactivate`,
+      {},
     );
   }
 

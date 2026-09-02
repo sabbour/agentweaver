@@ -583,6 +583,16 @@ export interface UnattendedReadiness {
 }
 
 /**
+ * Owner-facing status of a project's schedule/event automation activation: whether it is
+ * currently live (able to fire), and which kind of model-provider authority backs it.
+ */
+export interface AutomationActivationStatus {
+  is_active: boolean;
+  model_provider_source?: 'byok' | 'github_copilot' | null;
+  activated_at?: string | null;
+}
+
+/**
  * The safe, project-scoped view of the Copilot App binding. It deliberately
  * excludes authorization transactions, provider permissions, and credentials.
  */

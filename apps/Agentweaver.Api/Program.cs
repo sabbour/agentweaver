@@ -1064,6 +1064,7 @@ else
     app.MapMemoryEndpoints();
     app.MapWorkflowDefinitionEndpoints();
     app.MapWorkflowTriggerEndpoints();
+    app.MapAutomationActivationEndpoints();
     app.MapGitHubWebhookEndpoints();
     app.MapDiagnosticsEndpoints();
     app.MapMetricsEndpoints();

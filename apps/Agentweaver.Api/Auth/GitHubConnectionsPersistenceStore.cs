@@ -38,8 +38,15 @@ public sealed record FencedAutomationActivation(
     long InstallationId,
     long RepositoryId,
     string RepositoryGrantDigest,
-    string CopilotBindingId,
-    string CopilotBindingGrantDigest);
+    AutomationModelProviderSource ModelProviderSource,
+    string? CopilotBindingId,
+    string? CopilotBindingGrantDigest,
+    string? ByokProviderId);
+/// <summary>Redacted status summary of a project's most recent automation activation attempt.</summary>
+public sealed record AutomationActivationSummary(
+    AutomationActivationStatus Status,
+    AutomationModelProviderSource ModelProviderSource,
+    DateTimeOffset ActivatedAt);
 public sealed record SnapshotRef
 {
     public SnapshotRef(string value)
@@ -180,7 +187,8 @@ internal sealed class RepoAppCredentialLease(
 /// delivery idempotency, etc.) do not need to wire one; any code path that actually needs to
 /// classify a project's origin requires it and fails closed if it is absent.
 /// </remarks>
-public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProjectStore? projectStore = null)
+public sealed class GitHubConnectionsPersistenceStore(
+    MemoryDbContext db, IProjectStore? projectStore = null, ByokProviderConfigurationService? byokSettings = null)
 {
     private const int MarketplaceCapabilityCleanupBatchSize = 100;
     internal static readonly TimeSpan MarketplaceCapabilityClaimLease = TimeSpan.FromMinutes(5);
@@ -1030,6 +1038,15 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
             GitHubAuditActorKind actorKind,
             CancellationToken ct = default)
     {
+        // When a deployment-wide BYOK provider is active, it is the automation's model-provider
+        // source and no GitHub Copilot binding is required at all — mirrors the same "byok"
+        // precedence already used by the project's GitHub connection status endpoint. This is an
+        // interim, minimal representation (see AutomationModelProviderSource) that may be renamed
+        // once the model-provider-resolver-unification work lands.
+        var activeByokProviderId = byokSettings is null
+            ? null
+            : await byokSettings.GetActiveProviderIdAsync(ct).ConfigureAwait(false);
+
         await using var transaction = await db.Database.BeginTransactionAsync(
             System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
         try
@@ -1043,25 +1060,32 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
                         installation.RevokedAt == null))
                 .Select(grant => new { grant.InstallationId, grant.RepositoryId, grant.PermissionDigest })
                 .ToListAsync(ct).ConfigureAwait(false);
-            var projectBindings = await db.ProjectCopilotBindings.AsNoTracking()
-                .Where(binding => binding.ProjectId == projectId &&
-                    binding.Status == GitHubBindingStatus.Active &&
-                    binding.DeactivatedAt == null)
-                .Select(binding => new { binding.Id, binding.GrantDigest })
-                .ToListAsync(ct).ConfigureAwait(false);
-            var bindings = projectBindings.Count > 0
-                ? projectBindings
-                : await db.PlatformDefaultCopilotBindings.AsNoTracking()
-                    .Where(binding => binding.Id == PlatformDefaultCopilotBindingRecord.SingletonId &&
+
+            List<(string Id, string GrantDigest)> bindings = [];
+            if (activeByokProviderId is null)
+            {
+                var projectBindings = await db.ProjectCopilotBindings.AsNoTracking()
+                    .Where(binding => binding.ProjectId == projectId &&
                         binding.Status == GitHubBindingStatus.Active &&
                         binding.DeactivatedAt == null)
                     .Select(binding => new { binding.Id, binding.GrantDigest })
                     .ToListAsync(ct).ConfigureAwait(false);
+                var resolvedBindings = projectBindings.Count > 0
+                    ? projectBindings
+                    : await db.PlatformDefaultCopilotBindings.AsNoTracking()
+                        .Where(binding => binding.Id == PlatformDefaultCopilotBindingRecord.SingletonId &&
+                            binding.Status == GitHubBindingStatus.Active &&
+                            binding.DeactivatedAt == null)
+                        .Select(binding => new { binding.Id, binding.GrantDigest })
+                        .ToListAsync(ct).ConfigureAwait(false);
+                bindings = resolvedBindings.Select(b => (b.Id, b.GrantDigest)).ToList();
+            }
 
             var result = grants.Count switch
             {
                 0 => AutomationActivationWriteResult.RepositoryGrantUnavailable,
                 > 1 => AutomationActivationWriteResult.RepositoryGrantAmbiguous,
+                _ when activeByokProviderId is not null => AutomationActivationWriteResult.Activated,
                 _ when bindings.Count == 0 => AutomationActivationWriteResult.CopilotBindingUnavailable,
                 _ when bindings.Count > 1 => AutomationActivationWriteResult.CopilotBindingAmbiguous,
                 _ => AutomationActivationWriteResult.Activated,
@@ -1081,7 +1105,6 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
             }
 
             var grant = grants[0];
-            var binding = bindings[0];
             var activation = new AutomationActivationRecord
             {
                 Id = SnapshotRef.Create().Value,
@@ -1089,12 +1112,22 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
                 InstallationId = grant.InstallationId,
                 RepositoryId = grant.RepositoryId,
                 RepositoryGrantDigest = grant.PermissionDigest,
-                CopilotBindingId = binding.Id,
-                CopilotBindingGrantDigest = binding.GrantDigest,
                 AutomationKey = "internal-activation-snapshot",
                 Status = AutomationActivationStatus.Active,
                 ActivatedAt = DateTimeOffset.UtcNow,
             };
+            if (activeByokProviderId is not null)
+            {
+                activation.ModelProviderSource = AutomationModelProviderSource.Byok;
+                activation.ByokProviderId = activeByokProviderId;
+            }
+            else
+            {
+                var binding = bindings[0];
+                activation.ModelProviderSource = AutomationModelProviderSource.GitHubCopilot;
+                activation.CopilotBindingId = binding.Id;
+                activation.CopilotBindingGrantDigest = binding.GrantDigest;
+            }
             EnsureAutomationActivationSnapshot(activation);
             db.AutomationActivations.Add(activation);
             db.GitHubAuditRecords.Add(CreateActivationAudit(
@@ -1126,13 +1159,10 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
         var activation = await db.AutomationActivations.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == activationId &&
                 x.Status == AutomationActivationStatus.Active, ct).ConfigureAwait(false);
-        if (activation is null ||
-            string.IsNullOrWhiteSpace(activation.RepositoryGrantDigest) ||
-            string.IsNullOrWhiteSpace(activation.CopilotBindingId) ||
-            string.IsNullOrWhiteSpace(activation.CopilotBindingGrantDigest))
+        if (activation is null || string.IsNullOrWhiteSpace(activation.RepositoryGrantDigest))
             return null;
 
-        var isLive = await db.GitHubRepositoryGrants.AsNoTracking().AnyAsync(grant =>
+        var repositoryGrantIsLive = await db.GitHubRepositoryGrants.AsNoTracking().AnyAsync(grant =>
             grant.InstallationId == activation.InstallationId &&
             grant.RepositoryId == activation.RepositoryId &&
             grant.ProjectId == activation.ProjectId &&
@@ -1142,17 +1172,93 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
                 installation.InstallationId == activation.InstallationId &&
                 installation.AppKind == GitHubAppKind.Repo &&
                 installation.ProjectId == activation.ProjectId &&
-                installation.RevokedAt == null), ct).ConfigureAwait(false) &&
-            await IsLiveCopilotBindingAsync(
+                installation.RevokedAt == null), ct).ConfigureAwait(false);
+        if (!repositoryGrantIsLive)
+            return null;
+
+        if (activation.ModelProviderSource == AutomationModelProviderSource.Byok)
+        {
+            if (string.IsNullOrWhiteSpace(activation.ByokProviderId))
+                return null;
+            // BYOK's live check is exact-id equality against the current deployment-wide active
+            // provider (there is no reversible digest to compare, unlike a Copilot binding grant).
+            var currentActiveByokProviderId = byokSettings is null
+                ? null
+                : await byokSettings.GetActiveProviderIdAsync(ct).ConfigureAwait(false);
+            if (!string.Equals(currentActiveByokProviderId, activation.ByokProviderId, StringComparison.Ordinal))
+                return null;
+
+            return new(
+                activation.Id, activation.ProjectId, activation.InstallationId, activation.RepositoryId,
+                activation.RepositoryGrantDigest, AutomationModelProviderSource.Byok,
+                CopilotBindingId: null, CopilotBindingGrantDigest: null, ByokProviderId: activation.ByokProviderId);
+        }
+
+        if (string.IsNullOrWhiteSpace(activation.CopilotBindingId) ||
+            string.IsNullOrWhiteSpace(activation.CopilotBindingGrantDigest))
+            return null;
+
+        var copilotBindingIsLive = await IsLiveCopilotBindingAsync(
                 activation.ProjectId,
                 activation.CopilotBindingId,
                 activation.CopilotBindingGrantDigest,
                 ct).ConfigureAwait(false);
 
-        return !isLive ? null : new(
+        return !copilotBindingIsLive ? null : new(
             activation.Id, activation.ProjectId, activation.InstallationId, activation.RepositoryId,
-            activation.RepositoryGrantDigest, activation.CopilotBindingId, activation.CopilotBindingGrantDigest);
+            activation.RepositoryGrantDigest, AutomationModelProviderSource.GitHubCopilot,
+            activation.CopilotBindingId, activation.CopilotBindingGrantDigest, ByokProviderId: null);
     }
+
+    /// <summary>
+    /// Deactivates the project's sole active automation activation, if any, marking it
+    /// <see cref="AutomationActivationStatus.Inactive"/> so no further schedule/event trigger fires
+    /// until a project Owner activates it again. Distinct from
+    /// <see cref="AutomationActivationStatus.Invalidated"/>, which is reserved for the automatic
+    /// invalidation that already happens when the underlying grant/binding is replaced or revoked.
+    /// </summary>
+    internal async Task<bool> TryDeactivateAutomationActivationAsync(
+        string projectId,
+        string? entraObjectId,
+        GitHubAuditActorKind actorKind,
+        CancellationToken ct = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var updated = await db.AutomationActivations
+            .Where(x => x.ProjectId == projectId && x.Status == AutomationActivationStatus.Active)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, AutomationActivationStatus.Inactive)
+                .SetProperty(x => x.InvalidatedAt, now), ct)
+            .ConfigureAwait(false);
+        if (updated == 0)
+            return false;
+
+        await AppendAuditAsync(CreateActivationAudit(
+            projectId, entraObjectId, actorKind, GitHubAuditOutcome.Succeeded,
+            GitHubAuditReasonCode.None, null, action: GitHubAuditAction.AutomationDeactivated), ct)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Redacted, read-only status for a project's automation activation: never returns repository,
+    /// installation, or credential identity, only the fields an Owner-facing settings UI needs to
+    /// show whether automation is on and which kind of model-provider authority backs it.
+    /// </summary>
+    internal async Task<AutomationActivationSummary?> GetAutomationActivationSummaryAsync(
+        string projectId,
+        CancellationToken ct = default)
+    {
+        // Ordered client-side (a project accumulates only a handful of activation rows over its
+        // lifetime): SQLite cannot translate ORDER BY over a DateTimeOffset column server-side.
+        var rows = await db.AutomationActivations.AsNoTracking()
+            .Where(x => x.ProjectId == projectId)
+            .Select(x => new AutomationActivationSummary(x.Status, x.ModelProviderSource, x.ActivatedAt))
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        return rows.OrderByDescending(x => x.ActivatedAt).FirstOrDefault();
+    }
+
 
     public async Task<InvocationClaimResult> ClaimInvocationAsync(
         AutomationInvocationRecord invocation,
@@ -2019,13 +2125,21 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
     private static void EnsureAutomationActivationSnapshot(AutomationActivationRecord activation)
     {
         _ = new SnapshotRef(activation.Id);
+        var hasValidModelProviderSource = activation.ModelProviderSource switch
+        {
+            AutomationModelProviderSource.Byok => !string.IsNullOrWhiteSpace(activation.ByokProviderId) &&
+                string.IsNullOrWhiteSpace(activation.CopilotBindingId) &&
+                string.IsNullOrWhiteSpace(activation.CopilotBindingGrantDigest),
+            _ => !string.IsNullOrWhiteSpace(activation.CopilotBindingId) &&
+                 !string.IsNullOrWhiteSpace(activation.CopilotBindingGrantDigest) &&
+                 string.IsNullOrWhiteSpace(activation.ByokProviderId),
+        };
         if (string.IsNullOrWhiteSpace(activation.ProjectId) ||
             activation.InstallationId <= 0 || activation.RepositoryId <= 0 ||
             string.IsNullOrWhiteSpace(activation.RepositoryGrantDigest) ||
-            string.IsNullOrWhiteSpace(activation.CopilotBindingId) ||
-            string.IsNullOrWhiteSpace(activation.CopilotBindingGrantDigest) ||
+            !hasValidModelProviderSource ||
             activation.Status != AutomationActivationStatus.Active)
-            throw new ArgumentException("Activation snapshots require an exact live grant and binding tuple.", nameof(activation));
+            throw new ArgumentException("Activation snapshots require an exact live grant and model-provider tuple.", nameof(activation));
     }
 
     private static GitHubAuditRecord CreateActivationAudit(
@@ -2035,12 +2149,13 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
         GitHubAuditOutcome outcome,
         GitHubAuditReasonCode reasonCode,
         string? grantDigest,
-        string? correlationId = null) =>
+        string? correlationId = null,
+        GitHubAuditAction action = GitHubAuditAction.AutomationActivated) =>
         new()
         {
             EntraObjectId = actorKind == GitHubAuditActorKind.HumanEntraSubject ? entraObjectId : null,
             ActorKind = actorKind,
-            Action = GitHubAuditAction.AutomationActivated,
+            Action = action,
             ResourceId = projectId,
             AppKind = GitHubAppKind.Repo,
             CapabilityPurpose = GitHubCapabilityPurpose.UnattendedRepository,

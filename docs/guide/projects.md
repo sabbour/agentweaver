@@ -99,15 +99,22 @@ Controls how agent commands execute and what they can reach. Options include:
 
 ### Unattended
 
-The **Unattended** section reports a project-scoped, read-only automation readiness status and
-a fixed reason code. It never reveals repository names, installation IDs, permission maps, or
+The **Unattended** section reports a project-scoped automation readiness status and a fixed
+reason code. It never reveals repository names, installation IDs, permission maps, or
 credentials. Its **GitHub Copilot account** control shows the effective background AI source:
 the verified login bound to this project, the platform-default GitHub Copilot account, or the
 deployment's custom-key mode when BYOK is active. A Project Owner can start the separate
-Copilot App binding when that is the missing prerequisite, but this page has no automation
-enablement or activation control; activation consent is a separate step. When readiness reports
+Copilot App binding when that is the missing prerequisite. When readiness reports
 `repo_app_installation_required` and the deployment configures a Repo App slug, the page also
 shows a direct **Install GitHub Repo App** link.
+
+Once the prerequisites above are met, a Project Owner can turn scheduled/event-triggered
+automation on or off with the **Activate automation**/**Deactivate automation** control in this
+same section. Activating records which model-provider source (GitHub Copilot or BYOK) backs the
+automation at that moment; deactivating immediately stops new scheduled/event triggers from
+firing without deleting the project's schedules or event subscriptions, so re-activating resumes
+them. Only Project Owners can see or use this control — everyone else sees the read-only
+readiness status only.
 
 Project Settings does not include legacy account-link controls, webhook provisioning, or
 webhook-secret controls. Repository event delivery is configured through the Repo App's
