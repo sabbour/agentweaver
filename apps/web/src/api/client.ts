@@ -485,18 +485,6 @@ export class AgentweaverApiClient {
     );
   }
 
-  beginProjectRepoAppInstallation(projectId: string): Promise<{
-    installation_url: string;
-    transaction_id: string;
-    expires_at: string;
-  }> {
-    return this.request(
-      'POST',
-      `/projects/${encodeURIComponent(projectId)}/github/repo-app-installation/authorizations`,
-      {},
-    );
-  }
-
   getProjectCopilotConnection(projectId: string): Promise<ProjectCopilotConnection> {
     return this.request<ProjectCopilotConnection>(
       'GET',
