@@ -101,8 +101,9 @@ describe('SettingsPage', () => {
     );
 
     expect(await screen.findByText('GitHub connections')).toBeDefined();
-    expect(screen.getByText(/separate Repo App provides repository access/i)).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Repo App' }));
+    expect(screen.getByText('GitHub Copilot provides AI access. The Repo App provides repository access.')).toBeDefined();
+    expect(screen.getAllByText('Optional').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize repository access' }));
     await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalledWith('/settings'));
     expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/repo-app/authorize');
     assign.mockRestore();
@@ -121,8 +122,8 @@ describe('SettingsPage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText(/Connected GitHub login: @sabbour/)).toBeDefined();
-    expect(screen.queryByRole('button', { name: 'Connect GitHub Repo App' })).toBeNull();
+    expect(await screen.findByText(/Repository access is ready for @sabbour/)).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Authorize repository access' })).toBeNull();
     await waitFor(() => expect(apiClient.getRepoAppConnectionStatus).toHaveBeenCalledTimes(2));
   });
 

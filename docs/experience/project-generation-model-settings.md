@@ -12,6 +12,18 @@ Use these settings when a project needs a different model for planning surfaces:
 
 Leave a field blank to inherit the global generation default shown in the UI (`apps/web/src/pages/ProjectSettingsPage.tsx:540`). Blank values are saved as `null` (`ProjectSettingsPage.tsx:342`).
 
+## Model provider prerequisite
+
+A model provider must be ready before Agentweaver starts AI work. This setup is separate from model selection.
+
+The project status identifies one effective source:
+
+- GitHub Copilot with project scope
+- GitHub Copilot with platform scope
+- A custom-key provider with platform scope
+
+If no source is ready, select **Set up model provider**. If setup is unavailable to you, contact a Platform Admin.
+
 ## Step by step
 
 1. Open a project and go to **Settings**.

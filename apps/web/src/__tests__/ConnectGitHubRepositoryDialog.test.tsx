@@ -47,7 +47,7 @@ beforeEach(() => {
 });
 
 describe('ConnectGitHubRepositoryDialog', () => {
-  it('offers a Connect GitHub action when the Repo App is not yet connected', async () => {
+  it('offers repository authorization when the Repo App is not yet connected', async () => {
     vi.mocked(apiClient.listProjectRepositoryOwners).mockRejectedValue(
       new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
     );
@@ -66,7 +66,9 @@ describe('ConnectGitHubRepositoryDialog', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole('button', { name: 'Connect GitHub' });
+    expect(await screen.findByRole('heading', { name: 'Set up repository access' })).toBeDefined();
+    expect(screen.getByText(/Local agent work can continue without a repository/)).toBeDefined();
+    await screen.findByRole('button', { name: 'Authorize repository access' });
     expect(screen.getByTestId('connect-github-repository-owners-error').getAttribute('data-intent')).toBe('warning');
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
@@ -92,7 +94,7 @@ describe('ConnectGitHubRepositoryDialog', () => {
 
     await screen.findByRole('button', { name: 'Retry' });
     expect(screen.getByTestId('connect-github-repository-owners-error').getAttribute('data-intent')).toBe('error');
-    expect(screen.queryByRole('button', { name: 'Connect GitHub' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Authorize repository access' })).toBeNull();
   });
 
   it('connects an existing repository from the new tab', async () => {
@@ -131,9 +133,10 @@ describe('ConnectGitHubRepositoryDialog', () => {
     });
     expect(onConnected).toHaveBeenCalledWith('octo/other-repo', 'https://github.com/octo/other-repo');
     expect(await screen.findByRole('link', { name: 'octo/other-repo' })).toBeDefined();
+    expect(screen.getByText(/Agentweaver pushed the existing project history/)).toBeDefined();
   });
 
-  it('sends the current page back through the Repo App authorization start', async () => {
+  it('returns to the current repository settings route after authorization', async () => {
     vi.mocked(apiClient.listProjectRepositoryOwners).mockRejectedValue(
       new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
     );
@@ -142,8 +145,7 @@ describe('ConnectGitHubRepositoryDialog', () => {
       transaction_id: 'txn-1',
       expires_at: '2026-08-28T00:05:00+00:00',
     } as never);
-    const assignSpy = vi.fn();
-    vi.stubGlobal('location', { ...window.location, assign: assignSpy });
+    const assignSpy = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
 
     render(
       <MemoryRouter initialEntries={['/projects/proj-1/settings?section=repository']}>
@@ -159,11 +161,10 @@ describe('ConnectGitHubRepositoryDialog', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Authorize repository access' }));
 
     await waitFor(() => expect(apiClient.beginRepoAppAuthorization)
       .toHaveBeenCalledWith('/projects/proj-1/settings?section=repository'));
-    await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?client_id=repo-app'));
-    vi.unstubAllGlobals();
+    expect(assignSpy).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?client_id=repo-app');
   });
 });

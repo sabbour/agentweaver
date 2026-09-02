@@ -90,7 +90,7 @@ describe('App auth gate', () => {
     render(<App />);
 
     expect(await screen.findByText('Sign in')).toBeDefined();
-    expect(screen.queryByText(/AI setup required/)).toBeNull();
+    expect(screen.queryByText(/Model provider setup required/)).toBeNull();
   });
 
   it('redirects platform admins to platform settings when AI is not configured', async () => {
@@ -161,7 +161,9 @@ describe('App auth gate', () => {
 
     render(<App />);
 
-    expect(await screen.findByText(/An administrator needs to configure an AI provider/)).toBeDefined();
+    expect(await screen.findByText('Model provider setup required')).toBeDefined();
+    expect(screen.getByText('Unavailable to you')).toBeDefined();
+    expect(screen.getByText('Ask a Platform Admin to complete this setup.')).toBeDefined();
     expect(screen.queryByText('Platform settings')).toBeNull();
   });
 
@@ -182,6 +184,6 @@ describe('App auth gate', () => {
 
     expect(await screen.findByText('Access denied')).toBeDefined();
     expect(screen.getByText(/no Agentweaver platform role is assigned/i)).toBeDefined();
-    expect(screen.queryByText(/AI setup required/)).toBeNull();
+    expect(screen.queryByText(/Model provider setup required/)).toBeNull();
   });
 });

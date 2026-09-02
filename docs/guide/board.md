@@ -101,10 +101,8 @@ If you have a specification file (a PRD, a design doc, a feature spec), the coor
 
 From the **Workspace** page, browse to the spec file and click **Decompose into tasks**. The coordinator produces a set of task cards and adds them to the Backlog. Review and adjust before dragging them to Ready.
 
-::: tip Connect GitHub Copilot
-Spec decomposition uses the project's GitHub Copilot connection. If it is not connected for
-your account, Agentweaver returns the standard **Connect GitHub Copilot App** action instead of
-running the decomposition; complete that project-scoped connection and retry.
+::: tip Model provider
+Spec decomposition requires a ready model provider. If setup is required, select **Authorize GitHub Copilot**. Then start the decomposition again.
 :::
 
 ## Monitoring active runs
