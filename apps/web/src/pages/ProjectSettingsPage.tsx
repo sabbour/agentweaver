@@ -385,7 +385,7 @@ export function ProjectSettingsPage() {
 
   useEffect(() => {
     if (repoAppAuthorizationResult !== 'success') return;
-    setConnectRepoOpen(true);
+    setConnectRepoOpen(true); // eslint-disable-line react-hooks/set-state-in-effect
     const next = new URLSearchParams(searchParams);
     next.delete('repo_app_auth');
     setSearchParams(next, { replace: true });

@@ -880,7 +880,7 @@ export function ProjectGalleryPage() {
     if (!repoAppAuth) return;
 
     if (repoAppAuth === 'success' && location.pathname === '/projects') {
-      setResumeCreateFromGitHubSignal((current) => current + 1);
+      setResumeCreateFromGitHubSignal((current) => current + 1); // eslint-disable-line react-hooks/set-state-in-effect
     }
 
     const next = new URLSearchParams(searchParams);
