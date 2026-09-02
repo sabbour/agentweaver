@@ -25,7 +25,7 @@ The project dashboard's **Agent and usage metrics** range selector scopes both t
 ![Token usage section on the project dashboard](/screenshots/dashboard-token-usage.png)
 
 > 📸 **Screenshot — `dashboard-token-usage.png`**
-> *Shows:* the project **Dashboard** with the shared range filter, Model performance panels, Agent leaderboard **Cost** column, and AI-credit/token diagnostics.
+> *Shows:* the project **Dashboard** with the **Activity** range filter, **Model metrics** panels, Agent leaderboard **Cost** column, and AI-credit/token data.
 > *Path:* `/projects/:projectId`.
 
 ## App overview (admin)
