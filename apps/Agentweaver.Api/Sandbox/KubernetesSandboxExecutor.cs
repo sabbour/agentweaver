@@ -427,8 +427,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 throw new InvalidOperationException(
                     $"Cannot launch AgentHost pod for run '{runId}' without a live run-bound Copilot capability snapshot.");
             throw ProjectId.TryParse(configProjectId, out var connectionProjectId)
-                ? new GitHubCopilotConnectionRequiredException(connectionProjectId)
-                : new GitHubCopilotConnectionRequiredException();
+                ? new ModelProviderConnectionRequiredException(connectionProjectId)
+                : new ModelProviderConnectionRequiredException();
         }
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
