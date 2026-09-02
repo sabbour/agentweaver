@@ -46,6 +46,7 @@ import { ScheduleTriggerDialog } from './ScheduleTriggerDialog';
 import { DAG_NODE_SEP,
   layoutDagStaircase,
   routeGridEdges,
+  WORKFLOW_FIT_VIEW_OPTIONS,
   workflowNodeSizeHint } from '../utils/dagLayout';
 import { addEdge,
   addNode,
@@ -667,7 +668,7 @@ function FitViewOnNodeAdded({ nodes }: { nodes: Node[] }) {
     }
     // Defer to the next frame so the newly-added node's DOM measurements are ready.
     requestAnimationFrame(() => {
-      void fitView({ padding: 0.2, maxZoom: 1.1, duration: 300 });
+      void fitView({ ...WORKFLOW_FIT_VIEW_OPTIONS, duration: 300 });
     });
   }, [nodes, fitView]);
 
@@ -1187,7 +1188,9 @@ export function VisualWorkflowEditor({
                 nodesConnectable
                 elementsSelectable
                 fitView
-                fitViewOptions={{ padding: 0.2, maxZoom: 1.1 }}
+                fitViewOptions={WORKFLOW_FIT_VIEW_OPTIONS}
+                minZoom={0.35}
+                maxZoom={1.5}
                 proOptions={{ hideAttribution: true }}
               >
                 <Background />

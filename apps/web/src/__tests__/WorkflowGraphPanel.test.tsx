@@ -5,7 +5,11 @@ import {
   ExecutionModalContext,
   workflowNodeTypes,
 } from '../components/WorkflowGraphPanel';
-import { buildSteppedConnectorRoute } from '../utils/dagLayout';
+import {
+  buildSteppedConnectorRoute,
+  FIXED_NODE_W,
+  WORKFLOW_PILL_DEFAULT_NODE_H,
+} from '../utils/dagLayout';
 import { BotRegular, CheckmarkCircleRegular, MergeRegular, ShieldRegular } from '../copilot-fluent-system';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { ReactFlow } from '@xyflow/react';
@@ -284,6 +288,31 @@ describe('WorkflowNode — message field display', () => {
 });
 
 describe('WorkflowGraphPanel — topology connector routing', () => {
+  it('uses compact pill size hints so fitView matches the rendered workflow cards', () => {
+    const graph: WorkflowGraphDto = {
+      graph_id: 'compact-workflow',
+      variant: 'default',
+      start_node_id: 'research',
+      nodes: [
+        { id: 'research', label: 'Research', role: 'agent', kind: 'planned', node_type: 'agent' },
+        { id: 'review', label: 'Stakeholder Review', role: 'review', kind: 'planned', node_type: 'gate' },
+        { id: 'done', label: 'Done', role: 'scribe', kind: 'planned', node_type: 'terminal' },
+      ],
+      edges: [
+        { from: 'research', to: 'review', cardinality: 'direct', loopback: false },
+        { from: 'review', to: 'done', cardinality: 'direct', loopback: false },
+      ],
+    };
+
+    const { rfNodes } = buildWorkflowDefinitionGraph(graph);
+    const byId = new Map(rfNodes.map((node) => [node.id, node]));
+
+    expect(byId.get('research')?.initialWidth).toBe(FIXED_NODE_W);
+    expect(byId.get('review')?.initialWidth).toBe(FIXED_NODE_W);
+    expect(byId.get('done')?.initialWidth).toBe(FIXED_NODE_W);
+    expect(byId.get('done')?.initialHeight).toBeLessThan(WORKFLOW_PILL_DEFAULT_NODE_H);
+  });
+
   it('routes a diamond workflow through GRID handles without dangling edge endpoints', () => {
     const graph: WorkflowGraphDto = {
       graph_id: 'content-authoring',

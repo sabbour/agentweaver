@@ -24,6 +24,7 @@ import {
   FIXED_CARD_H,
   COMPACT_NODE_W,
   FIXED_NODE_W,
+  WORKFLOW_FIT_VIEW_OPTIONS,
   layoutDagStaircase,
   NODE_TYPE_W,
   NODE_W,
@@ -1424,7 +1425,8 @@ export function coordinatorLoopbackLabel(sourceRole: string | undefined, sourceI
 
 const useInlinePanelStyles = makeStyles({
   container: {
-    height: '320px',
+    height: '400px',
+    overflow: 'hidden',
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
@@ -1434,11 +1436,9 @@ const useInlinePanelStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    height: '320px',
+    height: '400px',
   },
 });
-
-const FIT_VIEW_OPTS = { padding: 0.2, maxZoom: 1.1 };
 
 /**
  * Builds the read-only workflow-definition graph with the same staircase and
@@ -1559,7 +1559,9 @@ export function WorkflowDefinitionInlinePanel({
             nodeTypes={workflowNodeTypes}
             edgeTypes={workflowEdgeTypes}
             fitView
-            fitViewOptions={FIT_VIEW_OPTS}
+            fitViewOptions={WORKFLOW_FIT_VIEW_OPTIONS}
+            minZoom={0.35}
+            maxZoom={1.5}
             nodesDraggable={false}
             nodesConnectable={false}
             nodesFocusable={false}
