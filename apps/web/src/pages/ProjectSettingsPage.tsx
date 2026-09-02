@@ -316,6 +316,7 @@ export function ProjectSettingsPage() {
     next.delete('repo_app_install');
     setSearchParams(next, { replace: true });
   };
+  const repoAppAuthorizationResult = searchParams.get('repo_app_auth');
 
   const [connectRepoOpen, setConnectRepoOpen] = useState(false);
 
@@ -381,6 +382,14 @@ export function ProjectSettingsPage() {
   const [automationError, setAutomationError] = useState<string | null>(null);
 
   const formatError = (err: unknown): string => formatApiErrorMessage(err);
+
+  useEffect(() => {
+    if (repoAppAuthorizationResult !== 'success') return;
+    setConnectRepoOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete('repo_app_auth');
+    setSearchParams(next, { replace: true });
+  }, [repoAppAuthorizationResult, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (!projectId) return;

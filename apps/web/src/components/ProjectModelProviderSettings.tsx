@@ -14,6 +14,7 @@ import {
 } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import type { ProjectCopilotConnection } from '../api/types';
 
 const CONNECTION_LOAD_ERROR = 'Could not load this project’s GitHub Copilot connection. Refresh and try again.';
@@ -30,6 +31,7 @@ export function ProjectModelProviderSettings({
   showConnectionStatus?: boolean;
   suppressProjectOverrideWhenPlatformDefault?: boolean;
 }) {
+  const location = useLocation();
   const [open, setOpen] = useState(false);
   const [connection, setConnection] = useState<ProjectCopilotConnection | null>(null);
   const [loading, setLoading] = useState(false);
@@ -72,7 +74,7 @@ export function ProjectModelProviderSettings({
     setConnecting(true);
     setConnectionError(null);
     try {
-      const handoff = await apiClient.beginProjectCopilotAuthorization(projectId);
+      const handoff = await apiClient.beginProjectCopilotAuthorization(projectId, `${location.pathname}${location.search}`);
       window.location.assign(handoff.authorization_url);
     } catch {
       setConnectionError('The GitHub Copilot App connection could not be started. Try again.');

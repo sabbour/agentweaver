@@ -12,7 +12,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { getLastActiveProjectId } from '../components/shell/projectContext';
 import type { AuthConfigResponse, AuthSessionResponse, RepoAppConnectionStatus } from '../api/types';
 import {
@@ -61,6 +61,7 @@ function formatError(err: unknown): string {
 
 export function SettingsPage() {
   const styles = useStyles();
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
@@ -144,7 +145,7 @@ export function SettingsPage() {
     setRepoAppConnecting(true);
     setRepoAppError(null);
     try {
-      const handoff = await apiClient.beginRepoAppAuthorization();
+      const handoff = await apiClient.beginRepoAppAuthorization(`${location.pathname}${location.search}`);
       window.location.assign(handoff.authorization_url);
     } catch (err) {
       setRepoAppError(formatError(err));

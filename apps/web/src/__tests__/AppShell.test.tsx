@@ -227,7 +227,7 @@ describe('AppShell navigation', () => {
     expect(await screen.findByText(MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE)).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub account' }));
-    await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('proj-1'));
+    await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('proj-1', '/projects/proj-1/team'));
     expect(assign).toHaveBeenCalledWith(
       'https://api.example.test/api/projects/proj-1/github/copilot/authorizations/redirect',
     );

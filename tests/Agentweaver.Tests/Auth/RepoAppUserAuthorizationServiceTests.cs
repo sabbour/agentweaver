@@ -15,13 +15,13 @@ namespace Agentweaver.Tests.Auth;
 public sealed class RepoAppUserAuthorizationServiceTests
 {
     [Fact]
-    public async Task Begin_UsesPkceS256AndAnOpaqueAllowlistedReturnRoute()
+    public async Task Begin_UsesPkceS256AndStoresASafeFrontendReturnPath()
     {
         await using var database = await OpenDatabaseAsync();
         var secrets = new InMemorySecretStore();
         var service = CreateService(database, secrets, new StubHttpClientFactory());
 
-        var result = await service.BeginAsync(Human("entra"), HumanPrincipal(), "settings");
+        var result = await service.BeginAsync(Human("entra"), HumanPrincipal(), "/projects?create=github");
 
         result.Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
         result.TransactionId.Should().HaveLength(43);
@@ -34,14 +34,16 @@ public sealed class RepoAppUserAuthorizationServiceTests
         var stored = await database.GitHubAuthorizations.SingleAsync();
         stored.State.Should().Be(state);
         stored.ExternalTransactionId.Should().Be(result.TransactionId);
-        stored.ReturnRouteKey.Should().Be("settings");
+        stored.ReturnRouteKey.Should().Be("/projects?create=github");
         stored.PkceVerifierProtected.Should().NotBeNullOrWhiteSpace();
         stored.CallbackCookieHash.Should().NotBe(result.CallbackCookie);
         var verifier = await secrets.GetSecretAsync(stored.PkceVerifierProtected);
         RepoAppUserAuthorizationService.CreateS256Challenge(verifier.Value!).Should().Be(challenge);
 
         var rejected = await service.BeginAsync(Human("another-entra"), HumanPrincipal(), "https://attacker.invalid");
-        rejected.Outcome.Should().Be(RepoAppAuthorizationOutcome.GitHubBindingUnavailable);
+        rejected.Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+        var rejectedStored = await database.GitHubAuthorizations.SingleAsync(x => x.EntraObjectId == "another-entra");
+        rejectedStored.ReturnRouteKey.Should().Be("/settings");
     }
 
     [Fact]
