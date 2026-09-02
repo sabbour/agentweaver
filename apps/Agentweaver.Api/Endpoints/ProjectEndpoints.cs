@@ -194,8 +194,7 @@ app.MapGet("/auth/github/copilot-app/callback", async (
         var platformService = new PlatformDefaultCopilotBindingService(
             configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, platformLogger);
         var platformOutcome = await platformService.CompleteBrowserCallbackAsync(
-            browserSession?.Id,
-            browserSession?.EntraObjectId,
+            browserSession,
             state,
             resolvedCode,
             platformCookie,
@@ -208,8 +207,7 @@ app.MapGet("/auth/github/copilot-app/callback", async (
         var platformService = new PlatformDefaultCopilotBindingService(
             configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, platformLogger);
         var platformOutcome = await platformService.CompleteBrowserCallbackAsync(
-            browserSession?.Id,
-            browserSession?.EntraObjectId,
+            browserSession,
             state,
             resolvedCode,
             platformCookie,

@@ -13,7 +13,10 @@ using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using k8s;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using AgentHostRuntimeState = agenthost::Agentweaver.AgentHost.AgentHostRuntimeState;
 using AgentHostCredentialProvider = agenthost::Agentweaver.AgentHost.AgentHostGitHubCapabilityCredentialProvider;
 using ConfigureRequest = agenthost::ConfigureRequest;
@@ -62,13 +65,15 @@ public sealed class KubernetesSandboxExecutorClaimTests
         IPodNameRegistry? podRegistry = null,
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
         IGitHubCopilotCapabilityCredentialProvider? copilotCredentials = null,
-        IByokProviderConfigurationProvider? byokProviderConfiguration = null) =>
+        IByokProviderConfigurationProvider? byokProviderConfiguration = null,
+        Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions,
             copilotCredentials: copilotCredentials ?? new FixedGitHubCopilotCapabilityCredentialProvider(),
             previewService: previewService,
-            byokProviderConfiguration: byokProviderConfiguration);
+            byokProviderConfiguration: byokProviderConfiguration,
+            effectiveProviderResolver: effectiveProviderResolver);
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
@@ -398,6 +403,98 @@ public sealed class KubernetesSandboxExecutorClaimTests
         byok.GetProperty("baseUrl").GetString().Should().Be("https://byok-resource.openai.azure.com");
         byok.GetProperty("model").GetString().Should().Be("gpt-4.1");
         byok.GetProperty("apiKey").GetString().Should().Be("test-byok-key");
+    }
+
+    [Fact]
+    public async Task Router_propagates_byok_provider_to_kubernetes_executor_without_requesting_copilot()
+    {
+        var runId = RunId.New().ToString();
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var byokProvider = new FixedByokProviderConfigurationProvider(
+            new ByokProviderConfiguration(
+                Id: "router-provider",
+                Name: "Router BYOK provider",
+                Type: "openai",
+                BaseUrl: "https://models.example.com",
+                Model: "gpt-5",
+                ApiKey: "router-byok-key"));
+        var scopeProvider = new ServiceCollection().BuildServiceProvider();
+        var router = new SandboxExecutorRouter(
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Sandbox:Backend"] = "kubernetes",
+                })
+                .Build(),
+            NullLoggerFactory.Instance,
+            byokProvider,
+            scopeProvider.GetRequiredService<IServiceScopeFactory>(),
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: new UnexpectedGitHubCopilotCapabilityCredentialProvider(),
+            effectiveProviderResolver: (_, _) => Task.FromResult<EffectiveModelProviderResult>(
+                new EffectiveModelProviderResult.Byok("router-provider", "openai")),
+            isInCluster: () => false,
+            kubernetesClientFactory: () => ClientFor(handler));
+        var executor = router.Resolve().Should().BeOfType<KubernetesSandboxExecutor>().Subject;
+
+        await executor.LaunchAgentHostPodAsync(runId);
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        var body = doc.RootElement;
+        body.GetProperty("copilotCredential").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("byokProviderConfiguration").GetProperty("apiKey").GetString()
+            .Should().Be("router-byok-key");
+    }
+
+    [Fact]
+    public async Task Unavailable_project_copilot_binding_does_not_fall_back_to_active_platform_byok()
+    {
+        var projectId = ProjectId.New();
+        var byokProvider = new FixedByokProviderConfigurationProvider(
+            new ByokProviderConfiguration(
+                Id: "platform-provider",
+                Name: "Platform BYOK provider",
+                Type: "openai",
+                BaseUrl: "https://models.example.com",
+                Model: "gpt-5",
+                ApiKey: "platform-key"));
+        var executor = NewExecutor(
+            new FakeKubeHandler(),
+            new StubSubmittingUserResolver("sabbour", projectId.ToString()),
+            copilotCredentials: new NullGitHubCopilotCapabilityCredentialProvider(),
+            byokProviderConfiguration: byokProvider,
+            effectiveProviderResolver: (_, _) => Task.FromResult<EffectiveModelProviderResult>(
+                new EffectiveModelProviderResult.Unavailable(
+                    "The project's active GitHub Copilot binding credential is unavailable.")));
+
+        var act = () => executor.LaunchAgentHostPodAsync(RunId.New().ToString());
+
+        var exception = await act.Should().ThrowAsync<ModelProviderConnectionRequiredException>();
+        exception.Which.Requirement.Action.ProjectId.Should().Be(projectId.ToString());
+    }
+
+    [Fact]
+    public void Router_requires_byok_provider_configuration_wiring()
+    {
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+            .AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance)
+            .AddSingleton<ISandboxExecutorRouter, SandboxExecutorRouter>()
+            .BuildServiceProvider();
+
+        var act = () => services.GetRequiredService<ISandboxExecutorRouter>();
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*IByokProviderConfigurationProvider*");
     }
 
     [Fact]
@@ -979,4 +1076,12 @@ public sealed class KubernetesSandboxExecutorClaimTests
         public Task<ByokProviderConfiguration?> GetAsync(CancellationToken ct) =>
             Task.FromResult<ByokProviderConfiguration?>(configuration);
     }
+
+    private sealed class UnexpectedGitHubCopilotCapabilityCredentialProvider
+        : IGitHubCopilotCapabilityCredentialProvider
+    {
+        public Task<GitHubCapabilitySnapshotCredential?> GetCredentialAsync(string runId, CancellationToken ct) =>
+            throw new InvalidOperationException("Copilot credentials must not be requested for an effective BYOK launch.");
+    }
+
 }
