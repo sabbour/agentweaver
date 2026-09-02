@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Net;
+using System.Reflection;
 using System.Text.Json;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
@@ -127,6 +129,68 @@ public sealed class KubernetesPodAgentEndpointResolverTests
             "the typed provider failure must be removed from the launch cache before it propagates");
     }
 
+    [Fact]
+    public async Task Failed_launch_waiters_do_not_evict_replacement_launch()
+    {
+        const string runId = "run-concurrent-stale-launch";
+        var projectId = ProjectId.New();
+        var registry = new PodNameRegistry();
+        var failure = new ModelProviderConnectionRequiredException(projectId);
+        var lifecycle = new ConcurrentProviderFailurePodLifecycle(
+            registry,
+            "agenthost-replacement",
+            failure);
+        var client = new Kubernetes(
+            new KubernetesClientConfiguration { Host = "http://localhost:8080" },
+            new ReadyPodHandler("agenthost-replacement", "10.0.0.44"));
+        var resolver = new KubernetesPodAgentEndpointResolver(
+            client,
+            registry,
+            "agentweaver",
+            new SandboxAgentOptions { RequireMtls = false },
+            NullLogger<KubernetesPodAgentEndpointResolver>.Instance,
+            lifecycle);
+
+        var firstWaiter = resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+        var secondWaiter = resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+        lifecycle.LaunchCalls.Should().Be(1);
+
+        var launches = GetLaunches(resolver);
+        launches.TryGetValue(runId, out var failedLaunch).Should().BeTrue();
+        var cachedFailedLaunch = failedLaunch
+            ?? throw new InvalidOperationException("Failed launch was not cached.");
+        launches.TryRemove(
+                new KeyValuePair<string, Lazy<Task<string>>>(runId, cachedFailedLaunch))
+            .Should().BeTrue("this stages the interleaving after one failed waiter removes its launch");
+
+        var replacement = resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+        lifecycle.LaunchCalls.Should().Be(2);
+
+        lifecycle.FailFirstLaunch();
+        var firstWaiterFailure = async () => await firstWaiter;
+        var secondWaiterFailure = async () => await secondWaiter;
+        await firstWaiterFailure.Should().ThrowAsync<ModelProviderConnectionRequiredException>();
+        await secondWaiterFailure.Should().ThrowAsync<ModelProviderConnectionRequiredException>();
+
+        var replacementWaiter = resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+        lifecycle.LaunchCalls.Should().Be(2,
+            "stale waiters must not remove the replacement launch from the cache");
+
+        lifecycle.CompleteReplacement(runId);
+        var endpoints = await Task.WhenAll(replacement, replacementWaiter);
+        endpoints.Should().OnlyContain(endpoint => endpoint == new Uri("http://10.0.0.44:8088/a2a/agent"));
+    }
+
+    private static ConcurrentDictionary<string, Lazy<Task<string>>> GetLaunches(
+        KubernetesPodAgentEndpointResolver resolver)
+    {
+        var field = typeof(KubernetesPodAgentEndpointResolver).GetField(
+            "_launches",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        return (ConcurrentDictionary<string, Lazy<Task<string>>>)
+            (field?.GetValue(resolver) ?? throw new InvalidOperationException("Launch cache field not found."));
+    }
+
     private sealed class RegisteringPodLifecycle(IPodNameRegistry registry, string replacementPod)
         : IAgentHostPodLifecycle
     {
@@ -174,6 +238,43 @@ public sealed class KubernetesPodAgentEndpointResolverTests
 
         public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class ConcurrentProviderFailurePodLifecycle(
+        IPodNameRegistry registry,
+        string podName,
+        AgentProviderException failure) : IAgentHostPodLifecycle
+    {
+        private readonly TaskCompletionSource<string> _failedLaunch =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<string> _replacementLaunch =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _launchCalls;
+
+        public int LaunchCalls => Volatile.Read(ref _launchCalls);
+
+        public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            var call = Interlocked.Increment(ref _launchCalls);
+            return call == 1 ? _failedLaunch.Task : _replacementLaunch.Task;
+        }
+
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            string? workingDirectoryOverride,
+            CancellationToken ct = default) =>
+            LaunchAgentHostPodAsync(runId, ct);
+
+        public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public void FailFirstLaunch() => _failedLaunch.SetException(failure);
+
+        public void CompleteReplacement(string runId)
+        {
+            registry.Register(runId, podName);
+            _replacementLaunch.SetResult("http://replacement");
+        }
     }
 
     private sealed class ReapedThenReplacementPodHandler(

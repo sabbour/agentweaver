@@ -225,7 +225,8 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         catch (Exception ex)
         {
             // Drop the cached failed launch so a subsequent turn can retry.
-            _launches.TryRemove(runId, out _);
+            _launches.TryRemove(
+                new KeyValuePair<string, Lazy<Task<string>>>(runId, launch));
 
             if (ex is AgentProviderException)
                 throw;
