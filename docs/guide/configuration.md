@@ -87,6 +87,32 @@ the App permissions and wait for the server to verify a new grant.
 Installation tokens are scoped to Agentweaver's server-declared unattended repository
 permissions and never inherit unrelated installation permissions.
 
+##### Required manual step: register the installation Setup URL
+
+Binding a new GitHub App installation to a project (the "Install GitHub Repo App" button in
+Project Settings) depends on **one manual, one-time configuration change in the Repo App's own
+GitHub settings** that cannot be automated by the API:
+
+1. Go to the Repo App's settings page on GitHub (`https://github.com/settings/apps/<slug>` for a
+   user-owned App, or the equivalent organization App settings page).
+2. Under **Identifying and authorizing users → Setup URL**, set the Setup URL to:
+
+   ```
+   https://<your-api-host>/auth/github/repo-app/installation/callback
+   ```
+
+   Replace `<your-api-host>` with the public origin of this deployment's API (the same host
+   `Auth:RepoApp:CallbackUrl` already resolves against). This URL is **distinct** from the
+   OAuth `CallbackUrl` above — GitHub sends the OAuth authorization code to `CallbackUrl` and
+   the App installation's `installation_id`/`setup_action`/`state` to this Setup URL.
+3. Check **"Redirect on update"** so GitHub also redirects here when an existing installation's
+   repository selection or permissions are changed, not just on a brand-new install.
+4. Save the App settings.
+
+Without this step, GitHub will install the App but leave the browser on GitHub's own
+installation confirmation page, and the resulting installation will never be bound to the
+project that started the flow — reproducing the exact failure this feature fixes.
+
 #### Purpose-bound broker
 
 The trusted run lifecycle captures and revalidates immutable, purpose-specific snapshots for
