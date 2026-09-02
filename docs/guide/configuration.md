@@ -161,15 +161,45 @@ or used for unattended work until its registration has zero permissions.
 | `Auth:CopilotApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for the fixed callback route |
 | `Auth:CopilotApp:SecretPath` | none | Optional Key Vault path; must not equal the Repo App secret path |
 
-The same Copilot App registration also serves the deployment-wide
-**platform-default Copilot** connection used by GitHub Copilot mode when no BYOK
-provider is saved. A Platform Admin starts that flow from **Platform settings**,
-but it now reuses the same physical callback URL as the project-scoped flow:
-`Auth:CopilotApp:CallbackUrl` (`/auth/github/copilot-app/callback`). The server
-disambiguates project vs. platform-default completion by the persisted OAuth
-`state`, so only this single callback URL needs to be registered on the GitHub
-App. The saved binding is singleton platform state, separate from every
-project-scoped Copilot binding.
+Since v0.23.1, one unified callback serves exactly two Copilot OAuth completion
+flows: the project-scoped flow and the deployment-wide **platform-default
+Copilot** flow used when no BYOK provider is saved. The MCP browser handoff is
+an entry point into the project-scoped flow, not a third completion flow.
+
+```
+https://<public-host>/auth/github/copilot-app/callback
+```
+
+Register that exact URL on the Copilot GitHub App with wildcard matching
+disabled. GitHub currently allows up to 10 callback URLs. Apps created before
+2026-08-03 with one callback URL may have wildcard matching enabled by default;
+explicitly inspect and disable it for exact matching. The server
+disambiguates the two flows using persisted OAuth `state`. The platform binding
+remains singleton platform state, separate from every project binding.
+
+This registration is independent of both the Repo GitHub App callback
+(`https://<public-host>/auth/github/repo-app/callback`) and the Microsoft Entra
+redirect URI (`https://<public-host>/auth/entra/callback`). Configure each URL
+on its corresponding application. A wildcard for one callback path does not
+match a sibling path, so wildcard matching cannot make the retired
+`/auth/github/platform-default-copilot/callback` path match the unified path.
+
+##### Migrating a shared Copilot App registration
+
+1. Add the exact unified URL first, with wildcard matching disabled.
+2. If older deployments share the Copilot App client ID, temporarily retain
+   their old exact callback. Inventory each deployment's version and client ID
+   before removing anything.
+3. Upgrade every shared deployment to v0.23.1 or later. After the final older
+   deployment stops, allow at least 15 minutes for pending authorization
+   transactions to drain.
+4. Verify all three entry points on deployed staging: project-scoped, MCP
+   browser handoff into the project-scoped flow, and platform-default. Then
+   remove the retired exact callback.
+
+Local end-to-end OAuth may be impossible when the Entra app permits only
+deployment redirect URIs. In that case, focused contract tests are the local
+check and successful deployed-staging authorization is the end-to-end proof.
 
 When `Auth:Mode=Entra`, the platform sign-in is driven by Microsoft Entra ID instead of
 GitHub. The interactive browser flow (`/auth/entra/authorize` → `/auth/entra/callback`)

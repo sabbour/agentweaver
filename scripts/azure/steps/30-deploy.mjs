@@ -111,6 +111,18 @@ export const DEPLOYMENT_MANIFESTS = ["api-deployment.yaml", "frontend-deployment
 // service (Agentweaver__ApiBaseUrl target) is already present.
 export const WORKER_MANIFESTS = ["worker-deployment.yaml", "worker-hpa.yaml"];
 
+export const COPILOT_APP_CALLBACK_SUFFIX = "/auth/github/copilot-app/callback";
+
+export function assertCopilotAppCallbackUrl(callbackUrl) {
+  const value = String(callbackUrl ?? "");
+  if (!value.endsWith(COPILOT_APP_CALLBACK_SUFFIX) || value.endsWith(`${COPILOT_APP_CALLBACK_SUFFIX}/`)) {
+    throw new Error(
+      `Auth:CopilotApp:CallbackUrl must end exactly with '${COPILOT_APP_CALLBACK_SUFFIX}' and have no trailing slash; refusing to render or apply manifests.`,
+    );
+  }
+  return value;
+}
+
 const INLINE_DEFAULT_DOMAIN_CERTIFICATE = (namespace) => `apiVersion: approuting.kubernetes.azure.com/v1alpha1
 kind: DefaultDomainCertificate
 metadata:
@@ -174,6 +186,8 @@ export function validateManagedDomain(domain) {
  */
 export async function buildManifests(vars, opts = {}) {
   const { repoRoot = DEFAULT_REPO_ROOT, scratchDir, fs: fsImpl = fs, capture: execCapture = execDefault.capture, kustomize = kustomizeDefault } = opts;
+  const runtimeConfig = kustomize.buildRuntimeConfigLiterals(vars);
+  assertCopilotAppCallbackUrl(runtimeConfig.COPILOT_APP_CALLBACK_URL);
   const overlayDir = kustomize.writeOverlay(vars, { repoRoot, scratchDir, fs: fsImpl });
   const { stdout: builtYaml } = await execCapture("kubectl", ["kustomize", overlayDir]);
   return kustomize.parseBuiltDocs(builtYaml);
@@ -346,6 +360,8 @@ export async function run(cfg, opts = {}) {
       SANDBOX_PREVIEW_ENABLED,
       SANDBOX_PREVIEW_ZONE_SUFFIX,
     };
+    const runtimeConfig = kustomize.buildRuntimeConfigLiterals(renderVars);
+    const copilotCallbackUrl = assertCopilotAppCallbackUrl(runtimeConfig.COPILOT_APP_CALLBACK_URL);
 
     // Do not apply any application manifest until the managed domain and its
     // derived public origin have both passed validation.
@@ -353,6 +369,9 @@ export async function run(cfg, opts = {}) {
     cleanupRenderedDir();
     fsImpl.mkdirSync(RENDERED_DIR, { recursive: true });
 
+    log.info("");
+    log.info(`  Copilot callback to register: ${copilotCallbackUrl}`);
+    log.info("  GitHub App callback matching: exact URL; wildcard matching disabled.");
     log.info("");
     log.info("Building manifests via Kustomize (kubectl kustomize)...");
     const docs = await buildManifests(renderVars, {
