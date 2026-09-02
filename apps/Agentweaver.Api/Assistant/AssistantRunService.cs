@@ -325,10 +325,15 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
         await using var scope = _scopeFactory.CreateAsyncScope();
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
-        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
-            throw run.ProjectId is { } projectId
-                ? new ModelProviderConnectionRequiredException(projectId)
-                : new ModelProviderConnectionRequiredException();
+
+        // Operator/Assistant runs are personal sessions, not project-scoped work: run.ProjectId (when
+        // present) is only incidental UI context (the project the caller happened to be viewing), so
+        // credential resolution must always go through the PLATFORM-level Copilot connection rather
+        // than that project's own (possibly broken/missing) binding. Hence platformScoped: true, and
+        // a failure always surfaces the platform-settings CTA, never a project-specific one.
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
+                .ConfigureAwait(false))
+            throw new ModelProviderConnectionRequiredException();
     }
 
     public Task<OperatorAssistantResponse> SendMessageAsync(
