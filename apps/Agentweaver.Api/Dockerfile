@@ -76,15 +76,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the GitHub CLI in the runtime image because GitHub diagnostics and
-# integrations invoke `gh` from the API process.
-ARG GH_CLI_VERSION=2.98.0
+# integrations invoke `gh` from the API process. The official apt repo only
+# ever serves the current latest release (older versions are rotated out), so
+# pinning an exact version here breaks as soon as upstream ships a new one;
+# install whatever is currently published instead.
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends gh=${GH_CLI_VERSION} \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
