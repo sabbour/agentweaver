@@ -309,7 +309,7 @@ export function LeftNav({
                     to={globalSessionsItem.path}
                     aria-label={globalSessionsItem.label}
                     aria-current={activeKey === globalSessionsItem.key ? 'page' : undefined}
-                    className="aw-nav-disclosure__toggle"
+                    className="aw-nav-item aw-nav-disclosure__toggle"
                   >
                     <span className="aw-nav-item__icon" aria-hidden="true">{globalSessionsItem.icon}</span>
                     <span className="aw-nav-item__label">{globalSessionsItem.label}</span>
@@ -317,7 +317,6 @@ export function LeftNav({
                   <Tooltip content="New session" relationship="label" positioning="after">
                     <Button
                       appearance="subtle"
-                      size="small"
                       icon={<AddRegular />}
                       aria-label="New session"
                       onClick={startNewSession}
