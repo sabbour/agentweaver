@@ -424,7 +424,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
     /// Vault secret is missing/stale (observed live via
     /// "Copilot App connection for project ... has an active binding record but its credential
     /// secret is missing."). This is a normal, user-actionable "reconnect GitHub" condition and
-    /// must surface as <see cref="GitHubCopilotConnectionRequiredException"/> (which the frontend
+    /// must surface as <see cref="ModelProviderConnectionRequiredException"/> (which the frontend
     /// already renders as a "Connect GitHub" CTA), not as an opaque internal
     /// <see cref="InvalidOperationException"/> that gets wrapped into a generic 500.
     /// </summary>
@@ -439,7 +439,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
 
         var act = () => executor.LaunchAgentHostPodAsync("run-with-stale-snapshot");
 
-        var exception = await act.Should().ThrowAsync<GitHubCopilotConnectionRequiredException>();
+        var exception = await act.Should().ThrowAsync<ModelProviderConnectionRequiredException>();
         exception.Which.Requirement.Action.ProjectId.Should().Be(projectId.ToString());
     }
 
