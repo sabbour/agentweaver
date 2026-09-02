@@ -463,12 +463,14 @@ export class AgentweaverApiClient {
     );
   }
 
-  beginProjectCopilotAuthorization(projectId: string): Promise<{
+  beginProjectCopilotAuthorization(projectId: string, returnRouteKey?: string): Promise<{
     authorization_url: string;
     transaction_id: string;
     expires_at: string;
   }> {
-    return this.request('POST', `/projects/${encodeURIComponent(projectId)}/github/copilot/authorizations`, {});
+    return this.request('POST', `/projects/${encodeURIComponent(projectId)}/github/copilot/authorizations`, {
+      ...(returnRouteKey ? { return_route_key: returnRouteKey } : {}),
+    });
   }
 
   beginProjectRepoAppInstallation(projectId: string): Promise<{
@@ -603,8 +605,10 @@ export class AgentweaverApiClient {
     return this.request<void>('POST', '/admin/platform-default-copilot/disconnect', {});
   }
 
-  beginRepoAppAuthorization(): Promise<{ authorization_url: string; transaction_id: string; expires_at: string }> {
-    return this.request('POST', '/auth/github/repo-app/authorizations', {});
+  beginRepoAppAuthorization(returnRouteKey?: string): Promise<{ authorization_url: string; transaction_id: string; expires_at: string }> {
+    return this.request('POST', '/auth/github/repo-app/authorizations', {
+      ...(returnRouteKey ? { return_route_key: returnRouteKey } : {}),
+    });
   }
 
   getRepoAppConnectionStatus(): Promise<RepoAppConnectionStatus> {

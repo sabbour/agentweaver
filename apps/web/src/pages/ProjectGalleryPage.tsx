@@ -34,7 +34,7 @@ import { Pager } from '../copilot-fluent-system';
 import { ENTRA_AUTHORIZE_URL } from '../config';
 import { useProjectList } from '../hooks/useProjectList';
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   CreateProjectRequest,
   PagedResult,
@@ -515,8 +515,19 @@ function useGitHubData(open: boolean) {
 }
 
 
-function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCreated: (p: Project) => void; dataDir: string | null; workspaceAutoAssigned: boolean }) {
+function CreateFromGitHubDialog({
+  onCreated,
+  dataDir,
+  workspaceAutoAssigned,
+  resumeSignal = 0,
+}: {
+  onCreated: (p: Project) => void;
+  dataDir: string | null;
+  workspaceAutoAssigned: boolean;
+  resumeSignal?: number;
+}) {
   const styles = useStyles();
+  const location = useLocation();
   const d = useCreateProjectDialog('github', onCreated);
   const { repos, reposLoading, reposError, reposConnectionRequired, reloadRepos } = useGitHubData(d.open);
   const [repoFilter, setRepoFilter] = useState('');
@@ -527,10 +538,14 @@ function CreateFromGitHubDialog({ onCreated, dataDir, workspaceAutoAssigned }: {
   const [connectingRepoApp, setConnectingRepoApp] = useState(false);
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
 
+  useEffect(() => {
+    if (resumeSignal > 0) d.setOpen(true);
+  }, [resumeSignal, d.setOpen]);
+
   const connectRepoApp = async () => {
     setConnectingRepoApp(true);
     try {
-      const handoff = await apiClient.beginRepoAppAuthorization();
+      const handoff = await apiClient.beginRepoAppAuthorization(`${location.pathname}${location.search}`);
       window.location.assign(handoff.authorization_url);
     } catch {
       setConnectingRepoApp(false);
@@ -732,6 +747,7 @@ function ProjectCard({ project, onOpen, highlight }: { project: Project; onOpen:
 
 
 export function ProjectGalleryPage() {
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { appendProject, refetch } = useProjectList();
@@ -746,6 +762,7 @@ export function ProjectGalleryPage() {
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [workspaceAutoAssigned, setWorkspaceAutoAssigned] = useState(false);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [resumeCreateFromGitHubSignal, setResumeCreateFromGitHubSignal] = useState(0);
   const toasterId = useId('project-gallery-toaster');
   const { dispatchToast } = useToastController(toasterId);
 
@@ -858,6 +875,19 @@ export function ProjectGalleryPage() {
     setSearchParams(next, { replace: true });
   };
 
+  useEffect(() => {
+    const repoAppAuth = searchParams.get('repo_app_auth');
+    if (!repoAppAuth) return;
+
+    if (repoAppAuth === 'success' && location.pathname === '/projects') {
+      setResumeCreateFromGitHubSignal((current) => current + 1); // eslint-disable-line react-hooks/set-state-in-effect
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.delete('repo_app_auth');
+    setSearchParams(next, { replace: true });
+  }, [location.pathname, searchParams, setSearchParams]);
+
   return (
     <PageContainer>
       <Toaster toasterId={toasterId} position="bottom-end" />
@@ -867,7 +897,12 @@ export function ProjectGalleryPage() {
         actions={showGalleryActions ? (
           <>
             <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
-            <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
+            <CreateFromGitHubDialog
+              onCreated={handleCreated}
+              dataDir={dataDir}
+              workspaceAutoAssigned={workspaceAutoAssigned}
+              resumeSignal={resumeCreateFromGitHubSignal}
+            />
           </>
         ) : undefined}
       />
@@ -911,7 +946,12 @@ export function ProjectGalleryPage() {
           action={
             <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', justifyContent: 'center' }}>
               <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
-              <CreateFromGitHubDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
+              <CreateFromGitHubDialog
+                onCreated={handleCreated}
+                dataDir={dataDir}
+                workspaceAutoAssigned={workspaceAutoAssigned}
+                resumeSignal={resumeCreateFromGitHubSignal}
+              />
             </div>
           }
         />

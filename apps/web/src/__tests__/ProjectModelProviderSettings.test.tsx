@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import { ProjectModelProviderSettings } from '../components/ProjectModelProviderSettings';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -15,7 +16,11 @@ vi.mock('../api/apiClient', () => ({
 }));
 
 function Wrapper({ children }: { children: ReactNode }) {
-  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
+  return (
+    <MemoryRouter initialEntries={['/projects/project-1/team']}>
+      <AzureFluentProvider density="compact">{children}</AzureFluentProvider>
+    </MemoryRouter>
+  );
 }
 
 beforeEach(() => {
@@ -105,7 +110,7 @@ describe('ProjectModelProviderSettings', () => {
 
     expect(await screen.findByText('Connected project GitHub account: @octocat')).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Switch GitHub account' }));
-    await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('project-1'));
+    await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('project-1', '/projects/project-1/team'));
     expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/copilot-app/authorize');
     assign.mockRestore();
   });

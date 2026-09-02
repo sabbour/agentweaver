@@ -28,7 +28,7 @@ public sealed class ProjectCopilotBindingServiceTests
         var admin = new CallerContext { User = "admin", EntraObjectId = "admin", PlatformRoles = [PlatformRoles.PlatformAdmin] };
         (await service.BeginAsync(admin, HumanPrincipal(), project)).Outcome.Should().Be(CopilotBindingOutcome.ProjectOwnerRequired);
 
-        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project);
+        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project, $"/projects/{project}/team");
         begin.Outcome.Should().Be(CopilotBindingOutcome.Success);
         var stored = await db.GitHubAuthorizations.SingleAsync();
         stored.ProjectId.Should().Be(project.ToString());
@@ -100,7 +100,7 @@ public sealed class ProjectCopilotBindingServiceTests
         await SeedProjectAsync(db, project, other);
         roles.SetOwner(project, "owner");
         var service = CreateService(db, roles, new InMemorySecretStore());
-        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project);
+        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project, $"/projects/{project}/team");
         var state = Query(begin.AuthorizationUrl!, "state");
 
         (await service.CompleteAsync(Human("owner"), HumanPrincipal(), other, state, "code", begin.CallbackCookie))
@@ -194,7 +194,7 @@ public sealed class ProjectCopilotBindingServiceTests
         await SeedProjectAsync(db, project);
         roles.SetOwner(project, "owner");
         var service = CreateService(db, roles, new InMemorySecretStore(), """{"access_token":"ghu_provider","refresh_token":"refresh-secret"}""");
-        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project);
+        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project, $"/projects/{project}/team");
 
         (await service.CompleteAsync(Human("owner"), HumanPrincipal(), project, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
             .Should().Be(CopilotBindingOutcome.Success);
@@ -215,7 +215,7 @@ public sealed class ProjectCopilotBindingServiceTests
             roles,
             new InMemorySecretStore(),
             """{"access_token":"ghu_provider","refresh_token":"refresh-secret"}""");
-        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project);
+        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project, $"/projects/{project}/team");
 
         (await service.CompleteAsync(
             Human("owner"), HumanPrincipal(), project, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
@@ -230,7 +230,7 @@ public sealed class ProjectCopilotBindingServiceTests
             .NotContain("ghu_").And.NotContain("refresh-secret").And.NotContain("credential");
         (await service.GetCallbackRedirectAsync(
             CopilotBindingOutcome.Success, Query(begin.AuthorizationUrl!, "state")))
-            .Should().Be($"http://localhost:5173/projects/{project}/settings?section=unattended&copilot_app_auth=success");
+            .Should().Be($"http://localhost:5173/projects/{project}/team?copilot_app_auth=success");
     }
 
     [Fact]

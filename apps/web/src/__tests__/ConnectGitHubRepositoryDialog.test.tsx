@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const originalConsoleError = console.error;
@@ -52,15 +53,17 @@ describe('ConnectGitHubRepositoryDialog', () => {
     );
 
     render(
-      <AzureFluentProvider density="compact">
-        <ConnectGitHubRepositoryDialog
-          projectId="proj-1"
-          projectName="Demo Project"
-          open
-          onOpenChange={() => {}}
-          onConnected={() => {}}
-        />
-      </AzureFluentProvider>,
+      <MemoryRouter initialEntries={['/projects/proj-1/settings?section=repository']}>
+        <AzureFluentProvider density="compact">
+          <ConnectGitHubRepositoryDialog
+            projectId="proj-1"
+            projectName="Demo Project"
+            open
+            onOpenChange={() => {}}
+            onConnected={() => {}}
+          />
+        </AzureFluentProvider>
+      </MemoryRouter>,
     );
 
     await screen.findByRole('button', { name: 'Connect GitHub' });
@@ -74,15 +77,17 @@ describe('ConnectGitHubRepositoryDialog', () => {
     );
 
     render(
-      <AzureFluentProvider density="compact">
-        <ConnectGitHubRepositoryDialog
-          projectId="proj-1"
-          projectName="Demo Project"
-          open
-          onOpenChange={() => {}}
-          onConnected={() => {}}
-        />
-      </AzureFluentProvider>,
+      <MemoryRouter initialEntries={['/projects/proj-1/settings?section=repository']}>
+        <AzureFluentProvider density="compact">
+          <ConnectGitHubRepositoryDialog
+            projectId="proj-1"
+            projectName="Demo Project"
+            open
+            onOpenChange={() => {}}
+            onConnected={() => {}}
+          />
+        </AzureFluentProvider>
+      </MemoryRouter>,
     );
 
     await screen.findByRole('button', { name: 'Retry' });
@@ -102,15 +107,17 @@ describe('ConnectGitHubRepositoryDialog', () => {
     const onConnected = vi.fn();
 
     render(
-      <AzureFluentProvider density="compact">
-        <ConnectGitHubRepositoryDialog
-          projectId="proj-1"
-          projectName="Demo Project"
-          open
-          onOpenChange={() => {}}
-          onConnected={onConnected}
-        />
-      </AzureFluentProvider>,
+      <MemoryRouter initialEntries={['/projects/proj-1/settings?section=repository']}>
+        <AzureFluentProvider density="compact">
+          <ConnectGitHubRepositoryDialog
+            projectId="proj-1"
+            projectName="Demo Project"
+            open
+            onOpenChange={() => {}}
+            onConnected={onConnected}
+          />
+        </AzureFluentProvider>
+      </MemoryRouter>,
     );
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Connect existing repository' }));
@@ -124,5 +131,39 @@ describe('ConnectGitHubRepositoryDialog', () => {
     });
     expect(onConnected).toHaveBeenCalledWith('octo/other-repo', 'https://github.com/octo/other-repo');
     expect(await screen.findByRole('link', { name: 'octo/other-repo' })).toBeDefined();
+  });
+
+  it('sends the current page back through the Repo App authorization start', async () => {
+    vi.mocked(apiClient.listProjectRepositoryOwners).mockRejectedValue(
+      new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
+    );
+    vi.mocked(apiClient.beginRepoAppAuthorization).mockResolvedValue({
+      authorization_url: 'https://github.com/login/oauth/authorize?client_id=repo-app',
+      transaction_id: 'txn-1',
+      expires_at: '2026-08-28T00:05:00+00:00',
+    } as never);
+    const assignSpy = vi.fn();
+    vi.stubGlobal('location', { ...window.location, assign: assignSpy });
+
+    render(
+      <MemoryRouter initialEntries={['/projects/proj-1/settings?section=repository']}>
+        <AzureFluentProvider density="compact">
+          <ConnectGitHubRepositoryDialog
+            projectId="proj-1"
+            projectName="Demo Project"
+            open
+            onOpenChange={() => {}}
+            onConnected={() => {}}
+          />
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub' }));
+
+    await waitFor(() => expect(apiClient.beginRepoAppAuthorization)
+      .toHaveBeenCalledWith('/projects/proj-1/settings?section=repository'));
+    await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?client_id=repo-app'));
+    vi.unstubAllGlobals();
   });
 });

@@ -31,6 +31,8 @@ vi.mock('../api/apiClient', () => ({
     deactivateAutomation: vi.fn(),
     beginProjectCopilotAuthorization: vi.fn(),
     beginProjectRepoAppInstallation: vi.fn(),
+    listProjectRepositoryOwners: vi.fn(),
+    listGitHubRepositorySelections: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
     getPlatformDefaultCopilotConnection: vi.fn(),
   },
@@ -40,10 +42,10 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
-function renderPage(projectId: string) {
+function renderPage(projectId: string, initialEntry = `/projects/${projectId}/settings`) {
   return render(
     <Wrapper>
-      <MemoryRouter initialEntries={[`/projects/${projectId}/settings`]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
         </Routes>
@@ -128,6 +130,12 @@ beforeEach(() => {
     is_active: false,
     model_provider_source: null,
     activated_at: null,
+  } as never);
+  vi.mocked(apiClient.listProjectRepositoryOwners).mockResolvedValue([
+    { login: 'octo', type: 'user' },
+  ] as never);
+  vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+    repositories: [{ full_name: 'octo/repo', owner_login: 'octo', private: true, default_branch: 'main', pushed_at: null }],
   } as never);
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'not_connected',
@@ -281,6 +289,14 @@ describe('ProjectSettingsPage', () => {
       'This project uses the platform-configured GitHub Copilot account for background AI access: @platform-bot. Manage it in Platform settings.',
     )).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Manage GitHub Copilot' })).toBeNull();
+  });
+
+  it('reopens repository connection after a successful Repo App callback so the repo list refreshes', async () => {
+    renderPage('proj-1', '/projects/proj-1/settings?section=repository&repo_app_auth=success');
+
+    expect(await screen.findByRole('heading', { name: 'Connect a GitHub repository' })).toBeDefined();
+    await waitFor(() => expect(apiClient.listProjectRepositoryOwners).toHaveBeenCalledWith('proj-1'));
+    await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalled());
   });
 
   it('uses connected-repository wording for background requirements when a repo is attached', async () => {
