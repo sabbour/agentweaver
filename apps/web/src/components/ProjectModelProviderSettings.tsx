@@ -19,7 +19,7 @@ import type { ProjectCopilotConnection } from '../api/types';
 const CONNECTION_LOAD_ERROR = 'Could not load this project’s GitHub Copilot connection. Refresh and try again.';
 const GITHUB_APPS_EXPLANATION = 'GitHub Copilot provides AI access. The separate Repo App provides repository access.';
 
-export function GitHubCopilotConnectionPicker({
+export function ProjectModelProviderSettings({
   projectId,
   triggerLabel = 'Manage GitHub Copilot',
   showConnectionStatus = false,

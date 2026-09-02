@@ -291,17 +291,21 @@ export function GitHubIdentityBadge({ projectId, collapsed }: GitHubIdentityBadg
             <>
               <Divider />
               <div className={styles.section}>
-                <Text weight="semibold">Project GitHub status</Text>
-                {connectionLoading && <Spinner label="Loading GitHub connection status" size="extra-tiny" />}
+                <Text weight="semibold">Repository access</Text>
+                {connectionLoading && <Spinner label="Loading repository access status" size="extra-tiny" />}
                 {!connectionLoading && (
-                  <>
-                    <Text size={200} className={styles.secondary}>
-                      {accessError ?? repositoryStatus(access)}
-                    </Text>
-                    <Text size={200} className={styles.secondary}>
-                      {copilotConnectionError ?? `AI source: GitHub Copilot — ${connectionStatus(connection)}`}
-                    </Text>
-                  </>
+                  <Text size={200} className={styles.secondary}>
+                    {accessError ?? repositoryStatus(access)}
+                  </Text>
+                )}
+              </div>
+              <div className={styles.section}>
+                <Text weight="semibold">Model provider</Text>
+                {connectionLoading && <Spinner label="Loading model provider status" size="extra-tiny" />}
+                {!connectionLoading && (
+                  <Text size={200} className={styles.secondary}>
+                    {copilotConnectionError ?? connectionStatus(connection)}
+                  </Text>
                 )}
                 <Link href={`/projects/${encodeURIComponent(projectId)}/settings`}>
                   Manage project connections
