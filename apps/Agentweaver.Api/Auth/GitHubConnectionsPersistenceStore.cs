@@ -115,6 +115,19 @@ internal sealed record RepoAppAuthorizationTransaction(
     string CallbackCookieHash,
     string? BrowserSessionId);
 internal sealed record CopilotAuthorizationTransaction(string State, string EntraObjectId, string ProjectId, long ExpiresAtUnixMilliseconds, string ReturnRouteKey, string PkceVerifierProtected, string CallbackCookieHash, string? BrowserSessionId);
+/// <summary>
+/// The project-pinned Repo App installation-binding transaction. It carries no PKCE verifier or
+/// return route because the installation flow never exchanges an authorization code — GitHub
+/// hands back only `installation_id`/`setup_action`, which the callback resolves against this
+/// state row before calling <see cref="Webhooks.RepoAppInstallationLifecycleService.BindAsync"/>.
+/// </summary>
+internal sealed record RepoAppInstallationAuthorizationTransaction(
+    string State,
+    string EntraObjectId,
+    string ProjectId,
+    long ExpiresAtUnixMilliseconds,
+    string CallbackCookieHash,
+    string? BrowserSessionId);
 internal sealed record PlatformDefaultCopilotAuthorizationTransaction(string State, string EntraObjectId, long ExpiresAtUnixMilliseconds, string ReturnRouteKey, string PkceVerifierProtected, string CallbackCookieHash, string? BrowserSessionId);
 internal sealed record RepoAppCredentialReference(
     string Id,
@@ -350,6 +363,22 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
     internal Task<CopilotAuthorizationTransaction?> GetCopilotAuthorizationTransactionByIdAsync(string id, string subject, CancellationToken ct = default) =>
         db.GitHubAuthorizations.AsNoTracking().Where(x => x.ExternalTransactionId == id && x.EntraObjectId == subject && x.AppKind == GitHubAppKind.Copilot && x.Purpose == GitHubAuthorizationPurpose.InteractiveCopilot && x.ProjectId != null)
             .Select(x => new CopilotAuthorizationTransaction(x.State, x.EntraObjectId, x.ProjectId!, x.ExpiresAtUnixMilliseconds, x.ReturnRouteKey, x.PkceVerifierProtected, x.CallbackCookieHash, x.BrowserSessionId)).SingleOrDefaultAsync(ct);
+    internal Task<RepoAppInstallationAuthorizationTransaction?> GetRepoAppInstallationAuthorizationTransactionAsync(
+        string state,
+        CancellationToken ct = default) =>
+        db.GitHubAuthorizations.AsNoTracking()
+            .Where(x => x.State == state &&
+                        x.AppKind == GitHubAppKind.Repo &&
+                        x.Purpose == GitHubAuthorizationPurpose.UnattendedRepositoryInstallation &&
+                        x.ProjectId != null)
+            .Select(x => new RepoAppInstallationAuthorizationTransaction(
+                x.State,
+                x.EntraObjectId,
+                x.ProjectId!,
+                x.ExpiresAtUnixMilliseconds,
+                x.CallbackCookieHash,
+                x.BrowserSessionId))
+            .SingleOrDefaultAsync(ct);
     internal Task<PlatformDefaultCopilotAuthorizationTransaction?> GetPlatformDefaultCopilotAuthorizationTransactionAsync(string state, CancellationToken ct = default) =>
         db.GitHubAuthorizations.AsNoTracking()
             .Where(x => x.State == state &&
@@ -492,12 +521,16 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
     public Task CompleteAuthorizationAsync(
         string state,
         bool succeeded,
-        CancellationToken ct = default) =>
-        db.GitHubAuthorizations
+        CancellationToken ct = default)
+    {
+        var status = succeeded ? GitHubAuthorizationStatus.Completed : GitHubAuthorizationStatus.Failed;
+        DateTimeOffset? completedAt = DateTimeOffset.UtcNow;
+        return db.GitHubAuthorizations
             .Where(x => x.State == state && x.Status == GitHubAuthorizationStatus.Redeeming)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(x => x.Status, succeeded ? GitHubAuthorizationStatus.Completed : GitHubAuthorizationStatus.Failed)
-                .SetProperty(x => x.CompletedAt, DateTimeOffset.UtcNow), ct);
+                .SetProperty(x => x.Status, status)
+                .SetProperty(x => x.CompletedAt, completedAt), ct);
+    }
 
     internal async Task<RepoAppAuthorizationCompletion> CompleteRepoAppAuthorizationAsync(
         string state,
