@@ -39,6 +39,7 @@ import {
   SetupReadiness,
 } from '../components/ui';
 import { useSearchParams } from 'react-router-dom';
+import { markRequiredSetupPending } from '../components/onboarding/firstRunTourStorage';
 
 const useStyles = makeStyles({
   form: {
@@ -108,17 +109,17 @@ const ADDABLE_PROVIDER_TYPES: { type: ByokProviderType; label: string; descripti
   {
     type: 'openai',
     label: 'Custom endpoint',
-    description: 'Any OpenAI-compatible HTTP endpoint (vLLM, OpenRouter, fine-tune, etc.)',
+    description: 'Connect an OpenAI-compatible endpoint, including vLLM or OpenRouter.',
   },
   {
     type: 'azure',
     label: 'Azure OpenAI',
-    description: 'Service deployments via resource host, API version, and per-model deployment names',
+    description: 'Connect Azure OpenAI with its resource URL, API version, and deployment name.',
   },
   {
     type: 'anthropic',
     label: 'Anthropic',
-    description: 'Hosted Claude models over the Messages API',
+    description: 'Connect hosted Claude models through the Messages API.',
   },
 ];
 
@@ -181,7 +182,7 @@ function parseHeadersText(text: string): Record<string, string> | undefined {
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    throw new Error('Custom headers must be valid JSON, e.g. {"X-Api-Version": "2024-01-01"}.');
+    throw new Error('Custom headers must be valid JSON. For example: {"X-Api-Version": "2024-01-01"}.');
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error('Custom headers must be a flat JSON object of string values.');
@@ -305,16 +306,12 @@ export function PlatformSettingsPage({
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    if (!setupRequired || !onRetryAccess) return;
-    if (activeProviderId !== null || platformCopilotConnection?.connected) onRetryAccess();
-  }, [activeProviderId, onRetryAccess, platformCopilotConnection?.connected, setupRequired]);
-
   const handleConnectPlatformCopilot = async () => {
     setConnectingCopilot(true);
     setPlatformCopilotError(null);
     try {
       const handoff = await apiClient.beginPlatformDefaultCopilotAuthorization();
+      if (setupRequired) markRequiredSetupPending();
       window.location.assign(handoff.authorization_url);
     } catch (err) {
       setPlatformCopilotError(formatApiErrorMessage(err));
@@ -329,6 +326,7 @@ export function PlatformSettingsPage({
       await apiClient.disconnectPlatformDefaultCopilotConnection();
       setPlatformCopilotConnection({ connected: false, github_login: null });
       await refreshPlatformCopilotConnection();
+      if (!setupRequired) onRetryAccess?.();
     } catch (err) {
       setPlatformCopilotError(formatApiErrorMessage(err));
     } finally {
@@ -343,7 +341,7 @@ export function PlatformSettingsPage({
       await apiClient.deactivateByokProviders();
       await refreshProviders();
       setNotice('GitHub Copilot is now the active AI inference source.');
-      onRetryAccess?.();
+      if (!setupRequired) onRetryAccess?.();
     } catch (err) {
       setLoadError(formatApiErrorMessage(err));
     } finally {
@@ -358,7 +356,7 @@ export function PlatformSettingsPage({
       await apiClient.activateByokProvider(provider.id);
       await refreshProviders();
       setNotice(`"${provider.name}" is now the active AI inference source.`);
-      onRetryAccess?.();
+      if (!setupRequired) onRetryAccess?.();
     } catch (err) {
       setLoadError(formatApiErrorMessage(err));
     } finally {
@@ -451,7 +449,7 @@ export function PlatformSettingsPage({
       setNotice(`"${removeTarget.name}" was removed.`);
       setRemoveTarget(null);
       await refreshProviders();
-      onRetryAccess?.();
+      if (!setupRequired) onRetryAccess?.();
     } catch (err) {
       setLoadError(formatApiErrorMessage(err));
     } finally {
@@ -481,13 +479,17 @@ export function PlatformSettingsPage({
   return (
     <PageContainer width="readable">
       <PageHeader
-        title="Platform settings"
-        description="Deployment-wide configuration for Agentweaver."
+        title={setupRequired ? 'Set up Agentweaver' : 'Platform settings'}
+        description={setupRequired
+          ? 'Add model providers and choose one active provider for this deployment.'
+          : 'Manage model providers for this Agentweaver deployment.'}
       />
       <SetupReadiness
         model={{
-          title: 'Setup readiness',
-          description: 'The active model provider applies to all users and projects.',
+          title: setupRequired ? 'Connect a model provider' : 'Setup readiness',
+          description: setupRequired
+            ? 'The active provider supplies AI access for all users and projects.'
+            : 'The active model provider applies to all users and projects.',
           loading,
           loadingLabel: 'Loading model provider status',
           error: loadError,
@@ -500,7 +502,7 @@ export function PlatformSettingsPage({
           }],
         }}
         onRetry={() => { window.location.reload(); }}
-        primaryAction={!modelProviderReady && !loading && !loadError ? (
+        primaryAction={!setupRequired && !modelProviderReady && !loading && !loadError ? (
           <Button
             appearance="primary"
             disabled={connectingCopilot}
@@ -513,10 +515,16 @@ export function PlatformSettingsPage({
         ) : undefined}
       />
       <PageSection
-        title="Model providers"
-        description="Choose one active model provider for the deployment. You can save other providers for later use."
+        title={setupRequired ? 'Choose a provider' : 'Model providers'}
+        description={setupRequired
+          ? 'Authorize GitHub Copilot, or add a provider and set it active.'
+          : 'Choose one active provider. You can save other providers for later use.'}
         actions={(
-          <Button appearance="primary" icon={<AddRegular />} onClick={openAddPicker}>
+          <Button
+            appearance={setupRequired ? 'secondary' : 'primary'}
+            icon={<AddRegular />}
+            onClick={openAddPicker}
+          >
             Add provider
           </Button>
         )}
@@ -537,7 +545,7 @@ export function PlatformSettingsPage({
               <div className={styles.providerHeaderRow}>
                 <div className={styles.providerLabel}>
                   <Label>GitHub Copilot</Label>
-                  <Body tone="muted">GitHub Copilot model provider · Platform scope</Body>
+                  <Body tone="muted">Use your GitHub Copilot subscription for this deployment.</Body>
                 </div>
                 {copilotIsActive
                   ? (
@@ -570,7 +578,7 @@ export function PlatformSettingsPage({
               )}
               {!platformCopilotError && platformCopilotConnection && !platformCopilotConnection.connected && (
                 <MessageBar intent="warning">
-                  <MessageBarBody>Authorize GitHub Copilot to use it as the platform model provider.</MessageBarBody>
+                  <MessageBarBody>Authorize GitHub Copilot to use it as the active model provider.</MessageBarBody>
                 </MessageBar>
               )}
               <div className={styles.formActions}>
@@ -659,7 +667,7 @@ export function PlatformSettingsPage({
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         title="Add provider"
-        description="Choose the kind of inference provider to configure."
+        description="Choose a model provider type."
       >
         <div className={styles.form}>
           <Input
@@ -706,7 +714,7 @@ export function PlatformSettingsPage({
               label="Base URL"
               required
               hint={form.type === 'openai'
-                ? 'Include the OpenAI-compatible root, e.g. "https://api.openai.com/v1" or "https://api.together.xyz/v1".'
+                ? 'Include the OpenAI-compatible root. For example: "https://api.openai.com/v1".'
                 : form.type === 'azure'
                   ? 'The bare Azure OpenAI resource endpoint, no path.'
                   : undefined}

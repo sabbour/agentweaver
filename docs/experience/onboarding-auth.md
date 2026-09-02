@@ -57,9 +57,19 @@ A Platform Admin can authorize GitHub Copilot or activate a custom-key provider.
 - Local agent work can continue without a GitHub repository.
 - Pull-request publishing requires repository access.
 
-After provider setup, optional guidance collapses. The user can expand it with **Show optional setup**.
+During required setup, the Platform Admin can add and manage all supported model providers.
+The administrator must choose one active provider.
 
-The setup pattern has one primary next action. It also shows loading, error, permission, and success states with text labels.
+When the provider is ready, select **Continue to Agentweaver**.
+Agentweaver opens the app shell and starts a three-step product tour.
+
+The tour introduces **Projects**, **Sessions**, and **Start task**.
+The administrator can skip the tour or press Escape.
+Agentweaver stores the completed tour for the signed-in user.
+
+To start the tour again, open the settings menu and select **Take product tour**.
+
+The setup pattern also shows loading, error, permission, and success states with text labels.
 
 ## GitHub capabilities
 

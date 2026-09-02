@@ -24,9 +24,21 @@ A Platform Admin can choose one active model provider:
 - GitHub Copilot with a platform account
 - A custom-key provider
 
+The Platform Admin can add more providers during required setup.
+Only one provider is active at a time.
+
 The active provider applies to all users and projects. The completed setup status identifies the provider and its platform scope.
 
 If you cannot manage this setup, Agentweaver shows **Unavailable to you**. Ask a Platform Admin to complete the setup.
+
+When the provider is ready, select **Continue to Agentweaver**.
+Agentweaver opens the app shell and starts a short product tour.
+
+The tour introduces **Projects**, **Sessions**, and **Start task**.
+You can skip the tour or press Escape.
+
+To start the tour again, open the settings menu.
+Then select **Take product tour**.
 
 ## GitHub capabilities
 
