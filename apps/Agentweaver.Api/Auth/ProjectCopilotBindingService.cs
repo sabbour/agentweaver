@@ -79,7 +79,7 @@ public sealed class ProjectCopilotBindingService(
         ProjectId projectId,
         CancellationToken ct = default)
     {
-        var begin = await BeginAsync(caller, principal, projectId, ct).ConfigureAwait(false);
+        var begin = await BeginAsync(caller, principal, projectId, requestedReturnRouteKey: null, ct).ConfigureAwait(false);
         if (begin.Outcome != CopilotBindingOutcome.Success)
             return new(begin.Outcome, null, null, null);
 
@@ -153,6 +153,7 @@ public sealed class ProjectCopilotBindingService(
         CallerContext caller,
         ClaimsPrincipal principal,
         ProjectId projectId,
+        string? requestedReturnRouteKey = null,
         CancellationToken ct = default)
     {
         if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
@@ -162,6 +163,9 @@ public sealed class ProjectCopilotBindingService(
         if (!IsConfigurationValid() ||
             await registration.ValidateAsync(ct).ConfigureAwait(false) != CopilotAppRegistrationState.Ready)
             return new(CopilotBindingOutcome.GitHubBindingUnavailable, null, null, null);
+        var returnPath = NormalizeReturnPath(
+            requestedReturnRouteKey,
+            $"/projects/{Uri.EscapeDataString(projectId.ToString())}/settings?section=unattended");
 
         var state = CreateRandomValue();
         var transactionId = GitHubConnectionsPersistenceStore.CreateExternalTransactionId();
@@ -182,7 +186,7 @@ public sealed class ProjectCopilotBindingService(
                 EntraObjectId = caller.EntraObjectId!,
                 ProjectId = projectId.ToString(),
                 ExpiresAtUnixMilliseconds = expiresAt.ToUnixTimeMilliseconds(),
-                ReturnRouteKey = "projects",
+                ReturnRouteKey = returnPath,
                 PkceVerifierProtected = verifierReference,
                 CallbackCookieHash = HashCookie(cookie),
                 Status = GitHubAuthorizationStatus.Pending,
@@ -350,11 +354,14 @@ public sealed class ProjectCopilotBindingService(
             var transaction = await persistence.GetCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
             if (transaction is not null && ProjectId.TryParse(transaction.ProjectId, out var projectId))
             {
-                return $"{frontend}/projects/{Uri.EscapeDataString(projectId.ToString())}/settings" +
-                    "?section=unattended&copilot_app_auth=success";
+                var defaultSuccessPath = $"/projects/{Uri.EscapeDataString(projectId.ToString())}/settings?section=unattended";
+                var route = string.Equals(transaction.ReturnRouteKey, "projects", StringComparison.Ordinal)
+                    ? defaultSuccessPath
+                    : NormalizeReturnPath(transaction.ReturnRouteKey, defaultSuccessPath);
+                return $"{frontend}{AppendQuery(route, "copilot_app_auth", "success")}";
             }
         }
-        return $"{frontend}{ReturnRoutes["projects"]}?copilot_app_auth={ToStateCode(outcome)}";
+        return $"{frontend}{AppendQuery(ReturnRoutes["projects"], "copilot_app_auth", ToStateCode(outcome))}";
     }
 
     private string BuildMcpHandoffUrl(string transactionId) =>
@@ -395,6 +402,26 @@ public sealed class ProjectCopilotBindingService(
         CopilotBindingOutcome.GitHubBindingUnavailable => "github_binding_unavailable",
         _ => "success",
     };
+
+    private static string NormalizeReturnPath(string? requestedReturnPath, string defaultPath)
+    {
+        var candidate = string.IsNullOrWhiteSpace(requestedReturnPath)
+            ? defaultPath
+            : requestedReturnPath.Trim();
+        if (ReturnRoutes.TryGetValue(candidate, out var mapped))
+            return mapped;
+        return IsSafeFrontendReturnPath(candidate) ? candidate : defaultPath;
+    }
+
+    private static bool IsSafeFrontendReturnPath(string candidate) =>
+        candidate.StartsWith("/", StringComparison.Ordinal) &&
+        !candidate.StartsWith("//", StringComparison.Ordinal) &&
+        !candidate.Contains('\\') &&
+        !candidate.Contains('\r') &&
+        !candidate.Contains('\n');
+
+    private static string AppendQuery(string path, string key, string value) =>
+        $"{path}{(path.Contains('?') ? '&' : '?')}{key}={Uri.EscapeDataString(value)}";
 
     private async Task<CopilotBindingOutcome> ClaimAndCompleteAsync(
         CopilotAuthorizationTransaction transaction,

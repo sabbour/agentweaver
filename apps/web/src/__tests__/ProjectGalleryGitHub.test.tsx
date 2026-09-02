@@ -25,7 +25,7 @@ vi.mock('../api/apiClient', () => ({
 function Wrapper({ children, initialEntries }: { children: ReactNode; initialEntries?: string[] }) {
   return (
     <AzureFluentProvider density="compact">
-      <MemoryRouter initialEntries={initialEntries}>
+      <MemoryRouter initialEntries={initialEntries ?? ['/projects']}>
         <ProjectListProvider>{children}</ProjectListProvider>
       </MemoryRouter>
     </AzureFluentProvider>
@@ -95,7 +95,7 @@ describe('ProjectGalleryPage repository authorization', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
 
     fireEvent.click(connectButton);
-    await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalled());
+    await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalledWith('/projects'));
     await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?client_id=repo-app'));
 
     vi.unstubAllGlobals();
@@ -112,5 +112,13 @@ describe('ProjectGalleryPage repository authorization', () => {
     await screen.findByRole('button', { name: 'Retry' });
     expect(screen.getByTestId('create-from-github-repositories-error').getAttribute('data-intent')).toBe('error');
     expect(screen.queryByRole('button', { name: 'Connect GitHub' })).toBeNull();
+  });
+
+  it('reopens Create from GitHub after a successful Repo App callback so repositories refetch', async () => {
+    render(<Wrapper initialEntries={['/projects?repo_app_auth=success']}><ProjectGalleryPage /></Wrapper>);
+
+    expect(await screen.findByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();
+    await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalled());
+    expect(screen.getByRole('combobox', { name: 'Repository' })).toBeDefined();
   });
 });

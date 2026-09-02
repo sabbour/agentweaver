@@ -171,11 +171,11 @@ public sealed class RepoAppUserAuthorizationService(
             return new(RepoAppAuthorizationOutcome.HumanEntraSubjectRequired, null, null, null);
         if (!TryConsumeRateLimit(caller.EntraObjectId!))
             return new(RepoAppAuthorizationOutcome.RateLimited, null, null, null);
-        if (!ReturnRoutes.ContainsKey(requestedReturnRouteKey ?? "settings") ||
-            string.IsNullOrWhiteSpace(_clientId) ||
+        if (string.IsNullOrWhiteSpace(_clientId) ||
             string.IsNullOrWhiteSpace(_clientSecret) ||
             string.IsNullOrWhiteSpace(_callbackUrl))
             return new(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, null, null, null);
+        var returnPath = NormalizeReturnPath(requestedReturnRouteKey, ReturnRoutes["settings"]);
 
         var state = CreateRandomValue();
         var transactionId = GitHubConnectionsPersistenceStore.CreateExternalTransactionId();
@@ -196,7 +196,7 @@ public sealed class RepoAppUserAuthorizationService(
                 Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
                 EntraObjectId = caller.EntraObjectId!,
                 ExpiresAtUnixMilliseconds = expiresAt.ToUnixTimeMilliseconds(),
-                ReturnRouteKey = requestedReturnRouteKey ?? "settings",
+                ReturnRouteKey = returnPath,
                 PkceVerifierProtected = verifierReference,
                 CallbackCookieHash = HashCookie(callbackCookie),
                 Status = GitHubAuthorizationStatus.Pending,
@@ -498,9 +498,29 @@ public sealed class RepoAppUserAuthorizationService(
     public string GetCallbackRedirect(string returnRouteKey, RepoAppAuthorizationOutcome outcome)
     {
         var frontend = (configuration["Auth:RepoApp:FrontendUrl"] ?? "http://localhost:5173").TrimEnd('/');
-        var route = ReturnRoutes.TryGetValue(returnRouteKey, out var candidate) ? candidate : ReturnRoutes["settings"];
-        return $"{frontend}{route}?repo_app_auth={ToStateCode(outcome)}";
+        var route = NormalizeReturnPath(returnRouteKey, ReturnRoutes["settings"]);
+        return $"{frontend}{AppendQuery(route, "repo_app_auth", ToStateCode(outcome))}";
     }
+
+    private static string NormalizeReturnPath(string? requestedReturnPath, string defaultPath)
+    {
+        var candidate = string.IsNullOrWhiteSpace(requestedReturnPath)
+            ? defaultPath
+            : requestedReturnPath.Trim();
+        if (ReturnRoutes.TryGetValue(candidate, out var mapped))
+            return mapped;
+        return IsSafeFrontendReturnPath(candidate) ? candidate : defaultPath;
+    }
+
+    private static bool IsSafeFrontendReturnPath(string candidate) =>
+        candidate.StartsWith("/", StringComparison.Ordinal) &&
+        !candidate.StartsWith("//", StringComparison.Ordinal) &&
+        !candidate.Contains('\\') &&
+        !candidate.Contains('\r') &&
+        !candidate.Contains('\n');
+
+    private static string AppendQuery(string path, string key, string value) =>
+        $"{path}{(path.Contains('?') ? '&' : '?')}{key}={Uri.EscapeDataString(value)}";
 
     private string BuildMcpHandoffUrl(string transactionId) =>
         CallbackBaseUrl() + "/auth/github/repo-app/handoff/" + Uri.EscapeDataString(transactionId);
