@@ -7,8 +7,9 @@ import {
 } from '../components/WorkflowGraphPanel';
 import {
   buildSteppedConnectorRoute,
-  FIXED_NODE_W,
+  WORKFLOW_DEFINITION_NODE_W,
   WORKFLOW_PILL_DEFAULT_NODE_H,
+  workflowDefinitionViewportHeight,
 } from '../utils/dagLayout';
 import { BotRegular, CheckmarkCircleRegular, MergeRegular, ShieldRegular } from '../copilot-fluent-system';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
@@ -288,7 +289,7 @@ describe('WorkflowNode — message field display', () => {
 });
 
 describe('WorkflowGraphPanel — topology connector routing', () => {
-  it('uses compact pill size hints so fitView matches the rendered workflow cards', () => {
+  it('uses roomier definition-node hints so fitView matches the rendered workflow cards', () => {
     const graph: WorkflowGraphDto = {
       graph_id: 'compact-workflow',
       variant: 'default',
@@ -304,13 +305,15 @@ describe('WorkflowGraphPanel — topology connector routing', () => {
       ],
     };
 
-    const { rfNodes } = buildWorkflowDefinitionGraph(graph);
+    const { rfNodes, layoutMode } = buildWorkflowDefinitionGraph(graph);
     const byId = new Map(rfNodes.map((node) => [node.id, node]));
 
-    expect(byId.get('research')?.initialWidth).toBe(FIXED_NODE_W);
-    expect(byId.get('review')?.initialWidth).toBe(FIXED_NODE_W);
-    expect(byId.get('done')?.initialWidth).toBe(FIXED_NODE_W);
+    expect(layoutMode).toBe('columns');
+    expect(byId.get('research')?.initialWidth).toBe(WORKFLOW_DEFINITION_NODE_W);
+    expect(byId.get('review')?.initialWidth).toBe(WORKFLOW_DEFINITION_NODE_W);
+    expect(byId.get('done')?.initialWidth).toBe(WORKFLOW_DEFINITION_NODE_W);
     expect(byId.get('done')?.initialHeight).toBeLessThan(WORKFLOW_PILL_DEFAULT_NODE_H);
+    expect(byId.get('research')?.data.definitionNode).toBe(true);
   });
 
   it('routes a diamond workflow through GRID handles without dangling edge endpoints', () => {
@@ -338,9 +341,10 @@ describe('WorkflowGraphPanel — topology connector routing', () => {
       ],
     };
 
-    const { rfNodes, rfEdges } = buildWorkflowDefinitionGraph(graph);
+    const { rfNodes, rfEdges, layoutMode } = buildWorkflowDefinitionGraph(graph);
     const nodeIds = new Set(rfNodes.map((node) => node.id));
 
+    expect(layoutMode).toBe('columns');
     expect(rfEdges).toHaveLength(graph.edges.length);
     for (const node of rfNodes) {
       expect(node.data.dir).toBe('GRID');
@@ -354,6 +358,12 @@ describe('WorkflowGraphPanel — topology connector routing', () => {
       expect(edge.targetHandle).toMatch(/^target-(left|right|top|bottom)$/);
       expect(edge.data).toMatchObject({ flowDirection: expect.any(String) });
     }
+  });
+
+  it('bounds the inline viewport to the graph content instead of leaving a fixed empty field', () => {
+    expect(workflowDefinitionViewportHeight({ w: 900, h: 120 })).toBe(300);
+    expect(workflowDefinitionViewportHeight({ w: 900, h: 340 })).toBe(420);
+    expect(workflowDefinitionViewportHeight({ w: 900, h: 900 })).toBe(520);
   });
 
   it('uses one orthogonal stepped path instead of cubic squiggles and junction dots', () => {

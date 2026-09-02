@@ -24,12 +24,14 @@ import {
   FIXED_CARD_H,
   COMPACT_NODE_W,
   FIXED_NODE_W,
+  WORKFLOW_DEFINITION_NODE_W,
   WORKFLOW_FIT_VIEW_OPTIONS,
-  layoutDagStaircase,
+  layoutWorkflowDefinitionNodes,
   NODE_TYPE_W,
   NODE_W,
   routeGridEdges,
   roundedOrthogonalPath,
+  workflowDefinitionViewportHeight,
   workflowNodeSizeHint,
 } from '../utils/dagLayout';
 import { AiCredits } from './AiCredits';
@@ -112,6 +114,8 @@ export interface WorkflowNodeData extends Record<string, unknown> {
   /** node_type drives card width and shape. */
   nodeType?: GraphNodeType;
   isPlanned?: boolean;
+  /** Uses the roomier workflow-definition card instead of the compact runtime-stage pill. */
+  definitionNode?: boolean;
   agentName?: string;
   agentRoleTitle?: string;
   modelId?: string;
@@ -262,7 +266,7 @@ export const useNodeStyles = makeStyles({
   // node_type=gate: decision shape (dashed border, slightly narrower)
   cardGate: {
     width: `${NODE_TYPE_W.gate}px`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusSmall,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
   },
   // node_type=action: smaller secondary (e.g. Merge, Scribe)
@@ -466,6 +470,9 @@ export const useNodeStyles = makeStyles({
   pillWrapShort: {
     width: `${FIXED_NODE_W}px`,
   },
+  pillWrapDefinition: {
+    width: `${WORKFLOW_DEFINITION_NODE_W}px`,
+  },
   pill: {
     boxSizing: 'border-box',
     width: '100%',
@@ -503,6 +510,11 @@ export const useNodeStyles = makeStyles({
   // minHeight is only a FLOOR, so the Human Review gate still grows to fit on-face action buttons.
   pillShort: {
     minHeight: `${FIXED_CARD_H}px`,
+  },
+  pillDefinition: {
+    minHeight: '68px',
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    opacity: 1,
   },
   // On-face action row for the Human Review gate while it awaits a decision. It re-enables pointer
   // events (the node face is the click target for select/zoom) and stops propagation so pressing the
@@ -941,6 +953,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     isStart,
     editorBadge,
     editorActions,
+    definitionNode,
   } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent, message } = state;
@@ -974,6 +987,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     isActive        ? s.cardActive         : undefined,
     isHumanWaiting  ? s.cardActionRequired : undefined,
     isPlanned       ? s.pillPlanned        : undefined,
+    definitionNode  ? s.pillDefinition     : undefined,
     selected        ? s.pillSelected       : undefined,
   );
 
@@ -1077,7 +1091,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   );
 
   const face = (
-    <div className={mergeClasses(s.pillWrap, s.pillWrapShort)}>
+    <div className={mergeClasses(s.pillWrap, definitionNode ? s.pillWrapDefinition : s.pillWrapShort)}>
       <div
         className={pillClass}
         role="article"
@@ -1368,9 +1382,9 @@ function SpineEdge({
               transform: `translate(-50%, -50%) translate(${route.labelX}px, ${route.labelY}px)`,
               background: 'var(--colorNeutralBackground1)',
               border: '1px solid var(--colorNeutralStroke2)',
-              borderRadius: '4px',
+              borderRadius: tokens.borderRadiusSmall,
               padding: '1px 6px',
-              fontSize: '11px',
+              fontSize: tokens.fontSizeBase100,
               color: 'var(--colorNeutralForeground2)',
               pointerEvents: 'none',
               whiteSpace: 'nowrap',
@@ -1425,7 +1439,6 @@ export function coordinatorLoopbackLabel(sourceRole: string | undefined, sourceI
 
 const useInlinePanelStyles = makeStyles({
   container: {
-    height: '400px',
     overflow: 'hidden',
     borderRadius: '8px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -1436,7 +1449,7 @@ const useInlinePanelStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    height: '400px',
+    height: '320px',
   },
 });
 
@@ -1445,7 +1458,7 @@ const useInlinePanelStyles = makeStyles({
  * grid-edge-routing pipeline used by the coordinator topology.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- pure graph transform is unit-tested independently.
-export function buildWorkflowDefinitionGraph(graph: WorkflowGraphDto): { rfNodes: Node[]; rfEdges: Edge[] } {
+export function buildWorkflowDefinitionGraph(graph: WorkflowGraphDto) {
   const allEdges = graph.edges.map((edge) =>
     edge.loopback
       ? loopbackEdge(`${edge.from}->${edge.to}`, edge.from, edge.to, edge.label ?? '')
@@ -1470,20 +1483,21 @@ export function buildWorkflowDefinitionGraph(graph: WorkflowGraphDto): { rfNodes
         state:     { status: 'pending' },
         nodeType,
         isPlanned: true,
+        definitionNode: true,
         // Grid routing chooses among all four sides, so expose the matching
         // source and target handles used by CoordinatorRunPage.
         dir: 'GRID',
       } as WorkflowNodeData,
     };
   });
-  const rfNodes = layoutDagStaircase(
-    raw,
-    forwardEdges,
-    { rankdir: 'LR', rankSep: 40, nodeSep: 20, targetAspect: 1.35, minStepRanks: 3 },
-    hints,
-  );
+  const layout = layoutWorkflowDefinitionNodes(raw, forwardEdges, hints);
 
-  return { rfNodes, rfEdges: routeGridEdges(allEdges, rfNodes) };
+  return {
+    rfNodes: layout.nodes,
+    rfEdges: routeGridEdges(allEdges, layout.nodes),
+    layoutMode: layout.mode,
+    bbox: layout.bbox,
+  };
 }
 
 /**
@@ -1526,10 +1540,13 @@ export function WorkflowDefinitionInlinePanel({
     return () => { cancelled = true; };
   }, [projectId, workflowId]);
 
-  const { rfNodes, rfEdges } = useMemo(
-    () => graph ? buildWorkflowDefinitionGraph(graph) : { rfNodes: [], rfEdges: [] },
+  const { rfNodes, rfEdges, layoutMode, bbox } = useMemo(
+    () => graph
+      ? buildWorkflowDefinitionGraph(graph)
+      : { rfNodes: [], rfEdges: [], layoutMode: 'columns' as const, bbox: { w: 0, h: 0 } },
     [graph],
   );
+  const viewportHeight = workflowDefinitionViewportHeight(bbox);
 
   if (loading) {
     return (
@@ -1552,7 +1569,12 @@ export function WorkflowDefinitionInlinePanel({
   return (
     <ExecutionModalContext.Provider value={undefined}>
       <ActiveEdgeContext.Provider value={undefined}>
-        <div className={s.container}>
+        <div
+          className={s.container}
+          style={{ height: `${viewportHeight}px` }}
+          data-layout-mode={layoutMode}
+          data-testid="workflow-definition-viewport"
+        >
           <ReactFlow
             nodes={rfNodes}
             edges={rfEdges}
@@ -1561,7 +1583,7 @@ export function WorkflowDefinitionInlinePanel({
             fitView
             fitViewOptions={WORKFLOW_FIT_VIEW_OPTIONS}
             minZoom={0.35}
-            maxZoom={1.5}
+            maxZoom={2}
             nodesDraggable={false}
             nodesConnectable={false}
             nodesFocusable={false}
