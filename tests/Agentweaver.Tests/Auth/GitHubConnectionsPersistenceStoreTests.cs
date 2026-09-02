@@ -659,6 +659,70 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     }
 
     [Fact]
+    public async Task CapabilitySnapshotLifecycle_AgentHostRejectsMissingProjectCredentialBeforeLaunch()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var secrets = new SeededCopilotCredentialStore();
+        await secrets.DeleteSecretAsync("copilot-app-project-project-version");
+        var lifecycle = CreateLifecycle(db, persistence, secrets);
+        var run = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeFalse(
+            "binding metadata alone cannot prove that the project credential is redeemable");
+        var snapshots = await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString());
+        snapshots.Should().ContainSingle(snapshot =>
+            snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+            snapshot.SourceBindingId == "binding");
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_ProjectCredentialDeletionAfterPreflightFailsClosedWithoutPlatformFallback()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "platform-version",
+            GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var secrets = new SeededCopilotCredentialStore();
+        var lifecycle = CreateLifecycle(db, persistence, secrets);
+        var run = RunForSnapshotLifecycle(projectId);
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeTrue();
+        var snapshot = (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString()))
+            .Single(candidate => candidate.Purpose == GitHubCapabilityPurpose.UnattendedCopilot);
+        snapshot.SourceBindingId.Should().Be("binding");
+
+        await secrets.DeleteSecretAsync("copilot-app-project-project-version");
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeFalse(
+            "late credential deletion must not switch the immutable project snapshot to the platform binding");
+        var snapshotAfterDeletion = (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString()))
+            .Single(candidate => candidate.Purpose == GitHubCapabilityPurpose.UnattendedCopilot);
+        snapshotAfterDeletion.SnapshotRef.Should().Be(snapshot.SnapshotRef);
+        snapshotAfterDeletion.SourceBindingId.Should().Be("binding");
+    }
+
+    [Fact]
     public async Task CapabilitySnapshotLifecycle_AgentHostFallsBackToPlatformDefaultCopilotBinding()
     {
         await using var connection = await OpenDatabaseAsync();
@@ -985,9 +1049,12 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         (await persistence.GetCapabilitySnapshotsAsync("target-run")).Should().BeEmpty();
     }
 
-    private static RunGitHubCapabilitySnapshotLifecycle CreateLifecycle(MemoryDbContext db, GitHubConnectionsPersistenceStore persistence)
+    private static RunGitHubCapabilitySnapshotLifecycle CreateLifecycle(
+        MemoryDbContext db,
+        GitHubConnectionsPersistenceStore persistence,
+        ISecretStore? secrets = null)
     {
-        var secrets = new InMemorySecretStore();
+        secrets ??= new SeededCopilotCredentialStore();
         var broker = new GitHubCapabilityBroker(
             persistence,
             new GitHubConnectionsCredentialVault(secrets),
@@ -997,6 +1064,45 @@ public sealed class GitHubConnectionsPersistenceStoreTests
                 secrets,
                 new NullHttpClientFactory()));
         return new RunGitHubCapabilitySnapshotLifecycle(persistence, broker);
+    }
+
+    private sealed class SeededCopilotCredentialStore : ISecretStore
+    {
+        private readonly Dictionary<string, string> _credentials = new(StringComparer.Ordinal)
+        {
+            ["copilot-app-project-project-version"] = Credential("project-token", "project-user"),
+            ["copilot-app-platform-default-version"] = Credential("platform-token", "platform-user"),
+        };
+
+        public Task<SecretGetResult> GetSecretAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult(_credentials.TryGetValue(key, out var value)
+                ? SecretGetResult.Of(value, "etag")
+                : SecretGetResult.NotFound);
+
+        public Task<string> SetSecretAsync(
+            string key,
+            string value,
+            string? etag = null,
+            CancellationToken ct = default)
+        {
+            _credentials[key] = value;
+            return Task.FromResult("etag");
+        }
+
+        public Task DeleteSecretAsync(string key, CancellationToken ct = default)
+        {
+            _credentials.Remove(key);
+            return Task.CompletedTask;
+        }
+
+        private static string Credential(string accessToken, string githubLogin) =>
+            JsonSerializer.Serialize(new
+            {
+                status = "signed-in",
+                accessToken,
+                expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                githubLogin,
+            });
     }
 
     [Theory]

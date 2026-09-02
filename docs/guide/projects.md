@@ -125,6 +125,11 @@ After GitHub Copilot authorization, Agentweaver returns to the project's
 **Background** settings and shows the selected GitHub login. It does not show authorization data,
 repository or installation details, permissions, or credentials.
 
+If that project's saved GitHub Copilot credential is missing, revoked, expired, or otherwise
+unusable, Agentweaver stops the run before creating its AgentHost sandbox and asks a Project Owner
+to reconnect the project's Copilot App. An active but stale project binding never falls back to a
+deployment-wide BYOK provider or platform-default Copilot account.
+
 ### Danger Zone
 
 Irreversible actions:
