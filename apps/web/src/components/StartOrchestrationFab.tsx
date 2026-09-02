@@ -30,6 +30,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { parseNoTeamStartError } from '../api/errors';
 import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
+import type { RefObject } from 'react';
 import { EmptyState } from './ui';
 // Inline action to start an orchestration, with a project selector so the
 // user can choose the target project regardless of the current route context.
@@ -52,9 +53,10 @@ const useStyles = makeStyles({
 
 export interface StartOrchestrationFabProps {
   currentProjectId?: string;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
 }
 
-export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFabProps) {
+export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrchestrationFabProps) {
   const styles = useStyles();
   const navigate = useNavigate();
 
@@ -173,6 +175,7 @@ export function StartOrchestrationFab({ currentProjectId }: StartOrchestrationFa
     >
       <Tooltip content="Start task" relationship="label" positioning="before">
         <Button
+          ref={buttonRef}
           className={styles.startButton}
           appearance="primary"
           size="small"

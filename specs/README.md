@@ -6,6 +6,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 
 - [Sign in and carry identity across Agentweaver](./identity-access/sign-in-and-carry-identity.md) — [#2](https://github.com/sabbour/agentweaver/issues/2)
 - [Authorize MCP clients to act for a user](./identity-access/authorize-mcp-clients.md) — [#3](https://github.com/sabbour/agentweaver/issues/3)
+- [Complete platform setup and tour the product](./identity-access/complete-platform-setup-and-tour.md) — [#1135](https://github.com/sabbour/agentweaver/issues/1135)
 
 ## Projects & workspace
 

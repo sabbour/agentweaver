@@ -20,7 +20,20 @@ vi.mock('../config', () => ({
 }));
 
 vi.mock('../components/shell/AppShell', () => ({
-  AppShell: ({ children }: { children: ReactNode }) => <div data-testid="app-shell">{children}</div>,
+  AppShell: ({
+    children,
+    startFirstRunTour,
+    tourUserKey,
+  }: {
+    children: ReactNode;
+    startFirstRunTour?: boolean;
+    tourUserKey?: string | null;
+  }) => (
+    <div data-testid="app-shell">
+      {startFirstRunTour && <div>Product tour requested for {tourUserKey}</div>}
+      {children}
+    </div>
+  ),
 }));
 
 vi.mock('../pages/PlatformSettingsPage', () => ({
@@ -73,6 +86,8 @@ describe('App auth gate', () => {
   beforeEach(() => {
     cleanup();
     retrySpy.mockReset();
+    sessionStorage.clear();
+    localStorage.clear();
     window.history.pushState({}, '', '/projects/proj-1');
     vi.mocked(apiClient.getServerInfo).mockResolvedValue({
       data_directory: 'C:\\data',
@@ -144,6 +159,53 @@ describe('App auth gate', () => {
 
     await waitFor(() => expect(retrySpy).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByTestId('app-shell')).toBeDefined());
+    expect(screen.getByText('Product tour requested for entra-admin')).toBeDefined();
+  });
+
+  it('does not start the tour during a normal configured sign-in', async () => {
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Admin',
+      email: 'admin@example.com',
+      login: 'admin',
+      avatar_url: null,
+      entra_object_id: 'entra-admin',
+      platform_roles: ['PlatformAdmin'],
+      ai_configured: true,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(screen.queryByText(/Product tour requested/)).toBeNull();
+  });
+
+  it('keeps the OAuth return in setup until the admin continues', async () => {
+    sessionStorage.setItem('agentweaver.requiredSetup.pending', '1');
+    window.history.pushState({}, '', '/platform-settings?copilot_app_auth=success');
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Admin',
+      email: 'admin@example.com',
+      login: null,
+      avatar_url: null,
+      entra_object_id: 'entra-admin',
+      platform_roles: ['PlatformAdmin'],
+      ai_configured: true,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Setup required')).toBeDefined();
+    expect(screen.queryByTestId('app-shell')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry access' }));
+
+    await waitFor(() => expect(screen.getByTestId('app-shell')).toBeDefined());
+    expect(screen.getByText('Product tour requested for entra-admin')).toBeDefined();
+    expect(sessionStorage.getItem('agentweaver.requiredSetup.pending')).toBeNull();
   });
 
   it('shows a non-admin lockout message when AI is not configured', async () => {
