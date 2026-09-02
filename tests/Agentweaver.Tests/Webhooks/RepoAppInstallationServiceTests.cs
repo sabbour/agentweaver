@@ -299,6 +299,8 @@ public sealed class RepoAppInstallationServiceTests
         db.AutomationActivations.Add(new AutomationActivationRecord
         {
             Id = Guid.NewGuid().ToString("N"), ProjectId = "project-id", InstallationId = 72, RepositoryId = 99,
+            RepositoryGrantDigest = RepoAppInstallationTokenService.CreatePermissionDigest(prior.Permissions),
+            CopilotBindingId = "binding", CopilotBindingGrantDigest = "copilot-digest",
             AutomationKey = "nightly", Status = AutomationActivationStatus.Active, ActivatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
