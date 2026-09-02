@@ -8,12 +8,6 @@ namespace Agentweaver.Api.Auth;
 public enum GitHubCapabilityOperation { RepositoryRead, RepositoryWrite, CopilotInference }
 public enum GitHubCapabilityBrokerOutcome { Issued, CapabilityUnavailable }
 
-/// <summary>Safe bounded capability metadata. It deliberately contains no credential material.</summary>
-internal sealed record GitHubCapabilityGrant(
-    GitHubCapabilityPurpose Purpose,
-    GitHubCapabilityOperation Operation,
-    DateTimeOffset ExpiresAt);
-
 /// <summary>
 /// Internal run-bound broker boundary. It accepts only a purpose and opaque snapshot reference,
 /// never a user, project, repository, grant, or ambient scope.
@@ -32,60 +26,6 @@ internal sealed class GitHubCapabilityBroker(
         DateTimeOffset now,
         CancellationToken ct) =>
         persistence.TryFenceLiveSnapshotAsync(purpose, snapshotRef, now, ct);
-
-    /// <summary>
-    /// Fences before and after vault/provider work. Credentials stay within this internal
-    /// boundary; the returned value only authorizes a bounded broker-owned operation.
-    /// </summary>
-    internal async Task<(GitHubCapabilityBrokerOutcome Outcome, GitHubCapabilityGrant? Grant)> TryAuthorizeAsync(
-        GitHubCapabilityPurpose purpose,
-        SnapshotRef snapshotRef,
-        GitHubCapabilityOperation operation,
-        DateTimeOffset now,
-        CancellationToken ct)
-    {
-        if (!IsOperationAllowed(purpose, operation))
-            return (GitHubCapabilityBrokerOutcome.CapabilityUnavailable, null);
-
-        var fenced = await persistence.TryFenceLiveSnapshotAsync(purpose, snapshotRef, now, ct)
-            .ConfigureAwait(false);
-        if (fenced is null)
-            return (GitHubCapabilityBrokerOutcome.CapabilityUnavailable, null);
-
-        DateTimeOffset? providerExpiresAt;
-        if (purpose == GitHubCapabilityPurpose.UnattendedRepository)
-        {
-            providerExpiresAt = null;
-            var outcome = await installationTokens.MintForRepositoryAsync(
-                fenced.InstallationId!.Value,
-                fenced.RepositoryId!.Value,
-                (_, expiresAt) =>
-                {
-                    providerExpiresAt = expiresAt;
-                    return Task.CompletedTask;
-                },
-                ct).ConfigureAwait(false);
-            if (outcome != RepoAppInstallationOutcome.Success || providerExpiresAt is null)
-                return (GitHubCapabilityBrokerOutcome.CapabilityUnavailable, null);
-        }
-        else
-        {
-            var secret = await vault.ReadCurrentAsync(fenced.CredentialLocator!, ct).ConfigureAwait(false);
-            if (!secret.Found || !HasUsableAccessToken(secret.Value, out providerExpiresAt))
-                return (GitHubCapabilityBrokerOutcome.CapabilityUnavailable, null);
-        }
-
-        // Persistence opens no transaction for this check, so no transaction spans provider I/O.
-        if (await persistence.TryFenceLiveSnapshotAsync(purpose, snapshotRef, now, ct).ConfigureAwait(false) is null)
-            return (GitHubCapabilityBrokerOutcome.CapabilityUnavailable, null);
-
-        var expiresAt = now.Add(MaximumCapabilityLifetime);
-        if (providerExpiresAt is not null && providerExpiresAt < expiresAt)
-            expiresAt = providerExpiresAt.Value;
-        return expiresAt <= now
-            ? (GitHubCapabilityBrokerOutcome.CapabilityUnavailable, null)
-            : (GitHubCapabilityBrokerOutcome.Issued, new(fenced.Purpose, operation, expiresAt));
-    }
 
     /// <summary>
     /// Mints one short-lived installation credential after snapshot fencing. The caller receives
@@ -187,7 +127,7 @@ internal sealed class GitHubCapabilityBroker(
         CancellationToken ct) =>
         await TryUseProjectCopilotCredentialAsync(
             capabilityReference,
-            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
             projectId,
             entraObjectId,
             now,
@@ -200,7 +140,7 @@ internal sealed class GitHubCapabilityBroker(
     /// </summary>
     internal async Task<GitHubCapabilityBrokerOutcome> TryUseProjectCopilotCredentialAsync(
         SnapshotRef capabilityReference,
-        GitHubProjectCopilotCapabilityPurpose purpose,
+        ProjectModelProviderCapabilityPurpose purpose,
         string projectId,
         string entraObjectId,
         DateTimeOffset now,
@@ -251,26 +191,6 @@ internal sealed class GitHubCapabilityBroker(
                 => operation == GitHubCapabilityOperation.CopilotInference,
             _ => false,
         };
-
-    private static bool HasUsableAccessToken(string? value, out DateTimeOffset? expiresAt)
-    {
-        expiresAt = null;
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
-        try
-        {
-            var credential = JsonSerializer.Deserialize<Credential>(value, CredentialJsonOptions);
-            if (!string.Equals(credential?.Status, "signed-in", StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(credential?.AccessToken))
-                return false;
-            expiresAt = credential!.ExpiresAt;
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
 
     private static bool TryGetUsableAccessToken(
         string? value,
