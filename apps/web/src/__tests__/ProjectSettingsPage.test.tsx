@@ -12,6 +12,7 @@ import {
   it,
   vi,
 } from 'vitest';
+import type { Project } from '../api/types';
 import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -46,6 +47,29 @@ function Wrapper({ children }: { children: ReactNode }) {
 function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location-search">{location.search}</output>;
+}
+
+function githubProject(): Project {
+  return {
+    project_id: 'proj-1',
+    name: 'Demo',
+    origin: 'github',
+    source_repository: 'octo/repo',
+    working_directory: 'C:/demo',
+    default_branch: 'main',
+    owner: 'sabbour',
+    default_provider: 'github-copilot',
+    default_model_github_copilot: 'gpt-4',
+    default_model_microsoft_foundry: null,
+    blueprint_generation_model: null,
+    workflow_generation_model: 'claude-sonnet-4.6',
+    outcome_spec_generation_model: null,
+    preview_approval_timeout_minutes: 30,
+    available: true,
+    state: 'active',
+    created_at: '2026-07-07T00:00:00Z',
+    updated_at: '2026-07-07T00:00:00Z',
+  };
 }
 
 function renderPage(projectId: string, initialEntry = `/projects/${projectId}/settings`) {
@@ -257,6 +281,7 @@ describe('ProjectSettingsPage', () => {
   });
 
   it('starts the Repo App installation flow when required', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue(githubProject());
     vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
       status: 'not_ready',
       reason_code: 'repo_app_installation_required',
@@ -285,12 +310,32 @@ describe('ProjectSettingsPage', () => {
     assignSpy.mockRestore();
   });
 
+  it('treats a disconnected legacy Repo App flag as not ready for a GitHub project', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue(githubProject());
+    vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
+      status: 'not_ready',
+      reason_code: 'copilot_binding_required',
+      message: 'Connect a model provider.',
+      repo_app_installation_connected: false,
+    });
+
+    renderPage('proj-1');
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
+
+    expect(await screen.findByText('repo_app_installation_required')).toBeDefined();
+    expect(screen.getByText(
+      'Install the GitHub Repo App to grant background repository access for this project.',
+    )).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Install GitHub Repo App' })).toBeDefined();
+  });
+
   it('renders nested model-provider and repository readiness independently', async () => {
     vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
       status: 'not_ready',
       reason_code: 'project_model_provider_reconnect_required',
       message: 'Legacy combined message.',
-      repo_app_installation_connected: true,
+      repo_app_installation_connected: false,
       model_provider: {
         status: 'not_ready',
         source: 'project',
@@ -303,26 +348,7 @@ describe('ProjectSettingsPage', () => {
         repo_app_installation_connected: true,
       },
     });
-    vi.mocked(apiClient.getProject).mockResolvedValue({
-      project_id: 'proj-1',
-      name: 'Demo',
-      origin: 'github',
-      source_repository: 'octo/repo',
-      working_directory: 'C:/demo',
-      default_branch: 'main',
-      owner: 'sabbour',
-      default_provider: 'github-copilot',
-      default_model_github_copilot: 'gpt-4',
-      default_model_microsoft_foundry: null,
-      blueprint_generation_model: null,
-      workflow_generation_model: 'claude-sonnet-4.6',
-      outcome_spec_generation_model: null,
-      preview_approval_timeout_minutes: 30,
-      available: true,
-      state: 'active',
-      created_at: '2026-07-07T00:00:00Z',
-      updated_at: '2026-07-07T00:00:00Z',
-    });
+    vi.mocked(apiClient.getProject).mockResolvedValue(githubProject());
 
     renderPage('proj-1');
     await screen.findByText('Rename project');
