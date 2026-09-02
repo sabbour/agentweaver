@@ -11,8 +11,8 @@ import { Link as RouterLink } from 'react-router-dom';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 import type { ClusterDiagnosticsDto } from '../api/types';
 
-const NODE_WIDTH = 190;
-const NODE_HEIGHT = 72;
+const NODE_WIDTH = 280;
+const NODE_HEIGHT = 96;
 const COLUMN_GAP = 100;
 const ROW_GAP = 28;
 
@@ -98,9 +98,9 @@ const useStyles = makeStyles({
   title: {
     fontSize: tokens.fontSizeBase300,
     fontWeight: tokens.fontWeightSemibold,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
   detail: {
     color: tokens.colorNeutralForeground3,
@@ -146,7 +146,7 @@ function ClusterNode({ data }: NodeProps) {
       data-testid="cluster-topology-node"
     >
       <Handle type="target" position={Position.Left} style={handleStyle} />
-      <span className={styles.title}>{node.title}</span>
+      <span className={styles.title} title={node.title}>{node.title}</span>
       <span className={styles.detail}>{node.detail}</span>
       {node.linkLabel && node.linkTo ? (
         <RouterLink to={node.linkTo} className={styles.link}>
@@ -313,7 +313,7 @@ export function ClusterTopologyGraph({ data }: { data: ClusterDiagnosticsDto }) 
                   aria-label={`${instance.name}: Warm instance · ${instance.status}`}
                 >
                   <div className={styles.instanceListMeta}>
-                    <div className={styles.instanceName}>{instance.name}</div>
+                    <div className={styles.instanceName} title={instance.name}>{instance.name}</div>
                     <div className={styles.detail}>
                       {instance.status === 'claimed'
                         ? `Claimed${instance.claim_name ? ` by ${instance.claim_name}` : ''}`
