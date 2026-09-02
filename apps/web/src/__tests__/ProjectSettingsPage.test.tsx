@@ -26,6 +26,9 @@ vi.mock('../api/apiClient', () => ({
     updateProjectPreviewSettings: vi.fn(),
     updateSandboxPolicy: vi.fn(),
     getUnattendedReadiness: vi.fn(),
+    getAutomationStatus: vi.fn(),
+    activateAutomation: vi.fn(),
+    deactivateAutomation: vi.fn(),
     beginProjectCopilotAuthorization: vi.fn(),
     beginProjectRepoAppInstallation: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
@@ -121,6 +124,11 @@ beforeEach(() => {
     message: 'Connect a project Copilot App identity before unattended work can run.',
     repo_app_installation_connected: false,
   } as never);
+  vi.mocked(apiClient.getAutomationStatus).mockResolvedValue({
+    is_active: false,
+    model_provider_source: null,
+    activated_at: null,
+  } as never);
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'not_connected',
     github_login: null,
@@ -173,7 +181,7 @@ describe('ProjectSettingsPage', () => {
     expect(screen.queryByText('Default provider')).toBeNull();
   });
 
-  it('shows read-only background readiness without an activation control', async () => {
+  it('shows background readiness alongside a real activation control', async () => {
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
@@ -188,7 +196,42 @@ describe('ProjectSettingsPage', () => {
     )).toBeDefined();
     expect(screen.getByText('copilot_binding_required')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
-    expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
+    // Automation is currently inactive (per the mocked status), so the activation control shows
+    // "Activate", not "Deactivate" — proving this section is no longer purely read-only.
+    expect(await screen.findByRole('button', { name: 'Activate automation' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Deactivate automation' })).toBeNull();
+  });
+
+  it('activates automation and then shows a Deactivate control once active', async () => {
+    vi.mocked(apiClient.activateAutomation).mockResolvedValue({
+      is_active: true,
+      model_provider_source: 'github_copilot',
+      activated_at: '2026-09-01T00:00:00Z',
+    } as never);
+
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
+
+    const activateButton = await screen.findByRole('button', { name: 'Activate automation' });
+    fireEvent.click(activateButton);
+
+    expect(await screen.findByRole('button', { name: 'Deactivate automation' })).toBeDefined();
+    expect(apiClient.activateAutomation).toHaveBeenCalledWith('proj-1');
+    expect(screen.getByText('GitHub Copilot')).toBeDefined();
+  });
+
+  it('hides the activation control for non-Owners (status endpoint returns 403)', async () => {
+    vi.mocked(apiClient.getAutomationStatus).mockRejectedValue(new ApiError(403, 'Forbidden') as never);
+
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
+
+    await screen.findByText('Background automation readiness');
+    expect(screen.queryByRole('button', { name: /activate automation|deactivate automation/i })).toBeNull();
   });
 
   it('starts the Repo App installation flow when required', async () => {

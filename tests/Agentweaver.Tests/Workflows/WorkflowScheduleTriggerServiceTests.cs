@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using FluentAssertions;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Security;
 using Agentweaver.Api.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -405,6 +407,114 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
         (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty();
     }
 
+    /// <summary>
+    /// End-to-end proof that the missing production entry point this change adds
+    /// (<see cref="AutomationActivationSnapshotService.ActivateAsync"/>, reachable via
+    /// <c>POST /api/projects/{id}/automation/activate</c>) is what makes
+    /// <see cref="WorkflowScheduleTriggerService"/> able to fire at all, and that
+    /// <see cref="AutomationActivationSnapshotService.DeactivateAsync"/> (via
+    /// <c>.../automation/deactivate</c>) turns it back off without touching the underlying
+    /// repository grant or Copilot binding: activate -> tick fires -> deactivate -> tick no longer
+    /// fires -> reactivate -> tick fires again.
+    /// </summary>
+    [Fact]
+    public async Task RunTick_OnlyFiresWhileAutomationIsActivated_ViaTheRealActivationService()
+    {
+        var project = await SeedProjectAsync(WeeklyMondayNineAmYaml);
+
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var invocationDb = new MemoryDbContext(new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite(connection, options => options.MigrationsAssembly("Agentweaver.Api")).Options);
+        await invocationDb.Database.MigrateAsync();
+
+        invocationDb.Projects.Add(new ProjectRecord { ProjectId = project.Id.ToString() });
+        invocationDb.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = 1, AppKind = GitHubAppKind.Repo, ProjectId = project.Id.ToString(), CreatedAt = DateTimeOffset.UtcNow,
+        });
+        invocationDb.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = 1, RepositoryId = 10, ProjectId = project.Id.ToString(), FullNameDisplay = "owner/repository",
+            PermissionDigest = "repo-digest", GrantedAt = DateTimeOffset.UtcNow,
+        });
+        invocationDb.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+        {
+            Id = "binding", ProjectId = project.Id.ToString(), EntraObjectId = "owner",
+            CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
+            Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
+        });
+        await invocationDb.SaveChangesAsync();
+
+        var roles = new SingleOwnerRoleStore(project.Id, "owner");
+        var activationService = new AutomationActivationSnapshotService(
+            new GitHubConnectionsPersistenceStore(invocationDb), roles);
+        var caller = new CallerContext { User = "owner", EntraObjectId = "owner" };
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("oid", "owner")], "test"));
+
+        var registry = new WorkflowRegistry();
+        await using var provider = new ServiceCollection()
+            .AddSingleton<IProjectStore>(_projects)
+            .AddSingleton<IBacklogTaskStore>(_backlog)
+            .AddSingleton(registry)
+            .AddScoped<IAutomationInvocationService>(_ =>
+                new AutomationInvocationService(invocationDb, new GitHubConnectionsPersistenceStore(invocationDb)))
+            .BuildServiceProvider();
+        var service = new WorkflowScheduleTriggerService(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            new ConfigurationBuilder().Build(),
+            NullLogger<WorkflowScheduleTriggerService>.Instance);
+
+        var week1 = new DateTimeOffset(2026, 7, 13, 9, 0, 0, TimeSpan.Zero);
+        var week2 = new DateTimeOffset(2026, 7, 20, 9, 0, 0, TimeSpan.Zero);
+        var week3 = new DateTimeOffset(2026, 7, 27, 9, 0, 0, TimeSpan.Zero);
+
+        // Before any activation exists at all (the bug this change fixes), the tick must not fire.
+        await service.RunTickAsync(week1, CancellationToken.None);
+        (await _backlog.ListByProjectAsync(project.Id)).Should().BeEmpty(
+            "no AutomationActivationRecord exists yet — nothing has ever called ActivateAsync in production before this change");
+
+        // Activate via the real (now-reachable) service -> the due occurrence fires.
+        (await activationService.ActivateAsync(caller, principal, project.Id)).Outcome
+            .Should().Be(AutomationActivationOutcome.Activated);
+        await service.RunTickAsync(week1, CancellationToken.None);
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle(
+            because: "activation is now live, so the due weekly occurrence must fire");
+
+        // Deactivate -> the next due occurrence must NOT fire.
+        (await activationService.DeactivateAsync(caller, principal, project.Id))
+            .Should().Be(AutomationDeactivationOutcome.Deactivated);
+        await service.RunTickAsync(week2, CancellationToken.None);
+        (await _backlog.ListByProjectAsync(project.Id)).Should().ContainSingle(
+            "automation was deactivated, so the week 2 occurrence must not publish a new backlog task");
+
+        // Reactivate -> ticks fire again (the underlying repository grant/Copilot binding were
+        // never touched by deactivation, so reactivation needs only a fresh fence, not new authority).
+        (await activationService.ActivateAsync(caller, principal, project.Id)).Outcome
+            .Should().Be(AutomationActivationOutcome.Activated);
+        await service.RunTickAsync(week2, CancellationToken.None);
+        await service.RunTickAsync(week3, CancellationToken.None);
+        var tasks = await _backlog.ListByProjectAsync(project.Id);
+        tasks.Should().HaveCount(3, "week 2 (recovered after reactivation) and week 3 must each publish once");
+    }
+
+    /// <summary>Minimal <see cref="IProjectRoleAssignmentStore"/> fake granting exactly one project
+    /// Owner, for the real <see cref="AutomationActivationSnapshotService"/> authority check in the
+    /// end-to-end test above.</summary>
+    private sealed class SingleOwnerRoleStore(ProjectId projectId, string ownerSubject) : IProjectRoleAssignmentStore
+    {
+        public Task<ProjectRoleAssignment?> GetAsync(ProjectId requestedProjectId, string principalId, CancellationToken ct = default) =>
+            Task.FromResult(requestedProjectId == projectId && principalId == ownerSubject
+                ? new ProjectRoleAssignment { ProjectId = projectId, PrincipalId = ownerSubject, Role = ProjectRole.Owner, GrantedBy = "test", GrantedAt = DateTimeOffset.UtcNow }
+                : null);
+        public Task UpsertAsync(ProjectRoleAssignment assignment, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ProjectRoleAssignmentStoreMutationResult> UpsertEnsuringOwnerInvariantAsync(ProjectRoleAssignment assignment, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<ProjectRoleAssignment>> ListByProjectAsync(ProjectId requestedProjectId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<ProjectRoleAssignment>> ListByPrincipalAsync(string principalId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<bool> DeleteAsync(ProjectId requestedProjectId, string principalId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<ProjectRoleAssignmentStoreMutationResult> DeleteEnsuringOwnerInvariantAsync(ProjectId requestedProjectId, string principalId, CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
     private static async Task<AutomationActivationRecord> ActivateAsync(MemoryDbContext db, ProjectId projectId)
     {
         db.Projects.Add(new ProjectRecord { ProjectId = projectId.ToString() });
@@ -423,14 +533,28 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
             CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
             Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
         });
-        db.AutomationActivations.Add(new AutomationActivationRecord
+        await db.SaveChangesAsync();
+        // Inserted (and returned) via raw SQL/manual construction rather than
+        // db.AutomationActivations.Add + SaveChanges/query because this helper runs against a
+        // deliberately pre-migration physical schema (see the pinned MigrateAsync("20260828203038_...")
+        // call above) that predates later automation_activations columns (e.g.
+        // byok_provider_id/model_provider_source). Using EF's current compiled model to INSERT or
+        // SELECT would reference columns that don't exist yet on the pinned schema.
+        var activatedAt = DateTimeOffset.UtcNow;
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO automation_activations
+                (id, project_id, installation_id, repository_id, repository_grant_digest,
+                 copilot_binding_id, copilot_binding_grant_digest, automation_key, status, activated_at)
+            VALUES
+                ('activation', {projectId.ToString()}, 1, 10, 'repo-digest',
+                 'binding', 'copilot-digest', 'automation', 0, {activatedAt});
+            """);
+        return new AutomationActivationRecord
         {
             Id = "activation", ProjectId = projectId.ToString(), InstallationId = 1, RepositoryId = 10,
             RepositoryGrantDigest = "repo-digest", CopilotBindingId = "binding",
             CopilotBindingGrantDigest = "copilot-digest", AutomationKey = "automation",
-            Status = AutomationActivationStatus.Active, ActivatedAt = DateTimeOffset.UtcNow,
-        });
-        await db.SaveChangesAsync();
-        return await db.AutomationActivations.SingleAsync();
+            Status = AutomationActivationStatus.Active, ActivatedAt = activatedAt,
+        };
     }
 }

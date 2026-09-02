@@ -101,6 +101,12 @@ Choose **Add event** or **Edit event** to also start the same workflow from a cu
 event. Each editor removes only its own trigger, so a weekly schedule and a GitHub event can coexist.
 Built-in workflows cannot be scheduled directly; duplicate one into the project first.
 
+Configuring a schedule or event trigger defines what *can* fire; it does not by itself turn
+automation on. A Project Owner must also activate automation for the project from the
+**Unattended** section of Project Settings (see [Projects](projects.md#unattended)) before any
+schedule or event trigger will actually run. Deactivating stops triggers from firing without
+deleting the workflow's schedule or event configuration.
+
 Existing workflow files with one `trigger:` object remain valid and continue to round-trip in that
 shape. Workflows with multiple triggers use a `triggers:` list, with at most one schedule and one
 event trigger:

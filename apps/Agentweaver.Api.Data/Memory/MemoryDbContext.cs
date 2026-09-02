@@ -654,6 +654,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.RepositoryGrantDigest).HasColumnName("repository_grant_digest");
             e.Property(x => x.CopilotBindingId).HasColumnName("copilot_binding_id");
             e.Property(x => x.CopilotBindingGrantDigest).HasColumnName("copilot_binding_grant_digest");
+            e.Property(x => x.ModelProviderSource).HasColumnName("model_provider_source");
+            e.Property(x => x.ByokProviderId).HasColumnName("byok_provider_id");
             e.Property(x => x.AutomationKey).HasColumnName("automation_key");
             e.Property(x => x.Status).HasColumnName("status");
             e.Property(x => x.ActivatedAt).HasColumnName("activated_at");
