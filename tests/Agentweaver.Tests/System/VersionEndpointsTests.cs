@@ -20,11 +20,11 @@ namespace Agentweaver.Tests.SystemVersion;
 public sealed class VersionEndpointsTests
 {
     [Fact]
-    public async Task GetVersion_ForRealReleaseBuild_ReturnsCleanSemverWithNoGitShaAndIsReleaseTrue()
+    public async Task GetVersion_ForRealReleaseBuild_ReturnsSemverAndBuildGitSha()
     {
         // Simulates `npm run azure:release` having tagged and deployed v0.9.71 —
         // IMAGE_TAG is a real semver tag, matching the VERSION file bumped by that release.
-        var stub = new StubAppVersionProvider(version: "0.9.71", gitSha: null, isRelease: true);
+        var stub = new StubAppVersionProvider(version: "0.9.71", gitSha: "a1c11f1", isRelease: true);
         using var factory = new VersionWebApplicationFactory(stub);
         using var client = factory.CreateAuthenticatedClient();
 
@@ -34,7 +34,7 @@ public sealed class VersionEndpointsTests
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
 
         body.GetProperty("version").GetString().Should().Be("0.9.71");
-        body.GetProperty("gitSha").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("gitSha").GetString().Should().Be("a1c11f1");
         body.GetProperty("isRelease").GetBoolean().Should().BeTrue();
     }
 

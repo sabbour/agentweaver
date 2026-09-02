@@ -13,8 +13,8 @@ public interface IAppVersionProvider
     string Version { get; }
 
     /// <summary>
-    /// Short git SHA the running image was built from, or null when unavailable
-    /// (e.g. a real release build, or running outside the container build pipeline).
+    /// Short git SHA the running image was built from, or null when build metadata
+    /// is unavailable (for example, running outside the container build pipeline).
     /// </summary>
     string? GitSha { get; }
 
@@ -52,10 +52,10 @@ public class AppVersionProvider : IAppVersionProvider
         {
             // The IMAGE_TAG *is* the authoritative version for a real release build
             // (it's what `azure:release` bumped VERSION to and tagged) — prefer it over
-            // whatever happens to be baked into the image's VERSION file, and there's no
-            // need to show a SHA suffix for a tagged release.
+            // whatever happens to be baked into the image's VERSION file. Report the
+            // build revision independently for diagnostics.
             Version = imageTag!.TrimStart('v');
-            GitSha = null;
+            GitSha = normalizedGitSha;
         }
         else
         {

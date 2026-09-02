@@ -33,7 +33,7 @@ public sealed class AppVersionProviderTests : IDisposable
     }
 
     [Fact]
-    public void WhenImageTagIsRealSemver_UsesImageTagAsVersion_AndHidesGitSha()
+    public void WhenImageTagIsRealSemver_UsesImageTagAsVersion_AndSurfacesBuildGitSha()
     {
         Environment.SetEnvironmentVariable("IMAGE_TAG", "0.9.71");
         Environment.SetEnvironmentVariable("GIT_SHA", "a1c11f1");
@@ -42,7 +42,7 @@ public sealed class AppVersionProviderTests : IDisposable
 
         provider.IsRelease.Should().BeTrue();
         provider.Version.Should().Be("0.9.71");
-        provider.GitSha.Should().BeNull();
+        provider.GitSha.Should().Be("a1c11f1");
     }
 
     [Fact]

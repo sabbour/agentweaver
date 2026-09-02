@@ -107,6 +107,10 @@ automation on. A Project Owner must also activate automation for the project fro
 schedule or event trigger will actually run. Deactivating stops triggers from firing without
 deleting the workflow's schedule or event configuration.
 
+A schedule can run for a repository-less project. GitHub event triggers and workflow steps that
+perform repository operations are different: they require a GitHub-backed project with verified
+repository access and the Repo App installation prerequisite described in Project Settings.
+
 Existing workflow files with one `trigger:` object remain valid and continue to round-trip in that
 shape. Workflows with multiple triggers use a `triggers:` list, with at most one schedule and one
 event trigger:
