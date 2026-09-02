@@ -70,7 +70,7 @@ The two GitHub Apps have separate purposes:
 
 Authorize GitHub Copilot from Platform settings or Project settings. The effective status identifies the provider and scope.
 
-Authorize repository access from Account settings or a repository action. Agentweaver returns to the current task after the browser handoff.
+Connect the GitHub Repo App from Account settings, or authorize repository access from a repository action elsewhere in the product. Agentweaver returns to the current task after the browser handoff.
 
 GitHub authorization does not replace Entra identity. It does not grant an Agentweaver role or project membership.
 
