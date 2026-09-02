@@ -1,5 +1,196 @@
 # Changelog
 
+## 0.26.0
+
+### Minor Changes
+
+- a4a5fba: Add real Activate/Deactivate endpoints and a Project Settings control for scheduled/event automation, and add BYOK as a valid model-provider source for activation.
+  
+  Root cause: `AutomationActivationSnapshotService.ActivateAsync` — the only thing that creates an
+  `AutomationActivationRecord`, which `WorkflowScheduleTriggerService`/`WorkflowEventTriggerService`
+  both require before they'll fire — had no production endpoint or caller at all; only tests
+  invoked it. Project Settings explicitly said "This page does not enable or activate automation."
+  As a result, no user could actually turn on scheduled/event automation for a project through any
+  current product surface, even though the trigger infrastructure and UI copy implied it was a real,
+  usable feature. Pre-existing/migrated activation records kept working, but nothing new could ever
+  be activated.
+  
+  - Added Owner-only endpoints: `GET /api/projects/{id}/automation/status`,
+    `POST /api/projects/{id}/automation/activate`, `POST /api/projects/{id}/automation/deactivate`,
+    backed by `AutomationActivationSnapshotService.ActivateAsync`/new `DeactivateAsync`/`GetStatusAsync`.
+  - Extended `AutomationActivationRecord` with a `ModelProviderSource` (`GitHubCopilot`/`Byok`) and an
+    optional `ByokProviderId`, so an activation snapshot can now pin BYOK as its model-provider source
+    instead of always requiring a GitHub Copilot binding. Added matching SQLite/Postgres migrations,
+    including updating the snapshot's insert/immutability trigger and CHECK constraint to branch on
+    the new BYOK-sourced shape.
+  - Added a Project Settings "Background automation" control (Activate/Deactivate button + status)
+    that only Owners can see — non-Owners get a 403 from the status endpoint and never see the
+    control at all — and removed the stale "does not enable or activate automation" copy.
+  - Added an end-to-end test proving activate → scheduled trigger fires → deactivate → trigger no
+    longer fires → reactivate → trigger fires again, plus new BYOK activation/fencing and
+    deactivate/reactivate/status coverage.
+- cea827d: Unify model-provider precedence and terminology across the platform, and fix four AI-generation
+  features that were silently broken for GitHub Copilot users.
+  
+  **One shared resolver, one precedence rule.** Introduced `EffectiveModelProviderResolver`, a single
+  backend service that resolves the effective AI model provider for a project (or the platform
+  default when there is no project) and returns a discriminated result: BYOK, project GitHub
+  Copilot, platform GitHub Copilot, or unavailable-with-reason. The rule is now applied consistently
+  everywhere: a project's explicit GitHub Copilot override always wins if configured, otherwise the
+  platform default applies (deployment-wide BYOK first, then the platform GitHub Copilot binding).
+  This replaces nine different, previously inconsistent precedence implementations across the
+  app-entry AI gate, project status/readiness endpoints, coordinator run startup, the Assistant
+  service, backlog decomposition, and marketplace catalog classification.
+  
+  **Fixed: four non-run AI generators that only worked with BYOK.** Blueprint generation, workflow
+  generation, skill generation, and casting generation each fabricated a synthetic run id and asked
+  for a run-bound Copilot capability snapshot that was never created for that id — so any project
+  using GitHub Copilot (rather than BYOK) silently failed to generate. All four now issue a real,
+  short-lived, purpose-bound capability through the resolver when the effective provider is Copilot,
+  or use the BYOK path directly when it isn't.
+  
+  **Fixed: capability issuance was owner-only.** Backlog decomposition and marketplace catalog
+  classification previously only accepted a project Copilot credential belonging to the exact human
+  who originally connected it, silently ignoring BYOK and the platform default, and blocking any
+  other authorized project Contributor. Both now use the shared resolver, so any authorized project
+  member can use the project's effective model provider.
+  
+  **Fixed: BYOK runs no longer require a bogus Copilot snapshot.** Pod-per-run coordinator startup
+  unconditionally demanded a GitHub Copilot capability snapshot even when the project was running on
+  BYOK. It now only requires a Copilot snapshot when the resolver's result is actually Copilot-sourced.
+  
+  **Terminology unified: "model provider" vs. "GitHub repository access".** Renamed the vocabulary
+  used for the source of AI inference (GitHub Copilot, custom endpoint, Azure OpenAI, Anthropic) to
+  "model provider" throughout the UI and API, distinct from GitHub repository access (Repo App
+  installation/grants), which keeps its GitHub-specific naming. Notably:
+  - `GitHubCopilotConnectionRequirement`/`GitHubCopilotConnectionAction` → `ModelProviderConnectionRequirement`/`ModelProviderConnectionAction`,
+    with the error code `github_copilot_connection_required` → `model_provider_connection_required`,
+    and a single ambiguous `connect_project_copilot_app` action split into distinct
+    `configure_project_model_provider` / `configure_platform_model_provider` codes.
+  - `GitHubCopilotConnectionPicker` → `ProjectModelProviderSettings`; `GitHubCopilotConnectionRequiredAction` → `ModelProviderRequiredAction`.
+  - Fixed a routing bug where a platform-scoped "connect" prompt sent the user to Account Settings
+    instead of Platform Settings.
+  - `apps/web/src/api/errors.ts` now has separate repository-access vs. model-provider error message
+    maps, and no longer misrepresents an unrelated `404` (e.g. a deleted run) as a GitHub connection
+    problem.
+  - The left-nav identity popover now shows separate "Repository access" and "Model provider" rows,
+    instead of a single row that mislabeled a BYOK deployment as "AI source: GitHub Copilot".
+  
+  **Dead code removed.** `GitHubCapabilityBroker.TryAuthorizeAsync`/`GitHubCapabilityGrant` (no
+  callers), and run-level `InteractiveRepository`/`InteractiveCopilot` capability snapshot capture
+  (never redeemed by any credential consumer, and the `InteractiveCopilot` variant was built from Repo
+  App authorization data rather than an actual Copilot binding).
+- c4a630d: Fixed personal/Operator ("Assistant") sessions incorrectly requiring a PROJECT-scoped
+  run-bound GitHub Copilot capability snapshot, instead of always resolving their credential
+  from the platform-level Copilot connection.
+  
+  Follow-up to #1116: that fix only corrected the *symptom* (surfacing the actionable
+  "Connect GitHub" 409 instead of an opaque 500) for a personal Assistant session whose run
+  happened to carry a non-null `ProjectId` — the project the caller was viewing when they
+  opened the chat. It did not address the underlying gap: that `ProjectId` is only incidental
+  UI context, never a real repo-scoped run, yet credential resolution still required THAT
+  project's own Copilot binding to be usable. If the incidental project's binding was broken
+  (the exact production case: an "Active" DB row with a missing Key Vault secret), the
+  personal session failed even though the platform-level Copilot connection was healthy.
+  
+  `RunGitHubCapabilitySnapshotLifecycle.PrepareForUnattendedCopilotLaunchAsync` now accepts a
+  `platformScoped` flag. Both Assistant/Operator run launch paths
+  (`AssistantRunService.PrepareAgentHostCapabilityAsync` and
+  `RemoteOperatorAssistantAgent.EnsureAgentHostCapabilityAsync`) now pass `platformScoped:
+  true`, so these personal sessions always resolve their Copilot credential from the
+  platform-level connection (`PlatformDefaultCopilotBindings`) regardless of any incidental
+  `ProjectId`, and any failure now correctly surfaces the platform-settings "Connect GitHub"
+  CTA rather than a project-specific one. Project-scoped work (Coordinator runs, subtasks,
+  retries) is unchanged and continues to require its own project-bound capability snapshot.
+- 82b4609: Fix the broken "Install GitHub Repo App" flow so the resulting GitHub App installation actually
+  binds to the project. Previously the button only opened GitHub's generic installation page, and
+  `RepoAppInstallationLifecycleService.BindAsync` — which creates the `GitHubInstallationRecord`
+  and `GitHubRepositoryGrantRecord` unattended runs require — had no production caller, so projects
+  could get a repository attached (via personal OAuth) but never a working App installation.
+  
+  - Add `RepoAppInstallationAuthorizationService`, a project-pinned, Owner-authorized transaction
+    flow mirroring the existing Copilot App project-binding pattern: a signed, single-use `state`
+    value plus a one-time `__Host-` callback cookie, stored via the existing purpose-agnostic
+    `GitHubAuthorizationRecord`/`ClaimAuthorizationAsync`/`CompleteAuthorizationAsync` persistence
+    (no new crypto primitives).
+  - `POST /api/projects/{id}/github/repo-app-installation/authorizations` begins the flow and
+    returns an installation URL carrying that `state`.
+  - `GET /auth/github/repo-app/installation/callback` is GitHub's App installation **Setup URL**
+    (distinct from the OAuth callback URL). It reads `installation_id`/`setup_action`/`state`,
+    validates the transaction, resolves the connected repository's numeric ID from the live
+    installation, and calls `RepoAppInstallationLifecycleService.BindAsync` — completing the
+    previously-missing binding. `setup_action=request` (pending org-owner approval) is reported as
+    an informational "pending" outcome instead of erroring. The browser is redirected back to
+    Project Settings' Background automation section with a clear success/failure indicator.
+  - The Project Settings "Install GitHub Repo App" button now starts this flow instead of linking to
+    a generic, unbound installation URL. After connecting a repository via personal OAuth, users are
+    now taken directly to the Background automation section so they can complete the App
+    installation step next.
+  - Fix `GitHubConnectionsPersistenceStore.CompleteAuthorizationAsync`, which this flow is the first
+    production caller of: its `ExecuteUpdateAsync` call failed to translate on the SQLite/relational
+    provider due to an inline ternary/DateTimeOffset conversion.
+  
+  This requires a one-time manual GitHub App configuration change (cannot be automated): set the
+  Repo App's **Setup URL** to `https://<api-host>/auth/github/repo-app/installation/callback` and
+  enable **"Redirect on update"**. See `docs/guide/configuration.md` for details.
+
+### Patch Changes
+
+- f34dbfb: Fixed the Operator Assistant (and other AgentHost-backed runs) surfacing an opaque
+  "AgentHost pod launch failed: Cannot launch AgentHost pod for run '...' without a live
+  run-bound Copilot capability snapshot" server error instead of the actionable "Connect your
+  GitHub Copilot account" prompt.
+  
+  Root cause: a run's Copilot capability snapshot is captured against whichever GitHub Copilot
+  App binding is marked "Active" in the database, but nothing checks that the binding's
+  credential material still exists in Key Vault at that point. When a bound connection's
+  credential secret is missing or stale (confirmed live via
+  "Copilot App connection for project ... has an active binding record but its credential
+  secret is missing."), the snapshot is still accepted at run-preparation time. The actual
+  credential redemption only happens later, at AgentHost pod launch, where it fails and the
+  pod launcher threw a generic `InvalidOperationException` — which isn't recognized as an
+  actionable "reconnect GitHub" condition and gets wrapped into a generic 500 by every caller.
+  
+  The AgentHost pod launcher now distinguishes a genuine wiring bug (no credential provider
+  registered at all, still fails loudly) from a configured provider that could not redeem the
+  run's credential, throwing the existing `GitHubCopilotConnectionRequiredException` in the
+  latter case so the API returns the standard `github_copilot_connection_required` 409 and the
+  frontend renders its established "Connect GitHub" call-to-action instead of a dead-end error.
+- 87eb706: Fix Cluster page "Resource topology" graph never showing warm-pool sandbox instances, sandbox claims, or agent pods beyond the top-level pool summary.
+  
+  Root cause: `DiagnosticsService.GetWarmPoolPodInventoryAsync` matched sandbox pods against a hardcoded `agentweaver-sandbox-` name prefix, but live warm-pool pods are generated from the `SandboxWarmPool`'s pod template with `generateName: "<pool-name>-"` (e.g. `agentweaver-agent-host-jbn86`). Since no live pod ever started with `agentweaver-sandbox-`, `warm_pools[].instances` always came back empty, even though the pool's `ready_replicas`/`available_replicas` counts (read from the CRD status) were correct — matching the "2/2 ready" summary the user saw while the per-instance list stayed empty.
+  
+  Pods are now matched to their owning warm pool by the longest `"<pool-name>-"` prefix match against the pool names returned from the `SandboxWarmPool` CRD listing, instead of a hardcoded constant. This also makes the matching correct if additional warm pools are ever added.
+- 43ee564: Fix the "Create project from GitHub" dialog and its owner/repo pickers so they no longer tell an
+  already-connected user to "reconnect GitHub" when repository listing fails.
+  
+  - Clean up the message shown whenever a "Connect GitHub" action is offered: it now always reads
+    "Connect GitHub to see your repositories." instead of the previous copy that contradictorily
+    told users to "Retry or reconnect GitHub" while showing only a Connect button.
+  - The backend's GitHub repository-listing broker previously collapsed a transient failure calling
+    the live GitHub API (network error, timeout) into the same `github_capability_unavailable` code
+    used for "you're not connected" — so a user who just finished the Connect GitHub flow could still
+    see the same "reconnect" prompt even though reconnecting would not help. It now returns a
+    distinct `github_capability_transient` outcome/error code for that case, surfaced in the UI as
+    "GitHub is temporarily unavailable. Try again in a moment." with the existing retry affordance,
+    not another Connect GitHub prompt.
+- f685915: Fix the workflow visual diagram (WorkflowsPage "View graph" panel and the visual workflow editor)
+  so both use the same staircase auto-layout mechanism as the coordinator run topology view, and fix
+  a broken "Add next step" button that visually overlapped node content in the editor.
+  
+  - `VisualWorkflowEditor.tsx` was still laying its canvas out with the plain `layoutDag` (a single
+    straight LR dagre row) and single left/right node handles, unlike the read-only
+    `WorkflowDefinitionInlinePanel` (WorkflowsPage) and `CoordinatorRunPage`, which both use
+    `layoutDagStaircase` + `routeGridEdges` + GRID (all-side) node handles for a compact, legible,
+    non-overlapping diagram. The editor now builds its graph the same way, so both surfaces read
+    identically instead of the editor's canvas looking sparse/unstructured by comparison.
+  - In `WorkflowGraphPanel.tsx`'s shared `WorkflowNode`, the editor's "Add next step" button + actions
+    menu was rendered as a sibling of the node's icon/title row inside the same single-row flex
+    container, so it got squeezed onto — and visually overlapped — the node's title/sub-label instead
+    of appearing below it. It now renders as the last row inside the node body (matching how the
+    Human Review gate's on-face action already stacks below its content), so it sits cleanly under the
+    node text with no overlap.
+
 ## 0.25.0
 
 ### Minor Changes
