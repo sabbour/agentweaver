@@ -1,7 +1,7 @@
 namespace Agentweaver.Api.Memory;
 
 public enum GitHubAppKind { Repo, Copilot }
-public enum GitHubAuthorizationPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot, PlatformDefaultCopilot }
+public enum GitHubAuthorizationPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot, PlatformDefaultCopilot, UnattendedRepositoryInstallation }
 public enum GitHubCapabilityPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot }
 public enum GitHubCapabilitySnapshotSourceKind { UserAuthorization, RepositoryGrant, CopilotBinding }
 public enum GitHubAuthorizationStatus { Pending, Redeeming, Completed, Failed, Expired }

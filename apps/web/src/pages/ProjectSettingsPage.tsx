@@ -4,6 +4,7 @@ import { authConfigModeToAuthMode, buildEntraAdminLink } from '../api/entraAdmin
 import { formatApiErrorMessage } from '../api/errors';
 import { GitHubCopilotConnectionPicker } from '../components/GitHubCopilotConnectionPicker';
 import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
+import { RepoAppInstallationResultNotice } from '../components/RepoAppInstallationResultNotice';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import {
   Badge,
@@ -30,7 +31,6 @@ import type {
   Project,
   ProjectAccessOverview,
   SandboxPolicy,
-  ServerInfo,
   UnattendedReadiness,
   UpdateProjectProviderSettingsRequest,
 } from '../api/types';
@@ -309,6 +309,12 @@ export function ProjectSettingsPage() {
     next.delete('copilot_app_auth');
     setSearchParams(next, { replace: true });
   };
+  const repoAppInstallationResult = searchParams.get('repo_app_install');
+  const dismissRepoAppInstallationResult = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('repo_app_install');
+    setSearchParams(next, { replace: true });
+  };
 
   const [connectRepoOpen, setConnectRepoOpen] = useState(false);
 
@@ -366,7 +372,8 @@ export function ProjectSettingsPage() {
   const [unattendedReadiness, setUnattendedReadiness] = useState<UnattendedReadiness | null>(null);
   const [unattendedLoading, setUnattendedLoading] = useState(true);
   const [unattendedError, setUnattendedError] = useState<string | null>(null);
-  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
+  const [installingRepoApp, setInstallingRepoApp] = useState(false);
+  const [installRepoAppError, setInstallRepoAppError] = useState<string | null>(null);
 
   const formatError = (err: unknown): string => formatApiErrorMessage(err);
 
@@ -402,18 +409,6 @@ export function ProjectSettingsPage() {
       })
       .catch(() => {
         if (!cancelled) setAuthConfig(null);
-      });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    void apiClient.getServerInfo()
-      .then((info) => {
-        if (!cancelled) setServerInfo(info);
-      })
-      .catch(() => {
-        if (!cancelled) setServerInfo(null);
       });
     return () => { cancelled = true; };
   }, []);
@@ -712,6 +707,10 @@ export function ProjectSettingsPage() {
       <CopilotAuthorizationResultNotice
         code={copilotAuthorizationResult}
         onDismiss={dismissCopilotAuthorizationResult}
+      />
+      <RepoAppInstallationResultNotice
+        code={repoAppInstallationResult}
+        onDismiss={dismissRepoAppInstallationResult}
       />
 
       {project && (
@@ -1069,13 +1068,21 @@ export function ProjectSettingsPage() {
                     </>
                   )}
                   <div className={styles.formActions}>
-                    {unattendedReadiness?.reason_code === 'repo_app_installation_required' && serverInfo?.repo_app_install_url && (
+                    {unattendedReadiness?.reason_code === 'repo_app_installation_required' && projectId && (
                       <Button
-                        as="a"
-                        href={serverInfo.repo_app_install_url}
-                        target="_blank"
-                        rel="noreferrer"
                         appearance="primary"
+                        disabled={installingRepoApp}
+                        onClick={async () => {
+                          setInstallingRepoApp(true);
+                          setInstallRepoAppError(null);
+                          try {
+                            const handoff = await apiClient.beginProjectRepoAppInstallation(projectId);
+                            window.location.assign(handoff.installation_url);
+                          } catch (err) {
+                            setInstallRepoAppError(formatApiErrorMessage(err, 'The GitHub Repo App installation could not be started. Try again.'));
+                            setInstallingRepoApp(false);
+                          }
+                        }}
                       >
                         Install GitHub Repo App
                       </Button>
@@ -1084,6 +1091,9 @@ export function ProjectSettingsPage() {
                       Refresh status
                     </Button>
                   </div>
+                  {installRepoAppError && (
+                    <MessageBar intent="error"><MessageBarBody>{installRepoAppError}</MessageBarBody></MessageBar>
+                  )}
                   {unattendedError && (
                     <MessageBar intent="error"><MessageBarBody>{unattendedError}</MessageBarBody></MessageBar>
                   )}
@@ -1114,7 +1124,7 @@ export function ProjectSettingsPage() {
                   onOpenChange={setConnectRepoOpen}
                   onConnected={(sourceRepository) => {
                     setProject((prev) => prev ? { ...prev, origin: 'github', source_repository: sourceRepository } : prev);
-                    selectSection('general');
+                    selectSection('unattended');
                   }}
                 />
               </div>

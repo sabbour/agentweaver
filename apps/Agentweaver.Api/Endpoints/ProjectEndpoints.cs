@@ -396,6 +396,86 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
         return Task.CompletedTask;
     });
 
+// POST /api/projects/{id}/github/repo-app-installation/authorizations — begin an Owner-authorized,
+// project-pinned GitHub App installation binding. The returned URL carries a signed, single-use
+// `state` value; it never lets the caller select a redirect target.
+app.MapPost("/api/projects/{id}/github/repo-app-installation/authorizations", async (
+    HttpContext httpContext,
+    string id,
+    IProjectStore projectStore,
+    GitHubConnectionsPersistenceStore persistence,
+    IProjectRoleAssignmentStore roleAssignments,
+    Agentweaver.Api.Webhooks.RepoAppInstallationTokenService tokenService,
+    MemoryDbContext db,
+    ILogger<RepoAppInstallationAuthorizationService> logger,
+    IConfiguration configuration,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "authorization_transaction_invalid" });
+    if (await projectStore.GetAsync(projectId, ct).ConfigureAwait(false) is null)
+        return Results.NotFound();
+
+    var service = new RepoAppInstallationAuthorizationService(
+        configuration, persistence, projectStore, roleAssignments, tokenService, db, logger);
+    var result = await service.BeginAsync(
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+    if (result.Outcome != RepoAppInstallationAuthorizationOutcome.Success)
+        return Results.Conflict(new { error = RepoAppInstallationAuthorizationService.ToStateCode(result.Outcome) });
+
+    RepoAppInstallationAuthorizationService.SetCallbackCookie(httpContext, result.CallbackCookie!);
+    return Results.Ok(new
+    {
+        installation_url = result.InstallationUrl,
+        transaction_id = result.TransactionId,
+        expires_at = result.ExpiresAt,
+    });
+})
+    .WithName("BeginProjectRepoAppInstallationAuthorization")
+    .WithTags("Projects", "GitHub")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Description = "Begins an Owner-authorized, project-pinned GitHub App installation binding. The request has no caller-selected redirect URL.";
+        return Task.CompletedTask;
+    });
+
+// GET /auth/github/repo-app/installation/callback — the GitHub App's configured Setup URL. GitHub
+// redirects the browser here with only `installation_id`/`setup_action`/`state`; it never carries a
+// bearer header. This uses only the one-time callback cookie issued at the authenticated begin
+// endpoint above and dispatches purely by the persisted, single-use `state` transaction — it never
+// accepts a project id or Entra subject from GitHub.
+app.MapGet("/auth/github/repo-app/installation/callback", async (
+    HttpContext httpContext,
+    long? installation_id,
+    string? setup_action,
+    string? state,
+    IConfiguration configuration,
+    BrowserEntraSessionService browserSessions,
+    GitHubConnectionsPersistenceStore persistence,
+    IProjectStore projectStore,
+    IProjectRoleAssignmentStore roleAssignments,
+    Agentweaver.Api.Webhooks.RepoAppInstallationTokenService tokenService,
+    MemoryDbContext db,
+    ILogger<RepoAppInstallationAuthorizationService> logger,
+    CancellationToken ct) =>
+{
+    var callbackCookie = RepoAppInstallationAuthorizationService.ReadCallbackCookie(httpContext);
+    RepoAppInstallationAuthorizationService.ClearCallbackCookie(httpContext);
+    var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
+
+    var service = new RepoAppInstallationAuthorizationService(
+        configuration, persistence, projectStore, roleAssignments, tokenService, db, logger);
+    var result = await service.CompleteBrowserCallbackAsync(
+        browserSession?.Id,
+        browserSession?.EntraObjectId,
+        installation_id,
+        setup_action,
+        state,
+        callbackCookie,
+        ct).ConfigureAwait(false);
+    return Results.Redirect(service.GetCallbackRedirect(result.Outcome, result.ProjectId));
+}).AllowAnonymous();
+
 // POST /api/projects — create blank or from GitHub
 app.MapPost("/api/projects", CreateProjectAsync)
     .WithName("CreateProject")

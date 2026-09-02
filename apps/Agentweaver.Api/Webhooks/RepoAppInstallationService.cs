@@ -109,6 +109,85 @@ public sealed class RepoAppInstallationTokenService(
         CancellationToken ct = default)
         => await GetRepositoryAuthorityAsync(installationId, repositoryId, ct).ConfigureAwait(false) is not null;
 
+    /// <summary>
+    /// Resolves the numeric repository ID for a display full name (e.g. "owner/repo") within a
+    /// live installation. This is the only place GitHub's App installation-flow callback recovers
+    /// a repository identifier — it never trusts a client-submitted numeric ID. Returns null if
+    /// the installation does not grant access to that exact repository.
+    /// </summary>
+    internal async Task<long?> ResolveRepositoryIdAsync(
+        long installationId,
+        string fullNameDisplay,
+        CancellationToken ct = default)
+    {
+        if (installationId <= 0 || string.IsNullOrWhiteSpace(fullNameDisplay))
+            return null;
+
+        var appJwt = await CreateAppJwtAsync(ct).ConfigureAwait(false);
+        if (appJwt is null)
+            return null;
+
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            var client = httpClientFactory.CreateClient("github");
+            using var tokenRequest = CreateGitHubRequest(
+                HttpMethod.Post, $"/app/installations/{installationId}/access_tokens", appJwt);
+            using var tokenResponse = await client.SendAsync(tokenRequest, timeout.Token).ConfigureAwait(false);
+            if (!tokenResponse.IsSuccessStatusCode)
+                return null;
+            using var tokenDocument = JsonDocument.Parse(
+                await tokenResponse.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false));
+            if (!tokenDocument.RootElement.TryGetProperty("token", out var tokenElement) ||
+                string.IsNullOrWhiteSpace(tokenElement.GetString()))
+                return null;
+            var installationToken = tokenElement.GetString()!;
+
+            for (var page = 1; page <= 20; page++)
+            {
+                using var listRequest = CreateGitHubRequest(
+                    HttpMethod.Get, $"/installation/repositories?per_page=100&page={page}", installationToken);
+                using var listResponse = await client.SendAsync(listRequest, timeout.Token).ConfigureAwait(false);
+                if (!listResponse.IsSuccessStatusCode)
+                    return null;
+                using var listDocument = JsonDocument.Parse(
+                    await listResponse.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false));
+                if (!listDocument.RootElement.TryGetProperty("repositories", out var repositories) ||
+                    repositories.ValueKind != JsonValueKind.Array)
+                    return null;
+
+                var count = 0;
+                foreach (var repository in repositories.EnumerateArray())
+                {
+                    count++;
+                    if (repository.TryGetProperty("full_name", out var fullNameElement) &&
+                        fullNameElement.ValueKind == JsonValueKind.String &&
+                        string.Equals(fullNameElement.GetString(), fullNameDisplay, StringComparison.OrdinalIgnoreCase) &&
+                        repository.TryGetProperty("id", out var idElement) &&
+                        idElement.TryGetInt64(out var repositoryId) &&
+                        repositoryId > 0)
+                        return repositoryId;
+                }
+                if (count < 100)
+                    return null;
+            }
+            return null;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>Revokes a minted installation credential. This method does not persist or log it.</summary>
     public async Task RevokeRepositoryTokenAsync(string token, CancellationToken ct = default)
     {
