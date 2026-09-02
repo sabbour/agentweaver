@@ -139,10 +139,10 @@ public sealed class RunRetryTests : IDisposable
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.EnumerateObject().Select(property => property.Name).Should().BeEquivalentTo(["code", "message", "action"]);
-        body.GetProperty("code").GetString().Should().Be(GitHubCopilotConnectionRequirement.RequirementCode);
-        body.GetProperty("message").GetString().Should().Be(GitHubCopilotConnectionRequirement.RequirementMessage);
+        body.GetProperty("code").GetString().Should().Be(ModelProviderConnectionRequirement.RequirementCode);
+        body.GetProperty("message").GetString().Should().Be(ModelProviderConnectionRequirement.RequirementMessage);
         body.GetProperty("action").GetProperty("type").GetString()
-            .Should().Be(GitHubCopilotConnectionAction.ConnectProjectCopilotApp);
+            .Should().Be(ModelProviderConnectionAction.ConfigureProjectModelProvider);
         body.GetProperty("action").GetProperty("project_id").GetString().Should().Be(projectId.ToString());
         body.ToString().Should().NotContainAny("credential", "snapshot", "binding");
 

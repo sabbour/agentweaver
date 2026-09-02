@@ -79,7 +79,7 @@ public sealed class BacklogDecomposeCapabilityTests : IClassFixture<CoordinatorW
             CancellationToken.None);
 
         result.ConnectionRequirement.Should().BeEquivalentTo(
-            GitHubCopilotConnectionRequirement.ForProject(project!.Id));
+            ModelProviderConnectionRequirement.ForProject(project!.Id));
         runner.Invocations.Should().Be(0,
             "the explicit project capability must exist before any decomposition model turn is attempted");
     }

@@ -1320,7 +1320,7 @@ app.MapPost("/api/runs/{id}/retry", async (
             && !await capabilitySnapshots.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
         {
             return Results.Json(
-                GitHubCopilotConnectionRequirement.ForProject(run.ProjectId!.Value),
+                ModelProviderConnectionRequirement.ForProject(run.ProjectId!.Value),
                 statusCode: StatusCodes.Status409Conflict);
         }
 
@@ -1334,7 +1334,7 @@ app.MapPost("/api/runs/{id}/retry", async (
                     ct)
                 .ConfigureAwait(false);
         }
-        catch (GitHubCopilotConnectionRequiredException ex)
+        catch (ModelProviderConnectionRequiredException ex)
         {
             return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
         }
@@ -1433,7 +1433,7 @@ app.MapPost("/api/runs/{id}/retry", async (
         logger.LogError(ex, "Failed to read dispatchable team roster while retrying source run {RunId}", runId);
         return Results.UnprocessableEntity(new { error = InvalidTeamException.ErrorCode, message = InvalidTeamException.DefaultMessage });
     }
-    catch (GitHubCopilotConnectionRequiredException ex)
+    catch (ModelProviderConnectionRequiredException ex)
     {
         return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
     }

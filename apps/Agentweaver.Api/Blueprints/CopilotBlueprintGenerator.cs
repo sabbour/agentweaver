@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Workflows;
@@ -22,6 +24,7 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
     private readonly CatalogConformanceSnapshot _catalogSnapshot;
     private readonly ILogger<CopilotBlueprintGenerator> _logger;
     private readonly string? _defaultModel;
+    private readonly IServiceScopeFactory? _scopeFactory;
 
     public CopilotBlueprintGenerator(
         IAgentRunner agentRunner,
@@ -29,12 +32,14 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
         IConfiguration configuration,
         ILogger<CopilotBlueprintGenerator> logger,
         IOptions<GenerationModelOptions>? generationOptions = null,
-        CatalogConformanceSnapshot? catalogSnapshot = null)
+        CatalogConformanceSnapshot? catalogSnapshot = null,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _agentRunner = agentRunner;
         _catalog = catalog;
         _catalogSnapshot = catalogSnapshot ?? new CatalogConformanceSnapshot(catalog);
         _logger = logger;
+        _scopeFactory = scopeFactory;
         _defaultModel = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveBlueprintModel();
     }
@@ -199,6 +204,24 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
             - "sandbox_profile": string. One of: {{sandboxList}}.
             """;
 
+        // Resolve the caller's EFFECTIVE model provider (project override, else platform default —
+        // see EffectiveModelProviderResolver) rather than hardcoding GitHub Copilot: this has no Run
+        // entity/snapshot, so a Copilot-sourced result must redeem a pre-issued, purpose-bound
+        // capability instead of a run-bound one. _scopeFactory is null only in unit tests that
+        // construct this generator directly with a fake IAgentRunner and don't exercise resolution.
+        var modelSource = ModelSource.GitHubCopilot;
+        CopilotOperationCapability? capability = null;
+        if (_scopeFactory is not null)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var executor = scope.ServiceProvider.GetRequiredService<GenerationModelProviderExecutor>();
+            var parsedProjectId = ProjectId.TryParse(projectId, out var pid) ? pid : (ProjectId?)null;
+            var plan = await executor.PrepareAsync(
+                parsedProjectId, userId, ProjectModelProviderCapabilityPurpose.BlueprintGeneration, ct).ConfigureAwait(false);
+            modelSource = plan.ModelSource;
+            capability = plan.Capability;
+        }
+
         var scratch = Path.Combine(AppPaths.DataDirectory, "blueprint-scratch", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
         try
@@ -208,13 +231,14 @@ public sealed class CopilotBlueprintGenerator : IBlueprintGenerator
                 task: prompt,
                 workingDirectory: scratch,
                 repositoryPath: scratch,
-                modelSource: ModelSource.GitHubCopilot,
+                modelSource: modelSource,
                 runId: runId,
                 modelId: modelId ?? _defaultModel,
                 stream: null,
                 ct: ct,
                 userId: userId,
-                projectId: projectId).ConfigureAwait(false);
+                projectId: projectId,
+                copilotCapability: capability).ConfigureAwait(false);
         }
         finally
         {
