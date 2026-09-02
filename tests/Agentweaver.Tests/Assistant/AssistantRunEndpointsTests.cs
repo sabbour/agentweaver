@@ -1024,6 +1024,7 @@ public sealed class AssistantRunEndpointsTests
     {
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
         db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
         {
             Id = PlatformDefaultCopilotBindingRecord.SingletonId,
@@ -1034,6 +1035,9 @@ public sealed class AssistantRunEndpointsTests
             Status = GitHubBindingStatus.Active,
             BoundAt = DateTimeOffset.UtcNow,
         });
+        await secrets.SetSecretAsync(
+            "copilot-app-platform-default-version",
+            """{"status":"signed-in","accessToken":"platform-token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"platform-bot"}""");
         await db.SaveChangesAsync();
     }
 
@@ -1041,6 +1045,7 @@ public sealed class AssistantRunEndpointsTests
     {
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
         if (!await db.Projects.AnyAsync(x => x.ProjectId == projectId))
             db.Projects.Add(new ProjectRecord { ProjectId = projectId });
         db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
@@ -1054,6 +1059,9 @@ public sealed class AssistantRunEndpointsTests
             Status = GitHubBindingStatus.Active,
             BoundAt = DateTimeOffset.UtcNow,
         });
+        await secrets.SetSecretAsync(
+            "copilot-app-project-version",
+            """{"status":"signed-in","accessToken":"project-token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"project-bot"}""");
         await db.SaveChangesAsync();
     }
 

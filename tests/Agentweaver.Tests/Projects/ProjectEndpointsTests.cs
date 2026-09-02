@@ -67,7 +67,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
         db.PlatformDefaultCopilotBindings.RemoveRange(db.PlatformDefaultCopilotBindings);
         await db.SaveChangesAsync();
-        await secrets.DeleteSecretAsync("copilot-app-platform-default");
+        await secrets.DeleteSecretAsync("copilot-app-platform-default-version");
         await secrets.DeleteSecretAsync("byok-provider-configurations");
     }
 
@@ -82,15 +82,15 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         {
             Id = PlatformDefaultCopilotBindingRecord.SingletonId,
             EntraObjectId = "platform-admin",
-            CredentialReference = "copilot-app-platform-default",
+            CredentialReference = "copilot-app-platform-default-version",
             CredentialVersion = "version",
             GrantDigest = "digest",
             Status = GitHubBindingStatus.Active,
             BoundAt = DateTimeOffset.UtcNow,
         });
         await secrets.SetSecretAsync(
-            "copilot-app-platform-default",
-            $$"""{"Status":"signed-in","AccessToken":"ghu_platform","GitHubLogin":"{{login}}"}""");
+            "copilot-app-platform-default-version",
+            $$"""{"status":"signed-in","accessToken":"ghu_platform","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"{{login}}"}""");
         await db.SaveChangesAsync();
     }
 
