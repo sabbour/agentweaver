@@ -6,10 +6,16 @@ describe('githubConnectionErrorMessage', () => {
   it.each([
     [409, { error: 'github_binding_unavailable' }],
     [409, { error: 'github_capability_unavailable' }],
+  ])('returns an actionable "Connect GitHub" message for a repository-access error %s', (status, body) => {
+    expect(githubConnectionErrorMessage(new ApiError(status, JSON.stringify(body)))).toMatch(/Connect GitHub/i);
+  });
+
+  it.each([
     [401, { error: 'github_copilot_auth_required' }],
-    [409, { error: 'github_copilot_connection_required' }],
-  ])('returns an actionable message for GitHub connection error %s', (status, body) => {
-    expect(githubConnectionErrorMessage(new ApiError(status, JSON.stringify(body)))).toMatch(/Connect GitHub|Connect your GitHub/i);
+    [409, { error: 'model_provider_connection_required' }],
+  ])('returns an actionable, non-"Connect GitHub" message for a model-provider error %s', (status, body) => {
+    const message = githubConnectionErrorMessage(new ApiError(status, JSON.stringify(body)));
+    expect(message).toMatch(/model provider|Copilot/i);
   });
 
   it.each([
@@ -23,6 +29,10 @@ describe('githubConnectionErrorMessage', () => {
     const message = githubConnectionErrorMessage(new ApiError(503, JSON.stringify({ error: 'github_capability_transient' })));
     expect(message).toMatch(/temporarily unavailable/i);
     expect(message).not.toMatch(/connect github/i);
+  });
+
+  it('returns null for an unrelated 404, instead of misrepresenting it as a GitHub connection issue', () => {
+    expect(githubConnectionErrorMessage(new ApiError(404, JSON.stringify({ error: 'run_not_found' })))).toBeNull();
   });
 });
 

@@ -2,9 +2,9 @@ import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AppShell } from '../components/shell/AppShell';
 import {
-  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
-  GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
-} from '../api/githubConnectionRequirement';
+  MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT,
+  MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE,
+} from '../api/modelProviderConnectionRequirement';
 import { projectIdFromPath } from '../components/shell/projectIdFromPath';
 import { resolveActiveKey } from '../components/shell/navConfig';
 import * as useAppVersionModule from '../hooks/useAppVersion';
@@ -81,6 +81,8 @@ function renderShellAt(path: string, isPlatformAdmin = false) {
             <Route path="/sessions" element={<div>Sessions content</div>} />
             <Route path="/projects/:projectId" element={<div>Board content <Link to="/projects/proj-1/team">Go team</Link></div>} />
             <Route path="/projects/:projectId/team" element={<div>Team content <Link to="/projects/proj-1">Go board</Link></div>} />
+            <Route path="/settings" element={<div>Account settings page</div>} />
+            <Route path="/platform-settings" element={<div>Platform settings page</div>} />
           </Routes>
         </AppShell>
       </MemoryRouter>
@@ -113,7 +115,6 @@ beforeEach(() => {
     can_manage_role_assignments: true,
     can_manage_project_github_identity: true,
     project_role_assignments: [],
-    github_identity_override_login: null,
     effective_github_login: 'octocat',
   } as never);
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
@@ -215,15 +216,15 @@ describe('AppShell navigation', () => {
     } as never);
     renderShellAt('/projects/proj-1/team');
 
-    window.dispatchEvent(new CustomEvent(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, {
+    window.dispatchEvent(new CustomEvent(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, {
       detail: {
-        code: 'github_copilot_connection_required',
-        message: GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
-        action: { type: 'connect_project_copilot_app', project_id: 'proj-1' },
+        code: 'model_provider_connection_required',
+        message: MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE,
+        action: { type: 'configure_project_model_provider', project_id: 'proj-1' },
       },
     }));
 
-    expect(await screen.findByText(GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE)).toBeDefined();
+    expect(await screen.findByText(MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE)).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub account' }));
     await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('proj-1'));
@@ -231,6 +232,22 @@ describe('AppShell navigation', () => {
       'https://api.example.test/api/projects/proj-1/github/copilot/authorizations/redirect',
     );
     assign.mockRestore();
+  });
+
+  it('routes a platform-scoped model-provider requirement to Platform Settings, not Account Settings', async () => {
+    renderShellAt('/projects/proj-1/team');
+
+    window.dispatchEvent(new CustomEvent(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, {
+      detail: {
+        code: 'model_provider_connection_required',
+        message: MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE,
+        action: { type: 'configure_platform_model_provider', project_id: '' },
+      },
+    }));
+
+    expect(await screen.findByText(MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }));
+    expect(await screen.findByText('Platform settings page')).toBeDefined();
   });
 
   it('resolves the active nav item from the route', () => {
