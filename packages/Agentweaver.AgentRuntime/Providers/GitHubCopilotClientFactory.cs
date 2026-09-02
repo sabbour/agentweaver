@@ -86,7 +86,7 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
             capabilityReference,
             projectId,
             entraObjectId,
-            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
             modelId,
             ct).ConfigureAwait(false);
 
@@ -98,7 +98,7 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
         string capabilityReference,
         string projectId,
         string entraObjectId,
-        GitHubProjectCopilotCapabilityPurpose purpose,
+        ProjectModelProviderCapabilityPurpose purpose,
         string? modelId,
         CancellationToken ct)
     {

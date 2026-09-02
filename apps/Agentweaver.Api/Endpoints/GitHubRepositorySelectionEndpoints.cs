@@ -34,6 +34,8 @@ public static class GitHubRepositorySelectionEndpoints
                 }),
                 GitHubRepositorySelectionOutcome.GitHubBindingUnavailable =>
                     Results.Conflict(new { error = "github_binding_unavailable" }),
+                GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError =>
+                    Results.Json(new { error = "github_capability_transient" }, statusCode: StatusCodes.Status503ServiceUnavailable),
                 _ => Results.Conflict(new { error = "github_capability_unavailable" }),
             };
         })
@@ -68,6 +70,8 @@ public static class GitHubRepositorySelectionEndpoints
                 }),
                 GitHubRepositorySelectionOutcome.GitHubBindingUnavailable =>
                     Results.Conflict(new { error = "github_binding_unavailable" }),
+                GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError =>
+                    Results.Json(new { error = "github_capability_transient" }, statusCode: StatusCodes.Status503ServiceUnavailable),
                 _ => Results.Conflict(new { error = "github_capability_unavailable" }),
             };
         })

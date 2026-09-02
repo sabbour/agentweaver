@@ -88,7 +88,7 @@ public sealed class RemoteOperatorAssistantAgent(
                     CallerBearerToken: request.CallerBearerToken),
                 ct).ConfigureAwait(false);
         }
-        catch (GitHubCopilotConnectionRequiredException)
+        catch (ModelProviderConnectionRequiredException)
         {
             throw;
         }
@@ -197,8 +197,8 @@ public sealed class RemoteOperatorAssistantAgent(
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
             throw run.ProjectId is { } projectId
-                ? new GitHubCopilotConnectionRequiredException(projectId)
-                : new GitHubCopilotConnectionRequiredException();
+                ? new ModelProviderConnectionRequiredException(projectId)
+                : new ModelProviderConnectionRequiredException();
     }
 
     /// <summary>

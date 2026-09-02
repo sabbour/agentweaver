@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -558,9 +559,25 @@ public sealed class CastingService
 
         var runId = castRunId.ToString();
 
+        // Resolve the caller's EFFECTIVE model provider (project override, else platform default —
+        // see EffectiveModelProviderResolver) instead of hardcoding GitHub Copilot: casting has no
+        // run-bound capability snapshot (the Run row above is created for bookkeeping only and never
+        // reaches the snapshot-capture path used by real Coordinator-launched runs), so a
+        // Copilot-sourced result must redeem a pre-issued, purpose-bound capability instead.
+        ModelSource modelSource;
+        CopilotOperationCapability? copilotCapability;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var executor = scope.ServiceProvider.GetRequiredService<GenerationModelProviderExecutor>();
+            var plan = await executor.PrepareAsync(
+                project.Id, owner, ProjectModelProviderCapabilityPurpose.CastingGeneration, ct).ConfigureAwait(false);
+            modelSource = plan.ModelSource;
+            copilotCapability = plan.Capability;
+        }
+
         string result;
         await using var runtime = new AgentweaverAgentRuntime(
-            _agentRunner, project.WorkingDirectory, modelId, project.Id.ToString());
+            _agentRunner, project.WorkingDirectory, modelId, project.Id.ToString(), modelSource, copilotCapability);
         try
         {
             result = await runtime.RunAsync(prompt, ct, userId: owner).ConfigureAwait(false);

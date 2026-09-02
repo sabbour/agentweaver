@@ -79,9 +79,9 @@ public sealed class AssistantRunEndpointsTests
             });
 
             response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-            var requirement = await response.Content.ReadFromJsonAsync<GitHubCopilotConnectionRequirement>();
+            var requirement = await response.Content.ReadFromJsonAsync<ModelProviderConnectionRequirement>();
             requirement.Should().BeEquivalentTo(
-                GitHubCopilotConnectionRequirement.ForProject(ProjectId.Parse(projectId!)));
+                ModelProviderConnectionRequirement.ForProject(ProjectId.Parse(projectId!)));
             factory.Agent.Requests.Should().BeEmpty(
                 "the AgentHost path must stop before any assistant/pod work can use an ambient credential");
         }
@@ -152,9 +152,11 @@ public sealed class AssistantRunEndpointsTests
         });
 
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        var requirement = await response.Content.ReadFromJsonAsync<GitHubCopilotConnectionRequirement>();
+        var requirement = await response.Content.ReadFromJsonAsync<ModelProviderConnectionRequirement>();
         requirement.Should().NotBeNull();
-        requirement!.Message.Should().Be(GitHubCopilotConnectionRequirement.PlatformDefaultRequirementMessage);
+        requirement!.Message.Should().Be(ModelProviderConnectionRequirement.PlatformDefaultRequirementMessage);
+        requirement.Action.Type.Should().Be(ModelProviderConnectionAction.ConfigurePlatformModelProvider,
+            "a platform-scoped requirement must carry a distinct action type so the client routes to Platform Settings, not Account Settings");
         requirement.Action.ProjectId.Should().BeEmpty();
         factory.Agent.Requests.Should().BeEmpty(
             "the AgentHost path must stop before any assistant work can run without a redeemable platform-default Copilot binding");
@@ -554,7 +556,6 @@ public sealed class AssistantRunEndpointsTests
             runStore, eventStream, factory.Agent, gate,
             Microsoft.Extensions.Options.Options.Create(new AssistantRunOptions()),
             factory.Services.GetRequiredService<IServiceScopeFactory>(),
-            factory.Services.GetRequiredService<IByokProviderConfigurationProvider>(),
             factory.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AssistantRunService>.Instance);
         var caller = new Agentweaver.Api.Security.CallerContext { User = AssistantWebApplicationFactory.TestUser };

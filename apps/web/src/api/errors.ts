@@ -18,22 +18,47 @@ export interface FormattedApiError {
   detail?: string;
 }
 
-const GITHUB_CONNECTION_MESSAGES: Record<string, string> = {
-  github_binding_unavailable: 'GitHub connections are temporarily unavailable. Connect GitHub and try again.',
-  github_capability_unavailable: 'GitHub repository capabilities are temporarily unavailable. Retry or reconnect GitHub.',
-  github_copilot_auth_required: 'Connect your GitHub Copilot account to use AI features.',
-  github_copilot_connection_required: 'Connect your GitHub Copilot account to continue.',
+// Shown whenever isGitHubRepoAppConnectionRequired(err) is true, regardless of which of the
+// connection-required codes triggered it, so the text always matches the single "Connect GitHub"
+// action offered in that state — never mentions "retry", since no retry option is shown.
+const GITHUB_CONNECTION_REQUIRED_MESSAGE = 'Connect GitHub to see your repositories.';
+
+// Repository-access-domain error codes: raised by the GitHub Repo App installation/authorization
+// endpoints. These never imply anything about the model provider (Copilot/BYOK) used for AI
+// generation — a repository-access failure and a model-provider failure are separate credential
+// authorities and must not be conflated in the message shown to the user.
+const REPOSITORY_ACCESS_ERROR_MESSAGES: Record<string, string> = {
+  // A live Repo App connection exists, but the GitHub API call itself failed transiently
+  // (network error, timeout, GitHub outage). Reconnecting would not help, so this pairs with a
+  // "Retry" action rather than "Connect GitHub".
+  github_capability_transient: 'GitHub is temporarily unavailable. Try again in a moment.',
 };
 
-export function githubConnectionErrorMessage(err: unknown): string | null {
+// Model-provider-domain error codes: raised when the caller's AI inference source (GitHub
+// Copilot, unless a deployment-wide or project override is active) is not connected or usable.
+const MODEL_PROVIDER_ERROR_MESSAGES: Record<string, string> = {
+  github_copilot_auth_required: 'Connect your GitHub Copilot account to use AI features.',
+  model_provider_connection_required: 'Connect a model provider to continue.',
+};
+
+function repositoryAccessErrorMessage(err: unknown): string | null {
   if (!(err instanceof ApiError)) return null;
-  const body = parseApiBody(err.body);
-  const code = body.error;
-  if (code && GITHUB_CONNECTION_MESSAGES[code]) return GITHUB_CONNECTION_MESSAGES[code];
-  if (err.status === 404) {
-    return 'Connect GitHub to access this project repository and AI features.';
-  }
-  return null;
+  if (isGitHubRepoAppConnectionRequired(err)) return GITHUB_CONNECTION_REQUIRED_MESSAGE;
+  const code = parseApiBody(err.body).error;
+  return code ? REPOSITORY_ACCESS_ERROR_MESSAGES[code] ?? null : null;
+}
+
+function modelProviderErrorMessage(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const code = parseApiBody(err.body).error;
+  return code ? MODEL_PROVIDER_ERROR_MESSAGES[code] ?? null : null;
+}
+
+// Combined dispatcher used by the generic formatApiErrorMessage() below, which has no context on
+// which credential domain (repository access vs. model provider) a given call site belongs to.
+// Call sites that know their domain should prefer the specific helper above instead.
+export function githubConnectionErrorMessage(err: unknown): string | null {
+  return repositoryAccessErrorMessage(err) ?? modelProviderErrorMessage(err);
 }
 
 const GITHUB_CONNECTION_REQUIRED_CODES = new Set([

@@ -672,7 +672,7 @@ public sealed class RunOrchestrator
         if (!prepared)
         {
             if (requiresAgentHost && run.ProjectId is { } projectId)
-                throw new GitHubCopilotConnectionRequiredException(projectId);
+                throw new ModelProviderConnectionRequiredException(projectId);
             throw new InvalidOperationException(
                 $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
         }

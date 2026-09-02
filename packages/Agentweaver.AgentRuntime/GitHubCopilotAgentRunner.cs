@@ -110,7 +110,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         CancellationToken ct,
         string? systemPromptContext = null,
         string? userId = null,
-        string? projectId = null)
+        string? projectId = null,
+        CopilotOperationCapability? copilotCapability = null)
     {
         var byokProvider = _byokProviderConfiguration is not null
             ? await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false)
@@ -119,7 +120,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         if (modelSource == ModelSource.Byok && byokProvider is null)
             throw new InvalidOperationException("A deployment-wide BYOK provider configuration is required.");
 
-        if (byokProvider is null && string.IsNullOrWhiteSpace(userId))
+        if (byokProvider is null && copilotCapability is null && string.IsNullOrWhiteSpace(userId))
             throw new AgentProviderException(
                 ModelSource.GitHubCopilot,
                 AgentProviderFailureKind.Authorization,
@@ -140,9 +141,22 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             : _executor;
         using var governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        await using var client = byokProvider is null
-            ? await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false)
-            : _factory.CreateByokClient();
+        // A supplied capability means the caller already resolved its EFFECTIVE model provider
+        // (see EffectiveModelProviderResolver) for a non-run operation with no Run entity/snapshot
+        // to redeem, and minted a short-lived, purpose-bound capability instead. That explicit
+        // decision always wins over the ambient deployment-wide BYOK check below, which real
+        // per-run pods rely on via their own run-scoped startup configuration.
+        await using var client = copilotCapability is not null
+            ? await _factory.CreateProjectOperationClientAsync(
+                copilotCapability.CapabilityReference,
+                copilotCapability.ProjectId,
+                copilotCapability.EntraObjectId,
+                copilotCapability.Purpose,
+                modelId,
+                ct).ConfigureAwait(false)
+            : byokProvider is null
+                ? await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false)
+                : _factory.CreateByokClient();
         try
         {
             await client.StartAsync(ct).ConfigureAwait(false);

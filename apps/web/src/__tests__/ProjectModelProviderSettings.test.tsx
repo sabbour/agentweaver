@@ -1,6 +1,6 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { GitHubCopilotConnectionPicker } from '../components/GitHubCopilotConnectionPicker';
+import { ProjectModelProviderSettings } from '../components/ProjectModelProviderSettings';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,7 +33,7 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-describe('GitHubCopilotConnectionPicker', () => {
+describe('ProjectModelProviderSettings', () => {
   it('keeps the new project connection when route navigation finishes an older request late', async () => {
     let resolveOldConnection: (connection: { status: 'connected'; github_login: string }) => void;
     const oldConnection = new Promise<{ status: 'connected'; github_login: string }>((resolve) => {
@@ -45,14 +45,14 @@ describe('GitHubCopilotConnectionPicker', () => {
 
     const { rerender } = render(
       <Wrapper>
-        <GitHubCopilotConnectionPicker projectId="project-a" showConnectionStatus />
+        <ProjectModelProviderSettings projectId="project-a" showConnectionStatus />
       </Wrapper>,
     );
     await waitFor(() => expect(apiClient.getProjectCopilotConnection).toHaveBeenCalledWith('project-a'));
 
     rerender(
       <Wrapper>
-        <GitHubCopilotConnectionPicker projectId="project-b" showConnectionStatus />
+        <ProjectModelProviderSettings projectId="project-b" showConnectionStatus />
       </Wrapper>,
     );
     expect(await screen.findByText(/GitHub Copilot background AI access is connected to this project as @project-b/)).toBeDefined();
@@ -69,7 +69,7 @@ describe('GitHubCopilotConnectionPicker', () => {
   it('shows an explicit, accessible connection picker when no account is connected', async () => {
     render(
       <Wrapper>
-        <GitHubCopilotConnectionPicker projectId="project-1" showConnectionStatus />
+        <ProjectModelProviderSettings projectId="project-1" showConnectionStatus />
       </Wrapper>,
     );
 
@@ -91,7 +91,7 @@ describe('GitHubCopilotConnectionPicker', () => {
     });
     render(
       <Wrapper>
-        <GitHubCopilotConnectionPicker projectId="project-1" showConnectionStatus />
+        <ProjectModelProviderSettings projectId="project-1" showConnectionStatus />
       </Wrapper>,
     );
 
@@ -118,7 +118,7 @@ describe('GitHubCopilotConnectionPicker', () => {
     });
     render(
       <Wrapper>
-        <GitHubCopilotConnectionPicker
+        <ProjectModelProviderSettings
           projectId="project-1"
           showConnectionStatus
           suppressProjectOverrideWhenPlatformDefault
@@ -140,7 +140,7 @@ describe('GitHubCopilotConnectionPicker', () => {
     });
     render(
       <Wrapper>
-        <GitHubCopilotConnectionPicker
+        <ProjectModelProviderSettings
           projectId="project-1"
           showConnectionStatus
           suppressProjectOverrideWhenPlatformDefault
@@ -158,7 +158,7 @@ describe('GitHubCopilotConnectionPicker', () => {
     vi.mocked(apiClient.beginProjectCopilotAuthorization).mockRejectedValue(new Error('network'));
     render(
       <Wrapper>
-        <GitHubCopilotConnectionPicker projectId="project-1" />
+        <ProjectModelProviderSettings projectId="project-1" />
       </Wrapper>,
     );
 
@@ -175,10 +175,10 @@ describe('GitHubCopilotConnectionPicker', () => {
     );
     render(
       <Wrapper>
-        <GitHubCopilotConnectionPicker projectId="project-1" showConnectionStatus />
+        <ProjectModelProviderSettings projectId="project-1" showConnectionStatus />
       </Wrapper>,
     );
 
-    expect(await screen.findByText('GitHub connections are temporarily unavailable. Connect GitHub and try again.')).toBeDefined();
+    expect(await screen.findByText('Connect GitHub to see your repositories.')).toBeDefined();
   });
 });

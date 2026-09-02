@@ -150,11 +150,11 @@ public sealed class BacklogDecomposeOwnershipTests : IClassFixture<CoordinatorWe
             new { run_id = sourceRunId, confirm = true });
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-        var requirement = await response.Content.ReadFromJsonAsync<GitHubCopilotConnectionRequirement>();
+        var requirement = await response.Content.ReadFromJsonAsync<ModelProviderConnectionRequirement>();
         requirement.Should().NotBeNull();
-        requirement!.Code.Should().Be(GitHubCopilotConnectionRequirement.RequirementCode);
-        requirement.Message.Should().Be(GitHubCopilotConnectionRequirement.RequirementMessage);
-        requirement.Action.Type.Should().Be(GitHubCopilotConnectionAction.ConnectProjectCopilotApp);
+        requirement!.Code.Should().Be(ModelProviderConnectionRequirement.RequirementCode);
+        requirement.Message.Should().Be(ModelProviderConnectionRequirement.RequirementMessage);
+        requirement.Action.Type.Should().Be(ModelProviderConnectionAction.ConfigureProjectModelProvider);
         requirement.Action.ProjectId.Should().Be(projectId);
 
         var tasks = await app.Services.GetRequiredService<IBacklogTaskStore>()

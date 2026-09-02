@@ -38,7 +38,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
     public DbSet<RunGitHubIdentitySnapshotRecord> RunGitHubIdentitySnapshots => Set<RunGitHubIdentitySnapshotRecord>();
     public DbSet<RunGitHubCapabilitySnapshotRecord> RunGitHubCapabilitySnapshots => Set<RunGitHubCapabilitySnapshotRecord>();
-    public DbSet<MarketplaceCopilotCapabilityRecord> MarketplaceCopilotCapabilities => Set<MarketplaceCopilotCapabilityRecord>();
+    public DbSet<ProjectModelProviderCapabilityRecord> MarketplaceCopilotCapabilities => Set<ProjectModelProviderCapabilityRecord>();
     public DbSet<GitHubAuditRecord> GitHubAuditRecords => Set<GitHubAuditRecord>();
 
     // Replica-safe per-pod / per-run singleton state moved out of process memory.
@@ -756,7 +756,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 .HasConstraintName("FK_run_github_capability_snapshots_projects_project_id");
         });
 
-        model.Entity<MarketplaceCopilotCapabilityRecord>(e =>
+        model.Entity<ProjectModelProviderCapabilityRecord>(e =>
         {
             e.ToTable("marketplace_copilot_capabilities");
             e.HasKey(x => x.CapabilityRef);

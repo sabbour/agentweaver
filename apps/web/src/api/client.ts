@@ -1,8 +1,8 @@
 import { getSessionToken } from '../config';
 import {
-  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
-  isGitHubCopilotConnectionRequirement,
-} from './githubConnectionRequirement';
+  MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT,
+  isModelProviderConnectionRequirement,
+} from './modelProviderConnectionRequirement';
 import { isSkillProvenance } from './types';
 import type {
   AddMemberRequest,
@@ -1377,9 +1377,9 @@ export class AgentweaverApiClient {
 
   private createApiError(status: number, body: string): ApiError {
     const error = new ApiError(status, body);
-    if (typeof window !== 'undefined' && isGitHubCopilotConnectionRequirement(error.payload)) {
+    if (typeof window !== 'undefined' && isModelProviderConnectionRequirement(error.payload)) {
       window.dispatchEvent(new CustomEvent(
-        GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
+        MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT,
         { detail: error.payload },
       ));
     }

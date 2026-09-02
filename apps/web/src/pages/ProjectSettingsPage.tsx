@@ -2,7 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { authConfigModeToAuthMode, buildEntraAdminLink } from '../api/entraAdminLink';
 import { formatApiErrorMessage } from '../api/errors';
-import { GitHubCopilotConnectionPicker } from '../components/GitHubCopilotConnectionPicker';
+import { ProjectModelProviderSettings } from '../components/ProjectModelProviderSettings';
 import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
 import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
 import {
@@ -1044,7 +1044,7 @@ export function ProjectSettingsPage() {
                   <Body as="p" tone="muted">
                     This controls the GitHub Copilot account used for this project’s background AI and other Copilot-powered generation. It does not control repository access.
                   </Body>
-                  <GitHubCopilotConnectionPicker
+                  <ProjectModelProviderSettings
                     projectId={projectId}
                     showConnectionStatus
                     suppressProjectOverrideWhenPlatformDefault
