@@ -1,6 +1,6 @@
 # Projects experience
 
-Projects are the front door to Agentweaver. A project names the work, anchors it to a repository workspace, and carries the defaults that shape every run in that repository.
+Projects are the front door to Agentweaver. A project can start with local agent work and add repository access later.
 
 Scope: this page covers creating, switching, summarizing, configuring, and deleting projects across the web UI and current MCP tools.
 
@@ -8,7 +8,7 @@ See also: [Overview](./00-overview.md), [Runs & board](./runs-board-watch.md), [
 
 ## Mental model
 
-An Agentweaver **project** is a durable container around a repository and Agentweaver's work against it. It answers five user-facing questions:
+An Agentweaver **project** is a durable container for agent work. A GitHub repository is optional.
 
 - **What am I working on?** The project has a user-facing name and stable project id.
 - **Where is the repository?** The project points at a working directory on the Agentweaver server, or at a server-managed workspace.
@@ -63,22 +63,15 @@ If no projects exist, the gallery says:
 
 The same **Create blank project** and **Create from GitHub** actions appear in the empty state, so first-run setup uses the normal creation flow.
 
-If GitHub sign-in is required to list projects, the gallery says:
+If the Entra session expires, the gallery says:
 
-> Sign in with GitHub to see your projects.
+> Sign in with Microsoft Entra ID to see your projects.
 
-The action is **Sign in with GitHub**. This is not the same as an unavailable project: sign-in controls whether projects can be listed; availability controls whether a listed workspace can be used.
+The action is **Sign in with Microsoft Entra ID**. Project availability remains a separate workspace state.
 
 ## Creating a project in the web UI
 
 Creation starts from the gallery. Users choose a blank repository or a GitHub-backed repository, then optionally apply a blueprint. Both dialogs now use the same shell: project and repository fields on the left, one shared **Blueprint** panel on the right, and a single footer **No blueprint** action for the empty-project path (`apps/web/src/pages/ProjectGalleryPage.tsx:486`, `:532`, `:665`, `:815`).
-
-![Creating a project in the web UI: Project Gallery, Create path, Create blank project, Create from GitHub, Enter Name, Workspace auto-assigned?, Enter Repository folder, No folder field; server manages workspace, Enter or autofill Name, GitHub connected?, Choose Organization, Connect GitHub or type manually, …](../diagrams/experience-projects-fig1.png)
-
-<!-- Rendered from ../diagrams/src/experience-projects-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 ### Create blank project
 
@@ -108,7 +101,7 @@ Creation is for a new controlled workspace. The target directory must be empty o
 ![Create project from GitHub dialog with Organization and Source repository pickers](/screenshots/create-from-github-dialog.png)
 
 > 📸 **Screenshot — `create-from-github-dialog.png`**
-> *Shows:* the **Create project from GitHub** dialog with the **Name** field, the searchable **Repository** combobox, **Repository sources** (personal `@{login}` with **You**, then organizations), and the auto-filled **Repository folder** field, plus **Cancel** / **Create**. If GitHub is not connected, the **Connect GitHub** action appears instead of the repository list.
+> *Shows:* the **Create project from GitHub** dialog with project fields and the repository picker. If access is missing, the authorization action appears.
 > *Path:* `/projects` → click **Create from GitHub**.
 
 Required fields:
@@ -123,11 +116,11 @@ The repository column offers three ways to choose a source:
 - **My organizations** — the signed-in user appears with a **You** badge alongside the organizations they belong to; selecting a source reloads that account's repositories, and a **Show more / Show less** toggle appears once there are more than five (`ProjectGalleryPage.tsx:766`, `:779`).
 - **Or paste any repository** — a direct `owner/repo` field and **Go →** button that works even without a connected account (`ProjectGalleryPage.tsx:793`).
 
-If GitHub is not connected, the dialog says:
+If repository access is not ready, the dialog says:
 
-> Connect your GitHub account to list repositories, including private ones you can access. Public repos can still be pasted below without connecting.
+> Set up repository access to see your GitHub repositories.
 
-The action is **Connect GitHub**. Users can still paste a public repository manually.
+The action is **Authorize repository access**. This access is required only for GitHub-backed creation and publishing.
 
 ### Autofilled but overridable fields
 
@@ -374,7 +367,7 @@ Before creation, edit **Repository folder**; Agentweaver stops overwriting it. A
 
 ### GitHub repositories do not load
 
-The dialog shows **Retry** for load failures. If GitHub is not connected, it shows **Connect GitHub** and still permits manual repository entry.
+The dialog shows **Retry** for load failures. If repository access is missing, it shows **Authorize repository access**.
 
 ### Blueprint load or generation fails
 

@@ -21,7 +21,7 @@ export interface FormattedApiError {
 // Shown whenever isGitHubRepoAppConnectionRequired(err) is true, regardless of which of the
 // connection-required codes triggered it, so the text always matches the single "Connect GitHub"
 // action offered in that state — never mentions "retry", since no retry option is shown.
-const GITHUB_CONNECTION_REQUIRED_MESSAGE = 'Connect GitHub to see your repositories.';
+const GITHUB_CONNECTION_REQUIRED_MESSAGE = 'Set up repository access to see your GitHub repositories.';
 
 // Repository-access-domain error codes: raised by the GitHub Repo App installation/authorization
 // endpoints. These never imply anything about the model provider (Copilot/BYOK) used for AI
@@ -37,7 +37,7 @@ const REPOSITORY_ACCESS_ERROR_MESSAGES: Record<string, string> = {
 // Model-provider-domain error codes: raised when the caller's AI inference source (GitHub
 // Copilot, unless a deployment-wide or project override is active) is not connected or usable.
 const MODEL_PROVIDER_ERROR_MESSAGES: Record<string, string> = {
-  github_copilot_auth_required: 'Connect your GitHub Copilot account to use AI features.',
+  github_copilot_auth_required: 'Authorize GitHub Copilot to use it as the model provider.',
   model_provider_connection_required: 'Connect a model provider to continue.',
 };
 

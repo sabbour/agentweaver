@@ -36,7 +36,7 @@ import { CoordinatorRunRoute } from './routes/CoordinatorRunRoute';
 import { AssistantRoute } from './routes/AssistantRoute';
 import { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
-import { Body, PageContainer, PageHeader, PageSection } from './components/ui';
+import { PageContainer, PageHeader, SetupReadiness } from './components/ui';
 
 function Shell({
   isPlatformAdmin,
@@ -216,12 +216,19 @@ function AuthGate() {
           title="Access denied"
           description="Your account is signed in, but no Agentweaver platform role is assigned."
         />
-        <PageSection title="What to do next">
-          <Body>
-            Ask a Platform Admin to assign you an Agentweaver platform role in Microsoft Entra ID,
-            then refresh this page.
-          </Body>
-        </PageSection>
+        <SetupReadiness
+          model={{
+            title: 'Access setup',
+            description: 'A Platform Admin controls access through Microsoft Entra ID.',
+            items: [{
+              id: 'platform-role',
+              title: 'Agentweaver platform role',
+              description: 'Ask a Platform Admin to assign a role. Then reload this page.',
+              requirement: 'required',
+              status: 'unavailable',
+            }],
+          }}
+        />
       </PageContainer>
     );
   }
@@ -242,15 +249,22 @@ function AuthGate() {
     return (
       <PageContainer width="readable">
         <PageHeader
-          title="AI setup required"
-          description="Agentweaver cannot be used until an administrator configures an AI provider."
+          title="Model provider setup required"
+          description="Agentweaver requires a model provider before AI work can start."
         />
-        <PageSection title="What to do next">
-          <Body>
-            An administrator needs to configure an AI provider before Agentweaver can be used.
-            Please contact your administrator.
-          </Body>
-        </PageSection>
+        <SetupReadiness
+          model={{
+            title: 'Setup readiness',
+            description: 'A Platform Admin manages the model provider for this deployment.',
+            items: [{
+              id: 'model-provider',
+              title: 'Model provider',
+              description: 'Ask a Platform Admin to complete this setup.',
+              requirement: 'required',
+              status: 'unavailable',
+            }],
+          }}
+        />
       </PageContainer>
     );
   }

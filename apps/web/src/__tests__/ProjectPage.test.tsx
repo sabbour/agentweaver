@@ -77,6 +77,21 @@ afterEach(() => {
 });
 
 describe('ProjectPage board (board-dedupe)', () => {
+  it('shows repository access as optional for a blank project', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      ...project,
+      origin: 'blank',
+      source_repository: null,
+    } as Project);
+
+    renderPage();
+
+    expect(await screen.findByText('Project setup')).toBeDefined();
+    expect(screen.getAllByText('Optional').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Local agent work can continue without a repository/)).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Set up repository access' })).toBeDefined();
+  });
+
   it('keeps the Start task CTA and removes the standalone Start run affordance', async () => {
     renderPage();
 

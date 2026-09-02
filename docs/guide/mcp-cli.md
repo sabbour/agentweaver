@@ -111,8 +111,7 @@ Add this to `.copilot/mcp-config.json` (or `~/.copilot/mcp-config.json`):
 
 ## Sign-in and GitHub capabilities
 
-Sign in to Agentweaver as a human Entra subject before using MCP. Connect GitHub capabilities
-separately and explicitly:
+Sign in to Agentweaver as a human Entra subject before using MCP. Authorize each GitHub capability separately:
 
 `github_repo_app_connect → open browser_url → github_repo_app_authorization_status`
 

@@ -225,9 +225,11 @@ describe('AppShell navigation', () => {
     }));
 
     expect(await screen.findByText(MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE)).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub account' }));
-    await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization).toHaveBeenCalledWith('proj-1', '/projects/proj-1/team'));
+    expect(screen.getByText('Action required')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Set up model provider' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Authorize GitHub Copilot' }));
+    await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization)
+      .toHaveBeenCalledWith('proj-1', '/projects/proj-1/team'));
     expect(assign).toHaveBeenCalledWith(
       'https://api.example.test/api/projects/proj-1/github/copilot/authorizations/redirect',
     );
@@ -246,7 +248,7 @@ describe('AppShell navigation', () => {
     }));
 
     expect(await screen.findByText(MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE)).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Platform settings' }));
     expect(await screen.findByText('Platform settings page')).toBeDefined();
   });
 

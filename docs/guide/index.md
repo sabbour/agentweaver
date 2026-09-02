@@ -133,7 +133,7 @@ The full Agentweaver feature set is available programmatically through an MCP se
 
 ## Next steps
 
-- [Sign in with GitHub](./authentication) to get started
+- [Sign in with Microsoft Entra ID](./authentication) to get started
 - [Create your first project](./projects)
 - [Learn about workflows](./workflows)
 - [Submit your first run](./runs)

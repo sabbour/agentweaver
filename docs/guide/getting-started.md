@@ -397,8 +397,7 @@ non-secret local settings there:
 
 Use an Entra app registration's application (client) and tenant IDs. Its
 redirect URI must exactly match `http://localhost:5000/auth/entra/callback`.
-Repository selection and Copilot access use their respective GitHub App
-browser handoffs; no legacy browser credential is configured for sign-in.
+Repository access and GitHub Copilot use separate browser handoffs. Microsoft Entra ID remains the browser sign-in authority.
 
 ## 2. Start the local development loop
 
@@ -424,11 +423,14 @@ at a different API.
 
 ## 4. Create a project, run, and review
 
-1. **Sign in** with Microsoft Entra ID when the web UI loads.
-2. **Create a project** from the Project Gallery — blank or through the Repo App authorization handoff.
-3. **Cast a team** (optional) or start straight away.
-4. **Start a task** from the project Board. The coordinator drafts an OutcomeSpec; confirm it to dispatch work.
-5. **Watch** the live topology and per-agent execution stream.
-6. **Review and merge** the assembled diff once the run reaches Human Review — nothing lands on your branch until you approve.
+1. Sign in with Microsoft Entra ID.
+2. If model-provider setup is required, ask a Platform Admin to complete it.
+3. Create a blank project for local agent work.
+4. If you need pull-request publishing, authorize repository access.
+5. Cast a team, or continue without one.
+6. Start a task from the project Board.
+7. Review the OutcomeSpec. Then dispatch the work.
+8. Watch the live topology and agent streams.
+9. Review the assembled diff. Merge it when you approve the result.
 
 For full end-to-end walkthroughs, see [Example walkthroughs](./example-scenarios).

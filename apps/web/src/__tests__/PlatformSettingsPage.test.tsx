@@ -71,7 +71,8 @@ describe('PlatformSettingsPage', () => {
 
     expect(await screen.findByText('Platform settings')).toBeDefined();
     expect(await screen.findByText('GitHub Copilot')).toBeDefined();
-    expect(await screen.findByText('No platform-default GitHub Copilot account is connected yet.')).toBeDefined();
+    expect(await screen.findAllByText('Authorize GitHub Copilot to use it as the platform model provider.')).toHaveLength(1);
+    expect(screen.getByText('Action required')).toBeDefined();
     // The GitHub Copilot card shows "Active" (no BYOK provider is active).
     const copilotHeading = screen.getByText('GitHub Copilot');
     const card = copilotHeading.closest('.fui-Card') ?? copilotHeading.parentElement!.parentElement!;
@@ -88,6 +89,19 @@ describe('PlatformSettingsPage', () => {
     expect(await screen.findByText('My custom endpoint')).toBeDefined();
     expect(screen.getByText(/Custom endpoint · my-model/)).toBeDefined();
     expect(screen.getByRole('button', { name: 'Set active' })).toBeDefined();
+  });
+
+  it('identifies an active custom-key provider and its platform scope', async () => {
+    vi.mocked(apiClient.listByokProviders).mockResolvedValue({
+      active_provider_id: 'p1',
+      providers: [{ ...customProvider, is_active: true }],
+    });
+    renderPage();
+
+    expect(await screen.findByText(
+      'My custom endpoint (Custom endpoint) supplies AI access. Scope: Platform.',
+    )).toBeDefined();
+    expect(screen.getAllByText('Ready').length).toBeGreaterThan(0);
   });
 
   it('does not offer Foundry Local or Microsoft Foundry as addable provider types', async () => {
@@ -253,7 +267,7 @@ describe('PlatformSettingsPage', () => {
     });
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Connect GitHub Copilot' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Authorize GitHub Copilot' }))[0]);
 
     await waitFor(() => expect(apiClient.beginPlatformDefaultCopilotAuthorization).toHaveBeenCalled());
     expect(assign).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?state=test');

@@ -103,7 +103,7 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
         {sessionError && (
           <MessageBar intent="error">
             <MessageBarBody>
-              <MessageBarTitle>Couldn't check your sign-in status</MessageBarTitle>
+              <MessageBarTitle>Sign-in status did not load</MessageBarTitle>
               {sessionError}
             </MessageBarBody>
           </MessageBar>

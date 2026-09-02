@@ -43,6 +43,7 @@ import {
   PageContainer,
   PageHeader,
   PageSection,
+  SetupReadiness,
   TitleText,
 } from '../components/ui';
 // Spec settings-subnav — project Settings restructured into a left in-page rail +
@@ -385,10 +386,12 @@ export function ProjectSettingsPage() {
 
   useEffect(() => {
     if (repoAppAuthorizationResult !== 'success') return;
-    setConnectRepoOpen(true); // eslint-disable-line react-hooks/set-state-in-effect
-    const next = new URLSearchParams(searchParams);
-    next.delete('repo_app_auth');
-    setSearchParams(next, { replace: true });
+    queueMicrotask(() => {
+      setConnectRepoOpen(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete('repo_app_auth');
+      setSearchParams(next, { replace: true });
+    });
   }, [repoAppAuthorizationResult, searchParams, setSearchParams]);
 
   useEffect(() => {
@@ -1146,7 +1149,7 @@ export function ProjectSettingsPage() {
                   )}
                   <TitleText>GitHub Copilot account</TitleText>
                   <Body as="p" tone="muted">
-                    This controls the GitHub Copilot account used for this project’s background AI and other Copilot-powered generation. It does not control repository access.
+                    This account supplies the project model provider. The Repo App controls repository access.
                   </Body>
                   <ProjectModelProviderSettings
                     projectId={projectId}
@@ -1157,8 +1160,8 @@ export function ProjectSettingsPage() {
                   <TitleText>Background requirements</TitleText>
                   <Body as="p" tone="muted">
                     {project.source_repository
-                      ? 'These server-verified prerequisites cover repository access for background branch, push, and pull-request work on this project’s connected GitHub repository. They are separate from the GitHub Copilot AI access shown above.'
-                      : 'These server-verified prerequisites apply after you connect a GitHub repository. They cover repository access for background branch, push, and pull-request work and are separate from the GitHub Copilot AI access shown above.'}
+                      ? 'These server checks cover branch, push, and pull-request work for the connected repository.'
+                      : 'These server checks apply after you add repository access. Local agent work can continue without a repository.'}
                   </Body>
                   {unattendedLoading && <Spinner label="Checking automation readiness" size="extra-tiny" />}
                   {unattendedReadiness && (
@@ -1184,7 +1187,7 @@ export function ProjectSettingsPage() {
                             const handoff = await apiClient.beginProjectRepoAppInstallation(projectId);
                             window.location.assign(handoff.installation_url);
                           } catch (err) {
-                            setInstallRepoAppError(formatApiErrorMessage(err, 'The GitHub Repo App installation could not be started. Try again.'));
+                            setInstallRepoAppError(formatApiErrorMessage(err, 'The GitHub Repo App installation did not start. Try again.'));
                             setInstallingRepoApp(false);
                           }
                         }}
@@ -1209,18 +1212,24 @@ export function ProjectSettingsPage() {
             {displayedSection === 'repository' && (
               <div className={styles.section}>
                 <div className={styles.subBlock}>
-                  <TitleText>Connect a GitHub repository</TitleText>
-                  <Body as="p" tone="muted">
-                    This project was started without a connected GitHub repository, so runs can't
-                    open pull requests. Create a new repository or connect one you already have to
-                    enable publishing. GitHub actions use the project capability authorization, so
-                    make sure you've linked an account first.
-                  </Body>
-                  <div className={styles.formActions}>
-                    <Button appearance="primary" onClick={() => setConnectRepoOpen(true)}>
-                      Connect or create repository
-                    </Button>
-                  </div>
+                  <SetupReadiness
+                    model={{
+                      title: 'Repository access',
+                      description: 'The local project is ready for agent work.',
+                      items: [{
+                        id: 'repository-access',
+                        title: 'GitHub repository',
+                        description: 'Local agent work can continue without a repository. Pull-request publishing requires repository access.',
+                        requirement: 'optional',
+                        status: 'optional',
+                      }],
+                    }}
+                    primaryAction={(
+                      <Button appearance="primary" onClick={() => setConnectRepoOpen(true)}>
+                        Set up repository access
+                      </Button>
+                    )}
+                  />
                 </div>
                 <ConnectGitHubRepositoryDialog
                   projectId={projectId}
