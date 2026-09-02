@@ -3,7 +3,7 @@ import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectSettingsPage } from '../pages/ProjectSettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import {
   afterEach,
   beforeEach,
@@ -33,6 +33,7 @@ vi.mock('../api/apiClient', () => ({
     beginProjectRepoAppInstallation: vi.fn(),
     listProjectRepositoryOwners: vi.fn(),
     listGitHubRepositorySelections: vi.fn(),
+    createProjectRepository: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
     getPlatformDefaultCopilotConnection: vi.fn(),
   },
@@ -42,6 +43,11 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location-search">{location.search}</output>;
+}
+
 function renderPage(projectId: string, initialEntry = `/projects/${projectId}/settings`) {
   return render(
     <Wrapper>
@@ -49,6 +55,7 @@ function renderPage(projectId: string, initialEntry = `/projects/${projectId}/se
         <Routes>
           <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
         </Routes>
+        <LocationProbe />
       </MemoryRouter>
     </Wrapper>,
   );
@@ -138,6 +145,10 @@ beforeEach(() => {
     repositories: [
       { full_name: 'octo/repo', owner_login: 'octo', private: true, default_branch: 'main', pushed_at: null },
     ],
+  } as never);
+  vi.mocked(apiClient.createProjectRepository).mockResolvedValue({
+    source_repository: 'octo/demo',
+    html_url: 'https://github.com/octo/demo',
   } as never);
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'not_connected',
@@ -347,6 +358,21 @@ describe('ProjectSettingsPage', () => {
     expect(await screen.findByRole('heading', { name: 'Set up repository access' })).toBeDefined();
     await waitFor(() => expect(apiClient.listProjectRepositoryOwners).toHaveBeenCalledWith('proj-1'));
     await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalled());
+  });
+
+  it('closes repository setup and clears callback state before showing unattended settings', async () => {
+    renderPage('proj-1', '/projects/proj-1/settings?section=repository&repo_app_auth=success');
+
+    expect(await screen.findByRole('heading', { name: 'Set up repository access' })).toBeDefined();
+    fireEvent.click(await screen.findByRole('button', { name: 'Create repository' }));
+
+    await waitFor(() => expect(apiClient.createProjectRepository).toHaveBeenCalledWith(
+      'proj-1',
+      { owner: 'octo', name: undefined, private: true },
+    ));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Set up repository access' })).toBeNull());
+    expect(await screen.findByText('Background automation readiness')).toBeDefined();
+    await waitFor(() => expect(screen.getByTestId('location-search').textContent).toBe('?section=unattended'));
   });
 
   it.each([

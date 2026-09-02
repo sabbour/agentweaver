@@ -197,7 +197,10 @@ export function ConnectGitHubRepositoryDialog({
     setConnectingRepoApp(true);
     setRepoAppConnectionError(null);
     try {
-      const handoff = await apiClient.beginRepoAppAuthorization(`${location.pathname}${location.search}`);
+      const returnParams = new URLSearchParams(location.search);
+      returnParams.delete('repo_app_auth');
+      const returnUrl = `${location.pathname}${returnParams.size > 0 ? `?${returnParams.toString()}` : ''}`;
+      const handoff = await apiClient.beginRepoAppAuthorization(returnUrl);
       window.location.assign(handoff.authorization_url);
     } catch {
       setRepoAppConnectionError('Repository authorization did not start. Try again.');
