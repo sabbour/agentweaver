@@ -275,6 +275,10 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
     {
         await using var scope = _factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        const string credentialReference = "copilot-app-project-coordinator-pickup-version";
+        await scope.ServiceProvider.GetRequiredService<ISecretStore>().SetSecretAsync(
+            credentialReference,
+            """{"status":"signed-in","accessToken":"pickup-token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"pickup-bot"}""");
         if (!await db.Projects.AnyAsync(x => x.ProjectId == projectId.ToString()))
             db.Projects.Add(new ProjectRecord { ProjectId = projectId.ToString() });
         db.GitHubInstallations.Add(new GitHubInstallationRecord
@@ -292,7 +296,7 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
         {
             Id = SnapshotRef.Create().Value, ProjectId = projectId.ToString(), EntraObjectId = "owner",
-            CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
+            CredentialReference = credentialReference, CredentialVersion = "version", GrantDigest = "copilot-digest",
             Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();

@@ -31,16 +31,41 @@ namespace Agentweaver.Api.Migrations
                 oldClrType: typeof(long),
                 oldType: "INTEGER");
 
+            migrationBuilder.AddCheckConstraint(
+                name: "CK_automation_activations_snapshot_tuple",
+                table: "automation_activations",
+                sql: """
+                    status <> 0 OR (
+                        (
+                            (installation_id IS NULL AND repository_id IS NULL AND repository_grant_digest IS NULL)
+                            OR
+                            (installation_id IS NOT NULL AND installation_id > 0 AND
+                                repository_id IS NOT NULL AND repository_id > 0 AND
+                                repository_grant_digest IS NOT NULL AND repository_grant_digest <> '')
+                        ) AND (
+                            (model_provider_source = 1 AND
+                                byok_provider_id IS NOT NULL AND byok_provider_id <> '' AND
+                                (copilot_binding_id IS NULL OR copilot_binding_id = '') AND
+                                (copilot_binding_grant_digest IS NULL OR copilot_binding_grant_digest = ''))
+                            OR
+                            (model_provider_source <> 1 AND
+                                copilot_binding_id IS NOT NULL AND copilot_binding_id <> '' AND
+                                copilot_binding_grant_digest IS NOT NULL AND copilot_binding_grant_digest <> '' AND
+                                (byok_provider_id IS NULL OR byok_provider_id = ''))
+                        ))
+                    """);
+
             migrationBuilder.Sql("""
                 CREATE TRIGGER TR_automation_activations_snapshot_insert
                 BEFORE INSERT ON automation_activations
                 WHEN NEW.status = 0 AND (
                     NOT (
                         (NEW.installation_id IS NULL AND NEW.repository_id IS NULL AND
-                            COALESCE(NEW.repository_grant_digest, '') = '')
+                            NEW.repository_grant_digest IS NULL)
                         OR
-                        (NEW.installation_id > 0 AND NEW.repository_id > 0 AND
-                            COALESCE(NEW.repository_grant_digest, '') != '')
+                        (NEW.installation_id IS NOT NULL AND NEW.installation_id > 0 AND
+                            NEW.repository_id IS NOT NULL AND NEW.repository_id > 0 AND
+                            NEW.repository_grant_digest IS NOT NULL AND NEW.repository_grant_digest != '')
                     ) OR
                     (NEW.model_provider_source = 1 AND (
                         COALESCE(NEW.byok_provider_id, '') = '' OR
