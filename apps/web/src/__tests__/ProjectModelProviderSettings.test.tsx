@@ -185,6 +185,42 @@ describe('ProjectModelProviderSettings', () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText('Set up repository access to see your GitHub repositories.')).toBeDefined();
+    expect(await screen.findByText('The GitHub authorization status is unavailable. Try again later.')).toBeDefined();
+    expect(screen.queryByText(/repository access/i)).toBeNull();
+  });
+
+  it('explains that Copilot authorization creates a durable user OAuth binding without installing an app', async () => {
+    render(
+      <Wrapper>
+        <ProjectModelProviderSettings projectId="project-1" />
+      </Wrapper>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage GitHub Copilot' }));
+    expect(await screen.findByText(/creates a durable project binding for unattended AI work/i)).toBeDefined();
+    expect(screen.getByText(/does not install a GitHub App or grant repository access/i)).toBeDefined();
+  });
+
+  it('offers project binding repair even when platform BYOK is active', async () => {
+    vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
+      status: 'not_connected',
+      github_login: null,
+      effective_source: 'byok',
+    });
+    render(
+      <Wrapper>
+        <ProjectModelProviderSettings
+          projectId="project-1"
+          showConnectionStatus
+          suppressProjectOverrideWhenPlatformDefault
+          repairRequired
+        />
+      </Wrapper>,
+    );
+
+    expect(await screen.findByText(
+      'Reconnect the project GitHub Copilot authorization used for unattended AI work.',
+    )).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
   });
 });

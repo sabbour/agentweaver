@@ -4,7 +4,7 @@ import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectListProvider } from '../hooks/useProjectList';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
@@ -26,10 +26,18 @@ function Wrapper({ children, initialEntries }: { children: ReactNode; initialEnt
   return (
     <AzureFluentProvider density="compact">
       <MemoryRouter initialEntries={initialEntries ?? ['/projects']}>
-        <ProjectListProvider>{children}</ProjectListProvider>
+        <ProjectListProvider>
+          {children}
+          <LocationProbe />
+        </ProjectListProvider>
       </MemoryRouter>
     </AzureFluentProvider>
   );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location-search">{location.search}</output>;
 }
 
 beforeEach(() => {
@@ -84,21 +92,24 @@ describe('ProjectGalleryPage repository authorization', () => {
       transaction_id: 'txn-1',
       expires_at: '2026-08-28T00:05:00+00:00',
     });
-    const assignSpy = vi.fn();
-    vi.stubGlobal('location', { ...window.location, assign: assignSpy });
+    const assignSpy = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
 
     render(<Wrapper><ProjectGalleryPage /></Wrapper>);
     fireEvent.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
 
     const connectButton = await screen.findByRole('button', { name: 'Authorize repository access' });
-    expect(screen.getByTestId('create-from-github-repositories-error').getAttribute('data-intent')).toBe('warning');
+    expect(screen.queryByTestId('create-from-github-repositories-error')).toBeNull();
+    expect(screen.queryByText('Set up repository access to see your GitHub repositories.')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Repository' })).toBeNull();
+    expect(screen.queryByRole('textbox', { name: 'Paste a repository that the Repo App can access' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use repository' })).toBeNull();
 
     fireEvent.click(connectButton);
-    await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalledWith('/projects'));
+    await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalledWith('/projects?create=github'));
     await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?client_id=repo-app'));
 
-    vi.unstubAllGlobals();
+    assignSpy.mockRestore();
   });
 
   it('keeps unexpected repository-loading failures styled as errors', async () => {
@@ -115,10 +126,33 @@ describe('ProjectGalleryPage repository authorization', () => {
   });
 
   it('reopens GitHub project creation after repository authorization succeeds', async () => {
-    render(<Wrapper initialEntries={['/projects?repo_app_auth=success']}><ProjectGalleryPage /></Wrapper>);
+    render(<Wrapper initialEntries={['/projects?create=github&repo_app_auth=success']}><ProjectGalleryPage /></Wrapper>);
 
     expect(await screen.findByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();
-    await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalled());
+    await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('combobox', { name: 'Repository' })).toBeDefined();
+    await waitFor(() => expect(screen.getByTestId('location-search').textContent).toContain('create=github'));
+  });
+
+  it.each([
+    ['human_entra_subject_required', 'Authorize repository access while signed in with your work account.'],
+    ['authorization_transaction_invalid', 'Repository authorization could not be completed. Start a new authorization.'],
+    ['authorization_transaction_consumed', 'This repository authorization has already been used. Start a new authorization.'],
+    ['github_binding_unavailable', 'Repository authorization is currently unavailable. Try again later.'],
+    ['rate_limited', 'GitHub is receiving too many authorization requests. Wait a moment and try again.'],
+    ['unknown_result', 'Repository authorization could not be completed. Start a new authorization.'],
+  ])('reopens GitHub project creation for %s and shows the failure in the modal', async (result, message) => {
+    render(<Wrapper initialEntries={[`/projects?create=github&repo_app_auth=${result}`]}><ProjectGalleryPage /></Wrapper>);
+
+    expect(await screen.findByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();
+    expect(await screen.findByText(message)).toBeDefined();
+    await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('location-search').textContent).toContain('create=github');
+  });
+
+  it('reopens the modal from explicit create=github intent', async () => {
+    render(<Wrapper initialEntries={['/projects?create=github']}><ProjectGalleryPage /></Wrapper>);
+
+    expect(await screen.findByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();
   });
 });

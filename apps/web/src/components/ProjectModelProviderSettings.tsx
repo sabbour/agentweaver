@@ -1,5 +1,5 @@
 import { apiClient } from '../api/apiClient';
-import { formatApiErrorMessage } from '../api/errors';
+import { formatModelProviderErrorMessage } from '../api/errors';
 import {
   Button,
   Dialog,
@@ -19,18 +19,20 @@ import type { ProjectCopilotConnection } from '../api/types';
 import { SetupReadiness } from './SetupReadiness';
 
 const CONNECTION_LOAD_ERROR = 'The model provider status did not load. Reload the status and try again.';
-const GITHUB_APPS_EXPLANATION = 'GitHub Copilot provides AI access. The Repo App provides repository access.';
+const GITHUB_APPS_EXPLANATION = 'GitHub Copilot provides AI access. Repository authorization is managed separately.';
 
 export function ProjectModelProviderSettings({
   projectId,
   triggerLabel = 'Manage GitHub Copilot',
   showConnectionStatus = false,
   suppressProjectOverrideWhenPlatformDefault = false,
+  repairRequired = false,
 }: {
   projectId: string;
   triggerLabel?: string;
   showConnectionStatus?: boolean;
   suppressProjectOverrideWhenPlatformDefault?: boolean;
+  repairRequired?: boolean;
 }) {
   const location = useLocation();
   const [open, setOpen] = useState(false);
@@ -52,7 +54,7 @@ export function ProjectModelProviderSettings({
     } catch (err) {
       if (generation !== refreshGeneration.current) return;
       setConnection(null);
-      setLoadError(formatApiErrorMessage(err, CONNECTION_LOAD_ERROR));
+      setLoadError(formatModelProviderErrorMessage(err, CONNECTION_LOAD_ERROR));
     } finally {
       if (generation === refreshGeneration.current) setLoading(false);
     }
@@ -93,22 +95,23 @@ export function ProjectModelProviderSettings({
   const accountLabel = connection?.github_login
     ? `@${connection.github_login}`
     : 'a GitHub account';
-  const canManageProjectConnection = !suppressProjectOverrideWhenPlatformDefault
+  const canManageProjectConnection = repairRequired || !suppressProjectOverrideWhenPlatformDefault
     || (!platformDefaultConnected && !byokConfigured);
   const noConnectionMessage = 'Choose a model provider before this project starts AI work.';
+  const repairMessage = 'Reconnect the project GitHub Copilot authorization used for unattended AI work.';
   const platformDefaultMessage = `GitHub Copilot (${accountLabel}) supplies AI access. Scope: Platform.`;
   const byokConfiguredMessage = 'A custom-key model provider supplies AI access. Scope: Platform.';
   const projectConnectionMessage = `GitHub Copilot (${accountLabel}) supplies AI access. Scope: Project.`;
-  const dialogDescription = (
-    'Choose a GitHub account with Copilot access. Agentweaver uses this account only as this project’s model provider.'
-  );
+  const dialogDescription = 'Authorize GitHub Copilot signs you in with GitHub and creates a durable project binding for unattended AI work. It does not install a GitHub App or grant repository access.';
   const dialogConnectedMessage = connection?.github_login
     ? `GitHub Copilot (@${connection.github_login}) is ready. Scope: Project.`
     : 'GitHub Copilot is ready. Scope: Project.';
-  const readinessStatus = connected || platformDefaultConnected || byokConfigured
+  const readinessStatus = !repairRequired && (connected || platformDefaultConnected || byokConfigured)
     ? 'ready' as const
     : 'action-required' as const;
-  const readinessDescription = connected
+  const readinessDescription = repairRequired
+    ? repairMessage
+    : connected
     ? projectConnectionMessage
     : platformDefaultConnected
       ? platformDefaultMessage
@@ -117,7 +120,7 @@ export function ProjectModelProviderSettings({
         : noConnectionMessage;
 
   const trigger = canManageProjectConnection ? (
-    <Button appearance={connected ? 'secondary' : 'primary'} onClick={() => setOpen(true)}>
+    <Button appearance={connected && !repairRequired ? 'secondary' : 'primary'} onClick={() => setOpen(true)}>
       {triggerLabel}
     </Button>
   ) : undefined;
@@ -170,12 +173,17 @@ export function ProjectModelProviderSettings({
                   <MessageBarBody>{dialogConnectedMessage}</MessageBarBody>
                 </MessageBar>
               )}
-              {!loading && !loadError && byokConfigured && (
+              {!loading && !loadError && byokConfigured && !repairRequired && (
                 <MessageBar intent="info">
                   <MessageBarBody>{byokConfiguredMessage}</MessageBarBody>
                 </MessageBar>
               )}
-              {!loading && !loadError && !connected && !byokConfigured && (
+              {!loading && !loadError && repairRequired && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>{repairMessage}</MessageBarBody>
+                </MessageBar>
+              )}
+              {!loading && !loadError && !connected && !byokConfigured && !repairRequired && (
                 <MessageBar intent="warning">
                   <MessageBarBody>{noConnectionMessage} {GITHUB_APPS_EXPLANATION}</MessageBarBody>
                 </MessageBar>

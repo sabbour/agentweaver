@@ -33,7 +33,7 @@ import { AppDialog, EmptyState, LoadingState, PageContainer, PageHeader, Tile, T
 import { Pager } from '../copilot-fluent-system';
 import { ENTRA_AUTHORIZE_URL } from '../config';
 import { useProjectList } from '../hooks/useProjectList';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   CreateProjectRequest,
@@ -507,7 +507,7 @@ function useGitHubData(open: boolean) {
     return () => { cancelled = true; };
   }, [open, reposKey]);
 
-  const reloadRepos = () => setReposKey((k) => k + 1);
+  const reloadRepos = useCallback(() => setReposKey((k) => k + 1), []);
 
   return {
     repos, reposLoading, reposError, reposConnectionRequired, reloadRepos,
@@ -520,14 +520,17 @@ function CreateFromGitHubDialog({
   dataDir,
   workspaceAutoAssigned,
   resumeSignal = 0,
+  resumeResult = null,
 }: {
   onCreated: (p: Project) => void;
   dataDir: string | null;
   workspaceAutoAssigned: boolean;
   resumeSignal?: number;
+  resumeResult?: string | null;
 }) {
   const styles = useStyles();
   const location = useLocation();
+  const navigate = useNavigate();
   const d = useCreateProjectDialog('github', onCreated);
   const { open, setOpen } = d;
   const { repos, reposLoading, reposError, reposConnectionRequired, reloadRepos } = useGitHubData(open);
@@ -541,14 +544,42 @@ function CreateFromGitHubDialog({
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
 
   useEffect(() => {
-    if (resumeSignal > 0) setOpen(true);
-  }, [resumeSignal, setOpen]);
+    if (resumeSignal <= 0) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setOpen(true);
+      if (resumeResult === 'success') {
+        setRepoAppConnectionError(null);
+        reloadRepos();
+        return;
+      }
+      const messages: Record<string, string> = {
+        human_entra_subject_required: 'Authorize repository access while signed in with your work account.',
+        authorization_transaction_invalid: 'Repository authorization could not be completed. Start a new authorization.',
+        authorization_transaction_consumed: 'This repository authorization has already been used. Start a new authorization.',
+        github_binding_unavailable: 'Repository authorization is currently unavailable. Try again later.',
+        rate_limited: 'GitHub is receiving too many authorization requests. Wait a moment and try again.',
+      };
+      setRepoAppConnectionError(
+        resumeResult
+          ? messages[resumeResult] ?? 'Repository authorization could not be completed. Start a new authorization.'
+          : null,
+      );
+    });
+    return () => { cancelled = true; };
+  }, [reloadRepos, resumeResult, resumeSignal, setOpen]);
 
   const connectRepoApp = async () => {
     setConnectingRepoApp(true);
     setRepoAppConnectionError(null);
     try {
-      const handoff = await apiClient.beginRepoAppAuthorization(`${location.pathname}${location.search}`);
+      const returnParams = new URLSearchParams(location.search);
+      returnParams.set('create', 'github');
+      returnParams.delete('repo_app_auth');
+      const handoff = await apiClient.beginRepoAppAuthorization(
+        `${location.pathname}?${returnParams.toString()}`,
+      );
       window.location.assign(handoff.authorization_url);
     } catch {
       setRepoAppConnectionError('Repository authorization did not start. Try again.');
@@ -600,30 +631,39 @@ function CreateFromGitHubDialog({
     <div className={styles.repositoryPanel}>
       <div className={styles.repoSelector}>
         <Text weight="semibold">Repository *</Text>
-        <Combobox
-          aria-label="Repository"
-          freeform
-          placeholder={reposLoading ? 'Loading repositories...' : 'Search or select a repository'}
-          value={d.sourceRepository}
-          onInput={(e) => { const val = (e.target as HTMLInputElement).value; setRepoFilter(val); d.setSourceRepository(val); if (val.includes('/')) applyRepo(val); }}
-          onOptionSelect={(_, data) => { if (data.optionValue) applyRepo(data.optionValue); }}
-          disabled={reposLoading}
-        >
-          {filteredRepos.map((repo) => {
-            const fullName = repo.fullName ?? '';
-            return (
-              <Option key={fullName} value={fullName} text={fullName}>
-                <span className={styles.repoOption}>
-                  <span className={styles.githubMark}>GH</span>
-                  <Text weight="semibold">{repoDisplayName(fullName)}</Text>
-                </span>
-              </Option>
-            );
-          })}
-        </Combobox>
-        <Text className={styles.tipLine}>
-          Search repositories that the Repo App can access.
-        </Text>
+        {!reposConnectionRequired && (
+          <>
+            <Combobox
+              aria-label="Repository"
+              freeform
+              placeholder={reposLoading ? 'Loading repositories...' : 'Search or select a repository'}
+              value={d.sourceRepository}
+              onInput={(e) => { const val = (e.target as HTMLInputElement).value; setRepoFilter(val); d.setSourceRepository(val); if (val.includes('/')) applyRepo(val); }}
+              onOptionSelect={(_, data) => { if (data.optionValue) applyRepo(data.optionValue); }}
+              disabled={reposLoading}
+            >
+              {filteredRepos.map((repo) => {
+                const fullName = repo.fullName ?? '';
+                return (
+                  <Option key={fullName} value={fullName} text={fullName}>
+                    <span className={styles.repoOption}>
+                      <span className={styles.githubMark}>GH</span>
+                      <Text weight="semibold">{repoDisplayName(fullName)}</Text>
+                    </span>
+                  </Option>
+                );
+              })}
+            </Combobox>
+            <Text className={styles.tipLine}>
+              Search repositories that the Repo App can access.
+            </Text>
+          </>
+        )}
+        {reposConnectionRequired && (
+          <Button appearance="primary" disabled={connectingRepoApp} onClick={() => void connectRepoApp()}>
+            {connectingRepoApp ? 'Opening GitHub' : 'Authorize repository access'}
+          </Button>
+        )}
       </div>
 
       <Field label="Project name">
@@ -634,21 +674,15 @@ function CreateFromGitHubDialog({
         />
       </Field>
 
-      {reposError && (
+      {reposError && !reposConnectionRequired && (
         <MessageBar
-          intent={reposConnectionRequired ? 'warning' : 'error'}
+          intent="error"
           data-testid="create-from-github-repositories-error"
-          data-intent={reposConnectionRequired ? 'warning' : 'error'}
+          data-intent="error"
         >
           <MessageBarBody>{reposError}</MessageBarBody>
           <MessageBarActions>
-            {reposConnectionRequired
-              ? (
-                <Button size="small" appearance="primary" disabled={connectingRepoApp} onClick={() => void connectRepoApp()}>
-                  {connectingRepoApp ? 'Opening GitHub' : 'Authorize repository access'}
-                </Button>
-              )
-              : <Button size="small" onClick={reloadRepos}>Retry</Button>}
+            <Button size="small" onClick={reloadRepos}>Retry</Button>
           </MessageBarActions>
         </MessageBar>
       )}
@@ -658,12 +692,14 @@ function CreateFromGitHubDialog({
         </MessageBar>
       )}
 
-      <Field label="Paste a repository that the Repo App can access" hint="For example, kubernetes/client-go">
-        <div className={styles.pasteRow}>
-          <Input className={styles.growInput} value={pasteRepo} onChange={(_, v) => setPasteRepo(v.value)} placeholder="owner/repo" />
-          <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Use repository</Button>
-        </div>
-      </Field>
+      {!reposConnectionRequired && (
+        <Field label="Paste a repository that the Repo App can access" hint="For example, kubernetes/client-go">
+          <div className={styles.pasteRow}>
+            <Input className={styles.growInput} value={pasteRepo} onChange={(_, v) => setPasteRepo(v.value)} placeholder="owner/repo" />
+            <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Use repository</Button>
+          </div>
+        </Field>
+      )}
       {!workspaceAutoAssigned && (
         <Field label="Repository folder" required hint={dataDir ? `Folder name inside ${dataDir}` : 'Workspace folder'}>
           <Input
@@ -698,7 +734,16 @@ function CreateFromGitHubDialog({
   return (
     <CreateProjectDialogShell
       open={d.open}
-      onOpenChange={(open) => { d.setOpen(open); if (!open) resetLocal(); }}
+      onOpenChange={(open) => {
+        d.setOpen(open);
+        if (!open) {
+          resetLocal();
+          const next = new URLSearchParams(location.search);
+          next.delete('create');
+          next.delete('repo_app_auth');
+          navigate(`${location.pathname}${next.size > 0 ? `?${next.toString()}` : ''}`, { replace: true });
+        }
+      }}
       trigger={<Button appearance="subtle" icon={<GitHubIcon size={16} />}>Create from GitHub</Button>}
       icon="GH"
       title="Create project from GitHub"
@@ -772,6 +817,8 @@ export function ProjectGalleryPage() {
   const [workspaceAutoAssigned, setWorkspaceAutoAssigned] = useState(false);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [resumeCreateFromGitHubSignal, setResumeCreateFromGitHubSignal] = useState(0);
+  const [repoAppAuthorizationResult, setRepoAppAuthorizationResult] = useState<string | null>(null);
+  const createFromGitHubIntentHandled = useRef(false);
   const toasterId = useId('project-gallery-toaster');
   const { dispatchToast } = useToastController(toasterId);
 
@@ -884,19 +931,29 @@ export function ProjectGalleryPage() {
     setSearchParams(next, { replace: true });
   };
 
-  useEffect(() => {
-    const repoAppAuth = searchParams.get('repo_app_auth');
-    if (!repoAppAuth) return;
+  const createFromGitHubIntent = searchParams.get('create') === 'github';
+  const repoAppAuth = searchParams.get('repo_app_auth');
 
+  useEffect(() => {
+    if (!createFromGitHubIntent && !repoAppAuth) return;
     queueMicrotask(() => {
-      if (repoAppAuth === 'success' && location.pathname === '/projects') {
+      if (location.pathname !== '/projects') return;
+      if (repoAppAuth) {
+        createFromGitHubIntentHandled.current = true;
+        setRepoAppAuthorizationResult(repoAppAuth);
+        setResumeCreateFromGitHubSignal((current) => current + 1);
+        const next = new URLSearchParams(searchParams);
+        next.delete('repo_app_auth');
+        setSearchParams(next, { replace: true });
+        return;
+      }
+      if (!createFromGitHubIntentHandled.current) {
+        createFromGitHubIntentHandled.current = true;
+        setRepoAppAuthorizationResult(null);
         setResumeCreateFromGitHubSignal((current) => current + 1);
       }
-      const next = new URLSearchParams(searchParams);
-      next.delete('repo_app_auth');
-      setSearchParams(next, { replace: true });
     });
-  }, [location.pathname, searchParams, setSearchParams]);
+  }, [createFromGitHubIntent, location.pathname, repoAppAuth, searchParams, setSearchParams]);
 
   return (
     <PageContainer>
@@ -912,6 +969,7 @@ export function ProjectGalleryPage() {
               dataDir={dataDir}
               workspaceAutoAssigned={workspaceAutoAssigned}
               resumeSignal={resumeCreateFromGitHubSignal}
+              resumeResult={repoAppAuthorizationResult}
             />
           </>
         ) : undefined}
@@ -961,6 +1019,7 @@ export function ProjectGalleryPage() {
                 dataDir={dataDir}
                 workspaceAutoAssigned={workspaceAutoAssigned}
                 resumeSignal={resumeCreateFromGitHubSignal}
+                resumeResult={repoAppAuthorizationResult}
               />
             </div>
           }

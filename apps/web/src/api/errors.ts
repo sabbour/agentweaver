@@ -54,6 +54,18 @@ function modelProviderErrorMessage(err: unknown): string | null {
   return code ? MODEL_PROVIDER_ERROR_MESSAGES[code] ?? null : null;
 }
 
+export function formatModelProviderErrorMessage(err: unknown, fallback?: string): string {
+  if (err instanceof ApiError && isGitHubRepoAppConnectionRequired(err)) {
+    return 'The GitHub authorization status is unavailable. Try again later.';
+  }
+  const providerMessage = modelProviderErrorMessage(err);
+  if (providerMessage) return providerMessage;
+  const formatted = formatApiError(err, fallback);
+  return formatted.detail && formatted.detail !== formatted.message
+    ? `${formatted.message} ${formatted.detail}`
+    : formatted.message;
+}
+
 // Combined dispatcher used by the generic formatApiErrorMessage() below, which has no context on
 // which credential domain (repository access vs. model provider) a given call site belongs to.
 // Call sites that know their domain should prefer the specific helper above instead.
