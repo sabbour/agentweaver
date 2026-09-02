@@ -64,7 +64,7 @@ beforeEach(() => {
       enterprise_app_object_id: null,
       authority: 'https://login.microsoftonline.com/tenant-1/v2.0',
     },
-  } as never);
+  });
   vi.mocked(apiClient.getProject).mockResolvedValue({
     project_id: 'proj-1',
     name: 'Demo',
@@ -199,12 +199,13 @@ describe('ProjectSettingsPage', () => {
 
     expect(await screen.findByText('Background automation readiness')).toBeDefined();
     expect(screen.getByText(
-      'This account supplies the project model provider. The Repo App controls repository access.',
+      /Authorize GitHub Copilot uses GitHub user OAuth to create a durable project binding/,
     )).toBeDefined();
     expect(screen.getByText(
       'These server checks apply after you add repository access. Local agent work can continue without a repository.',
     )).toBeDefined();
-    expect(screen.getByText('copilot_binding_required')).toBeDefined();
+    expect(screen.getByText('model_provider_connection_required')).toBeDefined();
+    expect(screen.getByText('not_required')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
     // Automation is currently inactive (per the mocked status), so the activation control shows
     // "Activate", not "Deactivate" — proving this section is no longer purely read-only.
@@ -256,11 +257,8 @@ describe('ProjectSettingsPage', () => {
       transaction_id: 'txn-1',
       expires_at: '2026-07-07T00:10:00Z',
     });
-    const assignSpy = vi.fn();
-    Object.defineProperty(window, 'location', {
-      value: { ...window.location, assign: assignSpy },
-      writable: true,
-    });
+
+    const assignSpy = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
 
     renderPage('proj-1');
 
@@ -273,6 +271,56 @@ describe('ProjectSettingsPage', () => {
     await waitFor(() => expect(apiClient.beginProjectRepoAppInstallation).toHaveBeenCalledWith('proj-1'));
     await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('https://github.com/apps/agentweaver-repo/installations/new?state=abc'));
     expect(screen.getByRole('button', { name: 'Refresh status' })).toBeDefined();
+    assignSpy.mockRestore();
+  });
+
+  it('renders nested model-provider and repository readiness independently', async () => {
+    vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
+      status: 'not_ready',
+      reason_code: 'project_model_provider_reconnect_required',
+      message: 'Legacy combined message.',
+      repo_app_installation_connected: true,
+      model_provider: {
+        status: 'not_ready',
+        source: 'project',
+        reason_code: 'project_model_provider_reconnect_required',
+      },
+      repository: {
+        required: true,
+        status: 'ready',
+        reason_code: 'ready',
+        repo_app_installation_connected: true,
+      },
+    });
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      project_id: 'proj-1',
+      name: 'Demo',
+      origin: 'github',
+      source_repository: 'octo/repo',
+      working_directory: 'C:/demo',
+      default_branch: 'main',
+      owner: 'sabbour',
+      default_provider: 'github-copilot',
+      default_model_github_copilot: 'gpt-4',
+      default_model_microsoft_foundry: null,
+      blueprint_generation_model: null,
+      workflow_generation_model: 'claude-sonnet-4.6',
+      outcome_spec_generation_model: null,
+      preview_approval_timeout_minutes: 30,
+      available: true,
+      state: 'active',
+      created_at: '2026-07-07T00:00:00Z',
+      updated_at: '2026-07-07T00:00:00Z',
+    });
+
+    renderPage('proj-1');
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Background/i }));
+
+    expect(await screen.findByText('project_model_provider_reconnect_required')).toBeDefined();
+    expect(screen.getByText('Repository access is ready for background automation.')).toBeDefined();
+    expect(screen.queryByText('Legacy combined message.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
   });
 
   it('shows the platform default Copilot account instead of a broken project warning', async () => {
@@ -299,6 +347,23 @@ describe('ProjectSettingsPage', () => {
     expect(await screen.findByRole('heading', { name: 'Set up repository access' })).toBeDefined();
     await waitFor(() => expect(apiClient.listProjectRepositoryOwners).toHaveBeenCalledWith('proj-1'));
     await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalled());
+  });
+
+  it.each([
+    ['success', null],
+    ['human_entra_subject_required', 'Authorize repository access while signed in with your work account.'],
+    ['authorization_transaction_invalid', 'Repository authorization could not be completed. Start a new authorization.'],
+    ['authorization_transaction_consumed', 'This repository authorization has already been used. Start a new authorization.'],
+    ['github_binding_unavailable', 'Repository authorization is currently unavailable. Try again later.'],
+    ['rate_limited', 'GitHub is receiving too many authorization requests. Wait a moment and try again.'],
+    ['unknown_result', 'Repository authorization could not be completed. Start a new authorization.'],
+  ])('reopens repository setup after authorization result %s', async (result, message) => {
+    renderPage('proj-1', `/projects/proj-1/settings?section=repository&repo_app_auth=${result}`);
+
+    expect(await screen.findByRole('heading', { name: 'Set up repository access' })).toBeDefined();
+    if (message) {
+      expect(await screen.findByText(message)).toBeDefined();
+    }
   });
 
   it('uses connected-repository wording for background requirements when a repo is attached', async () => {

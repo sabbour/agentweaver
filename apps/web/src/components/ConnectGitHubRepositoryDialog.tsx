@@ -67,6 +67,7 @@ interface ConnectGitHubRepositoryDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Called with the connected repo's "owner/repo" once the connection succeeds. */
   onConnected: (sourceRepository: string, htmlUrl: string) => void;
+  authorizationResult?: string | null;
 }
 
 /**
@@ -81,6 +82,7 @@ export function ConnectGitHubRepositoryDialog({
   open,
   onOpenChange,
   onConnected,
+  authorizationResult = null,
 }: ConnectGitHubRepositoryDialogProps) {
   const styles = useStyles();
   const location = useLocation();
@@ -107,6 +109,31 @@ export function ConnectGitHubRepositoryDialog({
   const [reposReloadKey, setReposReloadKey] = useState(0);
 
   const defaultName = slugify(projectName);
+
+  useEffect(() => {
+    if (!open || !authorizationResult) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (authorizationResult === 'success') {
+        setRepoAppConnectionError(null);
+        setOwnersReloadKey((key) => key + 1);
+        setReposReloadKey((key) => key + 1);
+        return;
+      }
+      const messages: Record<string, string> = {
+        human_entra_subject_required: 'Authorize repository access while signed in with your work account.',
+        authorization_transaction_invalid: 'Repository authorization could not be completed. Start a new authorization.',
+        authorization_transaction_consumed: 'This repository authorization has already been used. Start a new authorization.',
+        github_binding_unavailable: 'Repository authorization is currently unavailable. Try again later.',
+        rate_limited: 'GitHub is receiving too many authorization requests. Wait a moment and try again.',
+      };
+      setRepoAppConnectionError(
+        messages[authorizationResult] ?? 'Repository authorization could not be completed. Start a new authorization.',
+      );
+    });
+    return () => { cancelled = true; };
+  }, [authorizationResult, open]);
 
   useEffect(() => {
     if (!open) return;
