@@ -379,7 +379,6 @@ export function ProjectSettingsPage() {
   const [automationLoading, setAutomationLoading] = useState(true);
   const [automationActionPending, setAutomationActionPending] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
-  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
 
   const formatError = (err: unknown): string => formatApiErrorMessage(err);
 
