@@ -32,7 +32,11 @@ import {
   postgresFqdn,
   buildPostgresFqdnPolicy,
 } from "../lib/kustomize.mjs";
-import { DEFAULT_REPO_ROOT } from "../steps/30-deploy.mjs";
+import {
+  assertCopilotAppCallbackUrl,
+  COPILOT_APP_CALLBACK_SUFFIX,
+  DEFAULT_REPO_ROOT,
+} from "../steps/30-deploy.mjs";
 
 // Fixed, realistic input variables -- distinct values for every field so a
 // successful build actually PROVES replacement/substitution fired, rather
@@ -109,6 +113,24 @@ test("buildRuntimeConfigLiterals() derives public Entra URLs from HOST and defau
     literals.REPO_APP_CALLBACK_URL,
     "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/github/repo-app/callback",
   );
+});
+
+test("deployment contract accepts only the unified Copilot callback suffix without a trailing slash", () => {
+  const callbackUrl =
+    "https://agentweaver.abc123def456.westus2.staging.aksapp.io/auth/github/copilot-app/callback";
+  assert.equal(assertCopilotAppCallbackUrl(callbackUrl), callbackUrl);
+  assert.equal(COPILOT_APP_CALLBACK_SUFFIX, "/auth/github/copilot-app/callback");
+
+  for (const invalidUrl of [
+    `${callbackUrl}/`,
+    "https://agentweaver.example.com/auth/github/platform-default-copilot/callback",
+    "https://agentweaver.example.com/auth/github/copilot-app/callback?source=deploy",
+  ]) {
+    assert.throws(
+      () => assertCopilotAppCallbackUrl(invalidUrl),
+      /must end exactly with '\/auth\/github\/copilot-app\/callback' and have no trailing slash/,
+    );
+  }
 });
 
 test("buildRuntimeConfigLiterals() passes AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID through and allows an optional enterprise app object ID", () => {

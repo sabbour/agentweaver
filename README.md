@@ -193,6 +193,11 @@ deployment. At the end it prints an **outputs summary** (resource group,
 cluster, ACR, namespace, image tags, gateway host/IP, and verification
 pass/fail counts). Configure the Entra app's redirect URI for each deployed
 environment (for example, `https://<gateway-host>/auth/entra/callback`).
+The Copilot GitHub App uses one exact callback for its two OAuth flows. The
+project UI and MCP browser handoff enter the project-scoped flow; the other flow
+is platform-default.
+See [Authentication configuration](docs/guide/configuration.md#project-copilot-app-binding)
+for the URL, distinct Repo App and Entra callbacks, and safe migration steps.
 
 **Non-interactive usage** — via flags, environment variables, and/or a params
 file (precedence: flags > env > params file > detected defaults > prompt; a
