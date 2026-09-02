@@ -43,11 +43,12 @@ import {
   WarningRegular,
 } from '@fluentui/react-icons';
 import { ScheduleTriggerDialog } from './ScheduleTriggerDialog';
-import { DAG_NODE_SEP,
-  layoutDagStaircase,
+import {
+  layoutWorkflowDefinitionNodes,
   routeGridEdges,
   WORKFLOW_FIT_VIEW_OPTIONS,
-  workflowNodeSizeHint } from '../utils/dagLayout';
+  workflowNodeSizeHint,
+} from '../utils/dagLayout';
 import { addEdge,
   addNode,
   AUTHORABLE_WORKFLOW_NODE_TYPES,
@@ -89,6 +90,7 @@ import type { ComponentType } from 'react';
 import type { GraphNodeType, WorkflowDetailDto } from '../api/types';
 import type { WfEdge, WfModel, WfNode } from '../utils/workflowYaml';
 import type { WorkflowNodeData } from './WorkflowGraphPanel';
+import type { WorkflowDefinitionLayoutMode } from '../utils/dagLayout';
 import type { Connection, Edge, Node, NodeChange, OnSelectionChangeParams } from '@xyflow/react';
 // US8 — visual execution-graph workflow editor. Extends the read-only ReactFlow
 // render (US6) into a writeable canvas. The on-disk YAML remains the single source
@@ -311,17 +313,17 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXS,
   },
   split: {
-    display: 'flex',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 380px)',
     gap: tokens.spacingHorizontalM,
     minHeight: '560px',
     '@media (max-width: 900px)': {
-      flexDirection: 'column',
+      gridTemplateColumns: 'minmax(0, 1fr)',
       minHeight: 0,
     },
   },
   canvasPane: {
-    flexBasis: '68%',
-    flexGrow: 1,
+    minWidth: 0,
     overflow: 'hidden',
     position: 'relative',
     backgroundColor: tokens.colorNeutralBackground2,
@@ -332,7 +334,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
-    flexBasis: '32%',
+    minWidth: 0,
     overflowY: 'auto',
     maxHeight: '560px',
     padding: tokens.spacingHorizontalL,
@@ -535,7 +537,7 @@ function buildGraph(
     remove: (nodeId: string) => void;
     select: (nodeId: string) => void;
   },
-): { rfNodes: Node[]; rfEdges: Edge[] } {
+): { rfNodes: Node[]; rfEdges: Edge[]; layoutMode: WorkflowDefinitionLayoutMode } {
   const order = new Map(model.nodes.map((n, i) => [n.id, i]));
 
   const rfEdges: Edge[] = model.edges.map((e, i) => {
@@ -562,7 +564,8 @@ function buildGraph(
   const raw: Node[] = model.nodes.map((n) => {
     const role = TYPE_ROLE[n.type] ?? 'agent';
     const gnt = TYPE_GRAPHNODE[n.type] ?? 'action';
-    hints[n.id] = workflowNodeSizeHint(gnt);
+    const hasEditorActions = n.type === 'prompt' || n.type === 'publish';
+    hints[n.id] = workflowNodeSizeHint(gnt, { withEditorActions: hasEditorActions });
     return {
       id: n.id,
       type: 'workflow',
@@ -578,12 +581,13 @@ function buildGraph(
         state: { status: 'pending' },
         nodeType: gnt,
         isPlanned: true,
+        definitionNode: true,
         connectable: true,
         interactionTestId: `workflow-node-${n.id}`,
         handleTestIdPrefix: `workflow-node-${n.id}-handle`,
         isStart: n.id === model.start,
         editorBadge: validationBadges.get(n.id),
-        editorActions: editorActions && (n.type === 'prompt' || n.type === 'publish') ? {
+        editorActions: editorActions && hasEditorActions ? {
           addNext: () => editorActions.addNext(n.id),
           rename: () => editorActions.rename(n.id),
           remove: () => editorActions.remove(n.id),
@@ -597,20 +601,16 @@ function buildGraph(
     };
   });
 
-  // Same staircase auto-layout used by the coordinator run topology and the read-only
-  // workflow-definition graph, so the editor's canvas is legible and structured instead of
-  // a loosely-packed LR dagre layout.
-  const laid = layoutDagStaircase(
-    raw,
-    forwardOnly,
-    { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP, targetAspect: 1.35, minStepRanks: 3 },
-    hints,
-  );
-  const rfNodes = laid.map((n) => {
+  const layout = layoutWorkflowDefinitionNodes(raw, forwardOnly, hints);
+  const rfNodes = layout.nodes.map((n) => {
     const p = positions.get(n.id);
     return p ? { ...n, position: p } : n;
   });
-  return { rfNodes, rfEdges: routeGridEdges(rfEdges, rfNodes) };
+  return {
+    rfNodes,
+    rfEdges: routeGridEdges(rfEdges, rfNodes),
+    layoutMode: layout.mode,
+  };
 }
 
 /** Verdicts a check/gate node declares that have no outgoing `when` edge (check-completeness, FR-052). */
@@ -655,22 +655,32 @@ function buildNodeValidationBadges(model: WfModel): Map<string, { label: string;
 // already keeps deleted nodes on-screen, so no re-fit is needed there either).
 // Rendered as a child of <ReactFlow>, which exposes its internal provider context to
 // descendants, so no extra <ReactFlowProvider> wrapper is needed here.
-function FitViewOnNodeAdded({ nodes }: { nodes: Node[] }) {
+function FitWorkflowView({
+  nodes,
+  resizeRevision,
+  manuallyAdjustedRef,
+}: {
+  nodes: Node[];
+  resizeRevision: number;
+  manuallyAdjustedRef: React.MutableRefObject<boolean>;
+}) {
   const { fitView } = useReactFlow();
   const prevCountRef = useRef<number | null>(null);
+  const prevResizeRevisionRef = useRef(resizeRevision);
 
   useEffect(() => {
     const prevCount = prevCountRef.current;
     prevCountRef.current = nodes.length;
-    if (prevCount === null || nodes.length <= prevCount) {
-      // First run (mount-time `fitView` prop already handled it) or no growth.
-      return;
-    }
-    // Defer to the next frame so the newly-added node's DOM measurements are ready.
+    const grew = prevCount !== null && nodes.length > prevCount;
+    const resized = resizeRevision !== prevResizeRevisionRef.current;
+    prevResizeRevisionRef.current = resizeRevision;
+    if (!grew && (!resized || manuallyAdjustedRef.current)) return;
+    if (grew) manuallyAdjustedRef.current = false;
+
     requestAnimationFrame(() => {
       void fitView({ ...WORKFLOW_FIT_VIEW_OPTIONS, duration: 300 });
     });
-  }, [nodes, fitView]);
+  }, [fitView, manuallyAdjustedRef, nodes, resizeRevision]);
 
   return null;
 }
@@ -687,6 +697,7 @@ export function VisualWorkflowEditor({
   const [yamlText, setYamlText] = useState(initialYaml);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  const [layoutMode, setLayoutMode] = useState<WorkflowDefinitionLayoutMode>('columns');
   const [model, setModel] = useState<WfModel | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
 
@@ -706,6 +717,9 @@ export function VisualWorkflowEditor({
   const [saveError, setSaveError] = useState<{ message: string; line: number | null } | null>(null);
 
   const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const canvasPaneRef = useRef<HTMLDivElement | null>(null);
+  const viewportManuallyAdjustedRef = useRef(false);
+  const [canvasResizeRevision, setCanvasResizeRevision] = useState(0);
   // React Flow owns visual selection, but the inspector needs a stable semantic
   // selection while YAML-derived node and edge objects are replaced.
   const selectedNodeIdRef = useRef(selectedNodeId);
@@ -720,6 +734,23 @@ export function VisualWorkflowEditor({
     const handler = (e: BeforeUnloadEvent) => { if (isDirtyRef.current) e.preventDefault(); };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
+  }, []);
+
+  useEffect(() => {
+    const element = canvasPaneRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    let previousWidth = element.clientWidth;
+    let previousHeight = element.clientHeight;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      const height = entry.contentRect.height;
+      if (Math.abs(width - previousWidth) < 24 && Math.abs(height - previousHeight) < 24) return;
+      previousWidth = width;
+      previousHeight = height;
+      setCanvasResizeRevision((revision) => revision + 1);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
 
   const updateYamlText = useCallback((updater: (text: string) => string) => {
@@ -794,7 +825,7 @@ export function VisualWorkflowEditor({
 
         setModel(parsed);
         const validationBadges = buildNodeValidationBadges(parsed);
-        const { rfNodes, rfEdges } = buildGraph(
+        const { rfNodes, rfEdges, layoutMode: nextLayoutMode } = buildGraph(
           parsed,
           positionsRef.current,
           selectedNodeIdRef.current,
@@ -809,6 +840,7 @@ export function VisualWorkflowEditor({
         );
         setNodes(rfNodes);
         setEdges(rfEdges);
+        setLayoutMode(nextLayoutMode);
       }
     };
     void syncGraph();
@@ -1141,7 +1173,12 @@ export function VisualWorkflowEditor({
       </div>
 
       <div className={styles.split}>
-        <div className={styles.canvasPane} data-testid="workflow-canvas">
+        <div
+          ref={canvasPaneRef}
+          className={styles.canvasPane}
+          data-testid="workflow-canvas"
+          data-layout-mode={layoutMode}
+        >
           <div className={styles.canvasToolbar} role="toolbar" aria-label="Workflow canvas actions">
             <Button appearance="primary" size="small" icon={<AddRegular />} onClick={openAddNodeDialog}>
               Add node
@@ -1190,12 +1227,19 @@ export function VisualWorkflowEditor({
                 fitView
                 fitViewOptions={WORKFLOW_FIT_VIEW_OPTIONS}
                 minZoom={0.35}
-                maxZoom={1.5}
+                maxZoom={2}
+                onMoveStart={(event) => {
+                  if (event) viewportManuallyAdjustedRef.current = true;
+                }}
                 proOptions={{ hideAttribution: true }}
               >
                 <Background />
                 <Controls showInteractive={false} />
-                <FitViewOnNodeAdded nodes={nodes} />
+                <FitWorkflowView
+                  nodes={nodes}
+                  resizeRevision={canvasResizeRevision}
+                  manuallyAdjustedRef={viewportManuallyAdjustedRef}
+                />
               </ReactFlow>
             </ActiveEdgeContext.Provider>
           </ExecutionModalContext.Provider>

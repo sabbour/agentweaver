@@ -3,12 +3,16 @@ import {
   FIXED_NODE_W,
   SUBTASK_NODE_H,
   SUBTASK_NODE_W,
+  analyzeWorkflowLayout,
   layoutDagBalancedGrid,
   layoutDagColumns,
   layoutDagStaircase,
   layoutBBox,
+  layoutWorkflowDefinitionNodes,
   NODE_H,
   NODE_W,
+  WORKFLOW_DEFINITION_NODE_W,
+  WORKFLOW_LONG_LINEAR_MIN_RANKS,
 } from '../utils/dagLayout';
 import { describe, expect, it } from 'vitest';
 import type { NodeSizeHint } from '../utils/dagLayout';
@@ -406,6 +410,85 @@ describe('layoutDagStaircase', () => {
         expect(Number.isFinite(n.position.y)).toBe(true);
         expect(n.position.x).toBeGreaterThanOrEqual(0);
         expect(n.position.y).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+});
+
+describe('adaptive workflow definition layout', () => {
+  const hintsFor = (nodes: Node[]): Record<string, NodeSizeHint> =>
+    Object.fromEntries(nodes.map((node) => [node.id, { width: WORKFLOW_DEFINITION_NODE_W, height: 80 }]));
+
+  it('uses centered stage columns for a short workflow', () => {
+    const nodes = ['start', 'review', 'done'].map(makeNode);
+    const edges = [makeEdge('start', 'review'), makeEdge('review', 'done')];
+
+    const result = layoutWorkflowDefinitionNodes(nodes, edges, hintsFor(nodes));
+
+    expect(result.mode).toBe('columns');
+    expect(result.analysis).toMatchObject({ rankCount: 3, hasBranching: false, isLongLinear: false });
+    expect(new Set(result.nodes.map((node) => rounded(node.position.y))).size).toBe(1);
+  });
+
+  it('uses centered stage columns for branching and fan-in workflows', () => {
+    const nodes = ['start', 'approved', 'declined', 'done'].map(makeNode);
+    const edges = [
+      makeEdge('start', 'approved'),
+      makeEdge('start', 'declined'),
+      makeEdge('approved', 'done'),
+      makeEdge('declined', 'done'),
+    ];
+    const hints = hintsFor(nodes);
+
+    const result = layoutWorkflowDefinitionNodes(nodes, edges, hints);
+    const byId = new Map(result.nodes.map((node) => [node.id, node]));
+    const center = (id: string) => centerY(byId.get(id)!, hints[id].height);
+    const branchCenter = (center('approved') + center('declined')) / 2;
+
+    expect(result.mode).toBe('columns');
+    expect(result.analysis).toMatchObject({ hasBranching: true, hasParallelRank: true });
+    expect(center('start')).toBe(branchCenter);
+    expect(center('done')).toBe(branchCenter);
+  });
+
+  it('reserves the staircase for genuinely long linear workflows', () => {
+    const nodeIds = Array.from({ length: WORKFLOW_LONG_LINEAR_MIN_RANKS }, (_, index) => `step-${index}`);
+    const nodes = nodeIds.map(makeNode);
+    const edges = nodeIds.slice(1).map((id, index) => makeEdge(nodeIds[index], id));
+
+    const analysis = analyzeWorkflowLayout(nodes, edges);
+    const result = layoutWorkflowDefinitionNodes(nodes, edges, hintsFor(nodes));
+
+    expect(analysis.isLongLinear).toBe(true);
+    expect(result.mode).toBe('staircase');
+    expect(new Set(result.nodes.map((node) => rounded(node.position.y))).size).toBeGreaterThan(1);
+  });
+
+  it('is deterministic and keeps adaptive layouts non-overlapping', () => {
+    const nodes = ['start', 'a', 'b', 'merge', 'done'].map(makeNode);
+    const edges = [
+      makeEdge('start', 'a'),
+      makeEdge('start', 'b'),
+      makeEdge('a', 'merge'),
+      makeEdge('b', 'merge'),
+      makeEdge('merge', 'done'),
+    ];
+    const hints = hintsFor(nodes);
+    const first = layoutWorkflowDefinitionNodes(nodes, edges, hints);
+    const second = layoutWorkflowDefinitionNodes(nodes, edges, hints);
+
+    expect(second.nodes.map((node) => [node.id, node.position]))
+      .toEqual(first.nodes.map((node) => [node.id, node.position]));
+    for (let i = 0; i < first.nodes.length; i += 1) {
+      for (let j = i + 1; j < first.nodes.length; j += 1) {
+        const a = first.nodes[i];
+        const b = first.nodes[j];
+        const separated =
+          a.position.x + hints[a.id].width <= b.position.x ||
+          b.position.x + hints[b.id].width <= a.position.x ||
+          a.position.y + hints[a.id].height <= b.position.y ||
+          b.position.y + hints[b.id].height <= a.position.y;
+        expect(separated).toBe(true);
       }
     }
   });

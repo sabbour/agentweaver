@@ -246,6 +246,135 @@ api-deployment.yaml. Manifest-only; no image rebuild. `kubectl apply` worker + r
 
 ---
 
+## [ERR-20260902-RG1] rg
+
+**Logged**: 2026-09-02T02:44:17-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+An overly broad contextual `rg` search against a large test file timed out.
+
+### Error
+```
+rg timed out after 20 seconds.
+```
+
+### Context
+- Searched several common terms with broad before/after context in `VisualWorkflowEditor.test.tsx`.
+- The partial output was unnecessary because narrower symbol searches and direct ranges covered the needed code.
+
+### Suggested Fix
+Search one symbol or behavior at a time and use `view_range` for the surrounding test block instead of requesting large contextual output.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/__tests__/VisualWorkflowEditor.test.tsx
+
+### Resolution
+- **Resolved**: 2026-09-02T02:44:17-07:00
+- **Notes**: Continued with narrower searches and direct file ranges.
+
+---
+
+## [ERR-20260902-DEPS] web test dependency setup
+
+**Logged**: 2026-09-02T02:52:03-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The first focused web test run failed because the fresh worktree dependencies had not been prepared.
+
+### Error
+```
+'vitest' is not recognized as an internal or external command
+```
+
+### Context
+- Ran `npm --prefix apps/web run test -- ...` before the documented `npm run deps:ensure` preparation step.
+- The repository uses private per-worktree `node_modules` directories.
+
+### Suggested Fix
+Run `npm run deps:ensure` once before the first Node/web validation command in a new worktree.
+
+### Metadata
+- Reproducible: yes
+- Related Files: CONTRIBUTING.md, apps/web/package.json
+
+### Resolution
+- **Resolved**: 2026-09-02T02:55:11-07:00
+- **Notes**: `npm run deps:ensure` completed and the focused test suite passed.
+
+---
+
+## [ERR-20260902-VALIDATION] concurrent validation worker contention
+
+**Logged**: 2026-09-02T03:08:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The full web suite and UI-harness fixture suite hit worker startup/time-budget failures when run concurrently with other validation.
+
+### Error
+```
+[vitest-pool]: Timeout waiting for worker to respond
+UI session worker did not become ready within 30000ms
+```
+
+### Context
+- The full web suite reported unrelated timeouts in Skills, Project Gallery, and the Fluent showcase while several validation commands ran in parallel.
+- The graph-layout suite stayed green, and the unrelated web failures passed when isolated; the Fluent showcase passed when run alone.
+- The UI-harness multi-process fixture timed out while the local app build and web validation were also active.
+
+### Suggested Fix
+Run resource-heavy browser and full-suite validation sequentially on constrained Windows worktrees. Use focused suites for change validation and let CI provide the final isolated full-suite authority.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: apps/web/src/__tests__/azureFluentSystem.test.tsx, scripts/ui-harness/test/multi-process-session.test.mjs
+
+### Resolution
+- **Resolved**: 2026-09-02T03:12:00-07:00
+- **Notes**: All affected web tests passed in focused or isolated runs; graph tests, lint, build, and docs build completed successfully.
+
+---
+
+## [ERR-20260902-TYPE] workflow graph return type omitted new metadata
+
+**Logged**: 2026-09-02T03:18:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+The first production build failed because `buildWorkflowDefinitionGraph` still declared its old return type after adding layout metadata.
+
+### Error
+```
+Property 'layoutMode' does not exist on type '{ rfNodes: Node[]; rfEdges: Edge[]; }'.
+```
+
+### Context
+- The implementation returned `layoutMode` and `bbox`, but the explicit function return annotation still listed only nodes and edges.
+
+### Suggested Fix
+Update or infer return types whenever a shared graph builder gains metadata consumed by components and tests.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/src/components/WorkflowGraphPanel.tsx
+
+### Resolution
+- **Resolved**: 2026-09-02T03:19:00-07:00
+- **Notes**: Removed the stale explicit annotation; TypeScript inference now keeps consumers aligned, and the production build passes.
+
+---
+
 ## [ERR-20260710-WFRACE] orchestration_start_400_harness_shell
 
 **Logged**: 2026-07-10T02:45:00-07:00
