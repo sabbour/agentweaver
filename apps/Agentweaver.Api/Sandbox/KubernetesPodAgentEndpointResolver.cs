@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using k8s;
 using k8s.Autorest;
 using Microsoft.Extensions.Logging;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
@@ -224,7 +225,11 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         catch (Exception ex)
         {
             // Drop the cached failed launch so a subsequent turn can retry.
-            _launches.TryRemove(runId, out _);
+            _launches.TryRemove(
+                new KeyValuePair<string, Lazy<Task<string>>>(runId, launch));
+
+            if (ex is AgentProviderException)
+                throw;
 
             // Map the known, actionable launch failures to a precise FailureReason so the run row
             // (and the run_not_active API response) can explain *why* the run stopped. Note: pod

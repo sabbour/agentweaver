@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Auth;
@@ -16,8 +15,9 @@ namespace Agentweaver.Api.Auth;
 /// <list type="bullet">
 ///   <item>
 ///     Project scope (<c>projectId</c> supplied): an explicit project-scoped model-provider
-///     override — today, only a project GitHub Copilot binding — always wins when active.
-///     Otherwise the project inherits the platform default (BYOK first, then platform Copilot).
+///     override — today, only a project GitHub Copilot binding — always wins when active and
+///     redeemable. An active but unusable project binding fails closed; only a project with no
+///     active binding inherits the platform default (BYOK first, then platform Copilot).
 ///   </item>
 ///   <item>
 ///     Platform/non-project scope (<c>projectId</c> is <see langword="null"/>): the
@@ -31,6 +31,9 @@ public sealed class EffectiveModelProviderResolver(
     ByokProviderConfigurationService byokSettings,
     ISecretStore secretStore)
 {
+    private readonly IGitHubConnectionsCredentialVault _credentialVault =
+        new GitHubConnectionsCredentialVault(secretStore);
+
     public async Task<EffectiveModelProviderResult> ResolveAsync(ProjectId? projectId, CancellationToken ct)
     {
         if (projectId is { } project)
@@ -39,8 +42,14 @@ public sealed class EffectiveModelProviderResolver(
                 .ConfigureAwait(false);
             if (projectBinding is not null)
             {
-                var login = await TryReadGitHubLoginAsync(projectBinding.CredentialReference, ct).ConfigureAwait(false);
-                return new EffectiveModelProviderResult.ProjectGitHubCopilot(projectBinding.Id, login);
+                var credential = await ReadUsableCredentialAsync(projectBinding.CredentialReference, ct)
+                    .ConfigureAwait(false);
+                return credential is not null
+                    ? new EffectiveModelProviderResult.ProjectGitHubCopilot(
+                        projectBinding.Id,
+                        credential.GitHubLogin)
+                    : new EffectiveModelProviderResult.Unavailable(
+                        "The project's active GitHub Copilot binding credential is unavailable. Reconnect the project's GitHub Copilot App.");
             }
         }
 
@@ -51,12 +60,12 @@ public sealed class EffectiveModelProviderResolver(
         var platformBinding = await persistence.GetActivePlatformDefaultCopilotBindingAsync(ct).ConfigureAwait(false);
         if (platformBinding is not null)
         {
-            var usable = await IsUsableCopilotSecretAsync(platformBinding.CredentialReference, ct).ConfigureAwait(false);
-            if (usable)
-            {
-                var login = await TryReadGitHubLoginAsync(platformBinding.CredentialReference, ct).ConfigureAwait(false);
-                return new EffectiveModelProviderResult.PlatformGitHubCopilot(platformBinding.Id, login);
-            }
+            var credential = await ReadUsableCredentialAsync(platformBinding.CredentialReference, ct)
+                .ConfigureAwait(false);
+            if (credential is not null)
+                return new EffectiveModelProviderResult.PlatformGitHubCopilot(
+                    platformBinding.Id,
+                    credential.GitHubLogin);
         }
 
         return new EffectiveModelProviderResult.Unavailable(
@@ -65,43 +74,29 @@ public sealed class EffectiveModelProviderResolver(
                 : "The project has no GitHub Copilot binding, and no BYOK provider or platform-default GitHub Copilot binding is configured.");
     }
 
-    /// <summary>
-    /// Case-insensitive so this reads both the PascalCase JSON produced by
-    /// <c>PlatformDefaultCopilotBindingService</c>/<c>ProjectCopilotBindingService</c> (they serialize
-    /// a C# record's actual property names) and any lowercase-keyed secret written by other paths.
-    /// </summary>
-    private static readonly JsonSerializerOptions CredentialJsonOptions = new() { PropertyNameCaseInsensitive = true };
-
-    private async Task<CopilotCredentialSnapshot?> ReadCredentialAsync(string credentialReference, CancellationToken ct)
+    private async Task<GitHubCapabilityBroker.CopilotCredential?> ReadUsableCredentialAsync(
+        string credentialReference,
+        CancellationToken ct)
     {
-        var secret = await secretStore.GetSecretAsync(credentialReference, ct).ConfigureAwait(false);
-        if (!secret.Found || string.IsNullOrWhiteSpace(secret.Value))
-            return null;
+        GitHubConnectionsCredentialLocator locator;
         try
         {
-            return JsonSerializer.Deserialize<CopilotCredentialSnapshot>(secret.Value, CredentialJsonOptions);
+            locator = GitHubConnectionsCredentialLocator.ForCopilotBinding(credentialReference);
         }
-        catch (JsonException)
+        catch (ArgumentException)
         {
             return null;
         }
-    }
 
-    private async Task<bool> IsUsableCopilotSecretAsync(string credentialReference, CancellationToken ct)
-    {
-        var credential = await ReadCredentialAsync(credentialReference, ct).ConfigureAwait(false);
-        return credential is not null &&
-               string.Equals(credential.Status, "signed-in", StringComparison.Ordinal) &&
-               !string.IsNullOrWhiteSpace(credential.AccessToken);
+        var secret = await _credentialVault.ReadCurrentAsync(locator, ct).ConfigureAwait(false);
+        return secret.Found &&
+            GitHubCapabilityBroker.TryGetUsableCopilotCredential(
+                secret.Value,
+                DateTimeOffset.UtcNow,
+                out var credential)
+            ? credential
+            : null;
     }
-
-    private async Task<string?> TryReadGitHubLoginAsync(string credentialReference, CancellationToken ct)
-    {
-        var credential = await ReadCredentialAsync(credentialReference, ct).ConfigureAwait(false);
-        return credential?.GitHubLogin;
-    }
-
-    private sealed record CopilotCredentialSnapshot(string? Status, string? AccessToken, string? GitHubLogin = null);
 }
 
 /// <summary>

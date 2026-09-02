@@ -10,10 +10,8 @@ namespace Agentweaver.Api.Auth;
 /// <summary>
 
 /// Captures or inherits immutable capability snapshots at trusted run lifecycle boundaries.
-
-/// It deliberately fences metadata only: #947 owns capability delivery to repository and
-
-/// Copilot adapters.
+/// General launch preparation fences metadata; unattended Copilot launch preparation additionally
+/// proves that the fenced credential can be redeemed before sandbox creation.
 
 /// </summary>
 
@@ -94,8 +92,8 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
     /// <summary>
     /// Prepares the normal immutable snapshot set, then proves that the unattended Copilot
-    /// capability is present and still fenced. A partial snapshot set is not sufficient: accepting
-    /// it would defer a missing Copilot binding until after execution has started.
+    /// capability is present, fenced, and redeemable. A partial or metadata-only snapshot set is not
+    /// sufficient: accepting it would defer a missing credential until after execution has started.
     /// </summary>
     /// <param name="platformScoped">
     /// When <c>true</c>, the run's credential is always resolved from the PLATFORM-level Copilot
@@ -136,11 +134,11 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
             .ConfigureAwait(false))
             .SingleOrDefault(snapshot => snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot);
         return copilotSnapshot is not null &&
-            await broker.TryFenceAsync(
-                GitHubCapabilityPurpose.UnattendedCopilot,
+            await broker.TryUseCopilotCredentialAsync(
                 new SnapshotRef(copilotSnapshot.SnapshotRef),
                 DateTimeOffset.UtcNow,
-                ct).ConfigureAwait(false) is not null;
+                static (_, _) => Task.CompletedTask,
+                ct).ConfigureAwait(false) == GitHubCapabilityBrokerOutcome.Issued;
     }
 
 }

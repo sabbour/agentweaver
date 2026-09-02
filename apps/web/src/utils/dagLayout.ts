@@ -36,19 +36,21 @@ export const REVIEW_EXPANDED_NODE_H = 96;
 export const COMPACT_CARD_H = SUBTASK_CARD_H;
 export const COMPACT_NODE_H = SUBTASK_NODE_H;
 
-// Compact workflow-definition / visual-editor nodes all render through WorkflowNode's short pill
-// face, regardless of semantic node_type. Keep these hints close to the actual rendered pills so
-// fitView and routed edges size to the visible cards rather than oversized virtual boxes.
-export const WORKFLOW_PILL_NODE_W = FIXED_NODE_W;
+// Workflow definitions need more visual mass than the compact runtime stages. The viewer and editor
+// share this footprint so layout hints, edge routing, and the rendered cards stay aligned.
+export const WORKFLOW_DEFINITION_NODE_W = 240;
+export const WORKFLOW_PILL_NODE_W = WORKFLOW_DEFINITION_NODE_W;
 export const WORKFLOW_PILL_NODE_H: Record<string, number> = {
-  agent: 92,
-  subtask: 84,
-  gate: 72,
-  action: 92,
-  terminal: 64,
+  agent: 80,
+  subtask: 80,
+  gate: 76,
+  action: 80,
+  terminal: 68,
 };
-export const WORKFLOW_PILL_DEFAULT_NODE_H = 84;
-export const WORKFLOW_FIT_VIEW_OPTIONS = { padding: 0.12, maxZoom: 1.35 } as const;
+export const WORKFLOW_PILL_DEFAULT_NODE_H = 80;
+export const WORKFLOW_EDITOR_ACTIONS_HEIGHT = 44;
+export const WORKFLOW_FIT_VIEW_OPTIONS = { padding: 0.1, maxZoom: 1.8 } as const;
+export const WORKFLOW_LONG_LINEAR_MIN_RANKS = 5;
 
 // Stair tread length: how many nodes advance along the SAME row (LR) / column (TB) before the stair
 // steps down/right to the next tread. A value of 2 keeps chunky, clearly-horizontal treads (instead of
@@ -88,6 +90,7 @@ export interface LayoutOpts {
   rankdir?: 'LR' | 'TB';
   rankSep?: number;
   nodeSep?: number;
+  crossAlign?: 'start' | 'center';
 }
 
 export interface BalancedGridLayoutOpts extends LayoutOpts {
@@ -228,12 +231,135 @@ export function buildSteppedConnectorRoute(input: {
   };
 }
 
-export function workflowNodeSizeHint(nodeType?: string | null): NodeSizeHint {
+export function workflowNodeSizeHint(
+  nodeType?: string | null,
+  opts: { withEditorActions?: boolean } = {},
+): NodeSizeHint {
   const key = nodeType ?? '';
   return {
     width: WORKFLOW_PILL_NODE_W,
-    height: WORKFLOW_PILL_NODE_H[key] ?? WORKFLOW_PILL_DEFAULT_NODE_H,
+    height: (WORKFLOW_PILL_NODE_H[key] ?? WORKFLOW_PILL_DEFAULT_NODE_H)
+      + (opts.withEditorActions ? WORKFLOW_EDITOR_ACTIONS_HEIGHT : 0),
   };
+}
+
+export interface WorkflowLayoutAnalysis {
+  rankCount: number;
+  hasBranching: boolean;
+  hasParallelRank: boolean;
+  isLongLinear: boolean;
+}
+
+export type WorkflowDefinitionLayoutMode = 'columns' | 'staircase';
+
+export interface WorkflowDefinitionLayoutResult {
+  nodes: Node[];
+  mode: WorkflowDefinitionLayoutMode;
+  bbox: { w: number; h: number };
+  analysis: WorkflowLayoutAnalysis;
+}
+
+export function analyzeWorkflowLayout(nodes: Node[], edges: Edge[]): WorkflowLayoutAnalysis {
+  if (nodes.length === 0) {
+    return { rankCount: 0, hasBranching: false, hasParallelRank: false, isLongLinear: false };
+  }
+
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const originalIndex = new Map(nodes.map((node, index) => [node.id, index]));
+  const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  const incoming = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  const indegree = new Map(nodes.map((node) => [node.id, 0]));
+
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
+    outgoing.get(edge.source)!.push(edge.target);
+    incoming.get(edge.target)!.push(edge.source);
+    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
+  }
+  for (const targets of outgoing.values()) {
+    targets.sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0));
+  }
+
+  const queue = nodes
+    .filter((node) => (indegree.get(node.id) ?? 0) === 0)
+    .map((node) => node.id);
+  const depth = new Map(queue.map((id) => [id, 0]));
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    visited.add(id);
+    const baseDepth = depth.get(id) ?? 0;
+    for (const target of outgoing.get(id) ?? []) {
+      depth.set(target, Math.max(depth.get(target) ?? 0, baseDepth + 1));
+      indegree.set(target, (indegree.get(target) ?? 0) - 1);
+      if ((indegree.get(target) ?? 0) === 0) {
+        queue.push(target);
+        queue.sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0));
+      }
+    }
+  }
+
+  // Keep malformed/cyclic definitions deterministic and visible; validation handles the error itself.
+  for (const node of nodes) {
+    if (visited.has(node.id)) continue;
+    const parentDepth = (incoming.get(node.id) ?? []).reduce(
+      (max, parent) => Math.max(max, depth.get(parent) ?? 0),
+      0,
+    );
+    depth.set(node.id, parentDepth + 1);
+  }
+
+  const rankCounts = new Map<number, number>();
+  for (const node of nodes) {
+    const rank = depth.get(node.id) ?? 0;
+    rankCounts.set(rank, (rankCounts.get(rank) ?? 0) + 1);
+  }
+
+  const rankCount = Math.max(0, ...depth.values()) + 1;
+  const hasParallelRank = [...rankCounts.values()].some((count) => count > 1);
+  const hasBranching = hasParallelRank
+    || [...outgoing.values()].some((targets) => targets.length > 1)
+    || [...incoming.values()].some((sources) => sources.length > 1);
+  const isLongLinear = !hasBranching
+    && rankCount >= WORKFLOW_LONG_LINEAR_MIN_RANKS
+    && rankCount === nodes.length;
+
+  return { rankCount, hasBranching, hasParallelRank, isLongLinear };
+}
+
+export function layoutWorkflowDefinitionNodes(
+  nodes: Node[],
+  edges: Edge[],
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): WorkflowDefinitionLayoutResult {
+  const analysis = analyzeWorkflowLayout(nodes, edges);
+  const mode: WorkflowDefinitionLayoutMode = analysis.isLongLinear ? 'staircase' : 'columns';
+  const laidOut = mode === 'staircase'
+    ? layoutDagStaircase(
+        nodes,
+        edges,
+        { rankdir: 'LR', rankSep: 64, nodeSep: 40, targetAspect: 1.35, minStepRanks: 3 },
+        nodeSizeHints,
+      )
+    : layoutDagColumns(
+        nodes,
+        edges,
+        { rankdir: 'LR', rankSep: 72, nodeSep: 48, crossAlign: 'center' },
+        nodeSizeHints,
+      );
+
+  return {
+    nodes: laidOut,
+    mode,
+    bbox: layoutBBox(laidOut, nodeSizeHints),
+    analysis,
+  };
+}
+
+export function workflowDefinitionViewportHeight(bbox: { w: number; h: number }): number {
+  if (bbox.w === 0 || bbox.h === 0) return 320;
+  return Math.min(520, Math.max(300, Math.ceil(bbox.h + 80)));
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -570,6 +696,14 @@ export function layoutDagColumns(
       laneStart += rowH + LANE_GAP;
     }
   } else {
+    const colHeightOf = (nodeIds: string[]): number =>
+      nodeIds.reduce((sum, id) => sum + (nodeSizeHints?.[id]?.height ?? NODE_H), 0) +
+      Math.max(0, nodeIds.length - 1) * CROSS_GAP;
+    const maxColHeight = sortedRankKeys.reduce(
+      (max, key) => Math.max(max, colHeightOf(byRank.get(key)!)),
+      0,
+    );
+
     let laneStart = MARGIN;
     for (const rankKey of sortedRankKeys) {
       const nodeIds = byRank.get(rankKey)!;
@@ -578,7 +712,9 @@ export function layoutDagColumns(
 
       // Rank lanes run left→right; cards stack top→bottom within each column.
       const colW = nodeIds.reduce((max, id) => Math.max(max, nodeSizeHints?.[id]?.width ?? NODE_W), 0);
-      let crossY = MARGIN;
+      let crossY = opts.crossAlign === 'center'
+        ? MARGIN + (maxColHeight - colHeightOf(nodeIds)) / 2
+        : MARGIN;
       for (const id of nodeIds) {
         const hint = nodeSizeHints?.[id];
         const h = hint?.height ?? NODE_H;

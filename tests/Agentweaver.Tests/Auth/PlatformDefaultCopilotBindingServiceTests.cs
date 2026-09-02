@@ -14,6 +14,8 @@ namespace Agentweaver.Tests.Auth;
 
 public sealed class PlatformDefaultCopilotBindingServiceTests
 {
+    private const string ConfiguredCallbackUrl = "https://agentweaver.test/auth/github/copilot-app/callback";
+
     [Fact]
     public async Task Begin_RequiresPlatformAdminAndPinsThePlatformDefaultPurpose()
     {
@@ -31,19 +33,22 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
         stored.Purpose.Should().Be(GitHubAuthorizationPurpose.PlatformDefaultCopilot);
         begin.AuthorizationUrl.Should().Contain("code_challenge_method=S256");
         Query(begin.AuthorizationUrl!, "redirect_uri")
-            .Should().Be("https://agentweaver.test/auth/github/copilot-app/callback");
+            .Should().Be(ConfiguredCallbackUrl);
     }
 
     [Fact]
     public async Task CompleteBrowserCallback_WritesSingletonBindingAndReturnsPlatformSettingsRedirect()
     {
         await using var db = await OpenDatabaseAsync();
-        var service = CreateService(db, new InMemorySecretStore(), """{"access_token":"ghu_platform","refresh_token":"refresh-secret"}""");
+        var httpClientFactory = new StubHttpClientFactory("""{"access_token":"ghu_platform","refresh_token":"refresh-secret"}""");
+        var service = CreateService(db, new InMemorySecretStore(), httpClientFactory: httpClientFactory);
         var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal());
         var state = Query(begin.AuthorizationUrl!, "state");
 
         (await service.CompleteBrowserCallbackAsync(null, null, state, "code", begin.CallbackCookie))
             .Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
+        httpClientFactory.LastTokenRequestForm.Should().NotBeNull();
+        httpClientFactory.LastTokenRequestForm!["redirect_uri"].Should().Be(ConfiguredCallbackUrl);
 
         var binding = await db.PlatformDefaultCopilotBindings.SingleAsync();
         binding.Id.Should().Be(PlatformDefaultCopilotBindingRecord.SingletonId);
@@ -232,7 +237,7 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
         {
             ["Auth:CopilotApp:ClientId"] = "copilot-client",
             ["Auth:CopilotApp:ClientSecret"] = "copilot-secret",
-            ["Auth:CopilotApp:CallbackUrl"] = "https://agentweaver.test/auth/github/copilot-app/callback",
+            ["Auth:CopilotApp:CallbackUrl"] = ConfiguredCallbackUrl,
             ["Auth:CopilotApp:FrontendUrl"] = "http://localhost:5173",
             ["Auth:CopilotApp:Slug"] = "agentweaver-copilot",
         }).Build();
@@ -265,13 +270,27 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
     private sealed class StubHttpClientFactory(string? response = null) : IHttpClientFactory
     {
         public int ProviderGrantRevocations { get; private set; }
+        public IReadOnlyDictionary<string, string>? LastTokenRequestForm { get; private set; }
 
         public HttpClient CreateClient(string name) => new(new Handler(response ?? """{"access_token":"ghu_token"}""", this));
 
         private sealed class Handler(string body, StubHttpClientFactory owner) : HttpMessageHandler
         {
-            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
-                Task.FromResult(CreateResponse(request, owner, body));
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+            {
+                if (request.RequestUri!.AbsolutePath == "/login/oauth/access_token")
+                {
+                    var content = await request.Content!.ReadAsStringAsync(ct);
+                    owner.LastTokenRequestForm = content
+                        .Split('&')
+                        .Select(field => field.Split('=', 2))
+                        .ToDictionary(
+                            field => WebUtility.UrlDecode(field[0]),
+                            field => WebUtility.UrlDecode(field[1]));
+                }
+
+                return CreateResponse(request, owner, body);
+            }
         }
 
         private static HttpResponseMessage CreateResponse(HttpRequestMessage request, StubHttpClientFactory owner, string body)

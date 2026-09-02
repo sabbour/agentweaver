@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Auth;
@@ -43,7 +44,7 @@ public sealed record ModelProviderConnectionRequirement(
 /// model-provider capability is not redeemable. Endpoint surfaces translate this to the single
 /// redacted connection-required response contract.
 /// </summary>
-public sealed class ModelProviderConnectionRequiredException : Exception
+public sealed class ModelProviderConnectionRequiredException : AgentProviderException
 {
     public ModelProviderConnectionRequiredException(ProjectId projectId)
         : this(ModelProviderConnectionRequirement.ForProject(projectId))
@@ -56,7 +57,12 @@ public sealed class ModelProviderConnectionRequiredException : Exception
     }
 
     private ModelProviderConnectionRequiredException(ModelProviderConnectionRequirement requirement)
-        : base(requirement.Message)
+        : base(
+            ModelSource.GitHubCopilot,
+            AgentProviderFailureKind.Authorization,
+            requirement.Code,
+            requirement.Message,
+            isRetryable: false)
     {
         Requirement = requirement;
     }

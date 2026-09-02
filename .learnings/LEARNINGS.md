@@ -35,6 +35,29 @@ the revised turn emits the same assemble_ready terminal a first-time dispatch do
 
 ---
 
+## [LRN-20260902-001] correction
+
+**Logged**: 2026-09-02T03:14:00-07:00
+**Priority**: medium
+**Status**: pending
+**Area**: frontend
+
+### Summary
+Do not plan local Agentweaver browser validation when the Entra ID app redirect cannot return to localhost.
+
+### Details
+The user clarified that the local UI cannot complete authentication because the configured Entra application redirect targets the deployed environment. Starting the local API/web stack and creating an empty browser storage state cannot make the authenticated workflow pages testable.
+
+### Suggested Action
+Use deterministic component/layout tests locally. Perform browser evidence capture only against an authorized deployment that contains the change and has valid managed Edge authentication.
+
+### Metadata
+- Source: user_feedback
+- Related Files: scripts/ui-harness/SKILL.md
+- Tags: entra, local-development, ui-harness, authentication
+
+---
+
 ## [LRN-20260716-001] correction
 
 **Logged**: 2026-07-16T14:04:04-07:00
