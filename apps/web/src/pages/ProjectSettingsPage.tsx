@@ -1340,7 +1340,11 @@ export function ProjectSettingsPage() {
                   authorizationResult={repoAppAuthorizationResult}
                   onConnected={(sourceRepository) => {
                     setProject((prev) => prev ? { ...prev, origin: 'github', source_repository: sourceRepository } : prev);
-                    selectSection('unattended');
+                    setConnectRepoOpen(false);
+                    const next = new URLSearchParams(searchParams);
+                    next.delete('repo_app_auth');
+                    next.set('section', 'unattended');
+                    setSearchParams(next, { replace: true });
                   }}
                 />
               </div>

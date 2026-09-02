@@ -136,7 +136,7 @@ describe('ConnectGitHubRepositoryDialog', () => {
     expect(screen.getByText(/Agentweaver pushed the existing project history/)).toBeDefined();
   });
 
-  it('returns to the current repository settings route after authorization', async () => {
+  it('removes a failed callback result before retrying repository authorization', async () => {
     vi.mocked(apiClient.listProjectRepositoryOwners).mockRejectedValue(
       new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
     );
@@ -148,7 +148,7 @@ describe('ConnectGitHubRepositoryDialog', () => {
     const assignSpy = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
 
     render(
-      <MemoryRouter initialEntries={['/projects/proj-1/settings?section=repository']}>
+      <MemoryRouter initialEntries={['/projects/proj-1/settings?section=repository&repo_app_auth=rate_limited']}>
         <AzureFluentProvider density="compact">
           <ConnectGitHubRepositoryDialog
             projectId="proj-1"
@@ -156,6 +156,7 @@ describe('ConnectGitHubRepositoryDialog', () => {
             open
             onOpenChange={() => {}}
             onConnected={() => {}}
+            authorizationResult="rate_limited"
           />
         </AzureFluentProvider>
       </MemoryRouter>,

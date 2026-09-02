@@ -75,6 +75,20 @@ describe('ProjectGalleryPage repository authorization', () => {
     })));
   });
 
+  it('clears GitHub creation intent after creating a project', async () => {
+    render(<Wrapper initialEntries={['/projects?create=github']}><ProjectGalleryPage /></Wrapper>);
+
+    expect(await screen.findByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();
+    fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'Hello World' } });
+    fireEvent.input(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'octocat/hello-world' } });
+    fireEvent.change(screen.getByPlaceholderText('my-repo'), { target: { value: 'hello-world' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(apiClient.createProject).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Create project from GitHub' })).toBeNull());
+    await waitFor(() => expect(screen.getByTestId('location-search').textContent).toBe(''));
+  });
+
   it('shows and dismisses a safe Copilot App callback result', async () => {
     render(<Wrapper initialEntries={['/projects?copilot_app_auth=success']}><ProjectGalleryPage /></Wrapper>);
 

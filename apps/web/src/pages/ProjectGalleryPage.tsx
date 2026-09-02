@@ -531,7 +531,16 @@ function CreateFromGitHubDialog({
   const styles = useStyles();
   const location = useLocation();
   const navigate = useNavigate();
-  const d = useCreateProjectDialog('github', onCreated);
+  const cleanupReturnQuery = useCallback(() => {
+    const next = new URLSearchParams(location.search);
+    next.delete('create');
+    next.delete('repo_app_auth');
+    navigate(`${location.pathname}${next.size > 0 ? `?${next.toString()}` : ''}`, { replace: true });
+  }, [location.pathname, location.search, navigate]);
+  const d = useCreateProjectDialog('github', (project) => {
+    cleanupReturnQuery();
+    onCreated(project);
+  });
   const { open, setOpen } = d;
   const { repos, reposLoading, reposError, reposConnectionRequired, reloadRepos } = useGitHubData(open);
   const [repoFilter, setRepoFilter] = useState('');
@@ -738,10 +747,7 @@ function CreateFromGitHubDialog({
         d.setOpen(open);
         if (!open) {
           resetLocal();
-          const next = new URLSearchParams(location.search);
-          next.delete('create');
-          next.delete('repo_app_auth');
-          navigate(`${location.pathname}${next.size > 0 ? `?${next.toString()}` : ''}`, { replace: true });
+          cleanupReturnQuery();
         }
       }}
       trigger={<Button appearance="subtle" icon={<GitHubIcon size={16} />}>Create from GitHub</Button>}
