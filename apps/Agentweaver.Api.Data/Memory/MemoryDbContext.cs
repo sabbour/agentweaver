@@ -647,7 +647,30 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<AutomationActivationRecord>(e =>
         {
-            e.ToTable("automation_activations").HasKey(x => x.Id);
+            e.ToTable("automation_activations", table =>
+                table.HasCheckConstraint(
+                    "CK_automation_activations_snapshot_tuple",
+                    """
+                    status <> 0 OR (
+                        (
+                            (installation_id IS NULL AND repository_id IS NULL AND repository_grant_digest IS NULL)
+                            OR
+                            (installation_id IS NOT NULL AND installation_id > 0 AND
+                                repository_id IS NOT NULL AND repository_id > 0 AND
+                                repository_grant_digest IS NOT NULL AND repository_grant_digest <> '')
+                        ) AND (
+                            (model_provider_source = 1 AND
+                                byok_provider_id IS NOT NULL AND byok_provider_id <> '' AND
+                                (copilot_binding_id IS NULL OR copilot_binding_id = '') AND
+                                (copilot_binding_grant_digest IS NULL OR copilot_binding_grant_digest = ''))
+                            OR
+                            (model_provider_source <> 1 AND
+                                copilot_binding_id IS NOT NULL AND copilot_binding_id <> '' AND
+                                copilot_binding_grant_digest IS NOT NULL AND copilot_binding_grant_digest <> '' AND
+                                (byok_provider_id IS NULL OR byok_provider_id = ''))
+                        ))
+                    """));
+            e.HasKey(x => x.Id);
             e.Property(x => x.Id).HasColumnName("id");
             e.Property(x => x.ProjectId).HasColumnName("project_id");
             e.Property(x => x.InstallationId).HasColumnName("installation_id");

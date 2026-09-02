@@ -306,7 +306,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.HasIndex("InstallationId", "RepositoryId");
 
-                    b.ToTable("automation_activations", (string)null);
+                    b.ToTable("automation_activations", t =>
+                        {
+                            t.HasCheckConstraint("CK_automation_activations_snapshot_tuple", "status <> 0 OR (\n    (\n        (installation_id IS NULL AND repository_id IS NULL AND repository_grant_digest IS NULL)\n        OR\n        (installation_id IS NOT NULL AND installation_id > 0 AND\n            repository_id IS NOT NULL AND repository_id > 0 AND\n            repository_grant_digest IS NOT NULL AND repository_grant_digest <> '')\n    ) AND (\n        (model_provider_source = 1 AND\n            byok_provider_id IS NOT NULL AND byok_provider_id <> '' AND\n            (copilot_binding_id IS NULL OR copilot_binding_id = '') AND\n            (copilot_binding_grant_digest IS NULL OR copilot_binding_grant_digest = ''))\n        OR\n        (model_provider_source <> 1 AND\n            copilot_binding_id IS NOT NULL AND copilot_binding_id <> '' AND\n            copilot_binding_grant_digest IS NOT NULL AND copilot_binding_grant_digest <> '' AND\n            (byok_provider_id IS NULL OR byok_provider_id = ''))\n    ))");
+                        });
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.AutomationInvocationRecord", b =>

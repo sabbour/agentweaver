@@ -16,10 +16,11 @@ namespace Agentweaver.Api.Migrations
                 WHEN NEW.status = 0 AND (
                     NOT (
                         (NEW.installation_id IS NULL AND NEW.repository_id IS NULL AND
-                            COALESCE(NEW.repository_grant_digest, '') = '')
+                            NEW.repository_grant_digest IS NULL)
                         OR
-                        (NEW.installation_id > 0 AND NEW.repository_id > 0 AND
-                            COALESCE(NEW.repository_grant_digest, '') != '')
+                        (NEW.installation_id IS NOT NULL AND NEW.installation_id > 0 AND
+                            NEW.repository_id IS NOT NULL AND NEW.repository_id > 0 AND
+                            NEW.repository_grant_digest IS NOT NULL AND NEW.repository_grant_digest != '')
                     ) OR
                     (NEW.model_provider_source = 1 AND (
                         COALESCE(NEW.byok_provider_id, '') = '' OR

@@ -37,9 +37,10 @@ public partial class AllowRepositorylessAutomationActivation : Migration
                 CHECK (status <> 0 OR (
                     (
                         (installation_id IS NULL AND repository_id IS NULL AND
-                            (repository_grant_digest IS NULL OR repository_grant_digest = ''))
+                            repository_grant_digest IS NULL)
                         OR
-                        (installation_id > 0 AND repository_id > 0 AND
+                        (installation_id IS NOT NULL AND installation_id > 0 AND
+                            repository_id IS NOT NULL AND repository_id > 0 AND
                             repository_grant_digest IS NOT NULL AND repository_grant_digest <> '')
                     ) AND (
                         (model_provider_source = 1 AND
