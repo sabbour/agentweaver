@@ -10,6 +10,7 @@ using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using LibGit2Sharp;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Skills;
@@ -189,6 +190,7 @@ public sealed class SkillCatalogService
     private readonly IGitHubSkillTreeClient? _treeClient;
     private readonly IMarketplaceCatalogIndexer? _catalogIndexer;
     private readonly MarketplaceCopilotCapabilityIssuer? _marketplaceCapabilityIssuer;
+    private readonly IServiceScopeFactory? _scopeFactory;
     private readonly ILogger<SkillCatalogService> _logger;
     private readonly ConcurrentDictionary<string, PreviewCloneCacheEntry> _previewCloneCache = new(StringComparer.Ordinal);
 
@@ -205,7 +207,8 @@ public sealed class SkillCatalogService
         IMarketplaceCatalogIndexer? catalogIndexer = null,
         IProjectRoleAuthorizationService? projectRoles = null,
         IConfiguration? configuration = null,
-        MarketplaceCopilotCapabilityIssuer? marketplaceCapabilityIssuer = null)
+        MarketplaceCopilotCapabilityIssuer? marketplaceCapabilityIssuer = null,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _skills = skills;
         _projects = projects;
@@ -218,6 +221,7 @@ public sealed class SkillCatalogService
         _treeClient = treeClient;
         _catalogIndexer = catalogIndexer;
         _marketplaceCapabilityIssuer = marketplaceCapabilityIssuer;
+        _scopeFactory = scopeFactory;
         _logger = logger;
     }
 
@@ -234,7 +238,8 @@ public sealed class SkillCatalogService
         IGitHubAccessTokenProvider? accessTokenProvider = null,
         IGitHubSkillTreeClient? treeClient = null,
         IMarketplaceCatalogIndexer? catalogIndexer = null,
-        MarketplaceCopilotCapabilityIssuer? marketplaceCapabilityIssuer = null)
+        MarketplaceCopilotCapabilityIssuer? marketplaceCapabilityIssuer = null,
+        IServiceScopeFactory? scopeFactory = null)
         : this(
             skills,
             projects,
@@ -248,7 +253,8 @@ public sealed class SkillCatalogService
             catalogIndexer,
             projectRoles,
             configuration,
-            marketplaceCapabilityIssuer)
+            marketplaceCapabilityIssuer,
+            scopeFactory)
     {
     }
 
@@ -614,6 +620,17 @@ public sealed class SkillCatalogService
             if (_marketplaceCapabilityIssuer is not null)
                 await _marketplaceCapabilityIssuer.PruneAsync(cts.Token).ConfigureAwait(false);
 
+            // Same precedence as every other model-provider consumer: deployment BYOK bypasses
+            // Copilot capability issuance entirely for the LLM classifier fallback.
+            var useByok = false;
+            if (_scopeFactory is not null)
+            {
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
+                var effectiveProvider = await resolver.ResolveAsync(project.Id, cts.Token).ConfigureAwait(false);
+                useByok = effectiveProvider is EffectiveModelProviderResult.Byok;
+            }
+
             // Anonymous-first, full recursive tree (subpath ""), no placeholder scratch files: candidates
             // are derived in-memory from the tree by the indexer, so browse never touches the filesystem.
             var blobs = await _treeClient.ListSubtreeBlobsAsync(owner, repo, branch, subpath: string.Empty, token: null, cts.Token).ConfigureAwait(false);
@@ -632,11 +649,12 @@ public sealed class SkillCatalogService
                     : issueCt => _marketplaceCapabilityIssuer.TryIssueAsync(project.Id, caller, issueCt),
                 hasCapabilityAsync: _marketplaceCapabilityIssuer is null
                     ? null
-                    : checkCt => _marketplaceCapabilityIssuer.HasActiveBindingAsync(project.Id, caller, checkCt))
+                    : checkCt => _marketplaceCapabilityIssuer.HasActiveBindingAsync(project.Id, caller, checkCt),
+                useByok: useByok)
                 .ConfigureAwait(false);
 
             if (index.RequiresGitHubConnection)
-                return (SkillOutcome.GitHubConnectionRequired, GitHubCopilotConnectionRequirement.RequirementMessage, null);
+                return (SkillOutcome.GitHubConnectionRequired, ModelProviderConnectionRequirement.RequirementMessage, null);
 
             if (index.Entries.Count == 0)
                 return (SkillOutcome.Invalid, AcceptedSkillSourceMessage, null);

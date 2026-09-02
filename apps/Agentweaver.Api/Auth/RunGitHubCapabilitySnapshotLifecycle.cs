@@ -57,7 +57,7 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
             // one-time migration input only and is never consulted on this new-run capture path.
 
-            var capture = await persistence.CaptureRootCapabilitySnapshotsAsync(runId, projectId, run.SubmittingUser, ct)
+            var capture = await persistence.CaptureRootCapabilitySnapshotsAsync(runId, projectId, ct)
 
                 .ConfigureAwait(false);
 

@@ -271,7 +271,7 @@ public sealed class SkillMarketplaceCatalogTests
             ProjectRef.Id, "github", "marketplace", "main", query: null, page: 1, pageSize: 25, Caller, CancellationToken.None);
 
         outcome.Should().Be(SkillOutcome.GitHubConnectionRequired);
-        error.Should().Be(GitHubCopilotConnectionRequirement.RequirementMessage);
+        error.Should().Be(ModelProviderConnectionRequirement.RequirementMessage);
         page.Should().BeNull();
         classifier.Invocations.Should().Be(0, "no capability must never dispatch a model turn");
     }
@@ -532,6 +532,65 @@ public sealed class SkillMarketplaceCatalogTests
         projectRoles: new AllowAllProjectRoles(),
         configuration: new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
 
+    [Fact]
+    public async Task Indexer_classifies_with_byok_bypassing_capability_issuance()
+    {
+        var classifier = new FakeByokClassifier(
+            [new MarketplaceCatalogEntry("skills/a", "a", "A skill.")]);
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
+
+        var index = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
+            "acme", "byok-repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: null, parseStrategy: "llm", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller,
+            issueCapabilityAsync: _ => throw new InvalidOperationException("BYOK must never issue a Copilot capability"),
+            hasCapabilityAsync: _ => throw new InvalidOperationException("BYOK must never check a Copilot capability"),
+            useByok: true);
+
+        index.Strategy.Should().Be("llm");
+        index.RequiresGitHubConnection.Should().BeFalse();
+        index.Entries.Should().ContainSingle(e => e.Location == "skills/a");
+        classifier.ByokInvocations.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Indexer_serves_a_cached_llm_result_to_a_byok_caller_without_a_capability_check()
+    {
+        var classifier = new FakeClassifier(
+            [new MarketplaceCatalogEntry("skills/a", "a", "A skill.")]);
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
+
+        _ = await indexer.GetOrBuildForProjectAsync(
+            "acme", "cached-repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: "capability-reference", parseStrategy: "llm", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller);
+
+        var byokBrowse = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
+            "acme", "cached-repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: null, parseStrategy: "llm", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller,
+            hasCapabilityAsync: _ => throw new InvalidOperationException("a BYOK caller must not check a Copilot binding"),
+            useByok: true);
+
+        byokBrowse.RequiresGitHubConnection.Should().BeFalse();
+        byokBrowse.Entries.Should().ContainSingle(e => e.Location == "skills/a");
+        classifier.Invocations.Should().Be(1, "the cached catalog must not dispatch another model turn");
+    }
+
+    [Fact]
+    public async Task Indexer_requires_connection_for_byok_classifier_unauthorized()
+    {
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), new UnavailableByokClassifier());
+
+        var index = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
+            "acme", "byok-unavailable-repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
+            capabilityReference: null, parseStrategy: "llm", CancellationToken.None,
+            projectId: ProjectRef.Id, caller: Caller, useByok: true);
+
+        index.RequiresGitHubConnection.Should().BeTrue();
+        index.Entries.Should().BeEmpty();
+    }
+
     private sealed class FakeClassifier(IReadOnlyList<MarketplaceCatalogEntry> result) : IMarketplaceCatalogClassifier
     {
         public int Invocations { get; private set; }
@@ -552,6 +611,33 @@ public sealed class SkillMarketplaceCatalogTests
         public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
             string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? capabilityRunId, CancellationToken ct) =>
             throw new GitHubCopilotUnauthorizedException("Connect a GitHub account with GitHub Copilot access.");
+    }
+
+    private sealed class FakeByokClassifier(IReadOnlyList<MarketplaceCatalogEntry> result) : IMarketplaceCatalogClassifier
+    {
+        public int ByokInvocations { get; private set; }
+
+        public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
+            string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? capabilityRunId, CancellationToken ct) =>
+            throw new InvalidOperationException("BYOK browse must call ClassifyWithByokAsync, not the capability-based path.");
+
+        public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyWithByokAsync(
+            string owner, string repo, string branch, IReadOnlyList<string> treePaths, CancellationToken ct)
+        {
+            ByokInvocations++;
+            return Task.FromResult<IReadOnlyList<MarketplaceCatalogEntry>?>(result);
+        }
+    }
+
+    private sealed class UnavailableByokClassifier : IMarketplaceCatalogClassifier
+    {
+        public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
+            string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? capabilityRunId, CancellationToken ct) =>
+            throw new InvalidOperationException("BYOK browse must call ClassifyWithByokAsync, not the capability-based path.");
+
+        public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyWithByokAsync(
+            string owner, string repo, string branch, IReadOnlyList<string> treePaths, CancellationToken ct) =>
+            throw new GitHubCopilotUnauthorizedException("BYOK provider unavailable.");
     }
 
     private sealed class RecordingTreeClient(IReadOnlyList<GitHubTreeBlob> blobs, Func<string, string?> content) : IGitHubSkillTreeClient

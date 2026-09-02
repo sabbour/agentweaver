@@ -23,7 +23,7 @@ public sealed class BacklogDecomposeCopilotCapabilityIssuer(IServiceScopeFactory
         var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
         var now = DateTimeOffset.UtcNow;
         var capability = await persistence.TryIssueProjectCopilotCapabilityAsync(
-            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            ProjectModelProviderCapabilityPurpose.BacklogDecomposition,
             projectId.ToString(),
             caller.EntraObjectId,
             now,

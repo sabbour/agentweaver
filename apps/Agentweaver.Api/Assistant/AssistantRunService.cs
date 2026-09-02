@@ -123,7 +123,6 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     private readonly IToolApprovalGate _approvalGate;
     private readonly AssistantRunOptions _options;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IByokProviderConfigurationProvider _byokProviderConfigurationProvider;
     private readonly bool _agentHostEnabled;
     private readonly ILogger<AssistantRunService> _logger;
 
@@ -147,7 +146,6 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         IToolApprovalGate approvalGate,
         IOptions<AssistantRunOptions> options,
         IServiceScopeFactory scopeFactory,
-        IByokProviderConfigurationProvider byokProviderConfigurationProvider,
         IConfiguration configuration,
         ILogger<AssistantRunService> logger)
     {
@@ -157,7 +155,6 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         _approvalGate = approvalGate;
         _options = options.Value;
         _scopeFactory = scopeFactory;
-        _byokProviderConfigurationProvider = byokProviderConfigurationProvider;
         _agentHostEnabled = string.Equals(
             configuration["Sandbox:AgentExecutionMode"],
             "pod-per-run",
@@ -253,7 +250,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         try
         {
             ProjectId? project = ProjectId.TryParse(projectId, out var pid) ? pid : null;
-            var modelSource = await ResolveAssistantModelSourceAsync(ct).ConfigureAwait(false);
+            var modelSource = await ResolveAssistantModelSourceAsync(project, ct).ConfigureAwait(false);
             var run = new Run
             {
                 Id = runId,
@@ -300,10 +297,26 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         return new StartAssistantRunResult(runId, RunStatus.InProgress, firstTurn);
     }
 
-    private async Task<ModelSource> ResolveAssistantModelSourceAsync(CancellationToken ct) =>
-        await _byokProviderConfigurationProvider.GetAsync(ct).ConfigureAwait(false) is null
-            ? ModelSource.GitHubCopilot
-            : ModelSource.Byok;
+    /// <summary>
+    /// Resolves the model source for a new Assistant run via the shared
+    /// <see cref="EffectiveModelProviderResolver"/> — for both project-context sessions (where a
+    /// project's own GitHub Copilot binding can override the platform default) and non-project
+    /// sessions (deployment BYOK, else the platform-default GitHub Copilot binding). This label only
+    /// drives bookkeeping and the agent-host capability gate below; a genuinely unavailable provider
+    /// is NOT fatal here — the in-API operator loop can still turn using the caller's own live bearer
+    /// token, exactly as before this resolver existed. <see cref="PrepareAgentHostCapabilityAsync"/>
+    /// remains the sole place that fails fast when agent-host mode actually needs a redeemable
+    /// capability and none is available.
+    /// </summary>
+    private async Task<ModelSource> ResolveAssistantModelSourceAsync(ProjectId? projectId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var modelProviderResolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
+        var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+        return effectiveProvider is EffectiveModelProviderResult.Byok
+            ? ModelSource.Byok
+            : ModelSource.GitHubCopilot;
+    }
 
     private async Task PrepareAgentHostCapabilityAsync(Run run, CancellationToken ct)
     {
@@ -314,8 +327,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
             throw run.ProjectId is { } projectId
-                ? new GitHubCopilotConnectionRequiredException(projectId)
-                : new GitHubCopilotConnectionRequiredException();
+                ? new ModelProviderConnectionRequiredException(projectId)
+                : new ModelProviderConnectionRequiredException();
     }
 
     public Task<OperatorAssistantResponse> SendMessageAsync(

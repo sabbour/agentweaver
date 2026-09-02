@@ -265,6 +265,8 @@ builder.Services.AddScoped<GitHubRepositorySelectionBroker>();
 builder.Services.AddScoped<Agentweaver.Api.Webhooks.RepoAppInstallationTokenService>();
 builder.Services.AddScoped<GitHubCapabilityBroker>();
 builder.Services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
+builder.Services.AddScoped<EffectiveModelProviderResolver>();
+builder.Services.AddScoped<Agentweaver.Api.Auth.GenerationModelProviderExecutor>();
 builder.Services.AddScoped<BrowserEntraSessionService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<Agentweaver.Domain.BlueprintPackages.IAuthenticatedOwnerContext,

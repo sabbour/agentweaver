@@ -330,9 +330,19 @@ public sealed class CoordinatorRunService
             return;
 
         await using var scope = _scopeFactory.CreateAsyncScope();
+        // BYOK-active runs never need a GitHub Copilot capability snapshot at pod startup — only
+        // require (and fence) one when the resolver's result is actually Copilot-sourced, matching
+        // the same precedence every other model-provider consumer uses.
+        var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
+        var effectiveProvider = await resolver.ResolveAsync(run.ProjectId, ct).ConfigureAwait(false);
+        if (effectiveProvider is EffectiveModelProviderResult.Byok)
+            return;
+        if (effectiveProvider is EffectiveModelProviderResult.Unavailable)
+            throw new ModelProviderConnectionRequiredException(run.ProjectId!.Value);
+
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
-            throw new GitHubCopilotConnectionRequiredException(run.ProjectId!.Value);
+            throw new ModelProviderConnectionRequiredException(run.ProjectId!.Value);
     }
 
     private async Task<string?> ResolveOutcomeSpecGenerationModelAsync(ProjectId projectId, CancellationToken ct)
