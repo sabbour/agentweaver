@@ -37,16 +37,31 @@ import { AssistantRoute } from './routes/AssistantRoute';
 import { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { PageContainer, PageHeader, SetupReadiness } from './components/ui';
+import {
+  clearRequiredSetupPending,
+  hasRequiredSetupPending,
+} from './components/onboarding/firstRunTourStorage';
 
 function Shell({
   isPlatformAdmin,
   onAiConfigurationChanged,
+  startFirstRunTour,
+  tourUserKey,
+  onFirstRunTourStarted,
 }: {
   isPlatformAdmin: boolean;
   onAiConfigurationChanged?: () => void;
+  startFirstRunTour?: boolean;
+  tourUserKey?: string | null;
+  onFirstRunTourStarted?: () => void;
 }) {
   return (
-    <AppShell isPlatformAdmin={isPlatformAdmin}>
+    <AppShell
+      isPlatformAdmin={isPlatformAdmin}
+      startFirstRunTour={startFirstRunTour}
+      tourUserKey={tourUserKey}
+      onFirstRunTourStarted={onFirstRunTourStarted}
+    >
       <Routes>
         {/* Global (non-project) destinations */}
         <Route path="/" element={<OverviewPage />} />
@@ -146,6 +161,9 @@ function AuthGate() {
   const [hasPlatformAccess, setHasPlatformAccess] = useState(false);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(true);
+  const [tourUserKey, setTourUserKey] = useState<string | null>(null);
+  const [startFirstRunTour, setStartFirstRunTour] = useState(false);
+  const [requiredSetupPending, setRequiredSetupPending] = useState(hasRequiredSetupPending);
   const [sessionError, setSessionError] = useState<string | null>(null);
 
   const runSessionCheck = useCallback(async (cancelledRef?: { cancelled: boolean }) => {
@@ -155,6 +173,7 @@ function AuthGate() {
     setSignedIn(false);
     setHasPlatformAccess(false);
     setIsPlatformAdmin(false);
+    setTourUserKey(null);
 
     try {
       await captureSessionAuthFromUrl();
@@ -164,6 +183,8 @@ function AuthGate() {
       if (cancelledRef?.cancelled) return;
       setSessionError(null);
       if (!session.authenticated) {
+        clearRequiredSetupPending();
+        setRequiredSetupPending(false);
         clearSessionAuth();
         setSignedIn(false);
         setHasPlatformAccess(false);
@@ -176,18 +197,35 @@ function AuthGate() {
       setHasPlatformAccess(roles.length > 0);
       setIsPlatformAdmin(roles.includes('PlatformAdmin'));
       setAiConfigured(session.ai_configured);
+      setTourUserKey(session.entra_object_id ?? session.login);
       setSignedIn(true);
       setAuthChecked(true);
     } catch (err: unknown) {
       if (cancelledRef?.cancelled) return;
       clearSessionAuth();
+      if (err instanceof ApiError && err.status === 401) {
+        clearRequiredSetupPending();
+        setRequiredSetupPending(false);
+      }
       setSignedIn(false);
       setHasPlatformAccess(false);
       setIsPlatformAdmin(false);
+      setTourUserKey(null);
       setAiConfigured(true);
       setSessionError(describeSessionCheckError(err));
       setAuthChecked(true);
     }
+  }, []);
+
+  const completeRequiredSetup = useCallback(() => {
+    clearRequiredSetupPending();
+    setRequiredSetupPending(false);
+    setStartFirstRunTour(true);
+    void runSessionCheck();
+  }, [runSessionCheck]);
+
+  const handleFirstRunTourStarted = useCallback(() => {
+    setStartFirstRunTour(false);
   }, []);
 
   useEffect(() => {
@@ -233,13 +271,13 @@ function AuthGate() {
     );
   }
 
-  if (!aiConfigured) {
+  if (!aiConfigured || (isPlatformAdmin && requiredSetupPending)) {
     if (isPlatformAdmin) {
       return (
         <Routes>
           <Route
             path="/platform-settings"
-            element={<PlatformSettingsPage setupRequired onRetryAccess={() => { void runSessionCheck(); }} />}
+            element={<PlatformSettingsPage setupRequired onRetryAccess={completeRequiredSetup} />}
           />
           <Route path="*" element={<Navigate to="/platform-settings" replace />} />
         </Routes>
@@ -269,7 +307,15 @@ function AuthGate() {
     );
   }
 
-  return <Shell isPlatformAdmin={isPlatformAdmin} onAiConfigurationChanged={() => { void runSessionCheck(); }} />;
+  return (
+    <Shell
+      isPlatformAdmin={isPlatformAdmin}
+      onAiConfigurationChanged={() => { void runSessionCheck(); }}
+      startFirstRunTour={startFirstRunTour}
+      tourUserKey={tourUserKey}
+      onFirstRunTourStarted={handleFirstRunTourStarted}
+    />
+  );
 }
 
 function App() {

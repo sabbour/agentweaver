@@ -19,7 +19,10 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
-function renderPage(initialEntry = '/platform-settings', props: { onRetryAccess?: () => void } = {}) {
+function renderPage(
+  initialEntry = '/platform-settings',
+  props: { setupRequired?: boolean; onRetryAccess?: () => void } = {},
+) {
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <AzureFluentProvider density="compact">
@@ -46,6 +49,7 @@ const customProvider = {
 
 describe('PlatformSettingsPage', () => {
   beforeEach(() => {
+    sessionStorage.clear();
     vi.mocked(apiClient.listByokProviders).mockReset();
     vi.mocked(apiClient.addByokProvider).mockReset();
     vi.mocked(apiClient.updateByokProvider).mockReset();
@@ -71,7 +75,7 @@ describe('PlatformSettingsPage', () => {
 
     expect(await screen.findByText('Platform settings')).toBeDefined();
     expect(await screen.findByText('GitHub Copilot')).toBeDefined();
-    expect(await screen.findAllByText('Authorize GitHub Copilot to use it as the platform model provider.')).toHaveLength(1);
+    expect(await screen.findAllByText('Authorize GitHub Copilot to use it as the active model provider.')).toHaveLength(1);
     expect(screen.getByText('Action required')).toBeDefined();
     // The GitHub Copilot card shows "Active" (no BYOK provider is active).
     const copilotHeading = screen.getByText('GitHub Copilot');
@@ -79,12 +83,45 @@ describe('PlatformSettingsPage', () => {
     expect(within(card as HTMLElement).getByText('Active')).toBeDefined();
   });
 
+  it('keeps all provider setup paths visible during required setup', async () => {
+    vi.mocked(apiClient.listByokProviders).mockResolvedValue(emptyList);
+    renderPage('/platform-settings', { setupRequired: true });
+
+    expect(await screen.findByText('Set up Agentweaver')).toBeDefined();
+    expect(screen.getByText('Connect a model provider')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Authorize GitHub Copilot' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Add provider' })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }));
+    expect(await screen.findByRole('dialog')).toBeDefined();
+    expect(screen.getByText('Azure OpenAI')).toBeDefined();
+    expect(screen.getByText('Anthropic')).toBeDefined();
+  });
+
+  it('waits for Continue before it opens Agentweaver after required setup', async () => {
+    const onRetryAccess = vi.fn();
+    vi.mocked(apiClient.listByokProviders).mockResolvedValue(emptyList);
+    vi.mocked(apiClient.getPlatformDefaultCopilotConnection).mockResolvedValue({
+      connected: true,
+      github_login: 'octocat',
+    });
+
+    renderPage('/platform-settings', { setupRequired: true, onRetryAccess });
+
+    const continueButton = await screen.findByRole('button', { name: 'Continue to Agentweaver' });
+    expect(onRetryAccess).not.toHaveBeenCalled();
+
+    fireEvent.click(continueButton);
+
+    expect(onRetryAccess).toHaveBeenCalledTimes(1);
+  });
+
   it('lists configured custom providers below GitHub Copilot', async () => {
     vi.mocked(apiClient.listByokProviders).mockResolvedValue({
       active_provider_id: null,
       providers: [customProvider],
     });
-    renderPage();
+    renderPage('/platform-settings', { setupRequired: true });
 
     expect(await screen.findByText('My custom endpoint')).toBeDefined();
     expect(screen.getByText(/Custom endpoint · my-model/)).toBeDefined();
@@ -265,12 +302,13 @@ describe('PlatformSettingsPage', () => {
       transaction_id: 'txn',
       expires_at: '2026-08-31T12:00:00Z',
     });
-    renderPage();
+    renderPage('/platform-settings', { setupRequired: true });
 
     fireEvent.click((await screen.findAllByRole('button', { name: 'Authorize GitHub Copilot' }))[0]);
 
     await waitFor(() => expect(apiClient.beginPlatformDefaultCopilotAuthorization).toHaveBeenCalled());
     expect(assign).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?state=test');
+    expect(sessionStorage.getItem('agentweaver.requiredSetup.pending')).toBe('1');
     assign.mockRestore();
   });
 

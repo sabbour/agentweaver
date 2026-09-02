@@ -22,6 +22,7 @@ import {
 } from 'vitest';
 import type { Project } from '../api/types';
 import type { ReactNode } from 'react';
+import type { AppShellProps } from '../components/shell/AppShell';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     listProjects: vi.fn(),
@@ -70,11 +71,15 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
-function renderShellAt(path: string, isPlatformAdmin = false) {
+function renderShellAt(
+  path: string,
+  isPlatformAdmin = false,
+  props: Partial<AppShellProps> = {},
+) {
   return render(
     <Wrapper>
       <MemoryRouter initialEntries={[path]}>
-        <AppShell isPlatformAdmin={isPlatformAdmin}>
+        <AppShell isPlatformAdmin={isPlatformAdmin} {...props}>
           <Routes>
             <Route path="/" element={<div>Gallery</div>} />
             <Route path="/overview" element={<div>Overview content</div>} />
@@ -207,6 +212,28 @@ describe('AppShell navigation', () => {
     expect(within(settingsSurface).getByText('Account settings')).toBeDefined();
     expect(within(settingsSurface).getByText('Platform settings')).toBeDefined();
     expect(within(settingsSurface).getByText('Project settings')).toBeDefined();
+  });
+
+  it('starts the first-run tour once and lets the user replay it', async () => {
+    const onFirstRunTourStarted = vi.fn();
+    renderShellAt('/overview', true, {
+      startFirstRunTour: true,
+      tourUserKey: 'sabbour',
+      onFirstRunTourStarted,
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Create a project' })).toBeDefined();
+    expect(onFirstRunTourStarted).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skip tour' }));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Create a project' })).toBeNull());
+    expect(localStorage.getItem('agentweaver.firstRunTour.v1.sabbour')).toBe('complete');
+
+    fireEvent.click(screen.getByTestId('settings-menu-button'));
+    const settingsSurface = await screen.findByTestId('settings-menu-popover');
+    fireEvent.click(within(settingsSurface).getByRole('button', { name: 'Take product tour' }));
+
+    expect(await screen.findByRole('heading', { name: 'Create a project' })).toBeDefined();
   });
 
   it('shows the shared GitHub Copilot connection action for a typed capability requirement', async () => {
