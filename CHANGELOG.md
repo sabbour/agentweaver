@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.26.1
+
+### Patch Changes
+
+- b8eee54: Show full cluster resource names in the Resource topology graph so warm-pool, claim, and pod nodes stay distinguishable instead of collapsing to the same truncated label.
+- c547a25: Fix the Sessions nav item rendering underlined/regular weight instead of matching other nav items (missing `aw-nav-item` class after the disclosure-to-Link conversion), and restore the expanded "New session" button to standard size to match other square icon buttons.
+- 724e649: Make workflow diagrams render larger and better centered in graph view and visual edit mode.
+- b4b7a33: Restore GitHub connection callbacks to the page that started them, and reopen GitHub project flows after a successful Repo App return so repository access is recognized immediately.
+
 ## 0.26.0
 
 ### Minor Changes
