@@ -268,7 +268,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("copilot_binding_id");
 
-                    b.Property<long>("InstallationId")
+                    b.Property<long?>("InstallationId")
                         .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
@@ -289,7 +289,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("repository_grant_digest");
 
-                    b.Property<long>("RepositoryId")
+                    b.Property<long?>("RepositoryId")
                         .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
@@ -2721,7 +2721,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .WithMany()
                         .HasForeignKey("InstallationId", "RepositoryId")
                         .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
                         .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
                 });
 

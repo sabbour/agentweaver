@@ -169,8 +169,8 @@ public sealed class AutomationActivationRecord
 {
     public string Id { get; set; } = "";
     public string ProjectId { get; set; } = "";
-    public long InstallationId { get; set; }
-    public long RepositoryId { get; set; }
+    public long? InstallationId { get; set; }
+    public long? RepositoryId { get; set; }
     /// <summary>Non-reversible digest of the exact provider-owned repository grant.</summary>
     public string? RepositoryGrantDigest { get; set; }
     /// <summary>Opaque identity of the exact project-scoped Copilot binding.</summary>

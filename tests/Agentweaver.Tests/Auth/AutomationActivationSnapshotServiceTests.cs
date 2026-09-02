@@ -7,6 +7,7 @@ using Agentweaver.Domain;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -157,6 +158,7 @@ public sealed class AutomationActivationSnapshotServiceTests
         (await db.AutomationActivations.SingleAsync()).Status.Should().Be(AutomationActivationStatus.Invalidated);
         (await service.TryFenceAsync(first.Activation!.ActivationId)).Should().BeNull();
 
+        service = CreateService(db, roles);
         var second = await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
         second.Outcome.Should().Be(AutomationActivationOutcome.Activated);
         await new RepoAppInstallationLifecycleService(db).InvalidateForPermissionChangeAsync(1, 10);
@@ -210,7 +212,9 @@ public sealed class AutomationActivationSnapshotServiceTests
             Model: "my-model", ApiKey: "sk-secret"), CancellationToken.None);
         await byokSettings.SetActiveAsync(provider.Id, CancellationToken.None);
         var service = new AutomationActivationSnapshotService(
-            new GitHubConnectionsPersistenceStore(db, byokSettings: byokSettings), roles);
+            new GitHubConnectionsPersistenceStore(db, byokSettings: byokSettings),
+            roles,
+            AutomationTestServices.CreateModelProviderResolver(db, byokSecrets, byokSettings));
 
         var result = await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
 
@@ -237,6 +241,80 @@ public sealed class AutomationActivationSnapshotServiceTests
         // ...and fails once BYOK is switched off entirely (back to GitHub Copilot mode).
         await byokSettings.SetActiveAsync(null, CancellationToken.None);
         (await service.TryFenceAsync(result.Activation.ActivationId)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Activate_BlankProjectWithProjectCopilotBinding_DoesNotRequireRepositoryTuple()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var project = await SeedProjectAsync(db, blankOrigin: true);
+        db.ProjectCopilotBindings.Add(Binding(project, "binding", "copilot-digest"));
+        await db.SaveChangesAsync();
+        var roles = new MutableRoles();
+        roles.SetOwner(project, "owner");
+
+        var result = await CreateService(db, roles).ActivateAsync(Human("owner"), HumanPrincipal(), project);
+
+        result.Outcome.Should().Be(AutomationActivationOutcome.Activated);
+        result.Activation!.InstallationId.Should().BeNull();
+        result.Activation.RepositoryId.Should().BeNull();
+        result.Activation.RepositoryGrantDigest.Should().BeNull();
+        result.Activation.CopilotBindingId.Should().Be("binding");
+        (await CreateService(db, roles).TryFenceAsync(result.Activation.ActivationId)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Activate_ProjectBindingWinsOverActiveByok()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var project = await SeedProjectAsync(db, blankOrigin: true);
+        db.ProjectCopilotBindings.Add(Binding(project, "binding", "copilot-digest"));
+        await db.SaveChangesAsync();
+        var roles = new MutableRoles();
+        roles.SetOwner(project, "owner");
+        var secrets = new InMemorySecretStore();
+        await secrets.SetSecretAsync(
+            "copilot-app-project-binding-version",
+            """{"status":"signed-in","accessToken":"token","expiresAt":"2099-01-01T00:00:00Z"}""");
+        var byok = new ByokProviderConfigurationService(secrets);
+        var provider = await byok.AddAsync(new ByokProviderConfiguration(
+            string.Empty, "BYOK", "openai", "https://api.example.com/v1", "model", "key"),
+            CancellationToken.None);
+        await byok.SetActiveAsync(provider.Id, CancellationToken.None);
+        var persistence = new GitHubConnectionsPersistenceStore(db, byokSettings: byok);
+        var service = new AutomationActivationSnapshotService(
+            persistence,
+            roles,
+            new EffectiveModelProviderResolver(persistence, byok, secrets));
+
+        var result = await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
+
+        result.Outcome.Should().Be(AutomationActivationOutcome.Activated);
+        result.Activation!.ModelProviderSource.Should().Be(AutomationModelProviderSource.GitHubCopilot);
+        result.Activation.CopilotBindingId.Should().Be("binding");
+        result.Activation.ByokProviderId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ActiveSnapshotRejectsPartialRepositoryTuple()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var project = await SeedProjectAsync(db, blankOrigin: true);
+        db.AutomationActivations.Add(new AutomationActivationRecord
+        {
+            Id = SnapshotRef.Create().Value,
+            ProjectId = project.ToString(),
+            InstallationId = 1,
+            RepositoryId = null,
+            RepositoryGrantDigest = null,
+            ModelProviderSource = AutomationModelProviderSource.Byok,
+            ByokProviderId = "provider",
+            AutomationKey = "partial",
+            Status = AutomationActivationStatus.Active,
+            ActivatedAt = DateTimeOffset.UtcNow,
+        });
+
+        await FluentActions.Invoking(() => db.SaveChangesAsync()).Should().ThrowAsync<DbUpdateException>();
     }
 
     [Fact]
@@ -303,16 +381,20 @@ public sealed class AutomationActivationSnapshotServiceTests
     }
 
     private static AutomationActivationSnapshotService CreateService(MemoryDbContext db, MutableRoles roles) =>
-        new(new GitHubConnectionsPersistenceStore(db), roles);
+        AutomationTestServices.CreateActivationService(db, roles);
 
     private static CallerContext Human(string subject) => new() { User = subject, EntraObjectId = subject };
     private static ClaimsPrincipal HumanPrincipal() =>
         new(new ClaimsIdentity([new Claim("oid", "owner")], "test"));
 
-    private static async Task<ProjectId> SeedProjectAsync(MemoryDbContext db)
+    private static async Task<ProjectId> SeedProjectAsync(MemoryDbContext db, bool blankOrigin = false)
     {
         var project = ProjectId.New();
-        db.Projects.Add(new ProjectRecord { ProjectId = project.ToString() });
+        db.Projects.Add(new ProjectRecord
+        {
+            ProjectId = project.ToString(),
+            OriginKind = blankOrigin ? "blank" : "github",
+        });
         await db.SaveChangesAsync();
         return project;
     }
@@ -335,7 +417,7 @@ public sealed class AutomationActivationSnapshotServiceTests
     private static ProjectCopilotBindingRecord Binding(ProjectId project, string id, string digest) => new()
     {
         Id = id, ProjectId = project.ToString(), EntraObjectId = "owner",
-        CredentialReference = $"credential-{id}", CredentialVersion = $"version-{id}", GrantDigest = digest,
+        CredentialReference = $"copilot-app-project-{id}-version", CredentialVersion = $"version-{id}", GrantDigest = digest,
         Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
     };
 
