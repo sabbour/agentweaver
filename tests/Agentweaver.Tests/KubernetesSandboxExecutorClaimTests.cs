@@ -416,6 +416,41 @@ public sealed class KubernetesSandboxExecutorClaimTests
             .WithMessage("*live run-bound Copilot capability snapshot*");
     }
 
+    /// <summary>
+    /// Regression for the recurring "Cannot launch AgentHost pod ... without a live run-bound
+    /// Copilot capability snapshot" production incident: a capability provider IS configured (the
+    /// run's snapshot metadata exists and was accepted at prepare time), but the credential it
+    /// resolves to could not be redeemed — e.g. the bound GitHub Copilot App connection's Key
+    /// Vault secret is missing/stale (observed live via
+    /// "Copilot App connection for project ... has an active binding record but its credential
+    /// secret is missing."). This is a normal, user-actionable "reconnect GitHub" condition and
+    /// must surface as <see cref="ModelProviderConnectionRequiredException"/> (which the frontend
+    /// already renders as a "Connect GitHub" CTA), not as an opaque internal
+    /// <see cref="InvalidOperationException"/> that gets wrapped into a generic 500.
+    /// </summary>
+    [Fact]
+    public async Task LaunchAgentHostPod_surfaces_connection_required_when_configured_credential_provider_cannot_redeem()
+    {
+        var projectId = ProjectId.New();
+        var executor = NewExecutor(
+            new FakeKubeHandler(),
+            new StubSubmittingUserResolver("sabbour", projectId.ToString()),
+            copilotCredentials: new NullGitHubCopilotCapabilityCredentialProvider());
+
+        var act = () => executor.LaunchAgentHostPodAsync("run-with-stale-snapshot");
+
+        var exception = await act.Should().ThrowAsync<ModelProviderConnectionRequiredException>();
+        exception.Which.Requirement.Action.ProjectId.Should().Be(projectId.ToString());
+    }
+
+    private sealed class NullGitHubCopilotCapabilityCredentialProvider : IGitHubCopilotCapabilityCredentialProvider
+    {
+        public Task<GitHubCapabilitySnapshotCredential?> GetCredentialAsync(
+            string runId,
+            CancellationToken ct = default) =>
+            Task.FromResult<GitHubCapabilitySnapshotCredential?>(null);
+    }
+
     [Fact]
     public async Task AgentHostCredentialProvider_allows_only_configured_live_run_credential()
     {
