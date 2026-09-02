@@ -77,19 +77,6 @@ public sealed class GitHubConnectionsCredentialArchitectureTests
     }
 
     [Fact]
-    public void InternalBrokerAuthorization_RequiresPurposeAndOpaqueSnapshot()
-    {
-        var authorize = typeof(GitHubCapabilityBroker).GetMethod(
-            "TryAuthorizeAsync",
-            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-
-        authorize.Should().NotBeNull();
-        authorize!.GetParameters().Take(2).Select(parameter => parameter.ParameterType)
-            .Should().Equal(typeof(GitHubCapabilityPurpose), typeof(SnapshotRef));
-        authorize.GetParameters().Should().NotContain(parameter => parameter.IsOptional);
-    }
-
-    [Fact]
     public void ProjectOperationCredentialBroker_RequiresPurposeAndBoundOpaqueInputs()
     {
         var credential = typeof(GitHubCapabilityBroker).GetMethod(
@@ -100,7 +87,7 @@ public sealed class GitHubConnectionsCredentialArchitectureTests
         credential!.GetParameters().Take(5).Select(parameter => parameter.ParameterType.FullName)
             .Should().Equal(
                 typeof(SnapshotRef).FullName,
-                "Agentweaver.Domain.GitHubProjectCopilotCapabilityPurpose",
+                "Agentweaver.Domain.ProjectModelProviderCapabilityPurpose",
                 typeof(string).FullName,
                 typeof(string).FullName,
                 typeof(DateTimeOffset).FullName);

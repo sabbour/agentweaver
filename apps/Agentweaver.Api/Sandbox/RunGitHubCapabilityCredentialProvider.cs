@@ -33,14 +33,14 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
             capabilityReference,
             projectId,
             entraObjectId,
-            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
             ct).ConfigureAwait(false);
 
     async Task<GitHubCapabilitySnapshotCredential?> IGitHubCopilotCapabilityCredentialProvider.GetProjectOperationCredentialAsync(
         string capabilityReference,
         string projectId,
         string entraObjectId,
-        GitHubProjectCopilotCapabilityPurpose purpose,
+        ProjectModelProviderCapabilityPurpose purpose,
         CancellationToken ct) =>
         await GetProjectOperationCredentialAsync(capabilityReference, projectId, entraObjectId, purpose, ct)
             .ConfigureAwait(false);
@@ -49,7 +49,7 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
         string capabilityReference,
         string projectId,
         string entraObjectId,
-        GitHubProjectCopilotCapabilityPurpose purpose,
+        ProjectModelProviderCapabilityPurpose purpose,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(capabilityReference) ||

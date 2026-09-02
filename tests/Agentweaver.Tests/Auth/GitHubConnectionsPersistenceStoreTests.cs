@@ -559,8 +559,6 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         var rootSnapshots = await persistence.GetCapabilitySnapshotsAsync(root.Id.ToString());
         rootSnapshots.Select(snapshot => snapshot.Purpose).Should().BeEquivalentTo(
         [
-            GitHubCapabilityPurpose.InteractiveRepository,
-            GitHubCapabilityPurpose.InteractiveCopilot,
             GitHubCapabilityPurpose.UnattendedRepository,
             GitHubCapabilityPurpose.UnattendedCopilot,
         ]);
@@ -596,9 +594,12 @@ public sealed class GitHubConnectionsPersistenceStoreTests
             rootSnapshots.Select(snapshot => snapshot.SnapshotRef));
 
         var revokedAt = DateTimeOffset.UtcNow;
-        await db.GitHubAppAuthorizations
-            .Where(authorization => authorization.Id == "authorization")
-            .ExecuteUpdateAsync(update => update.SetProperty(authorization => authorization.RevokedAt, revokedAt));
+        // Revoking the underlying repository installation (rather than the now-unused Interactive
+        // repo-app-user authorization) is what makes the persisted UnattendedRepository snapshot
+        // re-fence as unavailable for root/child/retry alike.
+        await db.GitHubInstallations
+            .Where(installation => installation.InstallationId == 101)
+            .ExecuteUpdateAsync(update => update.SetProperty(installation => installation.RevokedAt, revokedAt));
         (await lifecycle.PrepareForLaunchAsync(root, CancellationToken.None)).Should().BeFalse();
         (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeFalse();
         (await lifecycle.PrepareForLaunchAsync(retry, CancellationToken.None)).Should().BeFalse();
@@ -784,8 +785,8 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenGitHubOriginProjectHasHistoryButNoLiveSource()
     {
         // The GitHub-origin project has recorded GitHub App history (a now-revoked installation)
-        // but currently resolves none of the four purposes: this must fail closed, not silently
-        // launch with zero capability protection.
+        // but currently resolves neither the unattended-repository nor unattended-Copilot purpose:
+        // this must fail closed, not silently launch with zero capability protection.
         await using var connection = await OpenDatabaseAsync();
         await using var db = new MemoryDbContext(Options(connection));
         var projectId = ProjectId.New();
@@ -968,48 +969,6 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     }
 
     [Fact]
-    public async Task Broker_UsesOnlyFencedSnapshotAndReturnsNoCredentialMaterial()
-    {
-        await using var connection = await OpenDatabaseAsync();
-        var options = Options(connection);
-        await using var db = new MemoryDbContext(options);
-        await SeedCapabilitySourcesAsync(db);
-        var persistence = new GitHubConnectionsPersistenceStore(db);
-        var snapshot = CapabilitySnapshot(GitHubCapabilityPurpose.InteractiveRepository);
-        (await persistence.TryInsertCapabilitySnapshotAsync(snapshot)).Should().BeTrue();
-        var secrets = new InMemorySecretStore();
-        var vault = new GitHubConnectionsCredentialVault(secrets);
-        var token = "g" + "hu_broker_test";
-        await vault.WriteAsync(
-            GitHubConnectionsCredentialLocator.ForRepoAppUser("repo-app-user-credential-version"),
-            $"{{\"status\":\"signed-in\",\"accessToken\":\"{token}\"}}");
-        var tokenService = new RepoAppInstallationTokenService(
-            new ConfigurationBuilder().AddInMemoryCollection().Build(),
-            db,
-            secrets,
-            new NullHttpClientFactory());
-        var broker = new GitHubCapabilityBroker(persistence, vault, tokenService);
-        var now = DateTimeOffset.UtcNow;
-
-        var result = await broker.TryAuthorizeAsync(
-            snapshot.Purpose,
-            new SnapshotRef(snapshot.SnapshotRef),
-            GitHubCapabilityOperation.RepositoryRead,
-            now,
-            CancellationToken.None);
-
-        result.Outcome.Should().Be(GitHubCapabilityBrokerOutcome.Issued);
-        result.Grant!.ExpiresAt.Should().Be(now.Add(GitHubCapabilityBroker.MaximumCapabilityLifetime));
-        JsonSerializer.Serialize(result.Grant).Should().NotContain(token);
-        (await broker.TryAuthorizeAsync(
-            snapshot.Purpose,
-            new SnapshotRef(snapshot.SnapshotRef),
-            GitHubCapabilityOperation.CopilotInference,
-            now,
-            CancellationToken.None)).Outcome.Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
-    }
-
-    [Fact]
     public async Task MarketplaceCapability_ConnectIssueClassifyAndRetry_IsBoundShortLivedAndSingleUse()
     {
         await using var connection = await OpenDatabaseAsync();
@@ -1037,9 +996,14 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         });
         await db.SaveChangesAsync();
 
-        // A binding belonging to another human subject cannot grant this caller a capability.
-        (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
-            projectId.ToString(), "other-entra", now, now.AddMinutes(2))).Should().BeNull();
+        // Any authorized project member may be issued a capability against the project's
+        // effective binding -- issuance is not restricted to the literal binding owner, since the
+        // resolver's precedence is per-project, not per-caller.
+        var otherMemberCapability = await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
+            projectId.ToString(), "other-entra", now, now.AddMinutes(2));
+        otherMemberCapability.Should().NotBeNull();
+        (await db.MarketplaceCopilotCapabilities.CountAsync(x => x.CapabilityRef == otherMemberCapability!.Value))
+            .Should().Be(1);
 
         var capability = (await persistence.TryIssueMarketplaceCopilotCapabilityAsync(
             projectId.ToString(), "entra", now, now.AddMinutes(2)))!;
@@ -1092,7 +1056,7 @@ public sealed class GitHubConnectionsPersistenceStoreTests
             capability, projectId.ToString(), "entra", now, (_, _) => Task.CompletedTask, CancellationToken.None))
             .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
         var expired = SnapshotRef.Create();
-        db.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+        db.MarketplaceCopilotCapabilities.Add(new ProjectModelProviderCapabilityRecord
         {
             CapabilityRef = expired.Value,
             ProjectId = projectId.ToString(),
@@ -1141,7 +1105,7 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         await db.SaveChangesAsync();
         var persistence = new GitHubConnectionsPersistenceStore(db);
         var capability = (await persistence.TryIssueProjectCopilotCapabilityAsync(
-            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            ProjectModelProviderCapabilityPurpose.BacklogDecomposition,
             "project",
             "entra",
             now,
@@ -1167,7 +1131,7 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         var modelTurns = 0;
 
         async Task<GitHubCapabilityBrokerOutcome> RedeemAsync(
-            GitHubProjectCopilotCapabilityPurpose purpose,
+            ProjectModelProviderCapabilityPurpose purpose,
             string projectId,
             string entraObjectId) =>
             await broker.TryUseProjectCopilotCredentialAsync(
@@ -1184,29 +1148,29 @@ public sealed class GitHubConnectionsPersistenceStoreTests
                 CancellationToken.None);
 
         (await RedeemAsync(
-            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification, "project", "entra"))
+            ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification, "project", "entra"))
             .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
         (await RedeemAsync(
-            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "other-project", "entra"))
+            ProjectModelProviderCapabilityPurpose.BacklogDecomposition, "other-project", "entra"))
             .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
         (await RedeemAsync(
-            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "project", "other-entra"))
+            ProjectModelProviderCapabilityPurpose.BacklogDecomposition, "project", "other-entra"))
             .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
         modelTurns.Should().Be(0, "no model turn can occur before the exact capability is redeemed");
 
         (await RedeemAsync(
-            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "project", "entra"))
+            ProjectModelProviderCapabilityPurpose.BacklogDecomposition, "project", "entra"))
             .Should().Be(GitHubCapabilityBrokerOutcome.Issued);
         modelTurns.Should().Be(1);
         (await RedeemAsync(
-            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition, "project", "entra"))
+            ProjectModelProviderCapabilityPurpose.BacklogDecomposition, "project", "entra"))
             .Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
 
         var expired = SnapshotRef.Create();
-        db.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+        db.MarketplaceCopilotCapabilities.Add(new ProjectModelProviderCapabilityRecord
         {
             CapabilityRef = expired.Value,
-            Purpose = (int)GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            Purpose = (int)ProjectModelProviderCapabilityPurpose.BacklogDecomposition,
             ProjectId = "project",
             EntraObjectId = "entra",
             SourceBindingId = "backlog-binding",
@@ -1220,7 +1184,7 @@ public sealed class GitHubConnectionsPersistenceStoreTests
 
         (await broker.TryUseProjectCopilotCredentialAsync(
             expired,
-            GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+            ProjectModelProviderCapabilityPurpose.BacklogDecomposition,
             "project",
             "entra",
             now,
@@ -1240,7 +1204,7 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         await using var db = new MemoryDbContext(Options(connection));
         var now = DateTimeOffset.UtcNow;
         db.MarketplaceCopilotCapabilities.AddRange(Enumerable.Range(0, 101).Select(index =>
-            new MarketplaceCopilotCapabilityRecord
+            new ProjectModelProviderCapabilityRecord
             {
                 CapabilityRef = SnapshotRef.Create().Value,
                 ProjectId = "project",
@@ -1266,7 +1230,7 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         await using var connection = await OpenDatabaseAsync();
         await using var db = new MemoryDbContext(Options(connection));
         var now = DateTimeOffset.UtcNow;
-        db.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+        db.MarketplaceCopilotCapabilities.Add(new ProjectModelProviderCapabilityRecord
         {
             CapabilityRef = SnapshotRef.Create().Value,
             ProjectId = "project",
@@ -1322,7 +1286,7 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         var now = DateTimeOffset.UtcNow;
         await using (var setup = new MemoryDbContext(options))
         {
-            setup.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+            setup.MarketplaceCopilotCapabilities.Add(new ProjectModelProviderCapabilityRecord
             {
                 CapabilityRef = SnapshotRef.Create().Value,
                 ProjectId = "project",
@@ -1437,7 +1401,7 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         db.Projects.Add(Project(projectId.ToString()));
         db.ProjectCopilotBindings.Add(binding);
         var expired = SnapshotRef.Create();
-        db.MarketplaceCopilotCapabilities.Add(new MarketplaceCopilotCapabilityRecord
+        db.MarketplaceCopilotCapabilities.Add(new ProjectModelProviderCapabilityRecord
         {
             CapabilityRef = expired.Value,
             ProjectId = projectId.ToString(),

@@ -41,9 +41,9 @@ public interface IGitHubCopilotCapabilityCredentialProvider
         string capabilityReference,
         string projectId,
         string entraObjectId,
-        GitHubProjectCopilotCapabilityPurpose purpose,
+        ProjectModelProviderCapabilityPurpose purpose,
         CancellationToken ct = default) =>
-        purpose == GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification
+        purpose == ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification
             ? GetMarketplaceCredentialAsync(capabilityReference, projectId, entraObjectId, ct)
             : Task.FromResult<GitHubCapabilitySnapshotCredential?>(null);
 }

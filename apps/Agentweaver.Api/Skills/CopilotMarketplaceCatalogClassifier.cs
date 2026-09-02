@@ -44,6 +44,20 @@ public interface IMarketplaceCatalogClassifier
         ProjectId? projectId = null,
         CallerContext? caller = null) =>
         ClassifyAsync(owner, repo, branch, treePaths, capabilityReference, ct);
+
+    /// <summary>
+    /// Classifies using the deployment-wide BYOK provider directly — no run-bound or project-bound
+    /// Copilot capability is issued or required. Used when
+    /// <see cref="Agentweaver.Api.Auth.EffectiveModelProviderResolver"/> resolves BYOK as the
+    /// project's effective model provider.
+    /// </summary>
+    Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyWithByokAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<string> treePaths,
+        CancellationToken ct) =>
+        throw new NotSupportedException("This classifier does not support BYOK classification.");
 }
 
 /// <summary>
@@ -115,19 +129,51 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
             (projectId is not null && string.IsNullOrWhiteSpace(caller?.EntraObjectId)))
             return null;
 
+        return await RunClassificationAsync(
+            owner, repo, branch, treePaths,
+            runTurnAsync: turnCt => projectId is null
+                ? RunModelTurnAsync(capabilityReference, BuildPrompt(owner, repo, branch, treePaths), turnCt)
+                : RunMarketplaceModelTurnAsync(
+                    capabilityReference, projectId!.Value.ToString(), caller!.EntraObjectId!,
+                    BuildPrompt(owner, repo, branch, treePaths), turnCt),
+            ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Classifies using the deployment-wide BYOK provider directly. No project or run-bound
+    /// capability is issued or checked — BYOK is not credential material scoped per project.
+    /// </summary>
+    public async Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyWithByokAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<string> treePaths,
+        CancellationToken ct)
+    {
+        if (treePaths.Count == 0)
+            return null;
+
+        return await RunClassificationAsync(
+            owner, repo, branch, treePaths,
+            runTurnAsync: turnCt => RunByokModelTurnAsync(BuildPrompt(owner, repo, branch, treePaths), turnCt),
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<MarketplaceCatalogEntry>?> RunClassificationAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<string> treePaths,
+        Func<CancellationToken, Task<string?>> runTurnAsync,
+        CancellationToken ct)
+    {
         try
         {
-            var prompt = BuildPrompt(owner, repo, branch, treePaths);
-
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(ClassificationTimeout);
             try
             {
-                var raw = projectId is null
-                    ? await RunModelTurnAsync(capabilityReference, prompt, timeoutCts.Token).ConfigureAwait(false)
-                    : await RunMarketplaceModelTurnAsync(
-                        capabilityReference, projectId!.Value.ToString(), caller!.EntraObjectId!, prompt, timeoutCts.Token)
-                        .ConfigureAwait(false);
+                var raw = await runTurnAsync(timeoutCts.Token).ConfigureAwait(false);
                 var parsed = ParseResult(raw);
                 _logger.LogInformation(
                     "Marketplace catalog classification for {Owner}/{Repo} produced {Count} candidate(s).",
@@ -158,6 +204,44 @@ public class CopilotMarketplaceCatalogClassifier : IMarketplaceCatalogClassifier
                 "Marketplace catalog classification failed for {Owner}/{Repo}; falling back to heuristic/empty.",
                 owner, repo);
             return null;
+        }
+    }
+
+    protected virtual async Task<string?> RunByokModelTurnAsync(string prompt, CancellationToken ct)
+    {
+        CopilotClient? client = null;
+        AIAgent? agent = null;
+        try
+        {
+            client = _copilotClientFactory.CreateByokClient();
+            await client.StartAsync(ct).ConfigureAwait(false);
+
+            var sessionConfig = new SessionConfig
+            {
+                SystemMessage = new SystemMessageConfig
+                {
+                    Mode = SystemMessageMode.Append,
+                    Content = ClassifierCharter,
+                },
+                Tools = [],
+                Model = _modelId,
+                EnableConfigDiscovery = false,
+                Streaming = true,
+                EnableSessionStore = false,
+                InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
+            };
+
+            agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: null, description: null);
+            var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
+            return await CopilotWorkflowSelectionModel.CaptureResponseTextAsync(
+                agent.RunStreamingAsync(prompt, session, options: null, ct), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (agent is IAsyncDisposable disposableAgent)
+                await disposableAgent.DisposeAsync().ConfigureAwait(false);
+            if (client is IAsyncDisposable disposableClient)
+                await disposableClient.DisposeAsync().ConfigureAwait(false);
         }
     }
 

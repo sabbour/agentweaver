@@ -1,9 +1,11 @@
 using System.Text.RegularExpressions;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Generation;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -29,17 +31,20 @@ public sealed class CopilotSkillGenerator : ISkillGenerator
     private readonly SkillParser _parser;
     private readonly ILogger<CopilotSkillGenerator> _logger;
     private readonly string _defaultModel;
+    private readonly IServiceScopeFactory? _scopeFactory;
 
     public CopilotSkillGenerator(
         IAgentRunner agentRunner,
         SkillParser parser,
         IConfiguration configuration,
         ILogger<CopilotSkillGenerator> logger,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        IServiceScopeFactory? scopeFactory = null)
     {
         _agentRunner = agentRunner;
         _parser = parser;
         _logger = logger;
+        _scopeFactory = scopeFactory;
         _defaultModel = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveSkillModel();
     }
@@ -89,6 +94,19 @@ public sealed class CopilotSkillGenerator : ISkillGenerator
         string? projectId,
         CancellationToken ct)
     {
+        var modelSource = ModelSource.GitHubCopilot;
+        CopilotOperationCapability? capability = null;
+        if (_scopeFactory is not null)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var executor = scope.ServiceProvider.GetRequiredService<GenerationModelProviderExecutor>();
+            var parsedProjectId = ProjectId.TryParse(projectId, out var pid) ? pid : (ProjectId?)null;
+            var plan = await executor.PrepareAsync(
+                parsedProjectId, userId, ProjectModelProviderCapabilityPurpose.SkillGeneration, ct).ConfigureAwait(false);
+            modelSource = plan.ModelSource;
+            capability = plan.Capability;
+        }
+
         var scratch = Path.Combine(AppPaths.DataDirectory, "skill-scratch", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
         try
@@ -97,13 +115,14 @@ public sealed class CopilotSkillGenerator : ISkillGenerator
                 task: prompt,
                 workingDirectory: scratch,
                 repositoryPath: scratch,
-                modelSource: ModelSource.GitHubCopilot,
+                modelSource: modelSource,
                 runId: Guid.NewGuid().ToString("N"),
                 modelId: _defaultModel,
                 stream: null,
                 ct: ct,
                 userId: userId,
-                projectId: projectId).ConfigureAwait(false);
+                projectId: projectId,
+                copilotCapability: capability).ConfigureAwait(false);
         }
         finally
         {

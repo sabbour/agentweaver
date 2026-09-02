@@ -714,6 +714,8 @@ public sealed class WorkflowGeneratorTests
         public string? LastTask { get; private set; }
         public string? LastModelId { get; private set; }
         public string? LastProjectId { get; private set; }
+        public ModelSource? LastModelSource { get; private set; }
+        public CopilotOperationCapability? LastCopilotCapability { get; private set; }
 
         public ScriptedAgentRunner(params string[] responses) => _responses = new Queue<string>(responses);
 
@@ -725,6 +727,7 @@ public sealed class WorkflowGeneratorTests
             CallCount++;
             LastTask = task;
             LastModelId = modelId;
+            LastModelSource = modelSource;
             var next = _responses.Count > 0 ? _responses.Dequeue() : string.Empty;
             return Task.FromResult(next);
         }
@@ -740,9 +743,11 @@ public sealed class WorkflowGeneratorTests
             CancellationToken ct,
             string? systemPromptContext = null,
             string? userId = null,
-            string? projectId = null)
+            string? projectId = null,
+            CopilotOperationCapability? copilotCapability = null)
         {
             LastProjectId = projectId;
+            LastCopilotCapability = copilotCapability;
             return ExecuteAsync(
                 task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct,
                 systemPromptContext, userId);
