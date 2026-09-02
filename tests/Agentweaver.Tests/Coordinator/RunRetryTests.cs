@@ -481,6 +481,7 @@ public sealed class RunRetryTests : IDisposable
         factory ??= _factory;
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
         var bindingId = SnapshotRef.Create().Value;
         if (!await db.Projects.AnyAsync(project => project.ProjectId == run.ProjectId!.Value.ToString()))
             db.Projects.Add(new ProjectRecord { ProjectId = run.ProjectId!.Value.ToString() });
@@ -510,6 +511,9 @@ public sealed class RunRetryTests : IDisposable
             CapturedAt = DateTimeOffset.UtcNow,
             SnapshotExpiresAt = expiredSnapshot ? DateTimeOffset.UtcNow.AddMinutes(-1) : null,
         });
+        await secrets.SetSecretAsync(
+            "copilot-app-project-test",
+            """{"status":"signed-in","accessToken":"retry-token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"retry-bot"}""");
         await db.SaveChangesAsync();
     }
 
