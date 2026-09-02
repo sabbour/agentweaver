@@ -64,9 +64,9 @@ function LineChart({ points, label }: { points: DailyInvocationPointDto[]; label
 
 export function AgentInvocationChart({
   points,
-  title = 'Run creation count',
-  subtitle = 'Daily project run creations across the selected range.',
-  emptyLabel = 'No run-creation telemetry for this range yet.',
+  title = 'Runs created by date',
+  subtitle = 'Daily runs created during the selected range.',
+  emptyLabel = 'No runs were created in this range.',
 }: {
   points?: DailyInvocationPointDto[];
   title?: string;
