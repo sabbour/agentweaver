@@ -27,6 +27,7 @@ vi.mock('../api/apiClient', () => ({
     updateSandboxPolicy: vi.fn(),
     getUnattendedReadiness: vi.fn(),
     beginProjectCopilotAuthorization: vi.fn(),
+    beginProjectRepoAppInstallation: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
     getPlatformDefaultCopilotConnection: vi.fn(),
   },
@@ -190,22 +191,34 @@ describe('ProjectSettingsPage', () => {
     expect(screen.queryByRole('button', { name: /activate|enable|start automation/i })).toBeNull();
   });
 
-  it('shows an install link when the Repo App installation is required', async () => {
+  it('starts the Repo App installation flow when required', async () => {
     vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
       status: 'not_ready',
       reason_code: 'repo_app_installation_required',
       message: 'Install the Repo App for this project before unattended work can run.',
       repo_app_installation_connected: false,
     } as never);
+    vi.mocked(apiClient.beginProjectRepoAppInstallation).mockResolvedValue({
+      installation_url: 'https://github.com/apps/agentweaver-repo/installations/new?state=abc',
+      transaction_id: 'txn-1',
+      expires_at: '2026-07-07T00:10:00Z',
+    });
+    const assignSpy = vi.fn();
+    Object.defineProperty(window, 'location', {
+      value: { ...window.location, assign: assignSpy },
+      writable: true,
+    });
 
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
     fireEvent.click(screen.getByRole('button', { name: /Background/i }));
 
-    const installLink = await screen.findByRole('link', { name: 'Install GitHub Repo App' });
-    expect(installLink.getAttribute('href')).toBe('https://github.com/apps/agentweaver-repo/installations/new');
-    expect(installLink.getAttribute('target')).toBe('_blank');
+    const installButton = await screen.findByRole('button', { name: 'Install GitHub Repo App' });
+    fireEvent.click(installButton);
+
+    await waitFor(() => expect(apiClient.beginProjectRepoAppInstallation).toHaveBeenCalledWith('proj-1'));
+    await waitFor(() => expect(assignSpy).toHaveBeenCalledWith('https://github.com/apps/agentweaver-repo/installations/new?state=abc'));
     expect(screen.getByRole('button', { name: 'Refresh status' })).toBeDefined();
   });
 
