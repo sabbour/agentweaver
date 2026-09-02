@@ -7,11 +7,17 @@ import {
   isModelProviderConnectionRequirement,
 } from '../../api/modelProviderConnectionRequirement';
 import { LeftNav } from './LeftNav';
+import { FirstRunTour } from '../onboarding/FirstRunTour';
+import {
+  firstRunTourStorageKey,
+  hasCompletedFirstRunTour,
+  markFirstRunTourComplete,
+} from '../onboarding/firstRunTourStorage';
 import { NotificationsProvider } from '../../notifications/NotificationsProvider';
 import { resolveActiveKey } from './navConfig';
 import { projectIdFromPath } from './projectIdFromPath';
 import { clearLastActiveProjectId, getLastActiveProjectId, setLastActiveProjectId } from './projectContext';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import type { ModelProviderConnectionRequirement } from '../../api/modelProviderConnectionRequirement';
@@ -24,12 +30,37 @@ export interface AppShellProps {
   children: ReactNode;
   banner?: ReactNode;
   isPlatformAdmin?: boolean;
+  startFirstRunTour?: boolean;
+  tourUserKey?: string | null;
+  onFirstRunTourStarted?: () => void;
 }
 
-export function AppShell({ children, banner, isPlatformAdmin = false }: AppShellProps) {
+export function AppShell({
+  children,
+  banner,
+  isPlatformAdmin = false,
+  startFirstRunTour = false,
+  tourUserKey,
+  onFirstRunTourStarted,
+}: AppShellProps) {
   const location = useLocation();
+  const projectsTourTarget = useRef<HTMLAnchorElement>(null);
+  const sessionsTourTarget = useRef<HTMLAnchorElement>(null);
+  const startTaskTourTarget = useRef<HTMLButtonElement>(null);
+  const settingsTourTarget = useRef<HTMLButtonElement>(null);
+  const tourTargets = useMemo(() => ({
+    projects: projectsTourTarget,
+    sessions: sessionsTourTarget,
+    startTask: startTaskTourTarget,
+    settings: settingsTourTarget,
+  }), []);
+  const tourStorageKey = useMemo(() => firstRunTourStorageKey(tourUserKey), [tourUserKey]);
+  const [tourOpen, setTourOpen] = useState(
+    () => startFirstRunTour && !hasCompletedFirstRunTour(tourStorageKey),
+  );
   const [connectionRequirement, setConnectionRequirement] =
     useState<ModelProviderConnectionRequirement | null>(null);
+  const previousStartFirstRunTour = useRef(startFirstRunTour);
 
   useEffect(() => {
     const showConnectionRequirement = (event: Event) => {
@@ -39,6 +70,18 @@ export function AppShell({ children, banner, isPlatformAdmin = false }: AppShell
     window.addEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, showConnectionRequirement);
     return () => window.removeEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, showConnectionRequirement);
   }, []);
+
+  useEffect(() => {
+    if (startFirstRunTour) onFirstRunTourStarted?.();
+  }, [onFirstRunTourStarted, startFirstRunTour]);
+
+  useEffect(() => {
+    const startsNow = startFirstRunTour && !previousStartFirstRunTour.current;
+    previousStartFirstRunTour.current = startFirstRunTour;
+    if (!startsNow || hasCompletedFirstRunTour(tourStorageKey)) return undefined;
+    const frame = window.requestAnimationFrame(() => setTourOpen(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [startFirstRunTour, tourStorageKey]);
 
   // The project id actually present in the route (undefined on global pages).
   const routeProjectId = useMemo(
@@ -69,6 +112,11 @@ export function AppShell({ children, banner, isPlatformAdmin = false }: AppShell
     setLastActiveState(undefined);
   }, []);
 
+  const dismissFirstRunTour = useCallback(() => {
+    markFirstRunTourComplete(tourStorageKey);
+    setTourOpen(false);
+  }, [tourStorageKey]);
+
   // Effective project for the switcher display + project-scoped nav targets:
   // the route's project when present, otherwise the persisted fallback.
   const effectiveProjectId = routeProjectId ?? lastActiveProjectId;
@@ -92,6 +140,8 @@ export function AppShell({ children, banner, isPlatformAdmin = false }: AppShell
             isFallbackProject={isFallbackProject}
             onFallbackProjectMissing={clearFallbackProject}
             isPlatformAdmin={isPlatformAdmin}
+            tourTargets={tourTargets}
+            onTakeProductTour={() => setTourOpen(true)}
           />
           <div className="aw-shell-canvas">
             {/* key remounts the content area when the active project changes,
@@ -102,7 +152,10 @@ export function AppShell({ children, banner, isPlatformAdmin = false }: AppShell
               aria-label="Main content"
             >
               <div className="aw-floating-actions">
-                <StartOrchestrationFab currentProjectId={effectiveProjectId} />
+                <StartOrchestrationFab
+                  currentProjectId={effectiveProjectId}
+                  buttonRef={startTaskTourTarget}
+                />
               </div>
               <div className="aw-shell-scroll">
                 {connectionRequirement && (
@@ -116,6 +169,12 @@ export function AppShell({ children, banner, isPlatformAdmin = false }: AppShell
               </div>
             </main>
           </div>
+          <FirstRunTour
+            open={tourOpen}
+            targets={tourTargets}
+            returnFocusTarget={settingsTourTarget}
+            onDismiss={dismissFirstRunTour}
+          />
         </div>
       </NotificationsProvider>
     </ProjectListProvider>

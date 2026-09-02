@@ -24,6 +24,7 @@ import { GitHubIdentityBadge } from '../GitHubIdentityBadge';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
+import type { RefObject } from 'react';
 // Persistent left navigation. Native FluentUI rebuild — no copilot-fluent-system
 // kit imports. Copilot-style single rail: chrome (brand + collapse), a header
 // slot (project switcher), a scrollable nav area, and a bottom persona footer.
@@ -53,6 +54,12 @@ export interface LeftNavProps {
   isFallbackProject?: boolean;
   onFallbackProjectMissing?: () => void;
   isPlatformAdmin?: boolean;
+  tourTargets?: {
+    projects: RefObject<HTMLAnchorElement | null>;
+    sessions: RefObject<HTMLAnchorElement | null>;
+    settings: RefObject<HTMLButtonElement | null>;
+  };
+  onTakeProductTour?: () => void;
 }
 
 function sectionLabel(heading: string): string {
@@ -75,6 +82,8 @@ export function LeftNav({
   isFallbackProject,
   onFallbackProjectMissing,
   isPlatformAdmin = false,
+  tourTargets,
+  onTakeProductTour,
 }: LeftNavProps) {
   const styles = useStyles();
   const version = useAppVersion();
@@ -129,8 +138,14 @@ export function LeftNav({
 
   function renderGlobalItem(item: GlobalNavItemDef) {
     const selected = activeKey === item.key;
+    const tourRef = item.key === 'projects'
+      ? tourTargets?.projects
+      : item.key === 'sessions'
+        ? tourTargets?.sessions
+        : undefined;
     const linkEl = (
       <Link
+        ref={tourRef}
         to={item.path}
         aria-label={item.label}
         aria-current={selected ? 'page' : undefined}
@@ -211,6 +226,7 @@ export function LeftNav({
             <PopoverTrigger disableButtonEnhancement>
               <Tooltip content="Settings" relationship="label">
                 <Button
+                  ref={tourTargets?.settings}
                   appearance="subtle"
                   icon={<Settings24Regular />}
                   aria-label="Settings"
@@ -244,6 +260,21 @@ export function LeftNav({
                     onClick={() => goTo(`/projects/${projectId}/settings`)}
                   >
                     Project settings
+                  </Button>
+                </>
+              )}
+              {onTakeProductTour && (
+                <>
+                  <Divider />
+                  <Button
+                    appearance="subtle"
+                    className={styles.settingsMenuItem}
+                    onClick={() => {
+                      setSettingsMenuOpen(false);
+                      onTakeProductTour();
+                    }}
+                  >
+                    Take product tour
                   </Button>
                 </>
               )}
@@ -306,6 +337,7 @@ export function LeftNav({
               <div role="group" aria-label="Sessions" className="aw-nav-section">
                 <div className={`aw-nav-disclosure${activeKey === globalSessionsItem.key ? ' aw-nav-disclosure--selected' : ''}`}>
                   <Link
+                    ref={tourTargets?.sessions}
                     to={globalSessionsItem.path}
                     aria-label={globalSessionsItem.label}
                     aria-current={activeKey === globalSessionsItem.key ? 'page' : undefined}
