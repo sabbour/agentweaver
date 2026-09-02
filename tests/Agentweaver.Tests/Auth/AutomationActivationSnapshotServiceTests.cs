@@ -184,6 +184,124 @@ public sealed class AutomationActivationSnapshotServiceTests
             .Should().NotContain("owner/repository").And.NotContain("ghu_").And.NotContain("credential");
     }
 
+    [Fact]
+    public async Task Activate_WhenByokIsTheActiveDeploymentProvider_SkipsCopilotBindingEntirely()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var project = await SeedProjectAsync(db);
+        // Only a live repository grant — deliberately no Copilot binding of any kind — to prove
+        // BYOK activation does not require one.
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = 1, AppKind = GitHubAppKind.Repo, ProjectId = project.ToString(), CreatedAt = DateTimeOffset.UtcNow,
+        });
+        db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = 1, RepositoryId = 10, ProjectId = project.ToString(), FullNameDisplay = "owner/repository",
+            PermissionDigest = "repo-digest", GrantedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var roles = new MutableRoles();
+        roles.SetOwner(project, "owner");
+        var byokSecrets = new InMemorySecretStore();
+        var byokSettings = new ByokProviderConfigurationService(byokSecrets);
+        var provider = await byokSettings.AddAsync(new ByokProviderConfiguration(
+            Id: "unused", Name: "My BYOK", Type: "openai", BaseUrl: "https://api.example.com/v1",
+            Model: "my-model", ApiKey: "sk-secret"), CancellationToken.None);
+        await byokSettings.SetActiveAsync(provider.Id, CancellationToken.None);
+        var service = new AutomationActivationSnapshotService(
+            new GitHubConnectionsPersistenceStore(db, byokSettings: byokSettings), roles);
+
+        var result = await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
+
+        result.Outcome.Should().Be(AutomationActivationOutcome.Activated);
+        result.Activation!.ModelProviderSource.Should().Be(AutomationModelProviderSource.Byok);
+        result.Activation.CopilotBindingId.Should().BeNull();
+        result.Activation.ByokProviderId.Should().Be(provider.Id);
+        var stored = await db.AutomationActivations.SingleAsync();
+        stored.ModelProviderSource.Should().Be(AutomationModelProviderSource.Byok);
+        stored.ByokProviderId.Should().Be(provider.Id);
+        stored.CopilotBindingId.Should().BeNull();
+
+        // Fencing succeeds while the same provider stays active...
+        (await service.TryFenceAsync(result.Activation.ActivationId)).Should().NotBeNull();
+
+        // ...but fails once a different provider becomes active (BYOK fencing is exact-id, not a
+        // reversible digest comparison, since there is no grant/permission digest for an LLM key).
+        var otherProvider = await byokSettings.AddAsync(new ByokProviderConfiguration(
+            Id: "unused", Name: "Other BYOK", Type: "openai", BaseUrl: "https://api.example.com/v1",
+            Model: "other-model", ApiKey: "sk-other"), CancellationToken.None);
+        await byokSettings.SetActiveAsync(otherProvider.Id, CancellationToken.None);
+        (await service.TryFenceAsync(result.Activation.ActivationId)).Should().BeNull();
+
+        // ...and fails once BYOK is switched off entirely (back to GitHub Copilot mode).
+        await byokSettings.SetActiveAsync(null, CancellationToken.None);
+        (await service.TryFenceAsync(result.Activation.ActivationId)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Deactivate_RequiresHumanEntraSubjectAndCurrentProjectOwner_ThenFreesTheProjectForReactivation()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var project = await SeedProjectAsync(db);
+        await SeedAuthorityAsync(db, project);
+        var roles = new MutableRoles();
+        roles.SetOwner(project, "owner");
+        var service = CreateService(db, roles);
+        var internalPrincipal = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("agentweaver_internal", "true")], "test"));
+
+        (await service.DeactivateAsync(
+            new CallerContext { User = "api-key-looking", EntraObjectId = null }, internalPrincipal, project))
+            .Should().Be(AutomationDeactivationOutcome.HumanEntraSubjectRequired);
+        (await service.DeactivateAsync(Human("member"), HumanPrincipal(), project))
+            .Should().Be(AutomationDeactivationOutcome.ProjectOwnerRequired);
+        (await service.DeactivateAsync(Human("owner"), HumanPrincipal(), project))
+            .Should().Be(AutomationDeactivationOutcome.NotActive, "nothing has been activated yet");
+
+        var activated = await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
+        activated.Outcome.Should().Be(AutomationActivationOutcome.Activated);
+
+        (await service.DeactivateAsync(Human("owner"), HumanPrincipal(), project))
+            .Should().Be(AutomationDeactivationOutcome.Deactivated);
+        db.ChangeTracker.Clear(); // TryDeactivateAutomationActivationAsync uses ExecuteUpdateAsync, which
+                                  // bypasses the change tracker/identity map.
+        (await db.AutomationActivations.SingleAsync()).Status.Should().Be(AutomationActivationStatus.Inactive);
+        (await service.TryFenceAsync(activated.Activation!.ActivationId)).Should().BeNull(
+            "an Inactive activation must not fence as live");
+
+        // Deactivating again is a no-op (nothing currently Active).
+        (await service.DeactivateAsync(Human("owner"), HumanPrincipal(), project))
+            .Should().Be(AutomationDeactivationOutcome.NotActive);
+
+        // The unique-active-per-project index frees up once Inactive, so a fresh activation succeeds.
+        var reactivated = await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
+        reactivated.Outcome.Should().Be(AutomationActivationOutcome.Activated);
+        (await service.TryFenceAsync(reactivated.Activation!.ActivationId)).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task GetStatus_ReflectsNoneThenActiveThenInactive()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var project = await SeedProjectAsync(db);
+        await SeedAuthorityAsync(db, project);
+        var roles = new MutableRoles();
+        roles.SetOwner(project, "owner");
+        var service = CreateService(db, roles);
+
+        (await service.GetStatusAsync(project)).IsActive.Should().BeFalse();
+
+        await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
+        var active = await service.GetStatusAsync(project);
+        active.IsActive.Should().BeTrue();
+        active.ModelProviderSource.Should().Be("github_copilot");
+        active.ActivatedAt.Should().NotBeNull();
+
+        await service.DeactivateAsync(Human("owner"), HumanPrincipal(), project);
+        (await service.GetStatusAsync(project)).IsActive.Should().BeFalse();
+    }
+
     private static AutomationActivationSnapshotService CreateService(MemoryDbContext db, MutableRoles roles) =>
         new(new GitHubConnectionsPersistenceStore(db), roles);
 

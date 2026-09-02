@@ -17,10 +17,28 @@ public enum AutomationActivationOutcome
     Conflict,
 }
 
+public enum AutomationDeactivationOutcome
+{
+    Deactivated,
+    HumanEntraSubjectRequired,
+    ProjectOwnerRequired,
+    NotActive,
+}
+
 /// <summary>
-/// Internal-only authority boundary for unattended automation activation. It intentionally has
-/// no HTTP endpoint: the project ID is the sole caller input, while all GitHub authority is
-/// resolved server-side and captured as an immutable, fenceable tuple.
+/// The redacted status a project Owner sees for their project's automation activation.
+/// </summary>
+public sealed record AutomationActivationStatusView(
+    bool IsActive,
+    string? ModelProviderSource,
+    DateTimeOffset? ActivatedAt);
+
+/// <summary>
+/// Authority boundary for unattended automation activation and deactivation. The project ID (plus
+/// the caller's own Owner-verified identity) is the sole input: all GitHub/BYOK model-provider
+/// authority is resolved server-side and captured as an immutable, fenceable tuple. Reachable only
+/// through the Owner-gated <c>/api/projects/{id}/automation/*</c> endpoints
+/// (<c>Endpoints.AutomationActivationEndpoints</c>).
 /// </summary>
 public sealed class AutomationActivationSnapshotService(
     GitHubConnectionsPersistenceStore persistence,
@@ -32,41 +50,12 @@ public sealed class AutomationActivationSnapshotService(
         ProjectId projectId,
         CancellationToken ct = default)
     {
-        if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
-        {
-            await persistence.AppendAuditAsync(new GitHubAuditRecord
-            {
-                ActorKind = GitHubAuditActorKind.GitHubWebhook,
-                Action = GitHubAuditAction.AutomationActivated,
-                ResourceId = projectId.ToString(),
-                AppKind = GitHubAppKind.Repo,
-                CapabilityPurpose = GitHubCapabilityPurpose.UnattendedRepository,
-                Outcome = GitHubAuditOutcome.Denied,
-                ReasonCode = GitHubAuditReasonCode.HumanEntraSubjectRequired,
-                CorrelationId = SnapshotRef.Create().Value,
-                OccurredAt = DateTimeOffset.UtcNow,
-            }, ct).ConfigureAwait(false);
-            return (AutomationActivationOutcome.HumanEntraSubjectRequired, null);
-        }
-
-        var assignment = await roleAssignments.GetAsync(projectId, caller.EntraObjectId!, ct).ConfigureAwait(false);
-        if (assignment?.Role != ProjectRole.Owner)
-        {
-            await persistence.AppendAuditAsync(new GitHubAuditRecord
-            {
-                EntraObjectId = caller.EntraObjectId,
-                ActorKind = GitHubAuditActorKind.HumanEntraSubject,
-                Action = GitHubAuditAction.AutomationActivated,
-                ResourceId = projectId.ToString(),
-                AppKind = GitHubAppKind.Repo,
-                CapabilityPurpose = GitHubCapabilityPurpose.UnattendedRepository,
-                Outcome = GitHubAuditOutcome.Denied,
-                ReasonCode = GitHubAuditReasonCode.ProjectOwnerRequired,
-                CorrelationId = SnapshotRef.Create().Value,
-                OccurredAt = DateTimeOffset.UtcNow,
-            }, ct).ConfigureAwait(false);
-            return (AutomationActivationOutcome.ProjectOwnerRequired, null);
-        }
+        var denied = await CheckOwnerAuthorityAsync(
+            caller, principal, projectId, GitHubAuditAction.AutomationActivated, ct).ConfigureAwait(false);
+        if (denied is not null)
+            return (denied.Value == AutomationActivationOutcome.HumanEntraSubjectRequired
+                ? AutomationActivationOutcome.HumanEntraSubjectRequired
+                : AutomationActivationOutcome.ProjectOwnerRequired, null);
 
         var created = await persistence.TryCreateAutomationActivationSnapshotAsync(
             projectId.ToString(), caller.EntraObjectId, GitHubAuditActorKind.HumanEntraSubject, ct).ConfigureAwait(false);
@@ -76,14 +65,104 @@ public sealed class AutomationActivationSnapshotService(
             created.Activation.InstallationId,
             created.Activation.RepositoryId,
             created.Activation.RepositoryGrantDigest!,
-            created.Activation.CopilotBindingId!,
-            created.Activation.CopilotBindingGrantDigest!));
+            created.Activation.ModelProviderSource,
+            created.Activation.CopilotBindingId,
+            created.Activation.CopilotBindingGrantDigest,
+            created.Activation.ByokProviderId));
+    }
+
+    public async Task<AutomationDeactivationOutcome> DeactivateAsync(
+        CallerContext caller,
+        ClaimsPrincipal principal,
+        ProjectId projectId,
+        CancellationToken ct = default)
+    {
+        var denied = await CheckOwnerAuthorityAsync(
+            caller, principal, projectId, GitHubAuditAction.AutomationDeactivated, ct).ConfigureAwait(false);
+        if (denied is not null)
+            return denied.Value == AutomationActivationOutcome.HumanEntraSubjectRequired
+                ? AutomationDeactivationOutcome.HumanEntraSubjectRequired
+                : AutomationDeactivationOutcome.ProjectOwnerRequired;
+
+        var deactivated = await persistence.TryDeactivateAutomationActivationAsync(
+            projectId.ToString(), caller.EntraObjectId, GitHubAuditActorKind.HumanEntraSubject, ct).ConfigureAwait(false);
+        return deactivated ? AutomationDeactivationOutcome.Deactivated : AutomationDeactivationOutcome.NotActive;
+    }
+
+    /// <summary>
+    /// Redacted status for a project's most recent automation activation, for the Owner-facing
+    /// settings UI. Never returns repository, installation, or credential identity.
+    /// </summary>
+    public async Task<AutomationActivationStatusView> GetStatusAsync(
+        ProjectId projectId,
+        CancellationToken ct = default)
+    {
+        var summary = await persistence.GetAutomationActivationSummaryAsync(projectId.ToString(), ct)
+            .ConfigureAwait(false);
+        if (summary is null)
+            return new(IsActive: false, ModelProviderSource: null, ActivatedAt: null);
+
+        return new(
+            IsActive: summary.Status == AutomationActivationStatus.Active,
+            ModelProviderSource: summary.ModelProviderSource == AutomationModelProviderSource.Byok ? "byok" : "github_copilot",
+            ActivatedAt: summary.ActivatedAt);
     }
 
     public Task<FencedAutomationActivation?> TryFenceAsync(
         string activationId,
         CancellationToken ct = default) =>
         persistence.TryFenceAutomationActivationAsync(activationId, ct);
+
+    /// <summary>
+    /// Shared human-Entra-subject + project-Owner authority check for both activation and
+    /// deactivation, auditing a denial under <paramref name="action"/>. Returns <see langword="null"/>
+    /// when the caller is authorized.
+    /// </summary>
+    private async Task<AutomationActivationOutcome?> CheckOwnerAuthorityAsync(
+        CallerContext caller,
+        ClaimsPrincipal principal,
+        ProjectId projectId,
+        GitHubAuditAction action,
+        CancellationToken ct)
+    {
+        if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
+        {
+            await persistence.AppendAuditAsync(new GitHubAuditRecord
+            {
+                ActorKind = GitHubAuditActorKind.GitHubWebhook,
+                Action = action,
+                ResourceId = projectId.ToString(),
+                AppKind = GitHubAppKind.Repo,
+                CapabilityPurpose = GitHubCapabilityPurpose.UnattendedRepository,
+                Outcome = GitHubAuditOutcome.Denied,
+                ReasonCode = GitHubAuditReasonCode.HumanEntraSubjectRequired,
+                CorrelationId = SnapshotRef.Create().Value,
+                OccurredAt = DateTimeOffset.UtcNow,
+            }, ct).ConfigureAwait(false);
+            return AutomationActivationOutcome.HumanEntraSubjectRequired;
+        }
+
+        var assignment = await roleAssignments.GetAsync(projectId, caller.EntraObjectId!, ct).ConfigureAwait(false);
+        if (assignment?.Role != ProjectRole.Owner)
+        {
+            await persistence.AppendAuditAsync(new GitHubAuditRecord
+            {
+                EntraObjectId = caller.EntraObjectId,
+                ActorKind = GitHubAuditActorKind.HumanEntraSubject,
+                Action = action,
+                ResourceId = projectId.ToString(),
+                AppKind = GitHubAppKind.Repo,
+                CapabilityPurpose = GitHubCapabilityPurpose.UnattendedRepository,
+                Outcome = GitHubAuditOutcome.Denied,
+                ReasonCode = GitHubAuditReasonCode.ProjectOwnerRequired,
+                CorrelationId = SnapshotRef.Create().Value,
+                OccurredAt = DateTimeOffset.UtcNow,
+            }, ct).ConfigureAwait(false);
+            return AutomationActivationOutcome.ProjectOwnerRequired;
+        }
+
+        return null;
+    }
 
     private static AutomationActivationOutcome ToOutcome(AutomationActivationWriteResult result) => result switch
     {

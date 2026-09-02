@@ -399,13 +399,23 @@ public sealed class AutomationInvocationService(
             activation.InstallationId != invocation.InstallationId ||
             activation.RepositoryId != invocation.RepositoryId)
             return false;
-        var binding = await persistence.GetLiveAutomationCopilotBindingAsync(
-            activation.ProjectId,
-            activation.CopilotBindingId,
-            activation.CopilotBindingGrantDigest,
-            ct).ConfigureAwait(false);
-        if (binding is null)
-            return false;
+
+        // A BYOK-sourced activation has no GitHub Copilot binding to snapshot: the run's AI backend
+        // is the deployment-wide BYOK provider, resolved independently of these GitHub capability
+        // snapshots (which exist to capture GitHub App credentials, not LLM credentials). This is an
+        // interim, minimal branch (see AutomationModelProviderSource) pending the unified
+        // model-provider resolver.
+        CopilotBindingSnapshotSource? binding = null;
+        if (activation.ModelProviderSource == AutomationModelProviderSource.GitHubCopilot)
+        {
+            binding = await persistence.GetLiveAutomationCopilotBindingAsync(
+                activation.ProjectId,
+                activation.CopilotBindingId!,
+                activation.CopilotBindingGrantDigest!,
+                ct).ConfigureAwait(false);
+            if (binding is null)
+                return false;
+        }
 
         var existing = await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false);
         if (existing.Count != 0)
@@ -424,8 +434,9 @@ public sealed class AutomationInvocationService(
                 return MatchesActivation(existing, activation, binding);
             }
 
-            db.RunGitHubCapabilitySnapshots.AddRange(
-                new RunGitHubCapabilitySnapshotRecord
+            var snapshots = new List<RunGitHubCapabilitySnapshotRecord>
+            {
+                new()
                 {
                     SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
                     Purpose = GitHubCapabilityPurpose.UnattendedRepository, AppKind = GitHubAppKind.Repo,
@@ -433,16 +444,19 @@ public sealed class AutomationInvocationService(
                     InstallationId = activation.InstallationId, RepositoryId = activation.RepositoryId,
                     GrantDigest = activation.RepositoryGrantDigest, CapturedAt = DateTimeOffset.UtcNow,
                 },
-                new RunGitHubCapabilitySnapshotRecord
+            };
+            if (binding is not null)
+                snapshots.Add(new RunGitHubCapabilitySnapshotRecord
                 {
                     SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
                     Purpose = GitHubCapabilityPurpose.UnattendedCopilot, AppKind = GitHubAppKind.Copilot,
                     SourceKind = GitHubCapabilitySnapshotSourceKind.CopilotBinding, ProjectId = activation.ProjectId,
-                    SourceBindingId = activation.CopilotBindingId,
+                    SourceBindingId = activation.CopilotBindingId!,
                     CredentialReference = binding.CredentialReference, CredentialVersion = binding.CredentialVersion,
-                    GrantDigest = activation.CopilotBindingGrantDigest,
+                    GrantDigest = activation.CopilotBindingGrantDigest!,
                     CapturedAt = DateTimeOffset.UtcNow,
                 });
+            db.RunGitHubCapabilitySnapshots.AddRange(snapshots);
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return true;
@@ -458,21 +472,30 @@ public sealed class AutomationInvocationService(
     private static bool MatchesActivation(
         IReadOnlyList<RunGitHubCapabilitySnapshotRecord> snapshots,
         FencedAutomationActivation activation,
-        CopilotBindingSnapshotSource binding) =>
-        snapshots.Count == 2 &&
-        snapshots.Any(x => x.Purpose == GitHubCapabilityPurpose.UnattendedRepository &&
-                           x.AppKind == GitHubAppKind.Repo &&
-                           x.SourceKind == GitHubCapabilitySnapshotSourceKind.RepositoryGrant &&
-                           x.ProjectId == activation.ProjectId &&
-                           x.InstallationId == activation.InstallationId &&
-                           x.RepositoryId == activation.RepositoryId &&
-                           x.GrantDigest == activation.RepositoryGrantDigest) &&
-        snapshots.Any(x => x.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
-                           x.AppKind == GitHubAppKind.Copilot &&
-                           x.SourceKind == GitHubCapabilitySnapshotSourceKind.CopilotBinding &&
-                           x.ProjectId == activation.ProjectId &&
-                           x.SourceBindingId == activation.CopilotBindingId &&
-                           x.CredentialReference == binding.CredentialReference &&
-                           x.CredentialVersion == binding.CredentialVersion &&
-                           x.GrantDigest == activation.CopilotBindingGrantDigest);
+        CopilotBindingSnapshotSource? binding)
+    {
+        var hasRepositoryGrantSnapshot = snapshots.Any(x =>
+            x.Purpose == GitHubCapabilityPurpose.UnattendedRepository &&
+            x.AppKind == GitHubAppKind.Repo &&
+            x.SourceKind == GitHubCapabilitySnapshotSourceKind.RepositoryGrant &&
+            x.ProjectId == activation.ProjectId &&
+            x.InstallationId == activation.InstallationId &&
+            x.RepositoryId == activation.RepositoryId &&
+            x.GrantDigest == activation.RepositoryGrantDigest);
+
+        if (binding is null)
+            return snapshots.Count == 1 && hasRepositoryGrantSnapshot;
+
+        var hasCopilotBindingSnapshot = snapshots.Any(x =>
+            x.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+            x.AppKind == GitHubAppKind.Copilot &&
+            x.SourceKind == GitHubCapabilitySnapshotSourceKind.CopilotBinding &&
+            x.ProjectId == activation.ProjectId &&
+            x.SourceBindingId == activation.CopilotBindingId &&
+            x.CredentialReference == binding.CredentialReference &&
+            x.CredentialVersion == binding.CredentialVersion &&
+            x.GrantDigest == activation.CopilotBindingGrantDigest);
+
+        return snapshots.Count == 2 && hasRepositoryGrantSnapshot && hasCopilotBindingSnapshot;
+    }
 }

@@ -7,9 +7,18 @@ public enum GitHubCapabilitySnapshotSourceKind { UserAuthorization, RepositoryGr
 public enum GitHubAuthorizationStatus { Pending, Redeeming, Completed, Failed, Expired }
 public enum GitHubBindingStatus { Active, Inactive, Revoked }
 public enum AutomationActivationStatus { Active, Inactive, Invalidated }
+/// <summary>
+/// The kind of model-provider authority an automation activation was fenced against. This is a
+/// minimal, interim representation kept intentionally small so it can be swapped for a unified
+/// model-provider resolver later without a data migration: <see cref="GitHubCopilot"/> keeps the
+/// existing Copilot-binding fields authoritative, while <see cref="Byok"/> means the activation
+/// was authorized against the deployment-wide BYOK provider instead (see
+/// <see cref="AutomationActivationRecord.ByokProviderId"/>), and the Copilot-binding fields are unset.
+/// </summary>
+public enum AutomationModelProviderSource { GitHubCopilot, Byok }
 public enum AutomationInvocationOutcome { Claimed, Duplicate, Completed, Failed }
 public enum GitHubAuditActorKind { HumanEntraSubject, GitHubWebhook }
-public enum GitHubAuditAction { AuthorizationCompleted, BindingChanged, InstallationChanged, GrantChanged, AutomationActivated, AutomationInvoked, RunSnapshotValidated, CapabilitySnapshotMigrated }
+public enum GitHubAuditAction { AuthorizationCompleted, BindingChanged, InstallationChanged, GrantChanged, AutomationActivated, AutomationInvoked, RunSnapshotValidated, CapabilitySnapshotMigrated, AutomationDeactivated }
 public enum GitHubAuditOutcome { Succeeded, Denied, Failed }
 public enum GitHubAuditReasonCode
 {
@@ -168,6 +177,14 @@ public sealed class AutomationActivationRecord
     public string? CopilotBindingId { get; set; }
     /// <summary>Non-reversible digest of the exact Copilot binding grant.</summary>
     public string? CopilotBindingGrantDigest { get; set; }
+    /// <summary>Which kind of model-provider authority this activation was fenced against.</summary>
+    public AutomationModelProviderSource ModelProviderSource { get; set; }
+    /// <summary>
+    /// The configured BYOK provider id this activation is fenced to when
+    /// <see cref="ModelProviderSource"/> is <see cref="AutomationModelProviderSource.Byok"/>;
+    /// unset for a <see cref="AutomationModelProviderSource.GitHubCopilot"/>-sourced activation.
+    /// </summary>
+    public string? ByokProviderId { get; set; }
     public string AutomationKey { get; set; } = "";
     public AutomationActivationStatus Status { get; set; }
     public DateTimeOffset ActivatedAt { get; set; }

@@ -28,6 +28,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
   AuthConfigResponse,
+  AutomationActivationStatus,
   Project,
   ProjectAccessOverview,
   SandboxPolicy,
@@ -374,6 +375,11 @@ export function ProjectSettingsPage() {
   const [unattendedError, setUnattendedError] = useState<string | null>(null);
   const [installingRepoApp, setInstallingRepoApp] = useState(false);
   const [installRepoAppError, setInstallRepoAppError] = useState<string | null>(null);
+  const [automationStatus, setAutomationStatus] = useState<AutomationActivationStatus | null>(null);
+  const [automationLoading, setAutomationLoading] = useState(true);
+  const [automationActionPending, setAutomationActionPending] = useState(false);
+  const [automationError, setAutomationError] = useState<string | null>(null);
+  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
 
   const formatError = (err: unknown): string => formatApiErrorMessage(err);
 
@@ -458,6 +464,55 @@ export function ProjectSettingsPage() {
     if (!projectId) return;
     queueMicrotask(() => { void refreshUnattendedReadiness(); });
   }, [projectId, refreshUnattendedReadiness]);
+
+  const refreshAutomationStatus = useCallback(async () => {
+    if (!projectId) return;
+    setAutomationLoading(true);
+    setAutomationError(null);
+    try {
+      setAutomationStatus(await apiClient.getAutomationStatus(projectId));
+    } catch (err) {
+      setAutomationStatus(null);
+      // 403 (not an Owner) is expected for non-Owners; the control is hidden for them anyway, so
+      // only surface an error for unexpected failures.
+      if (!(err instanceof ApiError && err.status === 403)) {
+        setAutomationError('Automation activation status is unavailable. Refresh the page and try again.');
+      }
+    } finally {
+      setAutomationLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    queueMicrotask(() => { void refreshAutomationStatus(); });
+  }, [projectId, refreshAutomationStatus]);
+
+  const handleActivateAutomation = async () => {
+    if (!projectId) return;
+    setAutomationActionPending(true);
+    setAutomationError(null);
+    try {
+      setAutomationStatus(await apiClient.activateAutomation(projectId));
+    } catch (err) {
+      setAutomationError(formatError(err));
+    } finally {
+      setAutomationActionPending(false);
+    }
+  };
+
+  const handleDeactivateAutomation = async () => {
+    if (!projectId) return;
+    setAutomationActionPending(true);
+    setAutomationError(null);
+    try {
+      setAutomationStatus(await apiClient.deactivateAutomation(projectId));
+    } catch (err) {
+      setAutomationError(formatError(err));
+    } finally {
+      setAutomationActionPending(false);
+    }
+  };
 
   const handleSaveModel = async () => {
     if (!projectId) return;
@@ -1037,8 +1092,50 @@ export function ProjectSettingsPage() {
                   <TitleText>Background automation readiness</TitleText>
                   <Body as="p" tone="muted">
                     This read-only status reports the server-verified prerequisites for background work.
-                    This page does not enable or activate automation.
                   </Body>
+                  {!automationLoading && automationStatus && (
+                    <>
+                      <TitleText>Automation activation</TitleText>
+                      <Body as="p" tone="muted">
+                        Turn scheduled and event-triggered automation on or off for this project. Only a
+                        project Owner can change this. Deactivating does not remove the repository access
+                        or GitHub Copilot account below — reactivating re-checks them fresh.
+                      </Body>
+                      <MetricRow items={[
+                        { label: 'Status', value: automationStatus.is_active ? 'Active' : 'Inactive' },
+                        ...(automationStatus.is_active
+                          ? [{
+                              label: 'Model provider',
+                              value: automationStatus.model_provider_source === 'byok' ? 'BYOK' : 'GitHub Copilot',
+                            }]
+                          : []),
+                      ]} />
+                      <div className={styles.formActions}>
+                        {automationStatus.is_active ? (
+                          <Button
+                            appearance="secondary"
+                            disabled={automationActionPending}
+                            onClick={() => void handleDeactivateAutomation()}
+                          >
+                            {automationActionPending ? 'Deactivating' : 'Deactivate automation'}
+                          </Button>
+                        ) : (
+                          <Button
+                            appearance="primary"
+                            disabled={automationActionPending}
+                            onClick={() => void handleActivateAutomation()}
+                          >
+                            {automationActionPending ? 'Activating' : 'Activate automation'}
+                          </Button>
+                        )}
+                        {automationActionPending && <Spinner size="extra-tiny" aria-hidden="true" />}
+                      </div>
+                      {automationError && (
+                        <MessageBar intent="error"><MessageBarBody>{automationError}</MessageBarBody></MessageBar>
+                      )}
+                      <Divider />
+                    </>
+                  )}
                   <TitleText>GitHub Copilot account</TitleText>
                   <Body as="p" tone="muted">
                     This controls the GitHub Copilot account used for this project’s background AI and other Copilot-powered generation. It does not control repository access.
