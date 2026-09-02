@@ -1149,32 +1149,40 @@ export function WorkflowNode({ data, selected }: NodeProps) {
               <Button appearance="primary" size="small" onClick={() => openModal?.(executionId as string)}>Review now</Button>
             </div>
           )}
-        </div>
-        {editorActions && (
-          <div className={mergeClasses(s.pillFaceActions, 'nopan', 'nodrag')}>
-            <Button
-              appearance="outline"
-              size="small"
-              onClick={(event) => {
-                event.stopPropagation();
-                editorActions.addNext();
-              }}
+          {/* Rendered as the LAST row inside pillBody (not a sibling of it) so it stacks BELOW
+              the title/sub-label in pillBody's column flow instead of squeezing into the same
+              row as the icon+title, which visually overlapped the node's text. */}
+          {editorActions && (
+            <div
+              className={mergeClasses(s.pillFaceActions, 'nopan', 'nodrag')}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+              role="presentation"
             >
-              Add next step
-            </Button>
-            <Menu>
-              <MenuTrigger disableButtonEnhancement>
-                <Button appearance="subtle" size="small" icon={<MoreHorizontalRegular />} aria-label={`Actions for ${label}`} />
-              </MenuTrigger>
-              <MenuPopover>
-                <MenuList>
-                  <MenuItem onClick={editorActions.rename}>Rename</MenuItem>
-                  <MenuItem onClick={editorActions.remove}>Delete</MenuItem>
-                </MenuList>
-              </MenuPopover>
-            </Menu>
-          </div>
-        )}
+              <Button
+                appearance="outline"
+                size="small"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  editorActions.addNext();
+                }}
+              >
+                Add next step
+              </Button>
+              <Menu>
+                <MenuTrigger disableButtonEnhancement>
+                  <Button appearance="subtle" size="small" icon={<MoreHorizontalRegular />} aria-label={`Actions for ${label}`} />
+                </MenuTrigger>
+                <MenuPopover>
+                  <MenuList>
+                    <MenuItem onClick={editorActions.rename}>Rename</MenuItem>
+                    <MenuItem onClick={editorActions.remove}>Delete</MenuItem>
+                  </MenuList>
+                </MenuPopover>
+              </Menu>
+            </div>
+          )}
+        </div>
       </div>
       {modelCaption && <span className={s.pillModelCaption} title={modelCaption}>{modelCaption}</span>}
     </div>

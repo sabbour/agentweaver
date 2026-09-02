@@ -2,6 +2,7 @@ using System.Text.Json;
 using GitHub.Copilot;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.GitHub.Copilot;
+using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
@@ -22,7 +23,7 @@ public sealed record DecomposeAgentResult(
     IReadOnlyList<ProposedItem> Items,
     bool WasCapped,
     int TotalFound,
-    GitHubCopilotConnectionRequirement? ConnectionRequirement = null);
+    ModelProviderConnectionRequirement? ConnectionRequirement = null);
 
 public interface IBacklogDecomposeService
 {
@@ -96,6 +97,7 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
     private readonly BacklogDecomposeCopilotCapabilityIssuer _capabilityIssuer;
     private readonly IBacklogDecomposeAgentRunner _agentRunner;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     /// <summary>
     /// Constructs the service with a project-operation capability issuer and a tool-less,
@@ -104,11 +106,13 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
     public BacklogDecomposeService(
         GitHubCopilotClientFactory copilotClientFactory,
         BacklogDecomposeCopilotCapabilityIssuer capabilityIssuer,
-        IBacklogDecomposeAgentRunner agentRunner)
+        IBacklogDecomposeAgentRunner agentRunner,
+        IServiceScopeFactory scopeFactory)
     {
         _copilotClientFactory = copilotClientFactory;
         _capabilityIssuer = capabilityIssuer;
         _agentRunner = agentRunner;
+        _scopeFactory = scopeFactory;
     }
 
     /// <summary>
@@ -123,11 +127,6 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
         if (string.IsNullOrWhiteSpace(caller.User))
             throw new InvalidOperationException("Decomposition requires a submitting user identity.");
 
-        var capabilityReference = await _capabilityIssuer.TryIssueAsync(project.Id, caller, ct)
-            .ConfigureAwait(false);
-        if (capabilityReference is null)
-            return new([], false, 0, GitHubCopilotConnectionRequirement.ForProject(project.Id));
-
         var task = $$"""
             Extract backlog items from the markdown document below.
             Return ONLY the JSON object with the "items" array — no prose, no code fences.
@@ -140,13 +139,43 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
             <<<END_DOCUMENT>>>
             """;
 
+        // Uses the same precedence as every other model-provider consumer: deployment BYOK bypasses
+        // Copilot capability issuance entirely; otherwise the project's own Copilot binding (any
+        // authorized project member, not only the exact binding owner) or the platform default is
+        // redeemed through the existing non-run capability mechanism.
+        EffectiveModelProviderResult effectiveProvider;
+        await using (var scope = _scopeFactory.CreateAsyncScope())
+        {
+            var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
+            effectiveProvider = await resolver.ResolveAsync(project.Id, ct).ConfigureAwait(false);
+        }
+        if (effectiveProvider is EffectiveModelProviderResult.Byok)
+        {
+            try
+            {
+                await using var byokClient = _copilotClientFactory.CreateByokClient();
+                var byokResponse = await _agentRunner.RunAsync(
+                    byokClient, task, project.ProviderSettings.GitHubCopilotModel, ct).ConfigureAwait(false);
+                return ParseItems(byokResponse);
+            }
+            catch (GitHubCopilotUnauthorizedException)
+            {
+                return new([], false, 0, ModelProviderConnectionRequirement.ForProject(project.Id));
+            }
+        }
+
+        var capabilityReference = await _capabilityIssuer.TryIssueAsync(project.Id, caller, ct)
+            .ConfigureAwait(false);
+        if (capabilityReference is null)
+            return new([], false, 0, ModelProviderConnectionRequirement.ForProject(project.Id));
+
         try
         {
             await using var client = await _copilotClientFactory.CreateProjectOperationClientAsync(
                 capabilityReference,
                 project.Id.ToString(),
                 caller.EntraObjectId!,
-                GitHubProjectCopilotCapabilityPurpose.BacklogDecomposition,
+                ProjectModelProviderCapabilityPurpose.BacklogDecomposition,
                 project.ProviderSettings.GitHubCopilotModel,
                 ct).ConfigureAwait(false);
             var response = await _agentRunner.RunAsync(
@@ -155,9 +184,10 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
         }
         catch (GitHubCopilotUnauthorizedException)
         {
-            return new([], false, 0, GitHubCopilotConnectionRequirement.ForProject(project.Id));
+            return new([], false, 0, ModelProviderConnectionRequirement.ForProject(project.Id));
         }
     }
+
 
     /// <summary>
     /// Extracts and caps the items array from the agent's JSON response. Throws

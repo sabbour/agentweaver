@@ -80,7 +80,7 @@ public sealed record FencedGitHubCapabilitySnapshot(
 /// </summary>
 internal sealed record FencedMarketplaceCopilotCapability(
     SnapshotRef CapabilityReference,
-    GitHubProjectCopilotCapabilityPurpose Purpose,
+    ProjectModelProviderCapabilityPurpose Purpose,
     string ProjectId,
     string EntraObjectId,
     DateTimeOffset ExpiresAt,
@@ -968,6 +968,23 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
         return binding;
     }
 
+    /// <summary>
+    /// Returns the project's own active GitHub Copilot binding, if any, regardless of which caller
+    /// bound it. Used by <see cref="EffectiveModelProviderResolver"/> to decide whether a project's
+    /// explicit model-provider override wins over the platform default; project role authorization
+    /// for the calling operation is enforced by the endpoint, not here.
+    /// </summary>
+    internal Task<RepoAppCredentialReference?> GetActiveProjectCopilotBindingAsync(
+        string projectId,
+        CancellationToken ct = default) =>
+        db.ProjectCopilotBindings.AsNoTracking()
+            .Where(x => x.ProjectId == projectId &&
+                        x.Status == GitHubBindingStatus.Active &&
+                        x.DeactivatedAt == null)
+            .Select(x => new RepoAppCredentialReference(
+                x.Id, x.CredentialReference, x.CredentialVersion, x.BoundAt))
+            .SingleOrDefaultAsync(ct);
+
     internal Task<RepoAppCredentialReference?> GetActivePlatformDefaultCopilotBindingAsync(
         CancellationToken ct = default) =>
         db.PlatformDefaultCopilotBindings.AsNoTracking()
@@ -1315,7 +1332,7 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
         DateTimeOffset expiresAt,
         CancellationToken ct = default) =>
         await TryIssueProjectCopilotCapabilityAsync(
-            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
             projectId,
             entraObjectId,
             now,
@@ -1323,11 +1340,17 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
             ct).ConfigureAwait(false);
 
     /// <summary>
-    /// Issues one short-lived, caller- and project-bound capability for the supplied non-run
-    /// operation. The capability's purpose is persisted and must match when the broker redeems it.
+    /// Issues one short-lived, caller-bound capability for the supplied non-run operation against
+    /// the project's EFFECTIVE model provider — its own active GitHub Copilot binding when present
+    /// (an explicit override, owned by any project member, not only the caller), otherwise the
+    /// platform-default GitHub Copilot binding. This matches
+    /// <see cref="EffectiveModelProviderResolver"/>'s precedence and
+    /// <see cref="CaptureRootCapabilitySnapshotsAsync"/>'s run-snapshot precedence. The capability's
+    /// purpose and calling caller are persisted and must match when the broker redeems it; the
+    /// caller identity is bound for replay protection only, not to restrict which binding is used.
     /// </summary>
     internal async Task<SnapshotRef?> TryIssueProjectCopilotCapabilityAsync(
-        GitHubProjectCopilotCapabilityPurpose purpose,
+        ProjectModelProviderCapabilityPurpose purpose,
         string projectId,
         string entraObjectId,
         DateTimeOffset now,
@@ -1340,17 +1363,12 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
             expiresAt <= now)
             return null;
 
-        var binding = await db.ProjectCopilotBindings.AsNoTracking()
-            .SingleOrDefaultAsync(x => x.ProjectId == projectId &&
-                                       x.EntraObjectId == entraObjectId &&
-                                       x.Status == GitHubBindingStatus.Active &&
-                                       x.DeactivatedAt == null, ct)
-            .ConfigureAwait(false);
+        var binding = await GetActiveCopilotBindingOrPlatformDefaultAsync(projectId, ct).ConfigureAwait(false);
         if (binding is null)
             return null;
 
         var capability = SnapshotRef.Create();
-        var record = new MarketplaceCopilotCapabilityRecord
+        var record = new ProjectModelProviderCapabilityRecord
         {
             CapabilityRef = capability.Value,
             Purpose = (int)purpose,
@@ -1369,20 +1387,21 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
         return capability;
     }
 
-    internal Task<bool> HasActiveMarketplaceCopilotBindingAsync(
+    /// <summary>
+    /// Whether the project currently has a redeemable effective Copilot provider — its own active
+    /// binding (owned by any project member) or, absent that, the platform-default binding. Used to
+    /// gate serving a cached LLM-derived catalog entry without minting a fresh capability.
+    /// </summary>
+    internal async Task<bool> HasActiveMarketplaceCopilotBindingAsync(
         string projectId,
         string entraObjectId,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(projectId) ||
             string.IsNullOrWhiteSpace(entraObjectId))
-            return Task.FromResult(false);
+            return false;
 
-        return db.ProjectCopilotBindings.AsNoTracking().AnyAsync(x =>
-            x.ProjectId == projectId &&
-            x.EntraObjectId == entraObjectId &&
-            x.Status == GitHubBindingStatus.Active &&
-            x.DeactivatedAt == null, ct);
+        return await GetActiveCopilotBindingOrPlatformDefaultAsync(projectId, ct).ConfigureAwait(false) is not null;
     }
 
     /// <summary>
@@ -1398,7 +1417,7 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
         CancellationToken ct = default) =>
         await TryClaimProjectCopilotCapabilityAsync(
             capabilityReference,
-            GitHubProjectCopilotCapabilityPurpose.MarketplaceCatalogClassification,
+            ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification,
             projectId,
             entraObjectId,
             now,
@@ -1410,7 +1429,7 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
     /// </summary>
     internal async Task<FencedMarketplaceCopilotCapability?> TryClaimProjectCopilotCapabilityAsync(
         SnapshotRef capabilityReference,
-        GitHubProjectCopilotCapabilityPurpose purpose,
+        ProjectModelProviderCapabilityPurpose purpose,
         string projectId,
         string entraObjectId,
         DateTimeOffset now,
@@ -1530,16 +1549,14 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
                 record.ClaimLeaseExpiresAt == capability.ClaimLeaseExpiresAt, ct).ConfigureAwait(false))
             return false;
 
-        return await db.ProjectCopilotBindings.AsNoTracking().AnyAsync(binding =>
-            binding.Id == capability.SourceBindingId &&
-            binding.ProjectId == capability.ProjectId &&
-            binding.EntraObjectId == capability.EntraObjectId &&
-            binding.CredentialReference == capability.CredentialReference &&
-            binding.CredentialVersion == capability.CredentialVersion &&
-            binding.GrantDigest == capability.GrantDigest &&
-            binding.Status == GitHubBindingStatus.Active &&
-            binding.DeactivatedAt == null, ct).ConfigureAwait(false);
+        // Re-confirms the exact credential-bearing binding this capability was issued from is
+        // still active — by SourceBindingId + GrantDigest, not by the caller's own Entra subject.
+        // The caller may be redeeming the project's effective (project-override-or-platform-
+        // default) provider, which can legitimately be owned by a different project member.
+        return await IsLiveCopilotBindingAsync(
+            capability.ProjectId, capability.SourceBindingId, capability.GrantDigest, ct).ConfigureAwait(false);
     }
+
 
     internal Task<List<RunGitHubCapabilitySnapshotRecord>> GetCapabilitySnapshotsAsync(
         string runId,
@@ -1723,25 +1740,20 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
     /// v2 capability snapshot directly from authoritative sources for a brand-new root run; it
     /// never reads the finite v1 legacy table. A project whose persisted origin is explicitly
     /// blank captures zero snapshots by design. A <see cref="ProjectOriginKind.FromGitHub"/>
-    /// project that currently resolves none of the four purposes is reported unavailable so the
-    /// caller fails the launch closed instead of silently proceeding with no capability
-    /// protection.
+    /// project that currently resolves neither the unattended-repository nor unattended-Copilot
+    /// purpose is reported unavailable so the caller fails the launch closed instead of silently
+    /// proceeding with no capability protection. Interactive-purpose snapshots are intentionally
+    /// not captured here: no credential consumer ever redeems a run-bound Interactive snapshot
+    /// (only <see cref="GitHubCapabilityPurpose.UnattendedRepository"/> and
+    /// <see cref="GitHubCapabilityPurpose.UnattendedCopilot"/> are read back for run credentials),
+    /// so capturing them would be dead write-only bookkeeping.
     /// </summary>
     public async Task<CapabilitySnapshotBackfillResult> CaptureRootCapabilitySnapshotsAsync(
         string runId,
         string projectId,
-        string entraObjectId,
         CancellationToken ct = default)
     {
         var resolved = new List<RunGitHubCapabilitySnapshotRecord>();
-        var interactiveRepository = await TryResolveInteractiveRepositorySnapshotAsync(runId, projectId, entraObjectId, ct)
-            .ConfigureAwait(false);
-        if (interactiveRepository is not null)
-            resolved.Add(interactiveRepository);
-        var interactiveCopilot = await TryResolveInteractiveCopilotSnapshotAsync(runId, projectId, entraObjectId, ct)
-            .ConfigureAwait(false);
-        if (interactiveCopilot is not null)
-            resolved.Add(interactiveCopilot);
         var unattendedRepository = await TryResolveUnattendedRepositorySnapshotAsync(runId, projectId, ct)
             .ConfigureAwait(false);
         if (unattendedRepository is not null)
@@ -1781,61 +1793,6 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
             db.ChangeTracker.Clear();
             return new CapabilitySnapshotBackfillResult(0, 1);
         }
-    }
-
-    private Task<GitHubAppAuthorizationRecord?> FindLiveRepoUserAuthorizationAsync(
-        string entraObjectId,
-        CancellationToken ct) =>
-        db.GitHubAppAuthorizations.AsNoTracking().SingleOrDefaultAsync(x =>
-            x.EntraObjectId == entraObjectId &&
-            x.AppKind == GitHubAppKind.Repo &&
-            x.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
-            x.RevokedAt == null, ct);
-
-    private async Task<RunGitHubCapabilitySnapshotRecord?> TryResolveInteractiveRepositorySnapshotAsync(
-        string runId,
-        string projectId,
-        string entraObjectId,
-        CancellationToken ct)
-    {
-        var authorization = await FindLiveRepoUserAuthorizationAsync(entraObjectId, ct).ConfigureAwait(false);
-        if (authorization is null)
-            return null;
-        var grants = await db.GitHubRepositoryGrants.AsNoTracking()
-            .Where(x => x.ProjectId == projectId && x.RevokedAt == null)
-            .ToListAsync(ct).ConfigureAwait(false);
-        var grant = grants.OrderByDescending(x => x.GrantedAt).FirstOrDefault();
-        if (grant is null)
-            return null;
-        return new RunGitHubCapabilitySnapshotRecord
-        {
-            SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
-            Purpose = GitHubCapabilityPurpose.InteractiveRepository, AppKind = GitHubAppKind.Repo,
-            SourceKind = GitHubCapabilitySnapshotSourceKind.UserAuthorization, ProjectId = projectId,
-            EntraObjectId = entraObjectId, SourceAuthorizationId = authorization.Id, RepositoryId = grant.RepositoryId,
-            CredentialReference = authorization.CredentialReference, CredentialVersion = authorization.CredentialVersion,
-            GrantDigest = authorization.GrantDigest, CapturedAt = DateTimeOffset.UtcNow,
-        };
-    }
-
-    private async Task<RunGitHubCapabilitySnapshotRecord?> TryResolveInteractiveCopilotSnapshotAsync(
-        string runId,
-        string projectId,
-        string entraObjectId,
-        CancellationToken ct)
-    {
-        var authorization = await FindLiveRepoUserAuthorizationAsync(entraObjectId, ct).ConfigureAwait(false);
-        if (authorization is null)
-            return null;
-        return new RunGitHubCapabilitySnapshotRecord
-        {
-            SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
-            Purpose = GitHubCapabilityPurpose.InteractiveCopilot, AppKind = GitHubAppKind.Repo,
-            SourceKind = GitHubCapabilitySnapshotSourceKind.UserAuthorization, ProjectId = projectId,
-            EntraObjectId = entraObjectId, SourceAuthorizationId = authorization.Id,
-            CredentialReference = authorization.CredentialReference, CredentialVersion = authorization.CredentialVersion,
-            GrantDigest = authorization.GrantDigest, CapturedAt = DateTimeOffset.UtcNow,
-        };
     }
 
     private async Task<RunGitHubCapabilitySnapshotRecord?> TryResolveUnattendedRepositorySnapshotAsync(
@@ -1883,7 +1840,7 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
         };
     }
 
-    private async Task<CopilotBindingSnapshotSource?> GetActiveCopilotBindingOrPlatformDefaultAsync(
+    internal async Task<CopilotBindingSnapshotSource?> GetActiveCopilotBindingOrPlatformDefaultAsync(
         string projectId,
         CancellationToken ct)
     {
@@ -1950,7 +1907,7 @@ public sealed class GitHubConnectionsPersistenceStore(MemoryDbContext db, IProje
             .ConfigureAwait(false);
     }
 
-    private async Task<bool> IsLiveCopilotBindingAsync(
+    internal async Task<bool> IsLiveCopilotBindingAsync(
         string projectId,
         string bindingId,
         string grantDigest,

@@ -14,18 +14,24 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
     private readonly string _workingDirectory;
     private readonly string? _modelId;
     private readonly string? _projectId;
+    private readonly ModelSource _modelSource;
+    private readonly CopilotOperationCapability? _copilotCapability;
     private bool _disposed;
 
     public AgentweaverAgentRuntime(
         IAgentRunner agentRunner,
         string workingDirectory,
         string? modelId = null,
-        string? projectId = null)
+        string? projectId = null,
+        ModelSource modelSource = ModelSource.GitHubCopilot,
+        CopilotOperationCapability? copilotCapability = null)
     {
         _agentRunner = agentRunner ?? throw new ArgumentNullException(nameof(agentRunner));
         _workingDirectory = workingDirectory ?? throw new ArgumentNullException(nameof(workingDirectory));
         _modelId = modelId;
         _projectId = projectId;
+        _modelSource = modelSource;
+        _copilotCapability = copilotCapability;
     }
 
     /// <summary>
@@ -40,13 +46,14 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
             task: prompt,
             workingDirectory: _workingDirectory,
             repositoryPath: _workingDirectory,
-            modelSource: ModelSource.GitHubCopilot,
+            modelSource: _modelSource,
             runId: runId,
             modelId: _modelId,
             stream: null,
             ct: ct,
             userId: userId,
-            projectId: _projectId).ConfigureAwait(false);
+            projectId: _projectId,
+            copilotCapability: _copilotCapability).ConfigureAwait(false);
     }
 
     /// <summary>

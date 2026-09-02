@@ -4,8 +4,12 @@ namespace Agentweaver.Domain;
 /// The explicitly bounded non-run operation authorized by a project Copilot capability.
 /// A capability for one purpose must never be redeemable by another purpose.
 /// </summary>
-public enum GitHubProjectCopilotCapabilityPurpose
+public enum ProjectModelProviderCapabilityPurpose
 {
     MarketplaceCatalogClassification,
     BacklogDecomposition,
+    BlueprintGeneration,
+    WorkflowGeneration,
+    SkillGeneration,
+    CastingGeneration,
 }

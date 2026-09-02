@@ -59,7 +59,7 @@ describe('GitHubIdentityBadge', () => {
     await screen.findByText('Signed in');
     expect(screen.getAllByText('Ada Lovelace')).toHaveLength(2);
     expect(await screen.findByText('Repository access: @octocat')).toBeDefined();
-    expect(screen.getByText('AI source: GitHub Copilot — Connected as @octocat')).toBeDefined();
+    expect(screen.getByText('Connected as @octocat')).toBeDefined();
     expect(apiClient.getProjectCopilotConnection).toHaveBeenCalledWith('proj-1');
     expect(apiClient.getProjectAccessOverview).toHaveBeenCalledWith('proj-1');
     expect(screen.getByRole('link', { name: 'Manage project connections' }).getAttribute('href')).toBe('/projects/proj-1/settings');
@@ -73,7 +73,8 @@ describe('GitHubIdentityBadge', () => {
     fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
 
     expect(await screen.findByText('Signed in')).toBeDefined();
-    expect(screen.queryByText('Project GitHub status')).toBeNull();
+    expect(screen.queryByText('Repository access')).toBeNull();
+    expect(screen.queryByText('Model provider')).toBeNull();
     expect(apiClient.getProjectCopilotConnection).not.toHaveBeenCalled();
   });
 
@@ -131,7 +132,7 @@ describe('GitHubIdentityBadge', () => {
     )).toBeDefined();
   });
 
-  it('shows the platform default AI source when the project uses the shared Copilot account', async () => {
+  it('shows the platform default model provider when the project uses the shared Copilot account', async () => {
     vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
       status: 'not_connected',
       github_login: 'platform-bot',
@@ -142,7 +143,22 @@ describe('GitHubIdentityBadge', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
 
-    expect(await screen.findByText('AI source: GitHub Copilot — Platform default @platform-bot')).toBeDefined();
+    expect(await screen.findByText('Platform default @platform-bot')).toBeDefined();
+  });
+
+  it('labels a BYOK-configured project with its custom-key status, not "GitHub Copilot" (regression: BYOK mislabeling)', async () => {
+    vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
+      status: 'not_connected',
+      github_login: null,
+      effective_source: 'byok',
+    });
+
+    renderBadge({ projectId: 'proj-1' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
+
+    expect(await screen.findByText('Custom key configured in Platform settings')).toBeDefined();
+    expect(screen.queryByText(/GitHub Copilot —/)).toBeNull();
   });
 
   it('keeps the trigger icon-only when the navigation rail is collapsed', async () => {

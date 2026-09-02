@@ -84,7 +84,7 @@ public static class AssistantEndpoints
             {
                 return Results.Json(new { error = ex.Error, message = ex.Message }, statusCode: ex.StatusCode);
             }
-            catch (GitHubCopilotConnectionRequiredException ex)
+            catch (ModelProviderConnectionRequiredException ex)
             {
                 return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
             }
@@ -162,7 +162,7 @@ public static class AssistantEndpoints
             {
                 return Results.Json(new { error = ex.Error, message = ex.Message }, statusCode: ex.StatusCode);
             }
-            catch (GitHubCopilotConnectionRequiredException ex)
+            catch (ModelProviderConnectionRequiredException ex)
             {
                 return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
             }

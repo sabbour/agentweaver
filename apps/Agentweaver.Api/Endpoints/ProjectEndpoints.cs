@@ -264,7 +264,7 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
     IHttpClientFactory httpClientFactory,
     IProjectRoleAssignmentStore roleAssignments,
     CopilotAppRegistrationService registration,
-    ByokProviderConfigurationService byokSettings,
+    EffectiveModelProviderResolver modelProviderResolver,
     ILogger<ProjectCopilotBindingService> logger,
     CancellationToken ct) =>
 {
@@ -283,14 +283,17 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
 
     var platformDefaultConnection = await GetPlatformDefaultCopilotConnectionAsync(
         persistence, secretStore, ct).ConfigureAwait(false);
-    var byokConfigured = await HasByokConfigurationAsync(byokSettings, ct).ConfigureAwait(false);
-    var effectiveSource = byokConfigured
-        ? "byok"
-        : result.Connected
-            ? "project"
-            : platformDefaultConnection.Connected
-                ? "platform_default"
-                : "none";
+    // Uses the same resolver as run/generation startup, so the status shown here always matches
+    // which model provider a project operation will actually use at runtime.
+    var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+    var byokConfigured = effectiveProvider is EffectiveModelProviderResult.Byok;
+    var effectiveSource = effectiveProvider switch
+    {
+        EffectiveModelProviderResult.Byok => "byok",
+        EffectiveModelProviderResult.ProjectGitHubCopilot => "project",
+        EffectiveModelProviderResult.PlatformGitHubCopilot => "platform_default",
+        _ => "none",
+    };
     if (result.Outcome == CopilotBindingOutcome.GitHubBindingUnavailable && effectiveSource == "none")
         return CopilotBindingFailure(result.Outcome);
 
@@ -352,9 +355,7 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
     IProjectStore projectStore,
     MemoryDbContext db,
     CopilotAppRegistrationService registration,
-    GitHubConnectionsPersistenceStore persistence,
-    ISecretStore secretStore,
-    ByokProviderConfigurationService byokSettings,
+    EffectiveModelProviderResolver modelProviderResolver,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -370,15 +371,18 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
         .AnyAsync(x => x.ProjectId == projectKey &&
                        x.AppKind == GitHubAppKind.Repo &&
                        x.RevokedAt == null, ct).ConfigureAwait(false);
-    var hasPlatformDefaultCopilotBinding = (await GetPlatformDefaultCopilotConnectionAsync(
-        persistence, secretStore, ct).ConfigureAwait(false)).Connected;
-    var hasByokConfiguration = await HasByokConfigurationAsync(byokSettings, ct).ConfigureAwait(false);
+    // Uses the same resolver as run/generation startup, so a project already correctly reports
+    // "ready" whenever it has its own active binding — even if the platform default is unset or
+    // the Copilot App registration is temporarily unverifiable (which only matters when the
+    // project has to fall back to the platform default).
+    var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+    var hasByokConfiguration = effectiveProvider is EffectiveModelProviderResult.Byok;
+    var hasBinding = effectiveProvider is EffectiveModelProviderResult.ProjectGitHubCopilot;
+    var hasPlatformDefaultCopilotBinding = effectiveProvider is EffectiveModelProviderResult.PlatformGitHubCopilot;
     var registrationState = await registration.ValidateAsync(ct).ConfigureAwait(false);
-    if (!hasByokConfiguration && !hasPlatformDefaultCopilotBinding && registrationState != CopilotAppRegistrationState.Ready)
+    if (effectiveProvider is EffectiveModelProviderResult.Unavailable && registrationState != CopilotAppRegistrationState.Ready)
         return Results.Ok(CreateUnattendedReadiness(registrationState, hasInstallation));
 
-    var hasBinding = await db.ProjectCopilotBindings.AsNoTracking()
-        .AnyAsync(x => x.ProjectId == projectKey && x.Status == GitHubBindingStatus.Active, ct).ConfigureAwait(false);
     var hasRepositoryGrant = await db.GitHubRepositoryGrants.AsNoTracking()
         .AnyAsync(x => x.ProjectId == projectKey && x.RevokedAt == null, ct).ConfigureAwait(false);
     return Results.Ok(CreateUnattendedReadiness(
@@ -559,10 +563,11 @@ app.MapGet("/api/projects/{id}/access", async (
             role = assignment.Role.ToApiString(),
             scope = assignment.Scope,
         }),
-        github_identity_override_login = (string?)null,
+        // Populated once repository-access identity is exposed by the Repo App installation flow
+        // (out of scope for this change — a different workstream owns that flow). Left null (not
+        // fabricated) rather than removed, since the frontend already renders this as an honest
+        // "not connected" state.
         effective_github_login = (string?)null,
-        effective_github_permission = (string?)null,
-        github_identity_permissions = Array.Empty<object>(),
     });
 })
     .WithName("GetProjectAccessOverview")
@@ -1387,7 +1392,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             logger.LogError(ex, "Failed to read dispatchable team roster for project {ProjectId}", projectId);
             return Results.UnprocessableEntity(new { error = InvalidTeamException.ErrorCode, message = InvalidTeamException.DefaultMessage });
         }
-        catch (GitHubCopilotConnectionRequiredException ex)
+        catch (ModelProviderConnectionRequiredException ex)
         {
             return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
         }
@@ -1574,20 +1579,6 @@ private static async Task<(bool Connected, string? GitHubLogin)> GetPlatformDefa
     catch (JsonException)
     {
         return (false, null);
-    }
-}
-
-private static async Task<bool> HasByokConfigurationAsync(
-    ByokProviderConfigurationService byokSettings,
-    CancellationToken ct)
-{
-    try
-    {
-        return await byokSettings.GetAsync(ct).ConfigureAwait(false) is not null;
-    }
-    catch (JsonException)
-    {
-        return false;
     }
 }
 

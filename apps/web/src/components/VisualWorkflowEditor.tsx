@@ -44,7 +44,8 @@ import {
 } from '@fluentui/react-icons';
 import { ScheduleTriggerDialog } from './ScheduleTriggerDialog';
 import { DAG_NODE_SEP,
-  layoutDag,
+  layoutDagStaircase,
+  routeGridEdges,
   workflowNodeSizeHint } from '../utils/dagLayout';
 import { addEdge,
   addNode,
@@ -587,16 +588,28 @@ function buildGraph(
           remove: () => editorActions.remove(n.id),
           select: () => editorActions.select(n.id),
         } : undefined,
+        // GRID routing (matches CoordinatorRunPage / WorkflowDefinitionInlinePanel) exposes
+        // handles on all four sides so routeGridEdges can bow connectors around neighboring
+        // nodes instead of drawing straight through them.
+        dir: 'GRID',
       } as WorkflowNodeData,
     };
   });
 
-  const laid = layoutDag(raw, forwardOnly, { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP }, hints);
+  // Same staircase auto-layout used by the coordinator run topology and the read-only
+  // workflow-definition graph, so the editor's canvas is legible and structured instead of
+  // a loosely-packed LR dagre layout.
+  const laid = layoutDagStaircase(
+    raw,
+    forwardOnly,
+    { rankdir: 'LR', rankSep: 80, nodeSep: DAG_NODE_SEP, targetAspect: 1.35, minStepRanks: 3 },
+    hints,
+  );
   const rfNodes = laid.map((n) => {
     const p = positions.get(n.id);
     return p ? { ...n, position: p } : n;
   });
-  return { rfNodes, rfEdges };
+  return { rfNodes, rfEdges: routeGridEdges(rfEdges, rfNodes) };
 }
 
 /** Verdicts a check/gate node declares that have no outgoing `when` edge (check-completeness, FR-052). */
@@ -630,7 +643,7 @@ function buildNodeValidationBadges(model: WfModel): Map<string, { label: string;
 // React Flow's `fitView` prop only fits the viewport once, on initial mount — it does
 // not re-run when `nodes` is later replaced (e.g. via syncGraph after handleAddNode /
 // handleAddSpecialGate write a new node into the YAML). Without this, a newly-added
-// node positioned outside the current viewport by buildGraph/layoutDag renders behind
+// node positioned outside the current viewport by buildGraph/layoutDagStaircase renders behind
 // the canvas pane's `overflow: hidden`, looking like the "Add node" click did nothing.
 //
 // This helper re-fits imperatively, but only when the node *count* grows — not on

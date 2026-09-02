@@ -290,7 +290,7 @@ public static class SkillEndpoints
                     SkillOutcome.NotFound => Results.NotFound(),
                     SkillOutcome.GitHubConnectionRequired =>
                         Results.Json(
-                            GitHubCopilotConnectionRequirement.ForProject(projectId),
+                            ModelProviderConnectionRequirement.ForProject(projectId),
                             statusCode: StatusCodes.Status401Unauthorized),
                     _ => Results.UnprocessableEntity(new { error }),
                 };

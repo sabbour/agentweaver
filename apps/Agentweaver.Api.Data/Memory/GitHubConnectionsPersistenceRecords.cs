@@ -257,7 +257,7 @@ public sealed class RunGitHubCapabilitySnapshotRecord
 /// deliberately not a run. The opaque reference is server-side only; credential material never
 /// leaves the broker.
 /// </summary>
-public sealed class MarketplaceCopilotCapabilityRecord
+public sealed class ProjectModelProviderCapabilityRecord
 {
     public string CapabilityRef { get; set; } = "";
     public int Purpose { get; set; }

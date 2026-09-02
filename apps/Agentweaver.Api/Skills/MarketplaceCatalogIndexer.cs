@@ -109,7 +109,8 @@ public interface IMarketplaceCatalogIndexer
         ProjectId? projectId = null,
         CallerContext? caller = null,
         Func<CancellationToken, Task<string?>>? issueCapabilityAsync = null,
-        Func<CancellationToken, Task<bool>>? hasCapabilityAsync = null) =>
+        Func<CancellationToken, Task<bool>>? hasCapabilityAsync = null,
+        bool useByok = false) =>
         GetOrBuildForProjectAsync(owner, repo, branch, blobs, capabilityReference, parseStrategy, ct, projectId, caller);
 }
 
@@ -174,7 +175,8 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         ProjectId? projectId = null,
         CallerContext? caller = null,
         Func<CancellationToken, Task<string?>>? issueCapabilityAsync = null,
-        Func<CancellationToken, Task<bool>>? hasCapabilityAsync = null)
+        Func<CancellationToken, Task<bool>>? hasCapabilityAsync = null,
+        bool useByok = false)
     {
         var repository = $"{owner}/{repo}";
         var fingerprint = ComputeFingerprint(blobs);
@@ -184,8 +186,10 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         if (_cache.TryGet(key, out var cached))
         {
             // A cached LLM result still requires the caller's active binding. Validate it without
-            // creating a capability record; heuristic indexes remain freely cacheable.
-            if (cached.Strategy != "llm" ||
+            // creating a capability record; heuristic indexes remain freely cacheable. The
+            // deployment-wide BYOK provider is not project-scoped credential material, so a BYOK
+            // caller may always read a cached LLM result.
+            if (cached.Strategy != "llm" || useByok ||
                 (hasCapabilityAsync is null && !string.IsNullOrWhiteSpace(capabilityReference)) ||
                 (hasCapabilityAsync is not null && await hasCapabilityAsync(ct).ConfigureAwait(false)))
                 return cached;
@@ -207,6 +211,23 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
             // deterministic empty result before issuing a capability that could never be redeemed.
             index = new MarketplaceCatalogIndex(
                 repository, branch, fingerprint, "skillmd", Array.Empty<MarketplaceCatalogEntry>());
+        }
+        else if (classifierRequested && useByok)
+        {
+            // BYOK bypasses Copilot capability issuance entirely — it is the deployment-wide
+            // default, not project- or caller-scoped credential material.
+            try
+            {
+                var treePaths = blobs.Select(b => b.Path).ToList();
+                var llmEntries = await BuildWithLlmByokAsync(owner, repo, branch, blobs, treePaths, ct).ConfigureAwait(false);
+                index = new MarketplaceCatalogIndex(repository, branch, fingerprint, "llm", llmEntries);
+            }
+            catch (GitHubCopilotUnauthorizedException)
+            {
+                return new MarketplaceCatalogIndex(
+                    repository, branch, fingerprint, "capability-required", Array.Empty<MarketplaceCatalogEntry>(),
+                    RequiresGitHubConnection: true);
+            }
         }
         else if (classifierRequested)
         {
@@ -282,12 +303,34 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
             .ClassifyForProjectAsync(
                 owner, repo, branch, treePaths, capabilityReference, ct: ct, projectId: projectId, caller: caller)
             .ConfigureAwait(false);
+        return ValidateProposedEntries(blobs, proposed);
+    }
+
+    private async Task<IReadOnlyList<MarketplaceCatalogEntry>> BuildWithLlmByokAsync(
+        string owner,
+        string repo,
+        string branch,
+        IReadOnlyList<GitHubTreeBlob> blobs,
+        IReadOnlyList<string> treePaths,
+        CancellationToken ct)
+    {
+        var proposed = await _classifier!
+            .ClassifyWithByokAsync(owner, repo, branch, treePaths, ct)
+            .ConfigureAwait(false);
+        return ValidateProposedEntries(blobs, proposed);
+    }
+
+    /// <summary>
+    /// Validates every proposed location against the real tree. For step-1 import compatibility the
+    /// location MUST contain a SKILL.md (import only understands the SKILL.md layout); hallucinated or
+    /// non-SKILL.md locations are dropped so browse never lists a skill that import cannot fetch.
+    /// </summary>
+    private static IReadOnlyList<MarketplaceCatalogEntry> ValidateProposedEntries(
+        IReadOnlyList<GitHubTreeBlob> blobs, IReadOnlyList<MarketplaceCatalogEntry>? proposed)
+    {
         if (proposed is null || proposed.Count == 0)
             return Array.Empty<MarketplaceCatalogEntry>();
 
-        // Validate every proposed location against the real tree. For step-1 import compatibility the
-        // location MUST contain a SKILL.md (import only understands the SKILL.md layout); hallucinated or
-        // non-SKILL.md locations are dropped so browse never lists a skill that import cannot fetch.
         var manifests = new HashSet<string>(
             blobs.Where(b => IsSkillManifest(b.Path)).Select(b => LocationOf(b.Path)), StringComparer.Ordinal);
         var kept = new List<MarketplaceCatalogEntry>();
@@ -306,6 +349,7 @@ public sealed class MarketplaceCatalogIndexer : IMarketplaceCatalogIndexer
         kept.Sort((a, b) => string.CompareOrdinal(a.Location, b.Location));
         return kept;
     }
+
 
     internal static bool IsSkillManifest(string path) =>
         path.Equals("SKILL.md", StringComparison.Ordinal) || path.EndsWith("/SKILL.md", StringComparison.Ordinal);

@@ -552,12 +552,6 @@ export interface ProjectRoleAssignment {
   scope: string;
 }
 
-export interface ProjectGitHubIdentityPermission {
-  login: string;
-  permission: string | null;
-  is_default?: boolean;
-}
-
 export interface CreateProjectRoleAssignmentRequest {
   principal_id: string;
   role: string;
@@ -573,10 +567,12 @@ export interface ProjectAccessOverview {
   can_manage_role_assignments?: boolean;
   can_manage_project_github_identity?: boolean;
   project_role_assignments: ProjectRoleAssignment[];
-  github_identity_override_login?: string | null;
+  /**
+   * The repository-access GitHub login effective for this project, when known. Currently always
+   * null — populating it requires reading Repo App installation identity, which is owned by a
+   * separate workstream.
+   */
   effective_github_login?: string | null;
-  effective_github_permission?: string | null;
-  github_identity_permissions?: ProjectGitHubIdentityPermission[] | null;
 }
 
 export interface UnattendedReadiness {
