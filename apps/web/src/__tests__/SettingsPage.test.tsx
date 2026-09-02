@@ -94,12 +94,16 @@ describe('SettingsPage', () => {
       transaction_id: 'transaction',
       expires_at: '2026-09-01T00:00:00Z',
     });
-    render(<MemoryRouter><AzureFluentProvider><SettingsPage /></AzureFluentProvider></MemoryRouter>);
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider><SettingsPage /></AzureFluentProvider>
+      </MemoryRouter>,
+    );
 
     expect(await screen.findByText('GitHub connections')).toBeDefined();
     expect(screen.getByText(/separate Repo App provides repository access/i)).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Repo App' }));
-    await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalled());
+    await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalledWith('/settings'));
     expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/repo-app/authorize');
     assign.mockRestore();
   });

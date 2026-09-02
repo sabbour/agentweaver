@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using LibGit2Sharp;
@@ -38,6 +39,7 @@ public static class ProjectEndpoints
 app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
     HttpContext httpContext,
     string id,
+    CopilotAuthorizationBeginRequest? request,
     IProjectStore projectStore,
     GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
@@ -56,7 +58,7 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
         persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.BeginAsync(
-        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, request?.ReturnRouteKey, ct).ConfigureAwait(false);
     if (result.Outcome != CopilotBindingOutcome.Success)
         return CopilotBindingFailure(result.Outcome);
 
@@ -72,7 +74,7 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
     .WithTags("Projects", "GitHub Copilot")
     .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        operation.Description = "Begins an Owner-authorized, project-pinned Copilot App binding. The request has no caller-selected redirect URL.";
+        operation.Description = "Begins an Owner-authorized, project-pinned Copilot App binding. Callers may supply a safe app-relative return path.";
         return Task.CompletedTask;
     });
 
@@ -1627,4 +1629,7 @@ private static string? BuildGitHubAppInstallUrl(string? slug, string? baseUrl)
 
     return $"{uri.GetLeftPart(UriPartial.Authority)}/apps/{Uri.EscapeDataString(slug.Trim())}/installations/new";
 }
-}
+    }
+
+    file sealed record CopilotAuthorizationBeginRequest(
+        [property: JsonPropertyName("return_route_key")] string? ReturnRouteKey);

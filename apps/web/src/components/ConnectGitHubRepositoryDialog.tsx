@@ -25,6 +25,7 @@ import {
 } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
 import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import type { GitHubRepositorySelectionCandidate, RepositoryOwner } from '../api/types';
 
 const useStyles = makeStyles({
@@ -82,6 +83,7 @@ export function ConnectGitHubRepositoryDialog({
   onConnected,
 }: ConnectGitHubRepositoryDialogProps) {
   const styles = useStyles();
+  const location = useLocation();
   const [mode, setMode] = useState<DialogMode>('create');
   const [owners, setOwners] = useState<RepositoryOwner[]>([]);
   const [ownersLoading, setOwnersLoading] = useState(false);
@@ -166,7 +168,7 @@ export function ConnectGitHubRepositoryDialog({
   const connectRepoApp = async () => {
     setConnectingRepoApp(true);
     try {
-      const handoff = await apiClient.beginRepoAppAuthorization();
+      const handoff = await apiClient.beginRepoAppAuthorization(`${location.pathname}${location.search}`);
       window.location.assign(handoff.authorization_url);
     } catch {
       setConnectingRepoApp(false);
