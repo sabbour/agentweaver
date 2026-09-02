@@ -439,8 +439,8 @@ describe('VisualWorkflowEditor — viewport re-fit on add (#540)', () => {
 
     await waitFor(() => {
       expect(fitViewSpy).toHaveBeenCalledWith(expect.objectContaining({
-        padding: 0.12,
-        maxZoom: 1.35,
+        padding: 0.1,
+        maxZoom: 1.8,
         duration: 300,
       }));
     });
@@ -642,6 +642,7 @@ describe('VisualWorkflowEditor — stable drag targets (#557)', () => {
     renderEditor(YAML_WITH_UNROUTED_RAI);
 
     expect(await screen.findByTestId('workflow-canvas')).toBeDefined();
+    expect(screen.getByTestId('workflow-canvas').getAttribute('data-layout-mode')).toBe('columns');
     expect(await screen.findByTestId('workflow-node-implement')).toBeDefined();
     // GRID routing (matches CoordinatorRunPage / WorkflowDefinitionInlinePanel) exposes four
     // source and four target handles per node instead of a single source/target pair.
