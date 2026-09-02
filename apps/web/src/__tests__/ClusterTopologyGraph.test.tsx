@@ -131,6 +131,75 @@ describe('ClusterTopologyGraph', () => {
     expect(screen.getByText('Unclaimed warm instance')).toBeTruthy();
   });
 
+  it('preserves full long node names for hover and wrapping', () => {
+    const longPoolName = 'agentweaver-agent-host-westus3-warm-pool-abcdef1234567890';
+    const longInstanceName = 'agentweaver-agent-host-westus3-sandbox-available-abcdef1234567890';
+    const longClaimName = 'sandboxclaim-agentweaver-agent-host-westus3-abcdef1234567890';
+    const longPodName = 'agentweaver-agent-host-westus3-pod-abcdef1234567890';
+
+    render(
+      <Wrapper>
+        <ClusterTopologyGraph
+          data={{
+            generated_utc: '2026-08-31T00:00:00.000Z',
+            total_duration_ms: 42,
+            checks: [
+              { name: 'K8s API', status: 'healthy', message: 'Reachable', latencyMs: 5 },
+            ],
+            active_agent_pods: [
+              {
+                claim_name: longClaimName,
+                pod_name: longPodName,
+                run_id: 'run-001',
+                status: 'ready',
+                age_seconds: 60,
+              },
+            ],
+            orphaned_agent_pods: [],
+            pending_capacity_runs: [],
+            warm_pools: [
+              {
+                name: longPoolName,
+                desired_replicas: 1,
+                ready_replicas: 1,
+                available_replicas: 0,
+                status: 'healthy',
+                instances: [
+                  {
+                    name: longInstanceName,
+                    status: 'claimed',
+                    claimed: true,
+                    claim_name: longClaimName,
+                    run_id: 'run-001',
+                    project_id: 'proj-001',
+                    age_seconds: 180,
+                  },
+                ],
+                age_seconds: 300,
+              },
+            ],
+            sandbox_claims: [
+              {
+                name: longClaimName,
+                phase: 'bound',
+                ready: true,
+                run_id: 'run-001',
+                bound_sandbox: longInstanceName,
+                warm_pool: longPoolName,
+                age_seconds: 120,
+              },
+            ],
+          }}
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText(longPoolName).getAttribute('title')).toBe(longPoolName);
+    expect(screen.getAllByText(longInstanceName).some((element) => element.getAttribute('title') === longInstanceName)).toBe(true);
+    expect(screen.getByText(longClaimName).getAttribute('title')).toBe(longClaimName);
+    expect(screen.getByText(longPodName).getAttribute('title')).toBe(longPodName);
+  });
+
   it('renders correctly when a pool has zero unclaimed instances', () => {
     render(
       <Wrapper>
