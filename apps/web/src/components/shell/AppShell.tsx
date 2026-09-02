@@ -1,11 +1,11 @@
 import './shell.css';
 import { ProjectListProvider } from '../../hooks/useProjectList';
 import { StartOrchestrationFab } from '../StartOrchestrationFab';
-import { GitHubCopilotConnectionRequiredAction } from '../GitHubCopilotConnectionRequiredAction';
+import { ModelProviderRequiredAction } from '../ModelProviderRequiredAction';
 import {
-  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
-  isGitHubCopilotConnectionRequirement,
-} from '../../api/githubConnectionRequirement';
+  MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT,
+  isModelProviderConnectionRequirement,
+} from '../../api/modelProviderConnectionRequirement';
 import { LeftNav } from './LeftNav';
 import { NotificationsProvider } from '../../notifications/NotificationsProvider';
 import { resolveActiveKey } from './navConfig';
@@ -14,7 +14,7 @@ import { clearLastActiveProjectId, getLastActiveProjectId, setLastActiveProjectI
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
-import type { GitHubCopilotConnectionRequirement } from '../../api/githubConnectionRequirement';
+import type { ModelProviderConnectionRequirement } from '../../api/modelProviderConnectionRequirement';
 // Spec 011 — the persistent navigation shell (FR-001). Native FluentUI rebuild:
 // a full-height flex row [left rail | main canvas]. The canvas hosts a lighter
 // rounded floating panel (Copilot "content floats on the sidebar" look). No
@@ -29,15 +29,15 @@ export interface AppShellProps {
 export function AppShell({ children, banner, isPlatformAdmin = false }: AppShellProps) {
   const location = useLocation();
   const [connectionRequirement, setConnectionRequirement] =
-    useState<GitHubCopilotConnectionRequirement | null>(null);
+    useState<ModelProviderConnectionRequirement | null>(null);
 
   useEffect(() => {
     const showConnectionRequirement = (event: Event) => {
-      if (event instanceof CustomEvent && isGitHubCopilotConnectionRequirement(event.detail))
+      if (event instanceof CustomEvent && isModelProviderConnectionRequirement(event.detail))
         setConnectionRequirement(event.detail);
     };
-    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, showConnectionRequirement);
-    return () => window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, showConnectionRequirement);
+    window.addEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, showConnectionRequirement);
+    return () => window.removeEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, showConnectionRequirement);
   }, []);
 
   // The project id actually present in the route (undefined on global pages).
@@ -106,7 +106,7 @@ export function AppShell({ children, banner, isPlatformAdmin = false }: AppShell
               </div>
               <div className="aw-shell-scroll">
                 {connectionRequirement && (
-                  <GitHubCopilotConnectionRequiredAction
+                  <ModelProviderRequiredAction
                     requirement={connectionRequirement}
                     onDismiss={() => setConnectionRequirement(null)}
                   />

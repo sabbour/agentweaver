@@ -1,8 +1,8 @@
 import { AgentweaverApiClient, ApiError } from '../client';
 import {
-  GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT,
-  GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
-} from '../githubConnectionRequirement';
+  MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT,
+  MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE,
+} from '../modelProviderConnectionRequirement';
 import type { SkillProvenance } from '../types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -142,12 +142,12 @@ describe('AgentweaverApiClient keepalive', () => {
 
   it('broadcasts the shared Copilot connection action for every typed requirement response', async () => {
     const requirement = {
-      code: 'github_copilot_connection_required',
-      message: GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
-      action: { type: 'connect_project_copilot_app', project_id: 'project-1' },
+      code: 'model_provider_connection_required',
+      message: MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE,
+      action: { type: 'configure_project_model_provider', project_id: 'project-1' },
     };
     const received = vi.fn();
-    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    window.addEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, received);
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -160,17 +160,17 @@ describe('AgentweaverApiClient keepalive', () => {
 
     expect(received).toHaveBeenCalledTimes(1);
     expect((received.mock.calls[0]![0] as CustomEvent).detail).toEqual(requirement);
-    window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    window.removeEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, received);
   });
 
   it('broadcasts the shared Copilot connection action when an in-place retry is fenced', async () => {
     const requirement = {
-      code: 'github_copilot_connection_required',
-      message: GITHUB_COPILOT_CONNECTION_REQUIRED_MESSAGE,
-      action: { type: 'connect_project_copilot_app', project_id: 'project-1' },
+      code: 'model_provider_connection_required',
+      message: MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE,
+      action: { type: 'configure_project_model_provider', project_id: 'project-1' },
     };
     const received = vi.fn();
-    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    window.addEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, received);
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
       status: 409,
@@ -184,12 +184,12 @@ describe('AgentweaverApiClient keepalive', () => {
     expect(fetchMock.mock.calls[0][0])
       .toBe('https://api.example.test/api/runs/run%2F1/retry');
     expect((received.mock.calls[0]![0] as CustomEvent).detail).toEqual(requirement);
-    window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    window.removeEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, received);
   });
 
   it('does not broadcast a connection action for an untyped 401 response', async () => {
     const received = vi.fn();
-    window.addEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    window.addEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, received);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -200,7 +200,7 @@ describe('AgentweaverApiClient keepalive', () => {
     await expect(client.getProject('project-1')).rejects.toMatchObject({ status: 401 });
 
     expect(received).not.toHaveBeenCalled();
-    window.removeEventListener(GITHUB_COPILOT_CONNECTION_REQUIRED_EVENT, received);
+    window.removeEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, received);
   });
 });
 
