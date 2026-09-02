@@ -289,8 +289,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
         await invocationDb.Database.MigrateAsync();
         await ActivateAsync(invocationDb, project.Id);
 
-        var durableInvocations = new AutomationInvocationService(
-            invocationDb, new GitHubConnectionsPersistenceStore(invocationDb));
+        var durableInvocations = AutomationTestServices.CreateInvocationService(invocationDb);
         var invocations = new FailFirstBindingInvocationService(durableInvocations);
         await using var provider = new ServiceCollection()
             .AddScoped<IAutomationInvocationService>(_ => invocations)
@@ -491,7 +490,7 @@ public sealed class WorkflowEventTriggerServiceTests : IAsyncDisposable
         db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
         {
             Id = "binding", ProjectId = projectId.ToString(), EntraObjectId = "owner",
-            CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
+            CredentialReference = "copilot-app-project-binding-version", CredentialVersion = "version", GrantDigest = "copilot-digest",
             Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
         });
         db.AutomationActivations.Add(new AutomationActivationRecord

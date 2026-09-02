@@ -316,7 +316,7 @@ builder.Services.AddSingleton<IProjectWorkspaceProvider>(sp =>
     };
 });
 builder.Services.AddSingleton<ProjectGitInitializer>();
-builder.Services.AddSingleton<ProjectService>();
+builder.Services.AddScoped<ProjectService>();
 
 // Owner-private Blueprint package library. Owner identity is request-scoped; storage remains
 // provider-aware so SQLite and PostgreSQL exercise the same immutable package contract.

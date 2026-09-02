@@ -330,7 +330,7 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
             .AddSingleton<IBacklogTaskStore>(_backlog)
             .AddSingleton(recoveryRegistry)
             .AddScoped<IAutomationInvocationService>(_ =>
-                new AutomationInvocationService(invocationDb, new GitHubConnectionsPersistenceStore(invocationDb)))
+                AutomationTestServices.CreateInvocationService(invocationDb))
             .BuildServiceProvider();
         var service = new WorkflowScheduleTriggerService(
             provider.GetRequiredService<IServiceScopeFactory>(),
@@ -441,14 +441,13 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
         invocationDb.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
         {
             Id = "binding", ProjectId = project.Id.ToString(), EntraObjectId = "owner",
-            CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
+            CredentialReference = "copilot-app-project-binding-version", CredentialVersion = "version", GrantDigest = "copilot-digest",
             Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
         });
         await invocationDb.SaveChangesAsync();
 
         var roles = new SingleOwnerRoleStore(project.Id, "owner");
-        var activationService = new AutomationActivationSnapshotService(
-            new GitHubConnectionsPersistenceStore(invocationDb), roles);
+        var activationService = AutomationTestServices.CreateActivationService(invocationDb, roles);
         var caller = new CallerContext { User = "owner", EntraObjectId = "owner" };
         var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("oid", "owner")], "test"));
 
@@ -458,7 +457,7 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
             .AddSingleton<IBacklogTaskStore>(_backlog)
             .AddSingleton(registry)
             .AddScoped<IAutomationInvocationService>(_ =>
-                new AutomationInvocationService(invocationDb, new GitHubConnectionsPersistenceStore(invocationDb)))
+                AutomationTestServices.CreateInvocationService(invocationDb))
             .BuildServiceProvider();
         var service = new WorkflowScheduleTriggerService(
             provider.GetRequiredService<IServiceScopeFactory>(),
@@ -530,7 +529,7 @@ public sealed class WorkflowScheduleTriggerServiceTests : IAsyncDisposable
         db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
         {
             Id = "binding", ProjectId = projectId.ToString(), EntraObjectId = "owner",
-            CredentialReference = "credential", CredentialVersion = "version", GrantDigest = "copilot-digest",
+            CredentialReference = "copilot-app-project-binding-version", CredentialVersion = "version", GrantDigest = "copilot-digest",
             Status = GitHubBindingStatus.Active, BoundAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();

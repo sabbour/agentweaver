@@ -49,6 +49,7 @@ public sealed class EffectiveModelProviderResolver(
                         projectBinding.Id,
                         credential.GitHubLogin)
                     : new EffectiveModelProviderResult.Unavailable(
+                        EffectiveModelProviderUnavailableReason.ProjectBindingRequiresReauthorization,
                         "The project's active GitHub Copilot binding credential is unavailable. Reconnect the project's GitHub Copilot App.");
             }
         }
@@ -69,6 +70,7 @@ public sealed class EffectiveModelProviderResolver(
         }
 
         return new EffectiveModelProviderResult.Unavailable(
+            EffectiveModelProviderUnavailableReason.NoProvider,
             projectId is null
                 ? "No deployment-wide BYOK provider or platform-default GitHub Copilot binding is configured."
                 : "The project has no GitHub Copilot binding, and no BYOK provider or platform-default GitHub Copilot binding is configured.");
@@ -119,5 +121,13 @@ public abstract record EffectiveModelProviderResult
     public sealed record PlatformGitHubCopilot(string BindingId, string? GitHubLogin) : EffectiveModelProviderResult;
 
     /// <summary>No usable model provider is configured for this scope.</summary>
-    public sealed record Unavailable(string Reason) : EffectiveModelProviderResult;
+    public sealed record Unavailable(
+        EffectiveModelProviderUnavailableReason UnavailableReason,
+        string Reason) : EffectiveModelProviderResult;
+}
+
+public enum EffectiveModelProviderUnavailableReason
+{
+    NoProvider,
+    ProjectBindingRequiresReauthorization,
 }

@@ -6,8 +6,10 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Projects;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Projects;
@@ -331,8 +333,16 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("status").GetString().Should().Be("not_ready");
-        body.GetProperty("reason_code").GetString().Should().Be("copilot_app_not_configured");
+        body.GetProperty("reason_code").GetString().Should().Be("model_provider_connection_required");
         body.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeFalse();
+        body.GetProperty("model_provider").GetProperty("status").GetString().Should().Be("not_ready");
+        body.GetProperty("model_provider").GetProperty("source").GetString().Should().Be("none");
+        body.GetProperty("model_provider").GetProperty("reason_code").GetString()
+            .Should().Be("model_provider_connection_required");
+        body.GetProperty("repository").GetProperty("required").GetBoolean().Should().BeFalse();
+        body.GetProperty("repository").GetProperty("status").GetString().Should().Be("not_required");
+        body.GetProperty("repository").GetProperty("reason_code").GetString().Should().Be("not_required");
+        body.GetProperty("repository").GetProperty("repo_app_installation_connected").GetBoolean().Should().BeFalse();
         body.TryGetProperty("installation_id", out _).Should().BeFalse();
         body.TryGetProperty("repository_id", out _).Should().BeFalse();
         body.TryGetProperty("permissions", out _).Should().BeFalse();
@@ -392,7 +402,7 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     [Fact]
-    public async Task GetUnattendedReadiness_UsesPlatformDefaultCopilotForRepoAppInstallPrompt()
+    public async Task GetUnattendedReadiness_BlankProjectWithPlatformDefaultDoesNotRequireRepository()
     {
         var id = await CreateBlankProjectAsync();
         await SeedPlatformDefaultCopilotBindingAsync();
@@ -401,13 +411,15 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("status").GetString().Should().Be("not_ready");
-        body.GetProperty("reason_code").GetString().Should().Be("repo_app_installation_required");
+        body.GetProperty("status").GetString().Should().Be("ready");
+        body.GetProperty("reason_code").GetString().Should().Be("ready");
         body.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeFalse();
+        body.GetProperty("model_provider").GetProperty("source").GetString().Should().Be("platform_default");
+        body.GetProperty("repository").GetProperty("status").GetString().Should().Be("not_required");
     }
 
     [Fact]
-    public async Task GetUnattendedReadiness_UsesByokForRepoGrantChecks()
+    public async Task GetUnattendedReadiness_BlankProjectWithByokDoesNotRequireRepository()
     {
         var id = await CreateBlankProjectAsync();
         await SeedByokProviderConfigurationAsync();
@@ -417,9 +429,81 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("status").GetString().Should().Be("ready");
+        body.GetProperty("reason_code").GetString().Should().Be("ready");
+        body.GetProperty("model_provider").GetProperty("source").GetString().Should().Be("byok");
+        body.GetProperty("repository").GetProperty("required").GetBoolean().Should().BeFalse();
+        body.GetProperty("repository").GetProperty("status").GetString().Should().Be("not_required");
+    }
+
+    [Fact]
+    public async Task GetUnattendedReadiness_StaleProjectBindingFailsClosedOverByok()
+    {
+        var id = await CreateBlankProjectAsync();
+        await SeedByokProviderConfigurationAsync();
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            if (!db.Projects.Any(project => project.ProjectId == id))
+                db.Projects.Add(new ProjectRecord { ProjectId = id, OriginKind = "blank" });
+            db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+            {
+                Id = "stale-project-binding",
+                ProjectId = id,
+                EntraObjectId = ProjectsWebApplicationFactory.TestUser,
+                CredentialReference = "missing-project-credential",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/unattended-readiness");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("status").GetString().Should().Be("not_ready");
-        body.GetProperty("reason_code").GetString().Should().Be("repo_app_repository_grant_required");
-        body.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeTrue();
+        body.GetProperty("reason_code").GetString().Should().Be("project_model_provider_reconnect_required");
+        body.GetProperty("model_provider").GetProperty("status").GetString().Should().Be("not_ready");
+        body.GetProperty("model_provider").GetProperty("source").GetString().Should().Be("project");
+        body.GetProperty("model_provider").GetProperty("reason_code").GetString()
+            .Should().Be("project_model_provider_reconnect_required");
+        body.GetProperty("repository").GetProperty("status").GetString().Should().Be("not_required");
+    }
+
+    [Fact]
+    public async Task ConnectingRepository_InvalidatesActiveRepositorylessActivation()
+    {
+        var id = await CreateBlankProjectAsync();
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        if (!db.Projects.Any(project => project.ProjectId == id))
+            db.Projects.Add(new ProjectRecord { ProjectId = id, OriginKind = "blank" });
+        db.AutomationActivations.Add(new AutomationActivationRecord
+        {
+            Id = SnapshotRef.Create().Value,
+            ProjectId = id,
+            ModelProviderSource = AutomationModelProviderSource.Byok,
+            ByokProviderId = "provider",
+            AutomationKey = "repositoryless",
+            Status = AutomationActivationStatus.Active,
+            ActivatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var service = scope.ServiceProvider.GetRequiredService<ProjectService>();
+        await service.ConnectCreatedRepositoryAsync(
+            ProjectId.Parse(id),
+            "octo/connected",
+            "https://github.com/octo/connected.git",
+            "ephemeral-token");
+
+        db.ChangeTracker.Clear();
+        var activation = await db.AutomationActivations.SingleAsync(x => x.ProjectId == id);
+        activation.Status.Should().Be(AutomationActivationStatus.Invalidated);
+        activation.InvalidatedAt.Should().NotBeNull();
     }
 
     [Fact]
