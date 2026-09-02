@@ -474,6 +474,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
             byokProviderConfiguration: byokProvider,
             effectiveProviderResolver: (_, _) => Task.FromResult<EffectiveModelProviderResult>(
                 new EffectiveModelProviderResult.Unavailable(
+                    EffectiveModelProviderUnavailableReason.ProjectBindingRequiresReauthorization,
                     "The project's active GitHub Copilot binding credential is unavailable.")));
 
         var act = () => executor.LaunchAgentHostPodAsync(RunId.New().ToString());

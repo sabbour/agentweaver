@@ -318,6 +318,47 @@ public sealed class AutomationActivationSnapshotServiceTests
     }
 
     [Fact]
+    public async Task RepositoryAttachmentGuard_InvalidatesAndRejectsRepositorylessActivationAfterStaleBlankRead()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var project = await SeedProjectAsync(db, blankOrigin: true);
+        db.ProjectCopilotBindings.Add(Binding(project, "binding", "copilot-digest"));
+        await db.SaveChangesAsync();
+        var roles = new MutableRoles();
+        roles.SetOwner(project, "owner");
+        var service = CreateService(db, roles);
+        var activated = await service.ActivateAsync(Human("owner"), HumanPrincipal(), project);
+        activated.Outcome.Should().Be(AutomationActivationOutcome.Activated);
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var originPersistedBeforeInvalidation = false;
+
+        await persistence.CompleteRepositoryAttachmentAsync(project.ToString(), async ct =>
+        {
+            originPersistedBeforeInvalidation = await db.AutomationActivations.AsNoTracking()
+                .AnyAsync(x => x.ProjectId == project.ToString() &&
+                               x.Status == AutomationActivationStatus.Active, ct);
+            await db.Projects.Where(x => x.ProjectId == project.ToString())
+                .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.OriginKind, "github"), ct);
+        });
+
+        originPersistedBeforeInvalidation.Should().BeTrue();
+        db.ChangeTracker.Clear();
+        var invalidated = await db.AutomationActivations.SingleAsync();
+        invalidated.Status.Should().Be(AutomationActivationStatus.Invalidated);
+        invalidated.InvalidatedAt.Should().NotBeNull();
+        (await db.AutomationProjectGuards.SingleAsync()).RepositoryAttached.Should().BeTrue();
+
+        await db.Projects.Where(x => x.ProjectId == project.ToString())
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.OriginKind, "blank"));
+        var racedActivation = await CreateService(db, roles)
+            .ActivateAsync(Human("owner"), HumanPrincipal(), project);
+
+        racedActivation.Outcome.Should().Be(AutomationActivationOutcome.RepositoryGrantUnavailable);
+        (await db.AutomationActivations.CountAsync(x => x.Status == AutomationActivationStatus.Active))
+            .Should().Be(0);
+    }
+
+    [Fact]
     public async Task Deactivate_RequiresHumanEntraSubjectAndCurrentProjectOwner_ThenFreesTheProjectForReactivation()
     {
         await using var db = await OpenDatabaseAsync();

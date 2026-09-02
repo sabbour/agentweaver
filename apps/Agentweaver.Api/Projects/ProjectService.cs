@@ -219,9 +219,10 @@ public sealed class ProjectService
         _gitInit.PushToNewRemote(project.WorkingDirectory, cloneUrl, project.DefaultBranch, accessToken);
         var now = DateTimeOffset.UtcNow;
         var origin = ProjectOrigin.FromGitHub(fullName);
-        await _store.UpdateOriginAsync(id, origin, now, ct).ConfigureAwait(false);
-        await _githubConnections.InvalidateRepositorylessAutomationActivationAsync(id.ToString(), ct)
-            .ConfigureAwait(false);
+        await _githubConnections.CompleteRepositoryAttachmentAsync(
+            id.ToString(),
+            token => _store.UpdateOriginAsync(id, origin, now, token),
+            ct).ConfigureAwait(false);
         return project with { Origin = origin, UpdatedAt = now };
     }
 

@@ -1045,9 +1045,11 @@ public sealed class GitHubConnectionsPersistenceStore(
             System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
         try
         {
-            var selectedProvider = await resolveProvider(ct).ConfigureAwait(false);
-            var repositoryRequired = !await IsIntentionallyBlankOriginProjectAsync(projectId, ct)
+            var repositoryAttached = await AcquireAutomationProjectGuardAsync(projectId, ct)
                 .ConfigureAwait(false);
+            var selectedProvider = await resolveProvider(ct).ConfigureAwait(false);
+            var repositoryRequired = repositoryAttached ||
+                !await IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false);
             var grants = repositoryRequired
                 ? await db.GitHubRepositoryGrants.AsNoTracking()
                     .Where(grant => grant.ProjectId == projectId && grant.RevokedAt == null &&
@@ -1234,21 +1236,45 @@ public sealed class GitHubConnectionsPersistenceStore(
             .Select(x => x.ProjectId)
             .SingleOrDefaultAsync(ct);
 
-    internal async Task InvalidateRepositorylessAutomationActivationAsync(
+    /// <summary>
+    /// Serializes the origin transition with repository-less activation creation. Persisting origin
+    /// precedes invalidation, while the durable guard makes that ordering safe across API replicas.
+    /// </summary>
+    internal async Task CompleteRepositoryAttachmentAsync(
         string projectId,
+        Func<CancellationToken, Task> persistOrigin,
         CancellationToken ct = default)
     {
-        var now = DateTimeOffset.UtcNow;
-        await db.AutomationActivations
-            .Where(x => x.ProjectId == projectId &&
-                        x.Status == AutomationActivationStatus.Active &&
-                        x.InstallationId == null &&
-                        x.RepositoryId == null &&
-                        x.RepositoryGrantDigest == null)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(x => x.Status, AutomationActivationStatus.Invalidated)
-                .SetProperty(x => x.InvalidatedAt, now), ct)
-            .ConfigureAwait(false);
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        try
+        {
+            await AcquireAutomationProjectGuardAsync(projectId, ct).ConfigureAwait(false);
+            await persistOrigin(ct).ConfigureAwait(false);
+            await db.AutomationProjectGuards
+                .Where(x => x.ProjectId == projectId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.RepositoryAttached, true), ct)
+                .ConfigureAwait(false);
+
+            var now = DateTimeOffset.UtcNow;
+            await db.AutomationActivations
+                .Where(x => x.ProjectId == projectId &&
+                            x.Status == AutomationActivationStatus.Active &&
+                            x.InstallationId == null &&
+                            x.RepositoryId == null &&
+                            x.RepositoryGrantDigest == null)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.Status, AutomationActivationStatus.Invalidated)
+                    .SetProperty(x => x.InvalidatedAt, now), ct)
+                .ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
     }
 
     /// <summary>
@@ -2097,6 +2123,33 @@ public sealed class GitHubConnectionsPersistenceStore(
             SqliteErrorCode: 19,
             SqliteExtendedErrorCode: 1555 or 2067
         };
+
+    private async Task<bool> AcquireAutomationProjectGuardAsync(
+        string projectId,
+        CancellationToken ct)
+    {
+        // The upsert guarantees a stable row, and the no-op update takes the provider's write/row
+        // lock. Both activation and attachment hold it through their serializable transaction.
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+             INSERT INTO automation_project_guards (project_id, repository_attached)
+             VALUES ({projectId}, {false})
+             ON CONFLICT (project_id) DO NOTHING
+             """,
+            ct).ConfigureAwait(false);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+             UPDATE automation_project_guards
+             SET repository_attached = repository_attached
+             WHERE project_id = {projectId}
+             """,
+            ct).ConfigureAwait(false);
+        return await db.AutomationProjectGuards.AsNoTracking()
+            .Where(x => x.ProjectId == projectId)
+            .Select(x => x.RepositoryAttached)
+            .SingleAsync(ct)
+            .ConfigureAwait(false);
+    }
 
     private static void EnsureAuthorizationTransaction(GitHubAuthorizationRecord authorization)
     {
