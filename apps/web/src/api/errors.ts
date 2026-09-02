@@ -19,8 +19,8 @@ export interface FormattedApiError {
 }
 
 // Shown whenever isGitHubRepoAppConnectionRequired(err) is true, regardless of which of the
-// connection-required codes triggered it, so the text always matches the single "Connect GitHub"
-// action offered in that state — never mentions "retry", since no retry option is shown.
+// connection-required codes triggered it, so the text always matches the repository setup action
+// offered in that state — never mentions "retry", since no retry option is shown.
 const GITHUB_CONNECTION_REQUIRED_MESSAGE = 'Set up repository access to see your GitHub repositories.';
 
 // Repository-access-domain error codes: raised by the GitHub Repo App installation/authorization
@@ -30,7 +30,7 @@ const GITHUB_CONNECTION_REQUIRED_MESSAGE = 'Set up repository access to see your
 const REPOSITORY_ACCESS_ERROR_MESSAGES: Record<string, string> = {
   // A live Repo App connection exists, but the GitHub API call itself failed transiently
   // (network error, timeout, GitHub outage). Reconnecting would not help, so this pairs with a
-  // "Retry" action rather than "Connect GitHub".
+  // "Retry" action rather than repository setup.
   github_capability_transient: 'GitHub is temporarily unavailable. Try again in a moment.',
 };
 
@@ -69,7 +69,7 @@ const GITHUB_CONNECTION_REQUIRED_CODES = new Set([
 /**
  * True when the API rejected a request because the caller has not yet connected the GitHub Repo
  * App (or the connection is stale/unavailable) — the case where the caller should be offered a
- * "Connect GitHub" action rather than a generic retry.
+ * repository setup action rather than a generic retry.
  */
 export function isGitHubRepoAppConnectionRequired(err: unknown): boolean {
   if (!(err instanceof ApiError)) return false;

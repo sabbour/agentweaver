@@ -6,8 +6,8 @@ describe('githubConnectionErrorMessage', () => {
   it.each([
     [409, { error: 'github_binding_unavailable' }],
     [409, { error: 'github_capability_unavailable' }],
-  ])('returns an actionable "Connect GitHub" message for a repository-access error %s', (status, body) => {
-    expect(githubConnectionErrorMessage(new ApiError(status, JSON.stringify(body)))).toMatch(/Connect GitHub/i);
+  ])('returns an actionable repository-access message for error %s', (status, body) => {
+    expect(githubConnectionErrorMessage(new ApiError(status, JSON.stringify(body)))).toMatch(/repository access/i);
   });
 
   it.each([
@@ -21,7 +21,7 @@ describe('githubConnectionErrorMessage', () => {
   it.each([
     [409, { error: 'github_binding_unavailable' }],
     [409, { error: 'github_capability_unavailable' }],
-  ])('does not mention retry when only a "Connect GitHub" action is offered (%s)', (status, body) => {
+  ])('does not mention retry when only a repository setup action is offered (%s)', (status, body) => {
     expect(githubConnectionErrorMessage(new ApiError(status, JSON.stringify(body)))).not.toMatch(/retry/i);
   });
 
@@ -40,7 +40,7 @@ describe('isGitHubRepoAppConnectionRequired', () => {
   it.each([
     'github_binding_unavailable',
     'github_capability_unavailable',
-  ])('returns true for %s so callers offer a "Connect GitHub" action instead of a generic retry', (code) => {
+  ])('returns true for %s so callers offer repository setup instead of a generic retry', (code) => {
     expect(isGitHubRepoAppConnectionRequired(new ApiError(409, JSON.stringify({ error: code })))).toBe(true);
   });
 
