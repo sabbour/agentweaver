@@ -34,6 +34,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<ProjectCopilotBindingRecord> ProjectCopilotBindings => Set<ProjectCopilotBindingRecord>();
     public DbSet<PlatformDefaultCopilotBindingRecord> PlatformDefaultCopilotBindings => Set<PlatformDefaultCopilotBindingRecord>();
     public DbSet<AutomationActivationRecord> AutomationActivations => Set<AutomationActivationRecord>();
+    public DbSet<AutomationProjectGuardRecord> AutomationProjectGuards => Set<AutomationProjectGuardRecord>();
     public DbSet<AutomationInvocationRecord> AutomationInvocations => Set<AutomationInvocationRecord>();
     public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
     public DbSet<RunGitHubIdentitySnapshotRecord> RunGitHubIdentitySnapshots => Set<RunGitHubIdentitySnapshotRecord>();
@@ -757,6 +758,13 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 .IsRequired(false)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK_run_github_capability_snapshots_projects_project_id");
+        });
+
+        model.Entity<AutomationProjectGuardRecord>(e =>
+        {
+            e.ToTable("automation_project_guards").HasKey(x => x.ProjectId);
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.RepositoryAttached).HasColumnName("repository_attached");
         });
 
         model.Entity<ProjectModelProviderCapabilityRecord>(e =>

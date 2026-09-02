@@ -191,6 +191,16 @@ public sealed class AutomationActivationRecord
     public DateTimeOffset? InvalidatedAt { get; set; }
 }
 
+/// <summary>
+/// Durable per-project serialization row shared by repository attachment and automation activation.
+/// Once attached, the repository flag is monotonic so stale blank-origin reads fail closed.
+/// </summary>
+public sealed class AutomationProjectGuardRecord
+{
+    public string ProjectId { get; set; } = "";
+    public bool RepositoryAttached { get; set; }
+}
+
 public sealed class AutomationInvocationRecord
 {
     public string Id { get; set; } = "";
