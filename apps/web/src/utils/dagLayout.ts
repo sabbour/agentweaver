@@ -36,6 +36,20 @@ export const REVIEW_EXPANDED_NODE_H = 96;
 export const COMPACT_CARD_H = SUBTASK_CARD_H;
 export const COMPACT_NODE_H = SUBTASK_NODE_H;
 
+// Compact workflow-definition / visual-editor nodes all render through WorkflowNode's short pill
+// face, regardless of semantic node_type. Keep these hints close to the actual rendered pills so
+// fitView and routed edges size to the visible cards rather than oversized virtual boxes.
+export const WORKFLOW_PILL_NODE_W = FIXED_NODE_W;
+export const WORKFLOW_PILL_NODE_H: Record<string, number> = {
+  agent: 92,
+  subtask: 84,
+  gate: 72,
+  action: 92,
+  terminal: 64,
+};
+export const WORKFLOW_PILL_DEFAULT_NODE_H = 84;
+export const WORKFLOW_FIT_VIEW_OPTIONS = { padding: 0.12, maxZoom: 1.35 } as const;
+
 // Stair tread length: how many nodes advance along the SAME row (LR) / column (TB) before the stair
 // steps down/right to the next tread. A value of 2 keeps chunky, clearly-horizontal treads (instead of
 // stepping after every single node → a fine 45° diagonal) while still packing into a square-ish box.
@@ -217,8 +231,8 @@ export function buildSteppedConnectorRoute(input: {
 export function workflowNodeSizeHint(nodeType?: string | null): NodeSizeHint {
   const key = nodeType ?? '';
   return {
-    width: NODE_TYPE_W[key] ?? NODE_W,
-    height: RENDERED_NODE_TYPE_H[key] ?? RENDERED_DEFAULT_NODE_H,
+    width: WORKFLOW_PILL_NODE_W,
+    height: WORKFLOW_PILL_NODE_H[key] ?? WORKFLOW_PILL_DEFAULT_NODE_H,
   };
 }
 

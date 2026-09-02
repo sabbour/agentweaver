@@ -438,7 +438,11 @@ describe('VisualWorkflowEditor — viewport re-fit on add (#540)', () => {
     await user.click(await screen.findByTestId('add-node-option-rubberduck'));
 
     await waitFor(() => {
-      expect(fitViewSpy).toHaveBeenCalled();
+      expect(fitViewSpy).toHaveBeenCalledWith(expect.objectContaining({
+        padding: 0.12,
+        maxZoom: 1.35,
+        duration: 300,
+      }));
     });
   });
 
