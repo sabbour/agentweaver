@@ -2,9 +2,11 @@ using k8s;
 using Agentweaver.AgentRuntime;
 using Agentweaver.SandboxExec;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Sandbox;
@@ -33,8 +35,17 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly Preview.ISandboxPreviewService? _previewService;
     private readonly RunRepositoryCredentialRegistry? _repositoryCredentials;
     private readonly IRunStore? _runStore;
+    private readonly IByokProviderConfigurationProvider _byokProviderConfiguration;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? _effectiveProviderResolver;
+    private readonly Func<bool> _isInCluster;
+    private readonly Func<IKubernetes> _kubernetesClientFactory;
 
-    public SandboxExecutorRouter(IConfiguration config, ILoggerFactory loggerFactory,
+    public SandboxExecutorRouter(
+        IConfiguration config,
+        ILoggerFactory loggerFactory,
+        IByokProviderConfigurationProvider byokProviderConfiguration,
+        IServiceScopeFactory serviceScopeFactory,
         IPodNameRegistry? podRegistry = null, IHttpClientFactory? httpClientFactory = null,
         IRunSubmittingUserResolver? submittingUserResolver = null,
         IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
@@ -45,7 +56,10 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         Preview.ISandboxPreviewService? previewService = null,
         RunRepositoryCredentialRegistry? repositoryCredentials = null,
         Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
-        IRunStore? runStore = null)
+        IRunStore? runStore = null,
+        Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
+        Func<bool>? isInCluster = null,
+        Func<IKubernetes>? kubernetesClientFactory = null)
     {
         _config = config;
         _loggerFactory = loggerFactory;
@@ -61,12 +75,21 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _repositoryCredentials = repositoryCredentials;
         _authorshipCapabilityStore = authorshipCapabilityStore;
         _runStore = runStore;
+        _byokProviderConfiguration = byokProviderConfiguration;
+        _serviceScopeFactory = serviceScopeFactory;
+        _effectiveProviderResolver = effectiveProviderResolver;
+        _isInCluster = isInCluster ?? (() => SandboxExecutorFactory.IsInCluster);
+        _kubernetesClientFactory = kubernetesClientFactory ?? (() =>
+        {
+            var k8sConfig = KubernetesClientConfiguration.InClusterConfig();
+            return new Kubernetes(k8sConfig);
+        });
     }
 
     public ISandboxExecutor Resolve()
     {
         var backendOverride = _config["Sandbox:Backend"]?.ToLowerInvariant();
-        var isInCluster = SandboxExecutorFactory.IsInCluster;
+        var isInCluster = _isInCluster();
         var logger = _loggerFactory.CreateLogger<SandboxExecutorRouter>();
 
         var useKubernetes = backendOverride == "kubernetes"
@@ -88,8 +111,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
 
         try
         {
-            var k8sConfig = KubernetesClientConfiguration.InClusterConfig();
-            var k8sClient = new Kubernetes(k8sConfig);
+            var k8sClient = _kubernetesClientFactory();
             var sandboxOptions = new KubernetesSandboxOptions
             {
                 Namespace = _config["Sandbox:Kubernetes:Namespace"] ?? "agentweaver",
@@ -116,7 +138,6 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                     _config["Sandbox:Kubernetes:AgentHostReadyPollIntervalMs"], out int ri) ? ri : 1000,
                 ToolApprovalApiBaseUrl = _config["Agentweaver:ApiBaseUrl"],
             };
-            var k8sLogger = _loggerFactory.CreateLogger<KubernetesSandboxExecutor>();
             WarnIfServiceCidrNotExcluded(sandboxOptions, logger);
 
             // Readiness gate closes the A2A cold-start race (pod Running before Kestrel binds :8088).
@@ -141,12 +162,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             logger.LogInformation(
                 "SandboxExecutorRouter: selecting KubernetesSandboxExecutor (namespace={Namespace}, workspaceMountPath={WorkspaceMountPath})",
                 sandboxOptions.Namespace, sandboxOptions.WorkspaceMountPath);
-            return new KubernetesSandboxExecutor(
-                k8sClient, sandboxOptions, k8sLogger, _podRegistry, _turnTokenRegistry, readinessProbe,
-                _submittingUserResolver, _httpClientFactory, _secretStore, _runEventStream,
-                _runOptions, _repositoryCredentials, _copilotCredentials, _previewService,
-                authorshipCapabilityStore: _authorshipCapabilityStore,
-                runStore: _runStore);
+            return CreateKubernetesExecutor(k8sClient, sandboxOptions, readinessProbe);
         }
         catch (Exception ex)
         {
@@ -154,6 +170,44 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 "SandboxExecutorRouter: in-cluster Kubernetes executor initialization failed. " +
                 "Fail-closed: will not fall back to a local executor.", ex);
         }
+    }
+
+    internal KubernetesSandboxExecutor CreateKubernetesExecutor(
+        IKubernetes k8sClient,
+        KubernetesSandboxOptions sandboxOptions,
+        IAgentHostReadinessProbe? readinessProbe = null) =>
+        new(
+            k8sClient,
+            sandboxOptions,
+            _loggerFactory.CreateLogger<KubernetesSandboxExecutor>(),
+            _podRegistry,
+            _turnTokenRegistry,
+            readinessProbe,
+            _submittingUserResolver,
+            _httpClientFactory,
+            _secretStore,
+            _runEventStream,
+            _runOptions,
+            _repositoryCredentials,
+            _copilotCredentials,
+            _previewService,
+            authorshipCapabilityStore: _authorshipCapabilityStore,
+            runStore: _runStore,
+            byokProviderConfiguration: _byokProviderConfiguration,
+            effectiveProviderResolver: ResolveEffectiveProviderAsync);
+
+    private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderAsync(
+        ProjectId? projectId,
+        CancellationToken ct)
+    {
+        if (_effectiveProviderResolver is not null)
+            return await _effectiveProviderResolver(projectId, ct).ConfigureAwait(false);
+
+        using var scope = _serviceScopeFactory.CreateScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<EffectiveModelProviderResolver>()
+            .ResolveAsync(projectId, ct)
+            .ConfigureAwait(false);
     }
 
     private IReadOnlyList<string> ReadSandboxEgressCidrExclusions() =>

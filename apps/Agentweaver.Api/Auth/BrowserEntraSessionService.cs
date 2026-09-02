@@ -23,6 +23,7 @@ public sealed class BrowserEntraSessionService(MemoryDbContext db)
         {
             Id = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32)),
             EntraObjectId = claims.ObjectId,
+            PlatformRoles = string.Join(',', claims.RecognizedRoles),
             ExpiresAt = claims.ExpiresAt,
         };
         db.BrowserEntraSessions.Add(session);
