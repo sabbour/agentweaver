@@ -135,7 +135,9 @@ beforeEach(() => {
     { login: 'octo', type: 'user' },
   ] as never);
   vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
-    repositories: [{ full_name: 'octo/repo', owner_login: 'octo', private: true, default_branch: 'main', pushed_at: null }],
+    repositories: [
+      { full_name: 'octo/repo', owner_login: 'octo', private: true, default_branch: 'main', pushed_at: null },
+    ],
   } as never);
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'not_connected',
@@ -197,10 +199,10 @@ describe('ProjectSettingsPage', () => {
 
     expect(await screen.findByText('Background automation readiness')).toBeDefined();
     expect(screen.getByText(
-      'This controls the GitHub Copilot account used for this project’s background AI and other Copilot-powered generation. It does not control repository access.',
+      'This account supplies the project model provider. The Repo App controls repository access.',
     )).toBeDefined();
     expect(screen.getByText(
-      'These server-verified prerequisites apply after you connect a GitHub repository. They cover repository access for background branch, push, and pull-request work and are separate from the GitHub Copilot AI access shown above.',
+      'These server checks apply after you add repository access. Local agent work can continue without a repository.',
     )).toBeDefined();
     expect(screen.getByText('copilot_binding_required')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
@@ -286,15 +288,15 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Background/i }));
 
     expect(await screen.findByText(
-      'This project uses the platform-configured GitHub Copilot account for background AI access: @platform-bot. Manage it in Platform settings.',
+      'GitHub Copilot (@platform-bot) supplies AI access. Scope: Platform.',
     )).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Manage GitHub Copilot' })).toBeNull();
   });
 
-  it('reopens repository connection after a successful Repo App callback so the repo list refreshes', async () => {
+  it('reopens repository setup after authorization succeeds', async () => {
     renderPage('proj-1', '/projects/proj-1/settings?section=repository&repo_app_auth=success');
 
-    expect(await screen.findByRole('heading', { name: 'Connect a GitHub repository' })).toBeDefined();
+    expect(await screen.findByRole('heading', { name: 'Set up repository access' })).toBeDefined();
     await waitFor(() => expect(apiClient.listProjectRepositoryOwners).toHaveBeenCalledWith('proj-1'));
     await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalled());
   });
@@ -327,7 +329,7 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Background/i }));
 
     expect(await screen.findByText(
-      'These server-verified prerequisites cover repository access for background branch, push, and pull-request work on this project’s connected GitHub repository. They are separate from the GitHub Copilot AI access shown above.',
+      'These server checks cover branch, push, and pull-request work for the connected repository.',
     )).toBeDefined();
   });
 

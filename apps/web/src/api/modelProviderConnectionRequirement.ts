@@ -1,7 +1,7 @@
 export const MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT = 'agentweaver:model-provider-connection-required';
 export const MODEL_PROVIDER_CONNECTION_REQUIRED_CODE = 'model_provider_connection_required';
 export const MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE =
-  'Connect your GitHub Copilot account to continue.';
+  'Set up a model provider to continue.';
 export const CONFIGURE_PROJECT_MODEL_PROVIDER_ACTION = 'configure_project_model_provider';
 export const CONFIGURE_PLATFORM_MODEL_PROVIDER_ACTION = 'configure_platform_model_provider';
 

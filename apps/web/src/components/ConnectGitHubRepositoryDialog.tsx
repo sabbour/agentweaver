@@ -57,7 +57,7 @@ function slugify(name: string): string {
 }
 
 function formatError(err: unknown): string {
-  return formatApiErrorMessage(err, 'Could not connect the GitHub repository.');
+  return formatApiErrorMessage(err, 'The GitHub repository connection failed.');
 }
 
 interface ConnectGitHubRepositoryDialogProps {
@@ -94,6 +94,7 @@ export function ConnectGitHubRepositoryDialog({
   const [reposError, setReposError] = useState<string | null>(null);
   const [reposConnectionRequired, setReposConnectionRequired] = useState(false);
   const [connectingRepoApp, setConnectingRepoApp] = useState(false);
+  const [repoAppConnectionError, setRepoAppConnectionError] = useState<string | null>(null);
   const [owner, setOwner] = useState('');
   const [name, setName] = useState('');
   const [isPrivate, setIsPrivate] = useState(true);
@@ -167,10 +168,12 @@ export function ConnectGitHubRepositoryDialog({
 
   const connectRepoApp = async () => {
     setConnectingRepoApp(true);
+    setRepoAppConnectionError(null);
     try {
       const handoff = await apiClient.beginRepoAppAuthorization(`${location.pathname}${location.search}`);
       window.location.assign(handoff.authorization_url);
     } catch {
+      setRepoAppConnectionError('Repository authorization did not start. Try again.');
       setConnectingRepoApp(false);
     }
   };
@@ -219,6 +222,7 @@ export function ConnectGitHubRepositoryDialog({
     setRepoFilter('');
     setResult(null);
     setError(null);
+    setRepoAppConnectionError(null);
   };
 
   const renderRepoAppMessage = (
@@ -237,7 +241,7 @@ export function ConnectGitHubRepositoryDialog({
         {connectionRequired
           ? (
             <Button size="small" appearance="primary" disabled={connectingRepoApp} onClick={() => void connectRepoApp()}>
-              {connectingRepoApp ? 'Opening GitHub…' : 'Connect GitHub'}
+              {connectingRepoApp ? 'Opening GitHub' : 'Authorize repository access'}
             </Button>
           )
           : <Button size="small" onClick={onRetry}>Retry</Button>}
@@ -258,9 +262,12 @@ export function ConnectGitHubRepositoryDialog({
               </DialogTrigger>
             }
           >
-            Connect a GitHub repository
+            Set up repository access
           </DialogTitle>
           <DialogContent className={styles.stack}>
+            <div className={styles.helperText}>
+              Local agent work can continue without a repository. Pull-request publishing requires repository access.
+            </div>
             {result ? (
               <MessageBar intent="success">
                 <MessageBarBody>
@@ -268,7 +275,7 @@ export function ConnectGitHubRepositoryDialog({
                   <FluentLink href={result.htmlUrl} target="_blank" rel="noreferrer">
                     {result.sourceRepository}
                   </FluentLink>
-                  . The project's existing history has been pushed to it.
+                  . Agentweaver pushed the existing project history to this repository.
                 </MessageBarBody>
               </MessageBar>
             ) : (
@@ -281,7 +288,7 @@ export function ConnectGitHubRepositoryDialog({
                 {mode === 'create' ? (
                   <div className={styles.tabPanel}>
                     <div className={styles.helperText}>
-                      Create a brand-new repository under one of your available GitHub owners.
+                      Create a repository under one available GitHub owner.
                     </div>
                     {ownersLoading && <Spinner label="Loading GitHub accounts" />}
                     {ownersError && renderRepoAppMessage(
@@ -319,7 +326,7 @@ export function ConnectGitHubRepositoryDialog({
                 ) : (
                   <div className={styles.tabPanel}>
                     <div className={styles.helperText}>
-                      Pick one of your Repo App-authorized repositories to attach it to this project.
+                      Choose a repository that the Repo App can access.
                     </div>
                     {reposLoading && <Spinner label="Loading GitHub repositories" />}
                     {reposError && renderRepoAppMessage(
@@ -368,6 +375,11 @@ export function ConnectGitHubRepositoryDialog({
                 {error && (
                   <MessageBar intent="error">
                     <MessageBarBody>{error}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {repoAppConnectionError && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>{repoAppConnectionError}</MessageBarBody>
                   </MessageBar>
                 )}
               </>

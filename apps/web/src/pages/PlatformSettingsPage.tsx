@@ -28,7 +28,16 @@ import type {
   ByokProviderType,
   PlatformDefaultCopilotConnection,
 } from '../api/types';
-import { AppCard, AppDialog, Body, Label, PageContainer, PageHeader, PageSection } from '../components/ui';
+import {
+  AppCard,
+  AppDialog,
+  Body,
+  Label,
+  PageContainer,
+  PageHeader,
+  PageSection,
+  SetupReadiness,
+} from '../components/ui';
 import { useSearchParams } from 'react-router-dom';
 
 const useStyles = makeStyles({
@@ -191,7 +200,7 @@ const PLATFORM_COPILOT_AUTH_RESULTS = {
   },
   human_entra_subject_required: {
     intent: 'warning',
-    message: 'Connect GitHub Copilot while signed in with your work account.',
+    message: 'Authorize GitHub Copilot while signed in with your work account.',
   },
   platform_admin_required: {
     intent: 'warning',
@@ -199,7 +208,7 @@ const PLATFORM_COPILOT_AUTH_RESULTS = {
   },
   authorization_transaction_invalid: {
     intent: 'error',
-    message: 'The GitHub Copilot connection could not be completed. Start a new connection from Platform settings.',
+    message: 'The GitHub Copilot connection failed. Start a new connection from Platform settings.',
   },
   authorization_transaction_consumed: {
     intent: 'error',
@@ -455,11 +464,19 @@ export function PlatformSettingsPage({
     : copilotAuthorizationResult
       ? {
         intent: 'error' as const,
-        message: 'The GitHub Copilot connection could not be completed. Start a new connection from Platform settings.',
+        message: 'The GitHub Copilot connection failed. Start a new connection from Platform settings.',
       }
       : null;
 
   const copilotIsActive = activeProviderId === null;
+  const activeCustomProvider = providers.find((provider) => provider.id === activeProviderId) ?? null;
+  const modelProviderReady = activeCustomProvider !== null
+    || (copilotIsActive && Boolean(platformCopilotConnection?.connected));
+  const modelProviderDescription = activeCustomProvider
+    ? `${activeCustomProvider.name} (${PROVIDER_TYPE_LABELS[activeCustomProvider.type]}) supplies AI access. Scope: Platform.`
+    : platformCopilotConnection?.connected
+      ? `GitHub Copilot (@${platformCopilotConnection.github_login ?? 'unknown'}) supplies AI access. Scope: Platform.`
+      : 'Choose a model provider before this deployment starts AI work.';
 
   return (
     <PageContainer width="readable">
@@ -467,27 +484,37 @@ export function PlatformSettingsPage({
         title="Platform settings"
         description="Deployment-wide configuration for Agentweaver."
       />
-      {setupRequired && (
-        <div className={styles.stack}>
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              Agentweaver is locked until an administrator configures either a deployment-wide custom key
-              or a platform-default GitHub Copilot account.
-            </MessageBarBody>
-          </MessageBar>
-          {onRetryAccess && (
-            <div className={styles.formActions}>
-              <Button appearance="secondary" onClick={onRetryAccess}>Retry access</Button>
-            </div>
-          )}
-        </div>
-      )}
+      <SetupReadiness
+        model={{
+          title: 'Setup readiness',
+          description: 'The active model provider applies to all users and projects.',
+          loading,
+          loadingLabel: 'Loading model provider status',
+          error: loadError,
+          items: [{
+            id: 'model-provider',
+            title: 'Model provider',
+            description: modelProviderDescription,
+            requirement: 'required',
+            status: modelProviderReady ? 'ready' : 'action-required',
+          }],
+        }}
+        onRetry={() => { window.location.reload(); }}
+        primaryAction={!modelProviderReady && !loading && !loadError ? (
+          <Button
+            appearance="primary"
+            disabled={connectingCopilot}
+            onClick={() => void handleConnectPlatformCopilot()}
+          >
+            {connectingCopilot ? 'Opening GitHub' : 'Authorize GitHub Copilot'}
+          </Button>
+        ) : setupRequired && modelProviderReady && onRetryAccess ? (
+          <Button appearance="primary" onClick={onRetryAccess}>Continue to Agentweaver</Button>
+        ) : undefined}
+      />
       <PageSection
         title="Model providers"
-        description="Choose exactly one active AI inference source for the whole deployment — this is not
-          per-project or per-person, it applies to everyone, including background and scheduled runs.
-          You can configure several providers ahead of time and keep their keys saved, but only one is
-          ever active at a time."
+        description="Choose one active model provider for the deployment. You can save other providers for later use."
         actions={(
           <Button appearance="primary" icon={<AddRegular />} onClick={openAddPicker}>
             Add provider
@@ -502,10 +529,6 @@ export function PlatformSettingsPage({
             </Button>
           </MessageBar>
         )}
-        {loading && <Spinner size="small" label="Loading configuration" />}
-        {loadError && (
-          <MessageBar intent="error"><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
-        )}
         {!loading && !loadError && (
           <div className={styles.providerList}>
             {/* GitHub Copilot is always shown first, is never removable, and is implicitly
@@ -514,7 +537,7 @@ export function PlatformSettingsPage({
               <div className={styles.providerHeaderRow}>
                 <div className={styles.providerLabel}>
                   <Label>GitHub Copilot</Label>
-                  <Body tone="muted">From your GitHub Copilot subscription</Body>
+                  <Body tone="muted">GitHub Copilot model provider · Platform scope</Body>
                 </div>
                 {copilotIsActive
                   ? (
@@ -541,13 +564,13 @@ export function PlatformSettingsPage({
               {!platformCopilotError && platformCopilotConnection?.connected && (
                 <MessageBar intent="success">
                   <MessageBarBody>
-                    Provided by your GitHub account @{platformCopilotConnection.github_login ?? 'unknown'}
+                    GitHub Copilot (@{platformCopilotConnection.github_login ?? 'unknown'}) is ready. Scope: Platform.
                   </MessageBarBody>
                 </MessageBar>
               )}
               {!platformCopilotError && platformCopilotConnection && !platformCopilotConnection.connected && (
                 <MessageBar intent="warning">
-                  <MessageBarBody>No platform-default GitHub Copilot account is connected yet.</MessageBarBody>
+                  <MessageBarBody>Authorize GitHub Copilot to use it as the platform model provider.</MessageBarBody>
                 </MessageBar>
               )}
               <div className={styles.formActions}>
@@ -557,10 +580,10 @@ export function PlatformSettingsPage({
                   onClick={() => void handleConnectPlatformCopilot()}
                 >
                   {connectingCopilot
-                    ? 'Opening GitHub…'
+                    ? 'Opening GitHub'
                     : platformCopilotConnection?.connected
                       ? 'Switch GitHub Copilot account'
-                      : 'Connect GitHub Copilot'}
+                      : 'Authorize GitHub Copilot'}
                 </Button>
                 <Button
                   appearance="secondary"
@@ -738,7 +761,7 @@ export function PlatformSettingsPage({
               label="API key"
               required={form.type !== 'openai'}
               hint={form.type === 'openai'
-                ? "Optional — leave blank if your endpoint doesn't require auth."
+                ? 'Optional. Leave this field blank if your endpoint does not require authentication.'
                 : undefined}
             >
               <Input

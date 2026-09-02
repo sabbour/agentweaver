@@ -16,9 +16,10 @@ import { DismissRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { ProjectCopilotConnection } from '../api/types';
+import { SetupReadiness } from './SetupReadiness';
 
-const CONNECTION_LOAD_ERROR = 'Could not load this project’s GitHub Copilot connection. Refresh and try again.';
-const GITHUB_APPS_EXPLANATION = 'GitHub Copilot provides AI access. The separate Repo App provides repository access.';
+const CONNECTION_LOAD_ERROR = 'The model provider status did not load. Reload the status and try again.';
+const GITHUB_APPS_EXPLANATION = 'GitHub Copilot provides AI access. The Repo App provides repository access.';
 
 export function ProjectModelProviderSettings({
   projectId,
@@ -74,10 +75,13 @@ export function ProjectModelProviderSettings({
     setConnecting(true);
     setConnectionError(null);
     try {
-      const handoff = await apiClient.beginProjectCopilotAuthorization(projectId, `${location.pathname}${location.search}`);
+      const handoff = await apiClient.beginProjectCopilotAuthorization(
+        projectId,
+        `${location.pathname}${location.search}`,
+      );
       window.location.assign(handoff.authorization_url);
     } catch {
-      setConnectionError('The GitHub Copilot App connection could not be started. Try again.');
+      setConnectionError('The GitHub Copilot authorization did not start. Try again.');
       setConnecting(false);
     }
   };
@@ -91,53 +95,57 @@ export function ProjectModelProviderSettings({
     : 'a GitHub account';
   const canManageProjectConnection = !suppressProjectOverrideWhenPlatformDefault
     || (!platformDefaultConnected && !byokConfigured);
-  const noConnectionMessage = 'No GitHub Copilot account is connected for this project’s background AI access.';
-  const platformDefaultMessage = `This project uses the platform-configured GitHub Copilot account for background AI access: ${accountLabel}. Manage it in Platform settings.`;
-  const byokConfiguredMessage = 'This project uses the deployment’s custom key AI configuration for background AI. GitHub Copilot is not used while Platform settings is in Custom key mode.';
-  const projectConnectionMessage = `GitHub Copilot background AI access is connected to this project as ${accountLabel}. ${GITHUB_APPS_EXPLANATION}`;
+  const noConnectionMessage = 'Choose a model provider before this project starts AI work.';
+  const platformDefaultMessage = `GitHub Copilot (${accountLabel}) supplies AI access. Scope: Platform.`;
+  const byokConfiguredMessage = 'A custom-key model provider supplies AI access. Scope: Platform.';
+  const projectConnectionMessage = `GitHub Copilot (${accountLabel}) supplies AI access. Scope: Project.`;
   const dialogDescription = (
-    'Choose the GitHub account with Copilot access in GitHub’s secure browser page. '
-    + `${GITHUB_APPS_EXPLANATION} Agentweaver keeps credentials private and uses this account only for this project’s background AI access.`
+    'Choose a GitHub account with Copilot access. Agentweaver uses this account only as this project’s model provider.'
   );
   const dialogConnectedMessage = connection?.github_login
-    ? `Connected project GitHub account: @${connection.github_login}`
-    : 'a GitHub account';
+    ? `GitHub Copilot (@${connection.github_login}) is ready. Scope: Project.`
+    : 'GitHub Copilot is ready. Scope: Project.';
+  const readinessStatus = connected || platformDefaultConnected || byokConfigured
+    ? 'ready' as const
+    : 'action-required' as const;
+  const readinessDescription = connected
+    ? projectConnectionMessage
+    : platformDefaultConnected
+      ? platformDefaultMessage
+      : byokConfigured
+        ? byokConfiguredMessage
+        : noConnectionMessage;
+
+  const trigger = canManageProjectConnection ? (
+    <Button appearance={connected ? 'secondary' : 'primary'} onClick={() => setOpen(true)}>
+      {triggerLabel}
+    </Button>
+  ) : undefined;
 
   return (
     <>
       {showConnectionStatus && (
-        <div>
-          {loading && <Spinner label="Loading GitHub account" size="extra-tiny" />}
-          {!loading && loadError && (
-            <MessageBar intent="error"><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
-          )}
-          {!loading && !loadError && connected && (
-            <MessageBar intent="success">
-              <MessageBarBody>{projectConnectionMessage}</MessageBarBody>
-            </MessageBar>
-          )}
-          {!loading && !loadError && platformDefaultConnected && (
-            <MessageBar intent="info">
-              <MessageBarBody>{platformDefaultMessage}</MessageBarBody>
-            </MessageBar>
-          )}
-          {!loading && !loadError && byokConfigured && (
-            <MessageBar intent="info">
-              <MessageBarBody>{byokConfiguredMessage}</MessageBarBody>
-            </MessageBar>
-          )}
-          {!loading && !loadError && !connected && !platformDefaultConnected && !byokConfigured && (
-            <MessageBar intent="warning">
-              <MessageBarBody>{noConnectionMessage} {GITHUB_APPS_EXPLANATION}</MessageBarBody>
-            </MessageBar>
-          )}
-        </div>
+        <SetupReadiness
+          compact
+          model={{
+            title: 'Model provider',
+            description: GITHUB_APPS_EXPLANATION,
+            loading,
+            loadingLabel: 'Loading model provider status',
+            error: loadError,
+            items: [{
+              id: 'project-model-provider',
+              title: 'AI access',
+              description: readinessDescription,
+              requirement: 'required',
+              status: readinessStatus,
+            }],
+          }}
+          onRetry={() => void refreshConnection()}
+          primaryAction={trigger}
+        />
       )}
-      {canManageProjectConnection && (
-        <Button appearance={connected ? 'secondary' : 'primary'} onClick={() => setOpen(true)}>
-          {triggerLabel}
-        </Button>
-      )}
+      {!showConnectionStatus && trigger}
       <Dialog open={open} onOpenChange={(_, data) => setOpen(data.open)}>
         <DialogSurface>
           <DialogBody>
@@ -150,10 +158,10 @@ export function ProjectModelProviderSettings({
                   onClick={() => setOpen(false)}
                 />
               }
-            >Connect GitHub Copilot for background AI</DialogTitle>
+            >Set up the project model provider</DialogTitle>
             <DialogContent>
               <p>{dialogDescription}</p>
-              {loading && <Spinner label="Loading GitHub connection" />}
+              {loading && <Spinner label="Loading model provider status" />}
               {!loading && loadError && (
                 <MessageBar intent="error"><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
               )}
@@ -177,8 +185,8 @@ export function ProjectModelProviderSettings({
               )}
             </DialogContent>
             <DialogActions>
-              <Button appearance="secondary" disabled={loading} onClick={() => void refreshConnection()}>
-                Refresh
+               <Button appearance="secondary" disabled={loading} onClick={() => void refreshConnection()}>
+                Reload status
               </Button>
               <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
               <Button
@@ -187,7 +195,7 @@ export function ProjectModelProviderSettings({
                 onClick={() => void connect()}
                 style={{ whiteSpace: 'nowrap' }}
               >
-                {connecting ? 'Opening GitHub…' : connected ? 'Switch GitHub account' : 'Connect GitHub account'}
+                {connecting ? 'Opening GitHub' : connected ? 'Switch GitHub Copilot account' : 'Authorize GitHub Copilot'}
               </Button>
             </DialogActions>
           </DialogBody>

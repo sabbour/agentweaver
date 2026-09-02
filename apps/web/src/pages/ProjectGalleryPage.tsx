@@ -265,7 +265,7 @@ function useCreateProjectDialog(origin: 'blank' | 'github', onCreated: (p: Proje
       reset();
     } catch (err) {
       setError(
-        formatApiErrorMessage(err, 'Could not load projects.'),
+        formatApiErrorMessage(err, 'The projects did not load.'),
       );
     } finally {
       setSaving(false);
@@ -498,7 +498,7 @@ function useGitHubData(open: boolean) {
       } catch (err: unknown) {
         if (cancelled) return;
         setReposConnectionRequired(isGitHubRepoAppConnectionRequired(err));
-        setReposError(formatApiErrorMessage(err, 'Could not load repositories.'));
+        setReposError(formatApiErrorMessage(err, 'The repositories did not load.'));
       } finally {
         if (!cancelled) setReposLoading(false);
       }
@@ -529,25 +529,29 @@ function CreateFromGitHubDialog({
   const styles = useStyles();
   const location = useLocation();
   const d = useCreateProjectDialog('github', onCreated);
-  const { repos, reposLoading, reposError, reposConnectionRequired, reloadRepos } = useGitHubData(d.open);
+  const { open, setOpen } = d;
+  const { repos, reposLoading, reposError, reposConnectionRequired, reloadRepos } = useGitHubData(open);
   const [repoFilter, setRepoFilter] = useState('');
   const [pasteRepo, setPasteRepo] = useState('');
   const [folderName, setFolderName] = useState('');
   const [folderEdited, setFolderEdited] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
   const [connectingRepoApp, setConnectingRepoApp] = useState(false);
+  const [repoAppConnectionError, setRepoAppConnectionError] = useState<string | null>(null);
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
 
   useEffect(() => {
-    if (resumeSignal > 0) d.setOpen(true);
-  }, [resumeSignal, d.setOpen]);
+    if (resumeSignal > 0) setOpen(true);
+  }, [resumeSignal, setOpen]);
 
   const connectRepoApp = async () => {
     setConnectingRepoApp(true);
+    setRepoAppConnectionError(null);
     try {
       const handoff = await apiClient.beginRepoAppAuthorization(`${location.pathname}${location.search}`);
       window.location.assign(handoff.authorization_url);
     } catch {
+      setRepoAppConnectionError('Repository authorization did not start. Try again.');
       setConnectingRepoApp(false);
     }
   };
@@ -618,7 +622,7 @@ function CreateFromGitHubDialog({
           })}
         </Combobox>
         <Text className={styles.tipLine}>
-          Start typing to narrow repositories available through the Repo App. Import succeeds only after its authorization verifies the selection.
+          Search repositories that the Repo App can access.
         </Text>
       </div>
 
@@ -641,18 +645,23 @@ function CreateFromGitHubDialog({
             {reposConnectionRequired
               ? (
                 <Button size="small" appearance="primary" disabled={connectingRepoApp} onClick={() => void connectRepoApp()}>
-                  {connectingRepoApp ? 'Opening GitHub…' : 'Connect GitHub'}
+                  {connectingRepoApp ? 'Opening GitHub' : 'Authorize repository access'}
                 </Button>
               )
               : <Button size="small" onClick={reloadRepos}>Retry</Button>}
           </MessageBarActions>
         </MessageBar>
       )}
+      {repoAppConnectionError && (
+        <MessageBar intent="error">
+          <MessageBarBody>{repoAppConnectionError}</MessageBarBody>
+        </MessageBar>
+      )}
 
-      <Field label="Paste a repository from your Repo App authorization" hint="owner/repo e.g. kubernetes/client-go">
+      <Field label="Paste a repository that the Repo App can access" hint="For example, kubernetes/client-go">
         <div className={styles.pasteRow}>
           <Input className={styles.growInput} value={pasteRepo} onChange={(_, v) => setPasteRepo(v.value)} placeholder="owner/repo" />
-          <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Go →</Button>
+          <Button appearance="secondary" disabled={!pasteRepo.trim()} onClick={() => applyRepo(pasteRepo)}>Use repository</Button>
         </div>
       </Field>
       {!workspaceAutoAssigned && (
@@ -693,7 +702,7 @@ function CreateFromGitHubDialog({
       trigger={<Button appearance="subtle" icon={<GitHubIcon size={16} />}>Create from GitHub</Button>}
       icon="GH"
       title="Create project from GitHub"
-      subtitle="Import an existing repository and configure a project with Agentweaver."
+      subtitle="Repository access is required for this import. Local projects do not require it."
       left={left}
       right={right}
       saving={d.saving}
@@ -784,7 +793,7 @@ export function ProjectGalleryPage() {
         }
         setLoadError(true);
         setErrorMessage(
-          formatApiErrorMessage(err, 'Could not create the project.'),
+          formatApiErrorMessage(err, 'Project creation failed.'),
         );
       } finally {
         if (!controller.signal.aborted) setLoading(false);
@@ -847,7 +856,7 @@ export function ProjectGalleryPage() {
     setHighlightId(project.project_id);
     dispatchToast(
       <Toast>
-        <ToastTitle>{isFirstProject ? "You're set up" : 'Project created'}</ToastTitle>
+        <ToastTitle>{isFirstProject ? 'Setup complete' : 'Project created'}</ToastTitle>
         <ToastBody>
           {isFirstProject
             ? `'${project.name}' is your first project — open it to start.`
@@ -879,13 +888,14 @@ export function ProjectGalleryPage() {
     const repoAppAuth = searchParams.get('repo_app_auth');
     if (!repoAppAuth) return;
 
-    if (repoAppAuth === 'success' && location.pathname === '/projects') {
-      setResumeCreateFromGitHubSignal((current) => current + 1); // eslint-disable-line react-hooks/set-state-in-effect
-    }
-
-    const next = new URLSearchParams(searchParams);
-    next.delete('repo_app_auth');
-    setSearchParams(next, { replace: true });
+    queueMicrotask(() => {
+      if (repoAppAuth === 'success' && location.pathname === '/projects') {
+        setResumeCreateFromGitHubSignal((current) => current + 1);
+      }
+      const next = new URLSearchParams(searchParams);
+      next.delete('repo_app_auth');
+      setSearchParams(next, { replace: true });
+    });
   }, [location.pathname, searchParams, setSearchParams]);
 
   return (
@@ -893,7 +903,7 @@ export function ProjectGalleryPage() {
       <Toaster toasterId={toasterId} position="bottom-end" />
       <PageHeader
         title="Projects"
-        description="Open an existing project, or create one from GitHub or a blueprint."
+        description="Create a local project now. Add repository access when you want to publish a pull request."
         actions={showGalleryActions ? (
           <>
             <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />
@@ -942,7 +952,7 @@ export function ProjectGalleryPage() {
       {!loading && !loadError && !authError && totalProjects === 0 && (
         <EmptyState
           title="No projects yet"
-          description="A project pairs a working directory with a squad and workflow so agents can start real work right away. Import an existing GitHub repository, or start blank and describe a goal for a tailored blueprint."
+          description="Create a local project for agent work. Repository access is optional until you publish a pull request."
           action={
             <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', justifyContent: 'center' }}>
               <CreateBlankDialog onCreated={handleCreated} dataDir={dataDir} workspaceAutoAssigned={workspaceAutoAssigned} />

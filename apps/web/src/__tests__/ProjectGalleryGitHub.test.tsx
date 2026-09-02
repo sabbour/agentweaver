@@ -54,7 +54,7 @@ describe('ProjectGalleryPage repository authorization', () => {
   it('uses the Repo App selection handoff when creating a project', async () => {
     render(<Wrapper><ProjectGalleryPage /></Wrapper>);
     fireEvent.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
-    await screen.findByText(/available through the Repo App/i);
+    await screen.findByText('Search repositories that the Repo App can access.');
 
     fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'Hello World' } });
     fireEvent.input(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'octocat/hello-world' } });
@@ -75,7 +75,7 @@ describe('ProjectGalleryPage repository authorization', () => {
     expect(screen.queryByText(/The Copilot App is connected to this project/)).toBeNull();
   });
 
-  it('offers a Connect GitHub action when the Repo App is not yet connected', async () => {
+  it('offers repository authorization when the Repo App is not yet connected', async () => {
     vi.mocked(apiClient.listGitHubRepositorySelections).mockRejectedValue(
       new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
     );
@@ -90,7 +90,7 @@ describe('ProjectGalleryPage repository authorization', () => {
     render(<Wrapper><ProjectGalleryPage /></Wrapper>);
     fireEvent.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
 
-    const connectButton = await screen.findByRole('button', { name: 'Connect GitHub' });
+    const connectButton = await screen.findByRole('button', { name: 'Authorize repository access' });
     expect(screen.getByTestId('create-from-github-repositories-error').getAttribute('data-intent')).toBe('warning');
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
 
@@ -111,10 +111,10 @@ describe('ProjectGalleryPage repository authorization', () => {
 
     await screen.findByRole('button', { name: 'Retry' });
     expect(screen.getByTestId('create-from-github-repositories-error').getAttribute('data-intent')).toBe('error');
-    expect(screen.queryByRole('button', { name: 'Connect GitHub' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Authorize repository access' })).toBeNull();
   });
 
-  it('reopens Create from GitHub after a successful Repo App callback so repositories refetch', async () => {
+  it('reopens GitHub project creation after repository authorization succeeds', async () => {
     render(<Wrapper initialEntries={['/projects?repo_app_auth=success']}><ProjectGalleryPage /></Wrapper>);
 
     expect(await screen.findByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();

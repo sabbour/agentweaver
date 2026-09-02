@@ -11,7 +11,6 @@ import {
   DialogSurface,
   DialogTitle,
   DialogTrigger,
-  Link as FluentLink,
   MessageBar,
   MessageBarBody,
   Spinner,
@@ -39,7 +38,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
-import { ErrorState, MetricRow } from '../components/ui';
+import { ErrorState, MetricRow, SetupReadiness } from '../components/ui';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { Project, WorkflowRunDto } from '../api/types';
@@ -479,7 +478,7 @@ export function ProjectPage() {
 
       {error && (
         <ErrorState
-          title="Couldn't load project board"
+          title="The project board did not load"
           message={error}
           onRetry={() => { window.location.reload(); }}
         />
@@ -494,12 +493,25 @@ export function ProjectPage() {
       )}
 
       {project && project.origin === 'blank' && (
-        <MessageBar intent="info">
-          <MessageBarBody>
-            This project has no connected GitHub repository, so runs can't publish pull requests.{' '}
-            <FluentLink onClick={() => setConnectRepoOpen(true)}>Connect or create one</FluentLink>.
-          </MessageBarBody>
-        </MessageBar>
+        <SetupReadiness
+          compact
+          model={{
+            title: 'Project setup',
+            description: 'The local project is ready for agent work.',
+            items: [{
+              id: 'repository-access',
+              title: 'Repository access',
+              description: 'Local agent work can continue without a repository. Pull-request publishing requires repository access.',
+              requirement: 'optional',
+              status: 'optional',
+            }],
+          }}
+          primaryAction={(
+            <Button appearance="primary" onClick={() => setConnectRepoOpen(true)}>
+              Set up repository access
+            </Button>
+          )}
+        />
       )}
 
       {project && (

@@ -50,3 +50,13 @@ export type { AppCardProps } from './AppCard';
 // Dialog (existing — do not duplicate).
 export { AppDialog } from './AppDialog';
 export type { AppDialogProps, AppDialogPrimaryAction } from './AppDialog';
+
+// First-run and prerequisite readiness.
+export { SetupReadiness } from '../SetupReadiness';
+export type {
+  SetupReadinessItem,
+  SetupReadinessProps,
+  SetupReadinessRequirement,
+  SetupReadinessStatus,
+  SetupReadinessViewModel,
+} from '../SetupReadiness';
