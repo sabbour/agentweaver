@@ -113,6 +113,7 @@ internal sealed record ConsumedGitHubRepositorySelection(
 public sealed record CapabilitySnapshotBackfillResult(int Migrated, int Unavailable);
 internal sealed record RepoAppAuthorizationTransaction(
     string State,
+    string ExternalTransactionId,
     GitHubAppKind AppKind,
     GitHubAuthorizationPurpose Purpose,
     string EntraObjectId,
@@ -356,6 +357,7 @@ public sealed class GitHubConnectionsPersistenceStore(
             .Where(x => x.State == state)
             .Select(x => new RepoAppAuthorizationTransaction(
                 x.State,
+                x.ExternalTransactionId,
                 x.AppKind,
                 x.Purpose,
                 x.EntraObjectId,

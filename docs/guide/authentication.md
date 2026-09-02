@@ -27,7 +27,9 @@ A Platform Admin can choose one active model provider:
 The Platform Admin can add more providers during required setup.
 Only one provider is active at a time.
 
-The active provider applies to all users and projects. The completed setup status identifies the provider and its platform scope.
+The active platform provider applies to interactive and unattended work for all users and
+projects. A configured custom-key provider (BYOK) is therefore a complete platform provider,
+not an interactive-only fallback.
 
 If you cannot manage this setup, Agentweaver shows **Unavailable to you**. Ask a Platform Admin to complete the setup.
 
@@ -50,9 +52,18 @@ When you create a project from GitHub, authorize the Repo App. Then select a rep
 
 Agentweaver verifies the repository selection on the server. It does not accept an unverified repository identifier.
 
-A project can use a project GitHub Copilot account. It can also inherit the platform GitHub Copilot account or custom-key provider.
+A project can use a project GitHub Copilot account. Otherwise, it inherits the active platform
+GitHub Copilot account or custom-key provider. This is the provider hierarchy shown in readiness
+status: a valid project binding takes precedence; without one, the active platform provider is
+used for both interactive and unattended work.
 
 Open **Project settings → Background** to see the effective model provider. The status identifies the provider and its project or platform scope.
+
+Project and platform Copilot authorization creates a durable server-side binding. Agentweaver
+does not borrow the token of whichever user is currently signed in, and the Copilot App has no
+repository installation screen. Repository authorization remains a separate Repo App capability.
+Platform-default Copilot consent supplies AI access to all users, projects, and background runs
+that inherit it. It grants no repository access.
 
 GitHub authorization does not replace your Entra identity. It does not grant an Agentweaver platform role or project membership.
 

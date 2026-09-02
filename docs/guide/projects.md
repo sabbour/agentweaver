@@ -109,6 +109,13 @@ Copilot App binding when that is the missing prerequisite. When readiness report
 `repo_app_installation_required` and the deployment configures a Repo App slug, the page also
 shows a direct **Install GitHub Repo App** link.
 
+Repository-less projects can run scheduled unattended workflows when their model provider and
+other automation prerequisites are ready. They do not need a Repo App installation merely to run
+background work. A GitHub-backed project has a separate repository prerequisite: repository
+operations and GitHub event triggers require the project's verified repository binding and Repo
+App installation. This repository requirement is independent of whether AI access comes from a
+project Copilot binding, platform Copilot binding, or active BYOK provider.
+
 Once the prerequisites above are met, a Project Owner can turn scheduled/event-triggered
 automation on or off with the **Activate automation**/**Deactivate automation** control in this
 same section. Activating records which model-provider source (GitHub Copilot or BYOK) backs the
