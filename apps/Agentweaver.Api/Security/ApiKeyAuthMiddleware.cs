@@ -16,7 +16,9 @@ public sealed class CallerContext
     public string? GitHubLogin { get; init; }
     public string? DisplayName { get; init; }
     public string? Email { get; init; }
-    public bool IsOAuthJwt { get; init; }
+    public string? AuthenticationScheme { get; init; }
+    public bool IsOAuthJwt =>
+        string.Equals(AuthenticationScheme, AgentweaverAuthenticationSchemes.McpOAuth, StringComparison.Ordinal);
     public string? Org { get; init; }
 
     public bool Owns(string? ownerUser) =>
@@ -84,14 +86,9 @@ public sealed class GitHubTokenAuthMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!context.Request.Path.StartsWithSegments("/api") ||
-            context.Request.Path.Equals("/api/ping", StringComparison.OrdinalIgnoreCase) ||
-            context.Request.Path.Equals("/api/health", StringComparison.OrdinalIgnoreCase) ||
-            context.Request.Path.Equals("/api/version", StringComparison.OrdinalIgnoreCase) ||
-            context.Request.Path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase) ||
-            context.Request.Path.Equals("/api/auth/config", StringComparison.OrdinalIgnoreCase) ||
-            context.Request.Path.Equals("/api/server/info", StringComparison.OrdinalIgnoreCase) ||
-            context.Request.Path.Equals("/api/github/webhooks/repo-app", StringComparison.OrdinalIgnoreCase))
+        var endpointAuthorization = context.GetEndpoint()?.Metadata.GetMetadata<EndpointAuthorizationMetadata>();
+        if (endpointAuthorization is { RequiresBearerAuthentication: false }
+            || (endpointAuthorization is null && !context.Request.Path.StartsWithSegments("/api")))
         {
             await _next(context).ConfigureAwait(false);
             return;
@@ -117,7 +114,9 @@ public sealed class GitHubTokenAuthMiddleware
                 PlatformRoles = testCaller.PlatformRoles,
                 PrimaryPlatformRole = testCaller.PlatformRoles.FirstOrDefault(),
             };
-            SetCaller(context, bypassCaller, BuildClaimsPrincipal(bypassCaller));
+            SetCaller(context, bypassCaller, CallerContextClaimsAdapter.ToPrincipal(
+                bypassCaller,
+                AgentweaverAuthenticationSchemes.TestBypass));
             await _next(context).ConfigureAwait(false);
             return;
         }
@@ -129,7 +128,10 @@ public sealed class GitHubTokenAuthMiddleware
                 User = ProjectAuthorization.InternalServiceUser,
                 PlatformRoles = [],
             };
-            SetCaller(context, capabilityCaller, BuildClaimsPrincipal(capabilityCaller, isInternal: true));
+            SetCaller(context, capabilityCaller, CallerContextClaimsAdapter.ToPrincipal(
+                capabilityCaller,
+                AgentweaverAuthenticationSchemes.RunCapability,
+                isInternalService: true));
             await _next(context).ConfigureAwait(false);
             return;
         }
@@ -144,7 +146,10 @@ public sealed class GitHubTokenAuthMiddleware
                 PlatformRoles = [PlatformRoles.PlatformAdmin],
                 PrimaryPlatformRole = PlatformRoles.PlatformAdmin,
             };
-            SetCaller(context, internalCaller, BuildClaimsPrincipal(internalCaller, isInternal: true));
+            SetCaller(context, internalCaller, CallerContextClaimsAdapter.ToPrincipal(
+                internalCaller,
+                AgentweaverAuthenticationSchemes.InternalServiceKey,
+                isInternalService: true));
             await _next(context).ConfigureAwait(false);
             return;
         }
@@ -167,12 +172,14 @@ public sealed class GitHubTokenAuthMiddleware
             DisplayName = claims.DisplayName,
             Email = claims.Email,
         };
-        SetCaller(context, caller, BuildClaimsPrincipal(caller, displayName: claims.DisplayName));
+        SetCaller(context, caller, CallerContextClaimsAdapter.ToPrincipal(
+            caller,
+            AgentweaverAuthenticationSchemes.Entra));
         await _next(context).ConfigureAwait(false);
     }
 
     public static CallerContext GetCaller(HttpContext context) =>
-        (CallerContext)context.Items[CallerItemKey]!;
+        CallerContextClaimsAdapter.FromPrincipal(context.User);
 
     private static async Task WriteUnauthorizedAsync(HttpContext context)
     {
@@ -185,28 +192,6 @@ public sealed class GitHubTokenAuthMiddleware
     {
         context.Items[CallerItemKey] = caller;
         context.User = principal;
-    }
-
-    private static ClaimsPrincipal BuildClaimsPrincipal(
-        CallerContext caller,
-        bool isInternal = false,
-        string? displayName = null)
-    {
-        var claims = new List<Claim> { new(ClaimTypes.NameIdentifier, caller.User), new("auth_mode", "Entra") };
-        if (!string.IsNullOrWhiteSpace(displayName))
-            claims.Add(new Claim(ClaimTypes.Name, displayName));
-        if (!string.IsNullOrWhiteSpace(caller.EntraObjectId))
-            claims.Add(new Claim("oid", caller.EntraObjectId));
-        if (!string.IsNullOrWhiteSpace(caller.EntraTenantId))
-            claims.Add(new Claim("tid", caller.EntraTenantId));
-        foreach (var role in caller.PlatformRoles)
-            claims.Add(new Claim(ClaimTypes.Role, role));
-        foreach (var rawRole in caller.RawPlatformRoles)
-            claims.Add(new Claim("raw_role", rawRole));
-        if (isInternal)
-            claims.Add(new Claim("agentweaver_internal", "true"));
-
-        return new ClaimsPrincipal(new ClaimsIdentity(claims, "Agentweaver"));
     }
 
     private static IReadOnlyList<string> ReadTestPlatformRoles(

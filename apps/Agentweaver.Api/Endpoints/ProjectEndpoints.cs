@@ -33,7 +33,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class ProjectEndpoints
 {
-    public static void MapProjectEndpoints(this WebApplication app)
+    public static void MapProjectEndpoints(this IEndpointRouteBuilder app)
     {
 // POST /api/projects/{id}/github/copilot/authorizations — begin a project-pinned Copilot App bind.
 app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
@@ -141,7 +141,7 @@ app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
 
     ProjectCopilotBindingService.SetCallbackCookie(httpContext, handoff.Value.CallbackCookie);
     return Results.Redirect(handoff.Value.AuthorizationUrl);
-}).AllowAnonymous();
+}).ProtocolManaged();
 
 // Shared callback for both project-scoped and platform-default Copilot OAuth flows. It uses only
 // the one-time cookie issued at the authenticated begin endpoint and dispatches by persisted state;
@@ -227,7 +227,7 @@ app.MapGet("/auth/github/copilot-app/callback", async (
         projectCookie,
         ct).ConfigureAwait(false);
     return Results.Redirect(await projectServiceFallback.GetCallbackRedirectAsync(projectOutcomeFallback, state, ct).ConfigureAwait(false));
-}).AllowAnonymous();
+}).ProtocolManaged();
 
 // GET /api/projects/{id}/github/copilot/authorizations/{transactionId} — initiating-human-only poll.
 app.MapGet("/api/projects/{id}/github/copilot/authorizations/{transactionId}", async (
@@ -480,7 +480,7 @@ app.MapGet("/auth/github/repo-app/installation/callback", async (
         callbackCookie,
         ct).ConfigureAwait(false);
     return Results.Redirect(service.GetCallbackRedirect(result.Outcome, result.ProjectId));
-}).AllowAnonymous();
+}).ProtocolManaged();
 
 // POST /api/projects — create blank or from GitHub
 app.MapPost("/api/projects", CreateProjectAsync)
@@ -505,7 +505,7 @@ app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider, ICo
         auth_mode_recommended   = true,
         repo_app_install_url    = BuildGitHubAppInstallUrl(configuration["Auth:RepoApp:Slug"], configuration["Auth:RepoApp:BaseUrl"]),
     });
-}).AllowAnonymous();
+}).OperationalAnonymous();
 
 // GET /api/projects — list all projects (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects", ListProjectsAsync)

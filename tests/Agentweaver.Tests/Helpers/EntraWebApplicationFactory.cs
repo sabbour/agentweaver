@@ -48,6 +48,12 @@ public class EntraWebApplicationFactory : WebApplicationFactory<Program>
     public string CreateBearerToken(
         string objectId,
         params string[] roles)
+        => CreateBearerTokenWithOverrides(objectId, audience: null, roles);
+
+    public string CreateBearerTokenWithOverrides(
+        string objectId,
+        string? audience = null,
+        params string[] roles)
     {
         var claims = new List<Claim>
         {
@@ -60,7 +66,7 @@ public class EntraWebApplicationFactory : WebApplicationFactory<Program>
         var descriptor = new SecurityTokenDescriptor
         {
             Issuer = Issuer,
-            Audience = ClientId,
+            Audience = audience ?? ClientId,
             Subject = new ClaimsIdentity(claims),
             Expires = DateTime.UtcNow.AddMinutes(30),
             NotBefore = DateTime.UtcNow.AddMinutes(-1),

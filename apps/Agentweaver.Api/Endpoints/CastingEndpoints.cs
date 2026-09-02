@@ -25,7 +25,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class CastingEndpoints
 {
-    public static void MapCastingEndpoints(this WebApplication app)
+    public static void MapCastingEndpoints(this IEndpointRouteBuilder app)
     {
 // GET /api/casting/templates — list all team templates from the catalog
 app.MapGet("/api/casting/templates", ListCastingTemplates)

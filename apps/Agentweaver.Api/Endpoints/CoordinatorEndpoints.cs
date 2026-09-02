@@ -26,7 +26,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class CoordinatorEndpoints
 {
-    public static void MapCoordinatorEndpoints(this WebApplication app)
+    public static void MapCoordinatorEndpoints(this IEndpointRouteBuilder app)
     {
 // GET /api/runs/{id}/outcome-spec — current persisted outcome spec for a coordinator run.
 app.MapGet("/api/runs/{id}/outcome-spec", GetOutcomeSpecAsync)

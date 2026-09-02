@@ -20,7 +20,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class SkillEndpoints
 {
-    public static void MapSkillEndpoints(this WebApplication app)
+    public static void MapSkillEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/projects/{id}/skill-defaults/preview", async (
             HttpContext http, string id, SkillDefaultsPreviewRequest body,

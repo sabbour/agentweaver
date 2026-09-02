@@ -1022,8 +1022,12 @@ if (recoveryLeader.IsLeader)
 
 if (isWorker)
 {
-    app.MapGet("/healthz", () => Results.Ok(new { status = "ok", role = AppRole.Worker }));
-    app.MapGet("/readyz", () => Results.Ok(new { status = "ready", role = AppRole.Worker }));
+    app.MapGet("/healthz", () => Results.Ok(new { status = "ok", role = AppRole.Worker }))
+        .AsApplicationEndpoint()
+        .OperationalAnonymous();
+    app.MapGet("/readyz", () => Results.Ok(new { status = "ready", role = AppRole.Worker }))
+        .AsApplicationEndpoint()
+        .OperationalAnonymous();
 }
 else
 {
@@ -1034,6 +1038,7 @@ else
         await context.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred." });
     }));
 
+    app.UseRouting();
     app.UseCors();
     app.Logger.LogInformation("Running with Microsoft Entra authentication.");
     app.UseMiddleware<GitHubTokenAuthMiddleware>();
@@ -1045,33 +1050,36 @@ else
     app.MapOpenApi();
     app.MapOpenApi("/openapi/{documentName}.yaml");
 
-    app.MapRunEndpoints();
-    app.MapProjectEndpoints();
-    app.MapProjectWorkspaceEndpoints();
-    app.MapSkillEndpoints();
-    app.MapBacklogEndpoints();
-    app.MapBacklogDecomposeEndpoints();
-    app.MapAssistantEndpoints();
-    app.MapCoordinatorEndpoints();
-    app.MapCastingEndpoints();
-    app.MapBlueprintEndpoints();
-    app.MapTeamEndpoints();
-    app.MapAuthEndpoints();
-    app.MapByokProviderSettingsEndpoints();
-    app.MapPlatformDefaultCopilotBindingEndpoints();
-    app.MapGitHubRepositorySelectionEndpoints();
-    app.MapDecisionsEndpoints();
-    app.MapMemoryEndpoints();
-    app.MapWorkflowDefinitionEndpoints();
-    app.MapWorkflowTriggerEndpoints();
-    app.MapAutomationActivationEndpoints();
-    app.MapGitHubWebhookEndpoints();
-    app.MapDiagnosticsEndpoints();
-    app.MapMetricsEndpoints();
-    app.MapNotificationsEndpoints();
-    app.MapSandboxEndpoints();
-    app.MapSystemEndpoints();
-    app.MapVersionEndpoints();
+    var applicationEndpoints = app.MapGroup(string.Empty)
+        .AsApplicationEndpoint()
+        .PlatformOrMcp();
+    applicationEndpoints.MapRunEndpoints();
+    applicationEndpoints.MapProjectEndpoints();
+    applicationEndpoints.MapProjectWorkspaceEndpoints();
+    applicationEndpoints.MapSkillEndpoints();
+    applicationEndpoints.MapBacklogEndpoints();
+    applicationEndpoints.MapBacklogDecomposeEndpoints();
+    applicationEndpoints.MapAssistantEndpoints();
+    applicationEndpoints.MapCoordinatorEndpoints();
+    applicationEndpoints.MapCastingEndpoints();
+    applicationEndpoints.MapBlueprintEndpoints();
+    applicationEndpoints.MapTeamEndpoints();
+    applicationEndpoints.MapAuthEndpoints();
+    applicationEndpoints.MapByokProviderSettingsEndpoints();
+    applicationEndpoints.MapPlatformDefaultCopilotBindingEndpoints();
+    applicationEndpoints.MapGitHubRepositorySelectionEndpoints();
+    applicationEndpoints.MapDecisionsEndpoints();
+    applicationEndpoints.MapMemoryEndpoints();
+    applicationEndpoints.MapWorkflowDefinitionEndpoints();
+    applicationEndpoints.MapWorkflowTriggerEndpoints();
+    applicationEndpoints.MapAutomationActivationEndpoints();
+    applicationEndpoints.MapGitHubWebhookEndpoints();
+    applicationEndpoints.MapDiagnosticsEndpoints();
+    applicationEndpoints.MapMetricsEndpoints();
+    applicationEndpoints.MapNotificationsEndpoints();
+    applicationEndpoints.MapSandboxEndpoints();
+    applicationEndpoints.MapSystemEndpoints();
+    applicationEndpoints.MapVersionEndpoints();
 }
 
 app.Run();

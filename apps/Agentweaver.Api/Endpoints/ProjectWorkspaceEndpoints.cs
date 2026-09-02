@@ -12,7 +12,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class ProjectWorkspaceEndpoints
 {
-    public static void MapProjectWorkspaceEndpoints(this WebApplication app)
+    public static void MapProjectWorkspaceEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{id}/workspace/refs — list the browsable refs (base branch + active worktrees).
         app.MapGet("/api/projects/{id}/workspace/refs", async (

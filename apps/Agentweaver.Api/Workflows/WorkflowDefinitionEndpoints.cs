@@ -20,7 +20,7 @@ namespace Agentweaver.Api.Workflows;
 /// </summary>
 public static class WorkflowDefinitionEndpoints
 {
-    public static void MapWorkflowDefinitionEndpoints(this WebApplication app)
+    public static void MapWorkflowDefinitionEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{projectId}/workflows — list discovered workflows + validation status.
         app.MapGet("/api/projects/{projectId}/workflows", async (

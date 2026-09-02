@@ -82,7 +82,7 @@ public sealed record DecomposeResponse(
 public static class BacklogDecomposeEndpoints
 {
     /// <summary>Registers both Feature 014 endpoints on the application.</summary>
-    public static void MapBacklogDecomposeEndpoints(this WebApplication app)
+    public static void MapBacklogDecomposeEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{id}/workspace/files — workspace file tree (sandbox-scoped)
         app.MapGet("/api/projects/{id}/workspace/files", async (

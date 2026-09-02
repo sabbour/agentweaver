@@ -32,9 +32,10 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class RunEndpoints
 {
-    public static void MapRunEndpoints(this WebApplication app)
+    public static void MapRunEndpoints(this IEndpointRouteBuilder app)
     {
-app.MapGet("/", () => "Agentweaver API");
+app.MapGet("/", () => "Agentweaver API")
+    .OperationalAnonymous();
 
 app.MapPost("/api/runs", () => Results.Problem(
     title: "Single-run endpoint deprecated",
@@ -2096,7 +2097,7 @@ app.MapGet("/api/runs/{id}/tool-approval-policies/{toolName}", async (
         tool_name = toolName,
         auto_approved = approvalGate.IsAutoApproved(id, toolName, url: null),
     });
-});
+}).RunCapability();
 
 app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
     HttpContext httpContext,

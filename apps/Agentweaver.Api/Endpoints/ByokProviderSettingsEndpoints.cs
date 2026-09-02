@@ -12,7 +12,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class ByokProviderSettingsEndpoints
 {
-    public static void MapByokProviderSettingsEndpoints(this WebApplication app)
+    public static void MapByokProviderSettingsEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/admin/byok-providers", async (
             HttpContext httpContext,

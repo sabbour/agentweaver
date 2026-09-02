@@ -10,7 +10,7 @@ public static class NotificationsEndpoints
     /// across every project/run they own. Polled by the frontend notification provider (#247); see
     /// <see cref="NotificationsService"/> for the polling-vs-SSE delivery rationale and MVP scope.
     /// </summary>
-    public static void MapNotificationsEndpoints(this WebApplication app)
+    public static void MapNotificationsEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/notifications", async (
             HttpContext httpContext,

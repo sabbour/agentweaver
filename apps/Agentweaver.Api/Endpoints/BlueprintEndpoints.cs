@@ -13,7 +13,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class BlueprintEndpoints
 {
-    public static void MapBlueprintEndpoints(this WebApplication app)
+    public static void MapBlueprintEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/blueprints — list the predefined blueprints.
         app.MapGet("/api/blueprints", ListBlueprints)

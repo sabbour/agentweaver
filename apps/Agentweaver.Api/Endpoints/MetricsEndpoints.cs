@@ -11,7 +11,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class MetricsEndpoints
 {
-    public static void MapMetricsEndpoints(this WebApplication app)
+    public static void MapMetricsEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/projects/{id}/dashboard", async (
             HttpContext httpContext,

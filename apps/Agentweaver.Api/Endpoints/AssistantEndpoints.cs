@@ -19,7 +19,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class AssistantEndpoints
 {
-    public static void MapAssistantEndpoints(this WebApplication app)
+    public static void MapAssistantEndpoints(this IEndpointRouteBuilder app)
     {
         // POST /api/assistant/runs — start a new operator chat run. An optional initial message runs
         // the opening turn immediately. Returns the run id used to stream and to post further turns.

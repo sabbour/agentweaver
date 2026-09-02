@@ -15,7 +15,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class AutomationActivationEndpoints
 {
-    public static void MapAutomationActivationEndpoints(this WebApplication app)
+    public static void MapAutomationActivationEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{id}/automation/status — Owner-only, redacted activation status.
         app.MapGet("/api/projects/{id}/automation/status", async (

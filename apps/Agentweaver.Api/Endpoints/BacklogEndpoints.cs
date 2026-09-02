@@ -17,7 +17,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class BacklogEndpoints
 {
-    public static void MapBacklogEndpoints(this WebApplication app)
+    public static void MapBacklogEndpoints(this IEndpointRouteBuilder app)
     {
         // POST /api/projects/{projectId}/backlog/tasks — capture (FR-001/002/003/016)
         app.MapPost("/api/projects/{projectId}/backlog/tasks", async (

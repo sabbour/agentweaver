@@ -1,4 +1,5 @@
 using Agentweaver.Api.Blueprints;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -11,11 +12,13 @@ public sealed class HttpContextAuthenticatedOwnerContextTests
     public void OwnerId_UsesAuthenticatedCallerIdentity()
     {
         var http = new DefaultHttpContext();
-        http.Items[GitHubTokenAuthMiddleware.CallerItemKey] = new CallerContext
-        {
-            User = "owner-a",
-            GitHubLogin = "owner-a",
-        };
+        http.User = CallerContextClaimsAdapter.ToPrincipal(
+            new CallerContext
+            {
+                User = "owner-a",
+                GitHubLogin = "owner-a",
+            },
+            AgentweaverAuthenticationSchemes.Entra);
         var accessor = new HttpContextAccessor { HttpContext = http };
 
         new HttpContextAuthenticatedOwnerContext(accessor).OwnerId.Should().Be("owner-a");

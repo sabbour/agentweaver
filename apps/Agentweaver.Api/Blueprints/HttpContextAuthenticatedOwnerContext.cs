@@ -15,9 +15,12 @@ public sealed class HttpContextAuthenticatedOwnerContext(IHttpContextAccessor ac
                 ?? throw new InvalidOperationException(
                     "An authenticated HTTP request is required for owner-scoped package operations.");
 
-            if (!context.Items.TryGetValue(GitHubTokenAuthMiddleware.CallerItemKey, out var value)
-                || value is not CallerContext caller
-                || string.IsNullOrWhiteSpace(caller.User))
+            CallerContext caller;
+            try
+            {
+                caller = GitHubTokenAuthMiddleware.GetCaller(context);
+            }
+            catch (InvalidOperationException)
             {
                 throw new InvalidOperationException(
                     "An authenticated caller is required for owner-scoped package operations.");

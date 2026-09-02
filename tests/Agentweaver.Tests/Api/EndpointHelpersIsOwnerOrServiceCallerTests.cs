@@ -1,4 +1,5 @@
 using Agentweaver.Api.Endpoints;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -34,7 +35,9 @@ public sealed class EndpointHelpersIsOwnerOrServiceCallerTests
     private static HttpContext MakeHttpContext(CallerContext caller)
     {
         var http = new DefaultHttpContext();
-        http.Items[GitHubTokenAuthMiddleware.CallerItemKey] = caller;
+        http.User = CallerContextClaimsAdapter.ToPrincipal(
+            caller,
+            AgentweaverAuthenticationSchemes.TestBypass);
         return http;
     }
 

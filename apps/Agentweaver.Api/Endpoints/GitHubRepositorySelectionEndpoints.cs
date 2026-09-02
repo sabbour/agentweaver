@@ -7,7 +7,7 @@ namespace Agentweaver.Api.Endpoints;
 /// <summary>Pre-project endpoints that turn a caller's Repo App browse choice into opaque authority.</summary>
 public static class GitHubRepositorySelectionEndpoints
 {
-    public static void MapGitHubRepositorySelectionEndpoints(this WebApplication app)
+    public static void MapGitHubRepositorySelectionEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/github/repository-selections", async (
             HttpContext httpContext,

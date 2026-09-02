@@ -5,7 +5,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class PlatformDefaultCopilotBindingEndpoints
 {
-    public static void MapPlatformDefaultCopilotBindingEndpoints(this WebApplication app)
+    public static void MapPlatformDefaultCopilotBindingEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/admin/platform-default-copilot/begin", async (
             HttpContext httpContext,

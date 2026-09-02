@@ -11,32 +11,6 @@ public sealed class PlatformRoleAuthorizationMiddleware
     private readonly IAuthorizationService _authorizationService;
     private readonly IConfiguration _configuration;
 
-    private static readonly string[] ExemptPrefixes =
-    [
-        "/health",
-        "/healthz",
-        "/api/health",
-        "/api/ping",
-        "/api/version",
-        // Public server metadata (data directory + configured auth mode) is what the web app
-        // reads BEFORE sign-in to decide which sign-in button to render, so it must stay
-        // anonymous in both middlewares.
-        "/api/server/info",
-        "/auth",
-        "/api/auth/config",
-        // The one-time-code session bootstrap is anonymous by design (the opaque code is the
-        // credential) and runs BEFORE any platform role exists, so it must be exempt here exactly as
-        // it is in the bearer-token auth middleware; otherwise Entra web sign-in cannot complete.
-        "/api/auth/session/exchange",
-        // A signed-in caller with zero platform roles must still be able to read their own
-        // identity/roles back — otherwise they hit a 403 brick wall with no way to see what
-        // Entra actually sent, and no way to self-diagnose or report the right details to an admin.
-        "/api/auth/session",
-        "/.well-known",
-        "/openapi",
-        "/mcp",
-    ];
-
     public PlatformRoleAuthorizationMiddleware(
         RequestDelegate next,
         IAuthorizationService authorizationService,
@@ -49,8 +23,9 @@ public sealed class PlatformRoleAuthorizationMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!context.Request.Path.StartsWithSegments("/api")
-            || IsExempt(context.Request.Path))
+        var endpointAuthorization = context.GetEndpoint()?.Metadata.GetMetadata<EndpointAuthorizationMetadata>();
+        if (endpointAuthorization is { RequiresPlatformAccess: false }
+            || (endpointAuthorization is null && !context.Request.Path.StartsWithSegments("/api")))
         {
             await _next(context).ConfigureAwait(false);
             return;
@@ -84,19 +59,5 @@ public sealed class PlatformRoleAuthorizationMiddleware
         }
 
         await _next(context).ConfigureAwait(false);
-    }
-
-    private static bool IsExempt(PathString path)
-    {
-        if (path.Equals("/api/github/webhooks/repo-app", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        foreach (var prefix in ExemptPrefixes)
-        {
-            if (path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
     }
 }

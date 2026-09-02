@@ -221,6 +221,34 @@ default-deny fallback policy 401s them, pods fail their probes and the deploymen
 crash/restart loop. That is a **self-inflicted outage triggered by a config flip**, and it
 would not be caught by any test that only exercises `/api/**` business routes.
 
+### 2.3.2 Layer 1 endpoint contract
+
+The behavior-neutral preparation layer replaces path inference with
+`EndpointAuthorizationMetadata`. Application routes are mapped through one classified route
+group, and focused endpoint extensions replace that default where the current contract is more
+specific:
+
+| Classification | Current contract |
+|---|---|
+| `OperationalAnonymous` | Health, version, server-info, and other intentionally public operational reads |
+| `ProtocolManaged` | Browser/OAuth handoffs whose state, one-time code, or protocol processing supplies the boundary |
+| `WebhookHmac` | GitHub delivery endpoints authenticated by request-body HMAC |
+| `AuthenticatedSelf` | A valid principal operating on its own session; no platform role required |
+| `AuthenticatedPlatform` | A valid Entra platform principal and platform role; not a general MCP API operation |
+| `PlatformOrMcp` | The normal protected API surface, including calls forwarded by the MCP server |
+| `InternalService` | Reserved for endpoints dedicated to the internal service-key caller |
+| `RunCapability` | A run-bound capability validated with the run identity headers |
+
+`AuthenticatedSelf` and `AuthenticatedPlatform` remain separate because the current middleware
+deliberately lets a role-less caller inspect or end its own session while platform operations
+still require a recognized role. Combining them would change authorization behavior.
+
+Both current auth middlewares and the OpenAPI security transformer consume this metadata. The
+endpoint inventory golden file pins every application route to exactly one classification and
+rejects bare `AllowAnonymous` metadata; framework-owned OpenAPI document routes are the only
+deliberate exclusion. This layer does not add authentication handlers, OpenIddict, a rollout
+flag, or a new middleware pipeline.
+
 ### 2.4 Issue tracking
 
 Phase 1 is tracked by **#691** — *"tech-debt(auth): auth middlewares should honor endpoint

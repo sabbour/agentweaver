@@ -7,7 +7,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class AuthEndpoints
 {
-    public static void MapAuthEndpoints(this WebApplication app)
+    public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/auth/config", (IConfiguration configuration) =>
         {
@@ -27,7 +27,7 @@ public static class AuthEndpoints
                     authority,
                 },
             });
-        }).AllowAnonymous();
+        }).OperationalAnonymous();
 
         app.MapGet("/api/auth/context", (HttpContext httpContext) =>
         {
@@ -42,7 +42,7 @@ public static class AuthEndpoints
                 platform_roles = caller.PlatformRoles,
                 primary_platform_role = caller.PrimaryPlatformRole,
             });
-        });
+        }).AuthenticatedPlatform();
 
         app.MapGet("/api/auth/session", async (
             HttpContext httpContext,
@@ -64,7 +64,7 @@ public static class AuthEndpoints
                 platform_roles = caller.PlatformRoles,
                 ai_configured = aiConfigured,
             });
-        });
+        }).AuthenticatedSelf();
 
         app.MapPost("/api/auth/github/repo-app/authorizations", async (
             HttpContext httpContext,
@@ -154,7 +154,7 @@ public static class AuthEndpoints
 
             RepoAppUserAuthorizationService.SetCallbackCookie(httpContext, handoff.Value.CallbackCookie);
             return Results.Redirect(handoff.Value.AuthorizationUrl);
-        }).AllowAnonymous();
+        }).ProtocolManaged();
 
         app.MapGet("/auth/github/repo-app/callback", async (
             HttpContext httpContext,
@@ -176,7 +176,7 @@ public static class AuthEndpoints
                 browserSession?.Id, browserSession?.EntraObjectId, state,
                 string.IsNullOrWhiteSpace(error) ? code : null, callbackCookie, ct).ConfigureAwait(false);
             return Results.Redirect(service.GetCallbackRedirect(result.ReturnRouteKey, result.Outcome));
-        }).AllowAnonymous();
+        }).ProtocolManaged();
 
         app.MapGet("/api/auth/github/repo-app/authorizations/{transactionId}", async (
             HttpContext httpContext,
@@ -242,7 +242,7 @@ public static class AuthEndpoints
             {
                 return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
             }
-        }).AllowAnonymous();
+        }).ProtocolManaged();
 
         app.MapGet("/auth/entra/callback", async (
             HttpContext httpContext,
@@ -287,7 +287,7 @@ public static class AuthEndpoints
             {
                 return Results.Redirect($"{frontendUrl}/?auth=error&reason=sign_in_failed");
             }
-        }).AllowAnonymous();
+        }).ProtocolManaged();
 
         app.MapPost("/api/auth/session/exchange", async (
             HttpContext httpContext,
@@ -308,7 +308,7 @@ public static class AuthEndpoints
                 return Results.BadRequest(new { error = "invalid_code" });
             await browserSessions.IssueAsync(httpContext, claims, ct).ConfigureAwait(false);
             return Results.Ok(new SessionExchangeResponse(accessToken, login));
-        }).AllowAnonymous();
+        }).ProtocolManaged();
 
         app.MapPost("/api/auth/session/sign-out", async (
             HttpContext httpContext,
@@ -321,7 +321,7 @@ public static class AuthEndpoints
             ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
             PlatformDefaultCopilotBindingService.ClearCallbackCookie(httpContext);
             return Results.NoContent();
-        });
+        }).AuthenticatedSelf();
     }
 }
 
