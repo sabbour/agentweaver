@@ -9,11 +9,13 @@ using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.SandboxExec;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.RateLimiting;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Memory;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
@@ -211,10 +213,12 @@ builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Ag
 // credentials written on one pod replica are invisible to every other replica (and are lost on
 // restart), which manifests as "github_binding_unavailable" / "github_copilot_auth_required"
 // errors that look like transient auth bugs. Log loudly if that happens outside Development.
+SecretClient? keyVaultSecretClient = null;
 var kvUri = builder.Configuration["Auth:KeyVault:Uri"];
 if (!string.IsNullOrWhiteSpace(kvUri))
 {
     var secretClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
+    keyVaultSecretClient = secretClient;
     var kvSecretStore = new KeyVaultSecretStore(secretClient);
     builder.Services.AddSingleton<ISecretStore>(kvSecretStore);
     builder.Services.AddSingleton(secretClient);
@@ -789,6 +793,90 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
                     b => b.MigrationsAssembly("Agentweaver.Api"));
                 break;
         }
+        opts.UseOpenIddict();
+    }
+
+    if (!isWorker)
+    {
+        var oauthConfiguration = OAuthServerConfiguration.Resolve(builder.Configuration, builder.Environment);
+        var oauthCertificates = await OAuthCertificateLoader.LoadAsync(
+            builder.Configuration, builder.Environment, keyVaultSecretClient);
+        builder.Services.AddSingleton(oauthConfiguration);
+        builder.Services.AddSingleton(oauthCertificates);
+        builder.Services.AddScoped<OAuthDynamicClientRegistrationService>();
+        builder.Services.AddHostedService<OAuthStaticClientReconciler>();
+        builder.Services.AddHostedService<OAuthMaintenanceService>();
+        builder.Services.AddRateLimiter(options =>
+        {
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.AddPolicy("oauth-registration", context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = 10,
+                        Window = TimeSpan.FromMinutes(1),
+                        QueueLimit = 0,
+                        AutoReplenishment = true,
+                    }));
+        });
+
+        builder.Services.AddOpenIddict()
+            .AddCore(options => options.UseEntityFrameworkCore().UseDbContext<MemoryDbContext>())
+            .AddServer(options =>
+            {
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthRefreshReplayHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Exchange.ValidateAuthentication.Descriptor.Order - 500));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleConfigurationRequestContext>(
+                    handler => handler.UseInlineHandler(context =>
+                        {
+                            context.Metadata["registration_endpoint"] =
+                                new Uri(oauthConfiguration.PublicOrigin, "/oauth/register").AbsoluteUri;
+                            return default;
+                        })
+                        .SetOrder(int.MaxValue - 100_000));
+                options.SetIssuer(oauthConfiguration.PublicOrigin)
+                    .SetAuthorizationEndpointUris(new Uri(oauthConfiguration.PublicOrigin, "/oauth/authorize"))
+                    .SetTokenEndpointUris(new Uri(oauthConfiguration.PublicOrigin, "/oauth/token"))
+                    .SetRevocationEndpointUris(new Uri(oauthConfiguration.PublicOrigin, "/oauth/revoke"))
+                    .SetJsonWebKeySetEndpointUris(new Uri(oauthConfiguration.PublicOrigin, "/oauth/jwks"))
+                    .AllowAuthorizationCodeFlow()
+                    .AllowRefreshTokenFlow()
+                    .RequireProofKeyForCodeExchange()
+                    .UseReferenceRefreshTokens()
+                    .DisableAccessTokenEncryption()
+                    .RegisterScopes(OAuthServerConfiguration.McpScope)
+                    .RegisterResources(oauthConfiguration.Resource.AbsoluteUri)
+                    .SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(1))
+                    .SetAccessTokenLifetime(TimeSpan.FromMinutes(10))
+                    .SetRefreshTokenLifetime(TimeSpan.FromDays(30));
+
+                foreach (var key in oauthCertificates.SigningKeys)
+                    options.AddSigningKey(key);
+                foreach (var key in oauthCertificates.EncryptionKeys)
+                    options.AddEncryptionKey(key);
+
+                options.UseAspNetCore()
+                    .EnableAuthorizationEndpointPassthrough()
+                    .EnableTokenEndpointPassthrough();
+                if (builder.Environment.IsDevelopment())
+                    options.UseAspNetCore().DisableTransportSecurityRequirement();
+            })
+            .AddValidation(options =>
+            {
+                options.UseLocalServer();
+                options.UseAspNetCore();
+            });
+        builder.Services.Configure<OpenIddict.Server.OpenIddictServerOptions>(options =>
+        {
+            options.CodeChallengeMethods.Clear();
+            options.CodeChallengeMethods.Add(
+                OpenIddict.Abstractions.OpenIddictConstants.CodeChallengeMethods.Sha256);
+            options.ClientAuthenticationMethods.Clear();
+            options.ClientAuthenticationMethods.Add(
+                OpenIddict.Abstractions.OpenIddictConstants.ClientAuthenticationMethods.None);
+        });
     }
 
     if (_isPostgres)
@@ -1040,6 +1128,7 @@ else
 
     app.UseRouting();
     app.UseCors();
+    app.UseRateLimiter();
     app.Logger.LogInformation("Running with Microsoft Entra authentication.");
     app.UseMiddleware<GitHubTokenAuthMiddleware>();
     app.UseMiddleware<PlatformRoleAuthorizationMiddleware>();
@@ -1080,6 +1169,7 @@ else
     applicationEndpoints.MapSandboxEndpoints();
     applicationEndpoints.MapSystemEndpoints();
     applicationEndpoints.MapVersionEndpoints();
+    applicationEndpoints.MapOAuthAuthorizationServerEndpoints();
 }
 
 app.Run();

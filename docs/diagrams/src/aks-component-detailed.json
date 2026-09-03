@@ -19,7 +19,7 @@
     { "id": "mcp", "label": "MCP ×1", "subLabel": ".NET 10 · OAuth", "meta": ":8080 · MCP protocol", "icon": "window", "badge": { "text": "Service", "tone": "teal" }, "group": "core" },
     { "id": "ahpool", "label": "AgentHost Warm Pool ×2", "subLabel": "agentweaver-agent-host", "meta": "A2A :8088 · workload identity", "icon": "bot", "badge": { "text": "Sandbox", "tone": "marigold" }, "group": "exec" },
     { "id": "ws", "label": "Workspace PVC", "subLabel": "Azure Files RWX", "meta": "/workspace", "icon": "database", "badge": { "text": "Storage", "tone": "neutral" }, "group": "aks" },
-    { "id": "spc", "label": "CSI SecretProviderClass", "subLabel": "github-client-id/secret", "meta": "mcp-oauth-signing-key", "icon": "key", "badge": { "text": "Storage", "tone": "neutral" }, "group": "aks" },
+    { "id": "spc", "label": "Key Vault", "subLabel": "GitHub secrets + OAuth certificates", "meta": "active and previous certificate versions", "icon": "key", "badge": { "text": "Storage", "tone": "neutral" }, "group": "aks" },
     { "id": "kv", "label": "Azure Key Vault", "subLabel": "agentweaver-kv", "meta": "user + app secrets", "icon": "key", "badge": { "text": "Data", "tone": "teal" }, "group": "azure" },
     { "id": "pg", "label": "Azure PostgreSQL", "subLabel": "Flexible Server", "meta": "runs · RunEvents · memory", "icon": "database", "badge": { "text": "Data", "tone": "teal" }, "group": "azure" },
     { "id": "acr", "label": "Azure Container Registry", "subLabel": "agentweaverregistry", "icon": "box", "badge": { "text": "Data", "tone": "teal" }, "group": "azure" }

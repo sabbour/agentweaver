@@ -182,6 +182,21 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: ENTRA_FRONTEND_URL
+            - name: Auth__OAuth__PublicOrigin
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_PUBLIC_ORIGIN
+            - name: Auth__OAuth__Certificates__SigningName
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_SIGNING_CERTIFICATE_NAME
+            - name: Auth__OAuth__Certificates__EncryptionName
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_ENCRYPTION_CERTIFICATE_NAME
             # GitHub Copilot App OAuth credentials. Its private key must remain unset:
             # this App uses the OAuth flow and is intentionally distinct from the Repo App.
             - name: Auth__CopilotApp__ClientId

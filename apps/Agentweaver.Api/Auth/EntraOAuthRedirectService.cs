@@ -207,13 +207,22 @@ public sealed class EntraOAuthRedirectService
     /// (bound to the state) to <see cref="MemoryDbContext"/> so the callback can complete on any
     /// replica, and returns the Microsoft authorization URL the browser should be redirected to.
     /// </summary>
-    public async Task<string> BeginAuthorizationAsync(CancellationToken ct = default)
+    public Task<string> BeginAuthorizationAsync(CancellationToken ct = default) =>
+        BeginAuthorizationAsync(returnHandle: null, ct);
+
+    public async Task<string> BeginAuthorizationAsync(string? returnHandle, CancellationToken ct = default)
     {
+        if (returnHandle is not null
+            && (returnHandle.Length is < 32 or > 128
+                || returnHandle.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_')))
+            throw new OAuthReturnHandleException();
+
         var configuration = GetAuthorizationFlowConfiguration();
 
         var state = GenerateUrlSafeToken();
         var codeVerifier = GenerateUrlSafeToken();
         var codeChallenge = ComputeS256Challenge(codeVerifier);
+        var nonce = returnHandle is null ? null : GenerateUrlSafeToken();
 
         using (var scope = _scopeFactory.CreateScope())
         {
@@ -222,21 +231,24 @@ public sealed class EntraOAuthRedirectService
             {
                 State = state,
                 CodeVerifier = codeVerifier,
+                ReturnHandle = returnHandle,
+                Nonce = nonce,
                 ExpiresAt = DateTimeOffset.UtcNow.Add(StateLifetime),
             });
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
         }
 
-        return CreateAuthorizationUrl(configuration, state, codeChallenge);
+        return CreateAuthorizationUrl(configuration, state, codeChallenge, nonce);
     }
 
     public string CreateAuthorizationUrl(string state, string codeChallenge) =>
-        CreateAuthorizationUrl(GetAuthorizationFlowConfiguration(), state, codeChallenge);
+        CreateAuthorizationUrl(GetAuthorizationFlowConfiguration(), state, codeChallenge, nonce: null);
 
     private static string CreateAuthorizationUrl(
         EntraAuthorizationFlowConfiguration configuration,
         string state,
-        string codeChallenge) =>
+        string codeChallenge,
+        string? nonce) =>
         $"{configuration.AuthorityBase}/oauth2/v2.0/authorize" +
         $"?client_id={Uri.EscapeDataString(configuration.ClientId)}" +
         $"&response_type=code" +
@@ -245,7 +257,8 @@ public sealed class EntraOAuthRedirectService
         $"&scope={Uri.EscapeDataString(configuration.Scopes)}" +
         $"&state={Uri.EscapeDataString(state)}" +
         $"&code_challenge={Uri.EscapeDataString(codeChallenge)}" +
-        $"&code_challenge_method=S256";
+        $"&code_challenge_method=S256" +
+        (nonce is null ? string.Empty : $"&nonce={Uri.EscapeDataString(nonce)}");
 
     /// <summary>
     /// Completes a sign-in: atomically claims the pending <c>state</c> (single-use across replicas),
@@ -256,9 +269,18 @@ public sealed class EntraOAuthRedirectService
     public async Task<(EntraAccessTokenClaims Claims, string AccessToken)> ExchangeCodeAsync(
         string code, string state, CancellationToken ct = default)
     {
+        var result = await ExchangeCodeWithContextAsync(code, state, ct).ConfigureAwait(false);
+        return (result.Claims, result.AccessToken);
+    }
+
+    public async Task<EntraCodeExchangeResult> ExchangeCodeWithContextAsync(
+        string code, string state, CancellationToken ct = default)
+    {
         var configuration = GetAuthorizationFlowConfiguration();
         var now = DateTimeOffset.UtcNow;
         string codeVerifier;
+        string? returnHandle;
+        string? nonce;
 
         using (var scope = _scopeFactory.CreateScope())
         {
@@ -284,6 +306,8 @@ public sealed class EntraOAuthRedirectService
                 throw new InvalidOperationException("Invalid or expired Entra OAuth state.");
 
             codeVerifier = existing.CodeVerifier;
+            returnHandle = existing.ReturnHandle;
+            nonce = existing.Nonce;
 
             // Best-effort purge of expired states; never let cleanup break sign-in. Only translatable
             // on Postgres (prod, where growth matters); skipped on SQLite/dev.
@@ -300,21 +324,29 @@ public sealed class EntraOAuthRedirectService
             }
         }
 
-        var accessToken = await RedeemCodeForAccessTokenAsync(code, codeVerifier, configuration, ct)
+        var tokens = await RedeemCodeForAccessTokenAsync(code, codeVerifier, configuration, ct)
             .ConfigureAwait(false);
 
         // Validate the access token exactly as every API request does (issuer, audience=ClientId,
         // signature, tenant, lifetime) and extract oid/tid/roles/display name. Fail closed on any
         // validation failure rather than trusting the token endpoint response blindly.
-        var claims = await _tokenValidator.ValidateAsync(accessToken, ct).ConfigureAwait(false);
+        var claims = await _tokenValidator.ValidateAsync(tokens.AccessToken!, ct).ConfigureAwait(false);
         if (claims is null)
             throw new InvalidOperationException("Microsoft Entra returned a token that failed validation.");
+        if (nonce is not null)
+        {
+            if (string.IsNullOrWhiteSpace(tokens.IdToken))
+                throw new InvalidOperationException("Microsoft Entra did not return the required ID token.");
+            var idClaims = await _tokenValidator.ValidateIdTokenAsync(tokens.IdToken, nonce, ct).ConfigureAwait(false);
+            if (idClaims is null || idClaims.ObjectId != claims.ObjectId)
+                throw new InvalidOperationException("Microsoft Entra ID token nonce or subject validation failed.");
+        }
 
         _logger.LogInformation("Entra OAuth redirect flow completed for object id {ObjectId}.", claims.ObjectId);
-        return (claims, accessToken);
+        return new(claims, tokens.AccessToken!, returnHandle);
     }
 
-    private async Task<string> RedeemCodeForAccessTokenAsync(
+    private async Task<TokenResponse> RedeemCodeForAccessTokenAsync(
         string code,
         string codeVerifier,
         EntraAuthorizationFlowConfiguration configuration,
@@ -353,7 +385,7 @@ public sealed class EntraOAuthRedirectService
         if (body is null || string.IsNullOrWhiteSpace(body.AccessToken))
             throw new InvalidOperationException("Microsoft Entra did not return an access token.");
 
-        return body.AccessToken!;
+        return body;
     }
 
     /// <summary>Generates a 256-bit random, URL-safe token (used for both CSRF state and PKCE verifier).</summary>
@@ -385,6 +417,11 @@ public sealed class EntraNotConfiguredException : InvalidOperationException
     public EntraNotConfiguredException(string message) : base(message) { }
 }
 
+public sealed class OAuthReturnHandleException : InvalidOperationException
+{
+    public OAuthReturnHandleException() : base("Invalid OAuth return handle.") { }
+}
+
 /// <summary>
 /// The validated settings required by both halves of an Entra browser authorization flow.
 /// </summary>
@@ -394,3 +431,8 @@ public sealed record EntraAuthorizationFlowConfiguration(
     string RedirectUri,
     string FrontendUrl,
     string Scopes);
+
+public sealed record EntraCodeExchangeResult(
+    EntraAccessTokenClaims Claims,
+    string AccessToken,
+    string? ReturnHandle);

@@ -35,6 +35,26 @@ authenticated caller cannot read or mutate another project's data by supplying i
 id (the trusted internal service identity used for a run's own agent callbacks is
 exempt). When no keys are configured, every `/api` request is unauthorized.
 
+### MCP OAuth protocol endpoints
+
+The protocol endpoints are outside `/api` and use the canonical
+`Auth:OAuth:PublicOrigin` rather than request host headers:
+
+| Method | Path | Result |
+| --- | --- | --- |
+| `GET` | `/.well-known/oauth-authorization-server` | RFC 8414/OIDC discovery |
+| `GET` | `/oauth/jwks` | Active and overlapping previous public signing keys |
+| `GET`, `POST` | `/oauth/authorize` | Entra-backed authorization code and explicit consent |
+| `POST` | `/oauth/token` | Authorization-code and rotating refresh-token grants |
+| `POST` | `/oauth/revoke` | Token revocation |
+| `POST` | `/oauth/register` | Restricted RFC 7591 public-native client registration |
+
+Authorization requests require PKCE S256 and the `mcp:invoke` scope. Access
+tokens are signed, ten-minute JWTs whose audience is exactly
+`{public-origin}/mcp`; authorization codes and refresh tokens are opaque,
+server-stored artifacts. A replayed refresh token revokes its complete token
+family.
+
 ## Endpoints
 
 ### POST /api/runs

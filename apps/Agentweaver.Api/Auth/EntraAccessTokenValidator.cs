@@ -54,6 +54,18 @@ public sealed class EntraAccessTokenValidator
         && !string.IsNullOrWhiteSpace(Issuer);
 
     public async Task<EntraAccessTokenClaims?> ValidateAsync(string token, CancellationToken ct)
+        => await ValidateAsync(token, expectedNonce: null, ct).ConfigureAwait(false);
+
+    public async Task<EntraAccessTokenClaims?> ValidateIdTokenAsync(
+        string token,
+        string expectedNonce,
+        CancellationToken ct)
+        => await ValidateAsync(token, expectedNonce, ct).ConfigureAwait(false);
+
+    private async Task<EntraAccessTokenClaims?> ValidateAsync(
+        string token,
+        string? expectedNonce,
+        CancellationToken ct)
     {
         if (!IsConfigured || string.IsNullOrWhiteSpace(token) || token.Count(c => c == '.') != 2)
             return null;
@@ -61,12 +73,12 @@ public sealed class EntraAccessTokenValidator
         try
         {
             var signingKeys = await GetSigningKeysAsync(forceRefresh: false, ct).ConfigureAwait(false);
-            var claims = await ValidateCoreAsync(token, signingKeys, ct).ConfigureAwait(false);
+            var claims = await ValidateCoreAsync(token, signingKeys, expectedNonce, ct).ConfigureAwait(false);
             if (claims is not null)
                 return claims;
 
             signingKeys = await GetSigningKeysAsync(forceRefresh: true, ct).ConfigureAwait(false);
-            return await ValidateCoreAsync(token, signingKeys, ct).ConfigureAwait(false);
+            return await ValidateCoreAsync(token, signingKeys, expectedNonce, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -78,6 +90,7 @@ public sealed class EntraAccessTokenValidator
     private async Task<EntraAccessTokenClaims?> ValidateCoreAsync(
         string token,
         IReadOnlyList<SecurityKey> signingKeys,
+        string? expectedNonce,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(Issuer) || string.IsNullOrWhiteSpace(ClientId))
@@ -97,6 +110,16 @@ public sealed class EntraAccessTokenValidator
 
         if (!result.IsValid || result.ClaimsIdentity is null)
             return null;
+
+        if (expectedNonce is not null)
+        {
+            var nonce = result.ClaimsIdentity.FindFirst("nonce")?.Value;
+            if (nonce is null
+                || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                    System.Text.Encoding.UTF8.GetBytes(nonce),
+                    System.Text.Encoding.UTF8.GetBytes(expectedNonce)))
+                return null;
+        }
 
         var oid = result.ClaimsIdentity.FindFirst("oid")?.Value;
         var tid = result.ClaimsIdentity.FindFirst("tid")?.Value;

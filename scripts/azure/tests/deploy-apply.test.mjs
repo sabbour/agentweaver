@@ -279,7 +279,9 @@ test("run(): applied manifests carry real kustomize-resolved values, not the com
 
   const runtimeConfig = writtenFiles.get("agentweaver-runtime-config.yaml");
   assert.ok(runtimeConfig, "expected the synthetic runtime-config ConfigMap to have been written before apply");
-  assert.doesNotMatch(runtimeConfig, /mcp-oauth-signing-key|Auth__OAuth__|OAUTH_ISSUER|OAUTH_AUDIENCE/);
+  assert.match(runtimeConfig, /OAUTH_PUBLIC_ORIGIN/);
+  assert.match(runtimeConfig, /OAUTH_SIGNING_CERTIFICATE_NAME/);
+  assert.doesNotMatch(runtimeConfig, /mcp-oauth-signing-key|Auth__OAuth__(?:SigningKey|Issuer|Audience)|OAUTH_ISSUER|OAUTH_AUDIENCE/);
 
   const secretProviderClass = writtenFiles.get("secret-provider-class.yaml");
   assert.ok(secretProviderClass);

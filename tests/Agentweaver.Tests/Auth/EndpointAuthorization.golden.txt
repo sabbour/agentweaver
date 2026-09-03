@@ -112,6 +112,8 @@ GET /auth/github/repo-app/handoff/{transactionId} | ProtocolManaged
 GET /auth/github/repo-app/installation/callback | ProtocolManaged
 GET /health | OperationalAnonymous
 GET /healthz/workspace | OperationalAnonymous
+GET /oauth/authorize | ProtocolManaged
+GET /oauth/resume | ProtocolManaged
 PATCH /api/projects/{id} | PlatformOrMcp
 PATCH /api/projects/{id}/casting/proposals/{proposalId} | PlatformOrMcp
 PATCH /api/projects/{id}/sessions/{sessionId} | PlatformOrMcp
@@ -206,6 +208,9 @@ POST /api/runs/{runId}/sandbox/port-forward | PlatformOrMcp
 POST /api/runs/{runId}/sandbox/preview | PlatformOrMcp
 POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry | PlatformOrMcp
 POST /api/runs/{runId}/sandbox/preview/{token}/keepalive | PlatformOrMcp
+POST /oauth/authorize | ProtocolManaged
+POST /oauth/register | ProtocolManaged
+POST /oauth/token | ProtocolManaged
 PUT /api/admin/byok-providers/{id} | PlatformOrMcp
 PUT /api/projects/{id}/decisions/{decisionId} | PlatformOrMcp
 PUT /api/projects/{id}/preview-settings | PlatformOrMcp

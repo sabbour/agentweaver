@@ -227,12 +227,13 @@ public static class AuthEndpoints
 
         app.MapGet("/auth/entra/authorize", async (
             HttpContext httpContext,
+            string? oauth_return_handle,
             EntraOAuthRedirectService entraOauthService,
             CancellationToken ct) =>
         {
             try
             {
-                var url = await entraOauthService.BeginAuthorizationAsync(ct).ConfigureAwait(false);
+                var url = await entraOauthService.BeginAuthorizationAsync(oauth_return_handle, ct).ConfigureAwait(false);
                 var state = EntraOAuthStateCookie.ExtractState(url);
                 if (state is not null)
                     EntraOAuthStateCookie.Set(httpContext, state);
@@ -241,6 +242,10 @@ public static class AuthEndpoints
             catch (EntraNotConfiguredException ex)
             {
                 return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (OAuthReturnHandleException)
+            {
+                return Results.BadRequest(new { error = "invalid_request" });
             }
         }).ProtocolManaged();
 
@@ -279,7 +284,15 @@ public static class AuthEndpoints
 
             try
             {
-                var (claims, accessToken) = await entraOauthService.ExchangeCodeAsync(code, state, ct).ConfigureAwait(false);
+                var exchange = await entraOauthService.ExchangeCodeWithContextAsync(code, state, ct).ConfigureAwait(false);
+                var claims = exchange.Claims;
+                var accessToken = exchange.AccessToken;
+                if (exchange.ReturnHandle is not null)
+                {
+                    await httpContext.RequestServices.GetRequiredService<BrowserEntraSessionService>()
+                        .IssueAsync(httpContext, claims, ct).ConfigureAwait(false);
+                    return Results.Redirect($"/oauth/resume?handle={Uri.EscapeDataString(exchange.ReturnHandle)}");
+                }
                 var oneTimeCode = await webSessionExchange.IssueAsync(accessToken, claims.DisplayName, ct).ConfigureAwait(false);
                 return Results.Redirect($"{frontendUrl}/?auth=success&code={Uri.EscapeDataString(oneTimeCode)}");
             }

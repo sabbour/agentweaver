@@ -24,6 +24,11 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<EntraOAuthState> EntraOAuthStates => Set<EntraOAuthState>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
     public DbSet<BrowserEntraSession> BrowserEntraSessions => Set<BrowserEntraSession>();
+    public DbSet<OAuthConsentRecord> OAuthConsents => Set<OAuthConsentRecord>();
+    public DbSet<OAuthAuthorizationTransaction> OAuthAuthorizationTransactions => Set<OAuthAuthorizationTransaction>();
+    public DbSet<OAuthDynamicRegistration> OAuthDynamicRegistrations => Set<OAuthDynamicRegistration>();
+    public DbSet<OAuthRefreshTokenFamily> OAuthRefreshTokenFamilies => Set<OAuthRefreshTokenFamily>();
+    public DbSet<OAuthMaintenanceLease> OAuthMaintenanceLeases => Set<OAuthMaintenanceLease>();
     public DbSet<IntegrationBuildLockRecord> IntegrationBuildLocks => Set<IntegrationBuildLockRecord>();
     public DbSet<DismissedNotification> DismissedNotifications => Set<DismissedNotification>();
     public DbSet<GitHubAuthorizationRecord> GitHubAuthorizations => Set<GitHubAuthorizationRecord>();
@@ -70,6 +75,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
     protected override void OnModelCreating(ModelBuilder model)
     {
+        base.OnModelCreating(model);
+        model.UseOpenIddict();
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.Status });
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.AgentName });
         model.Entity<Decision>().Property(d => d.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
@@ -144,6 +151,12 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
         model.Entity<BrowserEntraSession>().HasKey(s => s.Id);
         model.Entity<BrowserEntraSession>().HasIndex(s => s.ExpiresAt);
+        model.Entity<OAuthConsentRecord>().HasIndex(x => new { x.Subject, x.ClientId }).IsUnique();
+        model.Entity<OAuthAuthorizationTransaction>().HasIndex(x => x.ExpiresAt);
+        model.Entity<OAuthDynamicRegistration>().HasIndex(x => x.ClientId).IsUnique();
+        model.Entity<OAuthDynamicRegistration>().HasIndex(x => new { x.SourceHash, x.RegisteredAt });
+        model.Entity<OAuthRefreshTokenFamily>().HasIndex(x => x.AuthorizationId).IsUnique();
+        model.Entity<OAuthMaintenanceLease>().HasKey(x => x.Name);
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
         ConfigureGitHubConnectionsPersistence(model);

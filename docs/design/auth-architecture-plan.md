@@ -249,6 +249,18 @@ rejects bare `AllowAnonymous` metadata; framework-owned OpenAPI document routes 
 deliberate exclusion. This layer does not add authentication handlers, OpenIddict, a rollout
 flag, or a new middleware pipeline.
 
+### 2.3.3 Layer 2 authorization server
+
+Layer 2 restores the MCP issuer as an Agentweaver-hosted OpenIddict server rather
+than resurrecting the retired custom OAuth tables. Its issuer is the configured
+public origin and its only resource is that origin plus `/mcp`. OpenIddict owns
+applications, authorizations, scopes, and tokens in `MemoryDbContext` on SQLite
+and PostgreSQL. Entra supplies upstream human identity through a database-backed,
+single-use return handle; consent, static-client reconciliation, constrained
+dynamic registration, refresh-family revocation, certificate overlap, and leased
+pruning remain server-side. The existing MCP validation boundary is intentionally
+unchanged until the resource-server cutover layer.
+
 ### 2.4 Issue tracking
 
 Phase 1 is tracked by **#691** — *"tech-debt(auth): auth middlewares should honor endpoint

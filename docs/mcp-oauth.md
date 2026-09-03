@@ -1,168 +1,28 @@
-# MCP OAuth 2.1 Authorization Server (Option C)
+# MCP OAuth authorization server
 
-::: warning Experimental
-The Agentweaver MCP server is **experimental**. Tool names, parameters, and behavior may change without notice. Pin to a known revision if you depend on the current surface.
-:::
+Agentweaver uses OpenIddict as its OAuth authorization server and Microsoft Entra
+as the upstream human identity provider. Copilot CLI, GitHub Copilot desktop, and
+VS Code may use a configured static public client or the restricted RFC 7591
+registration endpoint.
 
-> Feature: `mcp-oauth` · Tasks T1-T3 (metadata + JWKS, token service, authorize/token)
+Discovery is served from `/.well-known/oauth-authorization-server`. The canonical
+issuer is `Auth:OAuth:PublicOrigin`; the MCP audience is always that exact origin
+plus `/mcp`. Neither value is derived from `Host` or forwarded headers.
 
-Agentweaver hosts a thin OAuth 2.1 Authorization Server (AS) inside `Agentweaver.Api`. It lets MCP
-clients (GitHub Copilot CLI, Claude Desktop, etc.) discover the AS, run a PKCE authorization-code
-flow themselves, and obtain short-lived JWT access tokens bound to the MCP resource. The AS uses the
-authenticated Microsoft Entra session for platform authorization and mints its own tokens. Repo App
-and Copilot App browser handoffs remain capability-specific; the client only receives
-Agentweaver-minted MCP artifacts.
+The server supports authorization code and rotating refresh-token grants only.
+PKCE S256 and explicit consent are required. The stable least-privilege scope is
+`mcp:invoke`; requesting additional approved scopes re-opens consent. Password,
+implicit, client-credentials, and device grants are unavailable.
 
-The MCP server itself stays a pure OAuth Resource Server (it validates these tokens; it never issues
-them). Resource-Server changes — the `WWW-Authenticate` 401 challenge, the
-`oauth-protected-resource` metadata, and the JWT validation middleware — are **T6** and are not part
-of this scope.
+Access tokens are signed JWTs with a ten-minute lifetime. Authorization codes and
+refresh tokens are opaque references persisted by OpenIddict. Code replay is
+rejected. Refresh-token replay atomically revokes all tokens in its authorization
+family.
 
-## What is implemented here (T1-T3)
+Production loads active and previous signing and encryption certificate versions
+from Azure Key Vault. Startup fails closed without usable durable keys.
+Development may generate process-ephemeral keys.
 
-| Task | Surface |
-|---|---|
-| T1 | `GET /.well-known/oauth-authorization-server` (RFC 8414) and `GET /oauth/jwks` |
-| T2 | `McpTokenService` — RS256 signing of short-lived, audience-bound JWT access tokens + JWKS |
-| T3 | `GET /oauth/authorize` and `POST /oauth/token` — authorization-code flow with mandatory PKCE (S256) |
-
-## Endpoints
-
-### `GET /.well-known/oauth-authorization-server`
-
-Unauthenticated. Returns RFC 8414 metadata. The `issuer` is bound to the host the request arrived on
-(`{scheme}://{host}`) unless `Auth:OAuth:Issuer` is configured, so the document is correct on local,
-staging, and production hosts without per-environment code.
-
-```json
-{
-  "issuer": "https://HOST",
-  "authorization_endpoint": "https://HOST/oauth/authorize",
-  "token_endpoint": "https://HOST/oauth/token",
-  "registration_endpoint": "https://HOST/oauth/register",
-  "jwks_uri": "https://HOST/oauth/jwks",
-  "revocation_endpoint": "https://HOST/oauth/revoke",
-  "scopes_supported": ["mcp:invoke", "offline_access"],
-  "response_types_supported": ["code"],
-  "grant_types_supported": ["authorization_code", "refresh_token"],
-  "code_challenge_methods_supported": ["S256"],
-  "token_endpoint_auth_methods_supported": ["none"]
-}
-```
-
-`code_challenge_methods_supported` is `["S256"]` only — `plain` is rejected. The
-`registration_endpoint` (T5) and `revocation_endpoint` (T4) are advertised for forward compatibility
-but are not yet implemented.
-
-### `GET /oauth/jwks`
-
-Unauthenticated. Publishes the public half of the current signing key so a Resource Server can
-validate access tokens offline.
-
-```json
-{ "keys": [ { "kty": "RSA", "use": "sig", "alg": "RS256", "kid": "<kid>", "n": "<base64url>", "e": "<base64url>" } ] }
-```
-
-The `kid` is derived deterministically from the public key material, so the same key always advertises
-the same `kid` (enabling future `kid`-based rotation).
-
-### `GET /oauth/authorize`
-
-Unauthenticated. Begins the authorization-code flow. Query parameters:
-
-| Parameter | Required | Notes |
-|---|---|---|
-| `response_type` | yes | Must be `code`. |
-| `client_id` | yes | Public client identifier. |
-| `redirect_uri` | yes | Loopback (`http://127.0.0.1:*`, `http://localhost:*`, `http://[::1]:*`) or HTTPS, exact-match, no fragment. |
-| `code_challenge` | yes | PKCE challenge (mandatory). |
-| `code_challenge_method` | yes | Must be `S256`. `plain` and a missing method are rejected. |
-| `scope` | no | Defaults to `mcp:invoke`. |
-| `state` | no | Opaque client value, echoed back on the redirect. |
-| `resource` | no | RFC 8707 resource indicator. |
-
-On success the endpoint uses the current Entra session. After platform authorization is confirmed,
-the server redirects an authorization `code` (and the client's `state`) back to `redirect_uri`.
-
-Validation failures return `400` with an OAuth error body
-(`{"error": "...", "error_description": "..."}`) and **never** redirect, to avoid open redirects.
-`invalid_request` is used for missing `client_id`/`redirect_uri` and PKCE problems;
-`unsupported_response_type` for a non-`code` `response_type`.
-
-### `POST /oauth/token`
-
-Unauthenticated (public client; `token_endpoint_auth_methods_supported: ["none"]`).
-`application/x-www-form-urlencoded` body. Responses include `Cache-Control: no-store`.
-
-**`grant_type=authorization_code`** — parameters `code`, `code_verifier`, `redirect_uri`, `client_id`.
-The server enforces single-use codes (≤ 60 s TTL), exact `redirect_uri` and `client_id` match, and
-PKCE verification (`code_challenge == BASE64URL(SHA256(code_verifier))`). On success:
-
-```json
-{
-  "access_token": "<JWT>",
-  "token_type": "Bearer",
-  "expires_in": 900,
-  "scope": "mcp:invoke",
-  "refresh_token": "<opaque>"
-}
-```
-
-`refresh_token` is a structural placeholder in this scope — rotation, hashing, reuse-detection, and the
-`refresh_token` grant are **T4**. The `refresh_token` grant currently returns `400 invalid_request`.
-
-Failures return `400` with an OAuth error body: `invalid_grant` (bad/expired/used code, redirect or
-client mismatch, PKCE failure) or `unsupported_grant_type`.
-
-## Access token
-
-Signed JWT (RS256). Claims:
-
-| Claim | Value |
-|---|---|
-| `iss` | `https://HOST` (the resolved issuer) |
-| `aud` | `https://HOST/mcp` (the MCP resource, RFC 8707 binding) |
-| `sub` | Entra object ID of the authenticated user |
-| `scope` | `mcp:invoke` |
-| `iat`, `nbf`, `exp` | issued-at, not-before, expiry (15 minutes) |
-| `jti` | unique token id (used by the T4 denylist) |
-
-## Configuration
-
-| Key | Purpose |
-|---|---|
-| `Auth:ApiKey` | Required API authentication key. Bound to the Key Vault CSI secret **`mcp-api-key`**. |
-| `Auth:Mcp:Issuer` | Public MCP issuer. |
-| `Auth:Mcp:Audience` | Public MCP resource audience. |
-| `Auth:Entra:ClientId` / `TenantId` / `RedirectUri` | Microsoft Entra browser sign-in and platform authorization. |
-
-For AKS production, run `npm run azure:provision-infra` before the first release
-deployment so the required `mcp-api-key` CSI secret is present. If it is missing,
-cluster diagnostics report `key_vault: critical: secret 'mcp-api-key' not found`.
-
-## Security properties
-
-- **Mandatory PKCE, S256 only.** Missing or `plain` challenge is rejected; codes are bound to the
-  `code_challenge`, `client_id`, and `redirect_uri`, are single-use, and expire in ≤ 60 s.
-- **Exact redirect-URI policy.** Loopback HTTP or HTTPS only, no fragment; the exact string captured at
-  `/authorize` is re-checked at token redemption. (Per-client registered URIs arrive with T5 DCR.)
-- **Audience-bound tokens.** `aud` is the MCP resource, so a stolen token is useless elsewhere and
-  expires within 15 minutes.
-- **Org membership enforced at issuance.** No authorization code (and therefore no token) is issued to
-  a non-member; the GitHub broker callback runs `GitHubOrgAuthorizationService` before issuing a code.
-- **Secrets stay server-side.** The GitHub `client_secret` and the user's GitHub token never reach the
-  client. Tokens, codes, and verifiers are never logged.
-
-## Backward compatibility
-
-There is no static Agentweaver API-key path for MCP — auth relies solely on Agentweaver-minted JWTs
-(via DCR) and the transitional raw-GitHub passthrough. The `/oauth/*` and `/.well-known/*` routes are
-exempt from the GitHub token and org-authorization middleware so the flow that obtains a token is
-itself reachable without a token.
-
-## Out of scope (post-checkpoint)
-
-- **T4** — rotating refresh-token store (hashed) + reuse detection, `/oauth/revoke`, `jti` denylist.
-- **T5** — `/oauth/register` Dynamic Client Registration (RFC 7591).
-- **T6** — MCP Resource-Server changes: `WWW-Authenticate` 401, `/.well-known/oauth-protected-resource`, JWT validation middleware.
-- **T7** — per-user downstream identity for MCP→API calls.
+This layer does not change MCP request validation. Broker-only MCP validation,
+protected-resource metadata, and removal of transitional validation belong to the
+subsequent resource-server cutover.

@@ -36,6 +36,33 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 | `Auth:Entra:RedirectUri` | none | Exact Entra application callback URL |
 | `Auth:Entra:FrontendUrl` | none | Exact browser origin for Entra callback completion |
 
+#### MCP OAuth authorization server
+
+The API hosts an OpenIddict authorization server for Copilot CLI, GitHub Copilot
+desktop, and VS Code MCP connections. Microsoft Entra remains the upstream human
+identity. The clients receive only short-lived Agentweaver access tokens for the
+`mcp:invoke` scope; Entra tokens never leave the API.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Auth:OAuth:PublicOrigin` | `http://localhost:5000` in Development; required elsewhere | Canonical issuer origin. Production requires HTTPS. Paths, query strings, fragments, and userinfo are rejected. |
+| `Auth:OAuth:Certificates:SigningName` | none | Azure Key Vault certificate-secret name for access-token signing |
+| `Auth:OAuth:Certificates:EncryptionName` | none | Azure Key Vault certificate-secret name for protocol artifact encryption |
+| `Auth:OAuth:DynamicRegistration:PerSourcePerDay` | `20` | Database-backed daily RFC 7591 quota per source address |
+| `Auth:OAuth:DynamicRegistration:MaximumActive` | `1000` | Deployment-wide active dynamic-client quota |
+| `Auth:OAuth:Clients` | empty | Statically known public native clients, each with `ClientId`, `DisplayName`, exact `RedirectUris`, and optional `Scopes` |
+
+The resource identifier is always the exact canonical origin plus `/mcp`; it
+cannot be configured independently or inferred from request headers. Production
+startup fails when either durable certificate is unavailable. The API loads the
+active and previous enabled Key Vault versions so a rotation overlap remains
+published. Development alone may use process-ephemeral certificates.
+
+Dynamic registration accepts public native clients only. It permits exact HTTPS
+and private-use callbacks, plus HTTP callbacks on literal `127.0.0.1` or `[::1]`.
+Hostnames such as `localhost`, wildcards, prefix matching, fragments, userinfo,
+client secrets, and metadata URL fetching are rejected.
+
 #### Repo App user authorization
 
 Interactive repository access is authorized separately from product sign-in. An Entra-authenticated human starts

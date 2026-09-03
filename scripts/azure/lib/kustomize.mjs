@@ -305,6 +305,7 @@ export function buildRuntimeConfigLiterals(vars) {
     }
   }
 
+  const oauthOrigin = isEntra ? entraOrigin : host ? `https://${host}` : "";
   return {
     HOST: host,
     PREVIEW_HOSTNAME: str(vars.PREVIEW_HOSTNAME),
@@ -316,6 +317,9 @@ export function buildRuntimeConfigLiterals(vars) {
     // ClientId/TenantId are required for every deployment.
     // ClientSecret is deliberately NOT wired here -- PKCE-only per #658; see api-deployment.yaml.
     AUTH_MODE: authMode,
+    OAUTH_PUBLIC_ORIGIN: oauthOrigin,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "agentweaver-oauth-signing",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "agentweaver-oauth-encryption",
     ENTRA_CLIENT_ID: str(vars.ENTRA_CLIENT_ID),
     ENTRA_TENANT_ID: str(vars.ENTRA_TENANT_ID),
     ENTRA_ENTERPRISE_APP_OBJECT_ID: str(vars.ENTRA_ENTERPRISE_APP_OBJECT_ID),
