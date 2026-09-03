@@ -39,6 +39,11 @@ enabled, time-valid versions. Deployment verification checks the canonical origi
 exact `/mcp` resource, runtime certificate names, Key Vault versions, and keyed RS256
 JWKS output.
 
+Azure deployments derive the canonical origin from the trusted managed
+`DefaultDomainCertificate` status. The deploy renderer rejects the committed
+placeholder and applies a shared OAuth runtime checksum to the API and MCP pod
+templates, so both processes restart and consume the same origin.
+
 In production the gateway terminates TLS and forwards HTTP to the API. Forwarded
 scheme and host processing runs before routing and OpenIddict, accepts exactly one
 hop, and trusts only configured private gateway CIDRs. The AKS deploy derives

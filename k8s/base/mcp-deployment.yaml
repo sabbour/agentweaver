@@ -19,6 +19,7 @@ spec:
         azure.workload.identity/use: "true"
       annotations:
         secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
+        agentweaver.io/oauth-runtime-config-checksum: "placeholder"
     spec:
       # Dedicated least-privilege identity (serviceaccount-mcp.yaml). The public-facing MCP
       # must NOT reuse agentweaver-api's pod-create/exec/sandbox RBAC. See that file's header.
