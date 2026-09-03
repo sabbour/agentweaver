@@ -194,8 +194,7 @@ app.MapGet("/auth/github/copilot-app/callback", async (
         var platformService = new PlatformDefaultCopilotBindingService(
             configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, platformLogger);
         var platformOutcome = await platformService.CompleteBrowserCallbackAsync(
-            browserSession?.Id,
-            browserSession?.EntraObjectId,
+            browserSession,
             state,
             resolvedCode,
             platformCookie,
@@ -208,8 +207,7 @@ app.MapGet("/auth/github/copilot-app/callback", async (
         var platformService = new PlatformDefaultCopilotBindingService(
             configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, platformLogger);
         var platformOutcome = await platformService.CompleteBrowserCallbackAsync(
-            browserSession?.Id,
-            browserSession?.EntraObjectId,
+            browserSession,
             state,
             resolvedCode,
             platformCookie,
@@ -356,7 +354,6 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
     string id,
     IProjectStore projectStore,
     MemoryDbContext db,
-    CopilotAppRegistrationService registration,
     EffectiveModelProviderResolver modelProviderResolver,
     CancellationToken ct) =>
 {
@@ -368,31 +365,25 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
     if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid)
         return forbid;
 
-    var projectKey = projectId.ToString();
-    var hasInstallation = await db.GitHubInstallations.AsNoTracking()
-        .AnyAsync(x => x.ProjectId == projectKey &&
-                       x.AppKind == GitHubAppKind.Repo &&
-                       x.RevokedAt == null, ct).ConfigureAwait(false);
-    // Uses the same resolver as run/generation startup, so a project already correctly reports
-    // "ready" whenever it has its own active binding — even if the platform default is unset or
-    // the Copilot App registration is temporarily unverifiable (which only matters when the
-    // project has to fall back to the platform default).
     var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
-    var hasByokConfiguration = effectiveProvider is EffectiveModelProviderResult.Byok;
-    var hasBinding = effectiveProvider is EffectiveModelProviderResult.ProjectGitHubCopilot;
-    var hasPlatformDefaultCopilotBinding = effectiveProvider is EffectiveModelProviderResult.PlatformGitHubCopilot;
-    var registrationState = await registration.ValidateAsync(ct).ConfigureAwait(false);
-    if (effectiveProvider is EffectiveModelProviderResult.Unavailable && registrationState != CopilotAppRegistrationState.Ready)
-        return Results.Ok(CreateUnattendedReadiness(registrationState, hasInstallation));
-
-    var hasRepositoryGrant = await db.GitHubRepositoryGrants.AsNoTracking()
-        .AnyAsync(x => x.ProjectId == projectKey && x.RevokedAt == null, ct).ConfigureAwait(false);
+    var repositoryRequired = project.Origin.Kind == ProjectOriginKind.FromGitHub;
+    var projectKey = projectId.ToString();
+    var activeInstallations = db.GitHubInstallations.AsNoTracking()
+        .Where(x => x.ProjectId == projectKey &&
+                    x.AppKind == GitHubAppKind.Repo &&
+                    x.RevokedAt == null);
+    var hasInstallation = repositoryRequired && await activeInstallations
+        .AnyAsync(ct).ConfigureAwait(false);
+    var liveRepositoryGrantCount = repositoryRequired
+        ? await db.GitHubRepositoryGrants.AsNoTracking()
+            .CountAsync(grant => grant.ProjectId == projectKey &&
+                                 grant.RevokedAt == null &&
+                                 activeInstallations.Any(installation =>
+                                     installation.InstallationId == grant.InstallationId),
+                ct).ConfigureAwait(false)
+        : 0;
     return Results.Ok(CreateUnattendedReadiness(
-        hasBinding,
-        hasPlatformDefaultCopilotBinding,
-        hasByokConfiguration,
-        hasInstallation,
-        hasRepositoryGrant));
+        effectiveProvider, repositoryRequired, hasInstallation, liveRepositoryGrantCount == 1));
 })
     .WithName("GetProjectUnattendedReadiness")
     .WithTags("Projects", "GitHub")
@@ -1486,69 +1477,98 @@ private static bool IsAllowedModelId(string? modelId) =>
     string.IsNullOrWhiteSpace(modelId) || AllowedModelRegex.IsMatch(modelId.Trim());
 
 private static object CreateUnattendedReadiness(
-    CopilotAppRegistrationState registrationState,
-    bool repoAppInstallationConnected) => registrationState switch
-{
-    CopilotAppRegistrationState.ConfigurationUnavailable => new
-    {
-        status = "not_ready",
-        reason_code = "copilot_app_not_configured",
-        message = "The Copilot App is not configured.",
-        repo_app_installation_connected = repoAppInstallationConnected,
-    },
-    CopilotAppRegistrationState.RepositoryPermissionsDetected => new
-    {
-        status = "not_ready",
-        reason_code = "copilot_app_repository_permissions_detected",
-        message = "The Copilot App has repository permissions and cannot be used for unattended work.",
-        repo_app_installation_connected = repoAppInstallationConnected,
-    },
-    _ => new
-    {
-        status = "not_ready",
-        reason_code = "copilot_app_registration_unavailable",
-        message = "The Copilot App registration could not be verified.",
-        repo_app_installation_connected = repoAppInstallationConnected,
-    },
-};
-
-private static object CreateUnattendedReadiness(
-    bool hasCopilotBinding,
-    bool hasPlatformDefaultCopilotBinding,
-    bool hasByokConfiguration,
+    EffectiveModelProviderResult effectiveProvider,
+    bool repositoryRequired,
     bool hasRepoAppInstallation,
     bool hasRepositoryGrant)
 {
-    if (!hasByokConfiguration && !hasCopilotBinding && !hasPlatformDefaultCopilotBinding)
-        return new
+    var modelProvider = effectiveProvider switch
+    {
+        EffectiveModelProviderResult.ProjectGitHubCopilot => new
+        {
+            status = "ready",
+            source = "project",
+            reason_code = "ready",
+        },
+        EffectiveModelProviderResult.PlatformGitHubCopilot => new
+        {
+            status = "ready",
+            source = "platform_default",
+            reason_code = "ready",
+        },
+        EffectiveModelProviderResult.Byok => new
+        {
+            status = "ready",
+            source = "byok",
+            reason_code = "ready",
+        },
+        EffectiveModelProviderResult.Unavailable
+        {
+            UnavailableReason: EffectiveModelProviderUnavailableReason.ProjectBindingRequiresReauthorization
+        } => new
         {
             status = "not_ready",
-            reason_code = "copilot_binding_required",
-            message = "Connect a project GitHub Copilot account or configure a platform-default GitHub Copilot account before unattended work can run.",
-            repo_app_installation_connected = hasRepoAppInstallation,
-        };
-    if (!hasRepoAppInstallation)
-        return new
+            source = "project",
+            reason_code = "project_model_provider_reconnect_required",
+        },
+        _ => new
         {
             status = "not_ready",
-            reason_code = "repo_app_installation_required",
-            message = "Install the Repo App for this project before unattended work can run.",
+            source = "none",
+            reason_code = "model_provider_connection_required",
+        },
+    };
+    var repository = !repositoryRequired
+        ? new
+        {
+            required = false,
+            status = "not_required",
+            reason_code = "not_required",
             repo_app_installation_connected = false,
-        };
-    if (!hasRepositoryGrant)
-        return new
-        {
-            status = "not_ready",
-            reason_code = "repo_app_repository_grant_required",
-            message = "The Repo App repository grant is unavailable for this project.",
-            repo_app_installation_connected = true,
-        };
+        }
+        : hasRepoAppInstallation && hasRepositoryGrant
+            ? new
+            {
+                required = true,
+                status = "ready",
+                reason_code = "ready",
+                repo_app_installation_connected = true,
+            }
+            : new
+            {
+                required = true,
+                status = "not_ready",
+                reason_code = hasRepoAppInstallation
+                    ? "repo_app_repository_grant_required"
+                    : "repo_app_installation_required",
+                repo_app_installation_connected = hasRepoAppInstallation,
+            };
+    var ready = modelProvider.status == "ready" && repository.status != "not_ready";
+    var reasonCode = ready
+        ? "ready"
+        : modelProvider.status == "not_ready"
+            ? modelProvider.reason_code
+            : repository.reason_code;
+    var message = reasonCode switch
+    {
+        "model_provider_connection_required" =>
+            "Connect a project model provider or configure a platform-default model provider before unattended work can run.",
+        "project_model_provider_reconnect_required" =>
+            "Reconnect the project's active model provider before unattended work can run.",
+        "repo_app_installation_required" =>
+            "Install the Repo App for this project before unattended work can run.",
+        "repo_app_repository_grant_required" =>
+            "The Repo App repository grant is unavailable for this project.",
+        _ => "This project is ready for unattended automation when activation consent is granted.",
+    };
     return new
     {
-        status = "ready",
-        reason_code = "ready",
-        message = "This project is ready for unattended automation when activation consent is granted.",
-        repo_app_installation_connected = true,
+        status = ready ? "ready" : "not_ready",
+        reason_code = reasonCode,
+        message,
+        repo_app_installation_connected = repository.repo_app_installation_connected,
+        model_provider = modelProvider,
+        repository,
     };
 }
 

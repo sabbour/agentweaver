@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.27.1
+
+### Patch Changes
+
+- a979b06: Improve GitHub authorization diagnostics, report the exact build revision from the version API, and clarify how durable Copilot providers and repository-less unattended automation work.
+
+## 0.27.0
+
+### Minor Changes
+
+- 6a5697f: Guide platform administrators through model-provider setup, and show an optional product tour after Agentweaver unlocks.
+- ba62d75: Add progressive setup readiness for model-provider activation and optional GitHub repository access. GitHub authorization returns to the current task.
+
+### Patch Changes
+
+- 238d384: Improve Skills catalog readability with consistent type roles, a focused content width, and responsive metadata wrapping.
+- 0482dfe: Make workflow graph previews and the visual editor easier to read with adaptive stage layouts, larger definition nodes, and better use of canvas space.
+- 1792003: Clarify the two GitHub connection types in Account settings and restore the direct Repo App connection flow.
+- d216491: Show operators the exact unified callback for the two GitHub Copilot OAuth flows during deployment, and document wildcard checks and safe shared-client migration.
+- 62a3596: Simplify the project dashboard and shared model-metric text. Remove the repetitive Decision guide so status, activity, and agent metrics are easier to scan.
+- 43d5aa6: Fail stale project GitHub Copilot credentials before AgentHost launch with the project reconnection action instead of reporting an AgentHost infrastructure failure or falling back to another provider.
+
 ## 0.26.1
 
 ### Patch Changes

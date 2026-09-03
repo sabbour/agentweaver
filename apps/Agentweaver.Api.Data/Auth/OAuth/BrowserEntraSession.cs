@@ -10,5 +10,6 @@ public sealed class BrowserEntraSession
 {
     [Key] public required string Id { get; set; }
     public required string EntraObjectId { get; set; }
+    public string PlatformRoles { get; set; } = string.Empty;
     public DateTimeOffset ExpiresAt { get; set; }
 }

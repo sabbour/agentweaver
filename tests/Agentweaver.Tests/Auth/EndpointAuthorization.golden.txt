@@ -16,7 +16,7 @@ DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId} | PlatformOrMcp
 GET / | OperationalAnonymous
 GET /api/admin/byok-providers | PlatformOrMcp
 GET /api/admin/platform-default-copilot/status | PlatformOrMcp
-GET /api/assistant/runs | PlatformOrMcp
+GET /api/assistant/runs | AuthenticatedPlatform
 GET /api/auth/config | OperationalAnonymous
 GET /api/auth/context | AuthenticatedPlatform
 GET /api/auth/github/repo-app/authorization/status | PlatformOrMcp
@@ -127,8 +127,8 @@ POST /api/admin/byok-providers/deactivate | PlatformOrMcp
 POST /api/admin/byok-providers/{id}/activate | PlatformOrMcp
 POST /api/admin/platform-default-copilot/begin | PlatformOrMcp
 POST /api/admin/platform-default-copilot/disconnect | PlatformOrMcp
-POST /api/assistant/runs | PlatformOrMcp
-POST /api/assistant/runs/{id}/messages | PlatformOrMcp
+POST /api/assistant/runs | AuthenticatedPlatform
+POST /api/assistant/runs/{id}/messages | AuthenticatedPlatform
 POST /api/auth/github/repo-app/authorization/refresh | PlatformOrMcp
 POST /api/auth/github/repo-app/authorizations | PlatformOrMcp
 POST /api/auth/github/repo-app/authorizations/handoff | PlatformOrMcp

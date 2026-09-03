@@ -39,6 +39,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<ProjectCopilotBindingRecord> ProjectCopilotBindings => Set<ProjectCopilotBindingRecord>();
     public DbSet<PlatformDefaultCopilotBindingRecord> PlatformDefaultCopilotBindings => Set<PlatformDefaultCopilotBindingRecord>();
     public DbSet<AutomationActivationRecord> AutomationActivations => Set<AutomationActivationRecord>();
+    public DbSet<AutomationProjectGuardRecord> AutomationProjectGuards => Set<AutomationProjectGuardRecord>();
     public DbSet<AutomationInvocationRecord> AutomationInvocations => Set<AutomationInvocationRecord>();
     public DbSet<GitHubLifecycleDeliveryRecord> GitHubLifecycleDeliveries => Set<GitHubLifecycleDeliveryRecord>();
     public DbSet<RunGitHubIdentitySnapshotRecord> RunGitHubIdentitySnapshots => Set<RunGitHubIdentitySnapshotRecord>();
@@ -659,7 +660,30 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<AutomationActivationRecord>(e =>
         {
-            e.ToTable("automation_activations").HasKey(x => x.Id);
+            e.ToTable("automation_activations", table =>
+                table.HasCheckConstraint(
+                    "CK_automation_activations_snapshot_tuple",
+                    """
+                    status <> 0 OR (
+                        (
+                            (installation_id IS NULL AND repository_id IS NULL AND repository_grant_digest IS NULL)
+                            OR
+                            (installation_id IS NOT NULL AND installation_id > 0 AND
+                                repository_id IS NOT NULL AND repository_id > 0 AND
+                                repository_grant_digest IS NOT NULL AND repository_grant_digest <> '')
+                        ) AND (
+                            (model_provider_source = 1 AND
+                                byok_provider_id IS NOT NULL AND byok_provider_id <> '' AND
+                                (copilot_binding_id IS NULL OR copilot_binding_id = '') AND
+                                (copilot_binding_grant_digest IS NULL OR copilot_binding_grant_digest = ''))
+                            OR
+                            (model_provider_source <> 1 AND
+                                copilot_binding_id IS NOT NULL AND copilot_binding_id <> '' AND
+                                copilot_binding_grant_digest IS NOT NULL AND copilot_binding_grant_digest <> '' AND
+                                (byok_provider_id IS NULL OR byok_provider_id = ''))
+                        ))
+                    """));
+            e.HasKey(x => x.Id);
             e.Property(x => x.Id).HasColumnName("id");
             e.Property(x => x.ProjectId).HasColumnName("project_id");
             e.Property(x => x.InstallationId).HasColumnName("installation_id");
@@ -677,6 +701,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 .HasDatabaseName("UX_automation_activations_active_project");
             e.HasOne<GitHubRepositoryGrantRecord>().WithMany()
                 .HasForeignKey(x => new { x.InstallationId, x.RepositoryId })
+                .IsRequired(false)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
             ConfigureProjectForeignKey(e, "FK_automation_activations_projects_project_id");
@@ -769,6 +794,13 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 .IsRequired(false)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK_run_github_capability_snapshots_projects_project_id");
+        });
+
+        model.Entity<AutomationProjectGuardRecord>(e =>
+        {
+            e.ToTable("automation_project_guards").HasKey(x => x.ProjectId);
+            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.RepositoryAttached).HasColumnName("repository_attached");
         });
 
         model.Entity<ProjectModelProviderCapabilityRecord>(e =>

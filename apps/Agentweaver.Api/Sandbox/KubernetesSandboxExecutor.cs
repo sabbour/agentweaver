@@ -199,6 +199,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // Redeems the run-bound Copilot snapshot for the AgentHost /configure call.
     private readonly IGitHubCopilotCapabilityCredentialProvider? _copilotCredentials;
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
+    private readonly Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? _effectiveProviderResolver;
     // Replica-safe run secret store used to persist the per-run preview-runner credential so a
     // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
     // release (spec-006 decouple-preview, BLOCKER A / RESIDUAL). Null in unit tests → no minting.
@@ -248,7 +249,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
         Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
         IRunStore? runStore = null,
-        IByokProviderConfigurationProvider? byokProviderConfiguration = null)
+        IByokProviderConfigurationProvider? byokProviderConfiguration = null,
+        Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null)
     {
         _client = client;
         _options = options;
@@ -267,6 +269,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _authorshipCapabilityStore = authorshipCapabilityStore;
         _runStore = runStore;
         _byokProviderConfiguration = byokProviderConfiguration;
+        _effectiveProviderResolver = effectiveProviderResolver;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -440,10 +443,11 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         // Resolve the run's submitting user so the pod can scope GitHub Copilot auth to that user's
         // signed-in token. The user's Key Vault secret name (Option C warm-pool path) is derived here
         // and delivered to the pod via /configure — never another user's secret.
-        var byokProvider = _byokProviderConfiguration is null
-            ? null
-            : await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
         var submittingUser = await ResolveSubmittingUserAsync(runId, ct).ConfigureAwait(false);
+        var (configProjectId, configAgentName) = _submittingUserResolver is not null
+            ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
+            : (null, null);
+        var byokProvider = await GetByokProviderAsync(runId, configProjectId, ct).ConfigureAwait(false);
         if (byokProvider is null && string.IsNullOrWhiteSpace(submittingUser))
         {
             throw new InvalidOperationException(
@@ -454,10 +458,6 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _logger.LogInformation(
             "KubernetesSandboxExecutor: resolved submitting user for run {RunId}; will configure pod via /configure.",
             runId);
-
-        var (configProjectId, configAgentName) = _submittingUserResolver is not null
-            ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
-            : (null, null);
 
         var copilotCredential = byokProvider is null && _copilotCredentials is not null
             ? await _copilotCredentials.GetCredentialAsync(runId, ct).ConfigureAwait(false)
@@ -673,6 +673,42 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             await RevokeRepositoryCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+    }
+
+    private async Task<ByokProviderConfiguration?> GetByokProviderAsync(
+        string runId,
+        string? projectId,
+        CancellationToken ct)
+    {
+        var requiresByok = false;
+        if (_effectiveProviderResolver is not null)
+        {
+            var parsedProjectId = ProjectId.TryParse(projectId, out var value) ? value : (ProjectId?)null;
+            var effectiveProvider = await _effectiveProviderResolver(parsedProjectId, ct).ConfigureAwait(false);
+            if (effectiveProvider is not EffectiveModelProviderResult.Byok)
+                return null;
+            requiresByok = true;
+        }
+
+        if (_byokProviderConfiguration is null)
+        {
+            if (requiresByok)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot launch AgentHost pod for BYOK run '{runId}' because the BYOK provider configuration service is not wired.");
+            }
+
+            return null;
+        }
+
+        var provider = await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
+        if (requiresByok && provider is null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot launch AgentHost pod for BYOK run '{runId}' because its active BYOK provider configuration is unavailable.");
+        }
+
+        return provider;
     }
 
     /// <summary>

@@ -9,6 +9,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 
 namespace Agentweaver.Api.Auth;
@@ -60,8 +61,14 @@ public sealed class RepoAppUserAuthorizationService(
     IConfiguration configuration,
     GitHubConnectionsPersistenceStore persistence,
     ISecretStore secretStore,
-    IHttpClientFactory httpClientFactory)
+    IHttpClientFactory httpClientFactory,
+    ILogger<RepoAppUserAuthorizationService> logger)
 {
+    internal static readonly EventId AuthorizationBeginEvent = new(4100, "RepoAppAuthorizationBegin");
+    internal static readonly EventId AuthorizationCallbackEvent = new(4101, "RepoAppAuthorizationCallback");
+    internal static readonly EventId CredentialPersistenceEvent = new(4102, "RepoAppCredentialPersistence");
+    internal static readonly EventId AuthorizationStatusEvent = new(4103, "RepoAppAuthorizationStatus");
+
     private const string CookieName = "__Host-agentweaver-repo-app-auth";
     private const string CredentialStatusSignedIn = "signed-in";
     private const string CredentialStatusRevoked = "revoked";
@@ -167,14 +174,15 @@ public sealed class RepoAppUserAuthorizationService(
         string? requestedReturnRouteKey,
         CancellationToken ct = default)
     {
+        var correlationId = CreateCorrelationId();
         if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
-            return new(RepoAppAuthorizationOutcome.HumanEntraSubjectRequired, null, null, null);
+            return BeginResult(RepoAppAuthorizationOutcome.HumanEntraSubjectRequired, correlationId);
         if (!TryConsumeRateLimit(caller.EntraObjectId!))
-            return new(RepoAppAuthorizationOutcome.RateLimited, null, null, null);
+            return BeginResult(RepoAppAuthorizationOutcome.RateLimited, correlationId);
         if (string.IsNullOrWhiteSpace(_clientId) ||
             string.IsNullOrWhiteSpace(_clientSecret) ||
             string.IsNullOrWhiteSpace(_callbackUrl))
-            return new(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, null, null, null);
+            return BeginResult(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, correlationId);
         var returnPath = NormalizeReturnPath(requestedReturnRouteKey, ReturnRoutes["settings"]);
 
         var state = CreateRandomValue();
@@ -206,11 +214,11 @@ public sealed class RepoAppUserAuthorizationService(
         catch
         {
             await WriteTombstoneAsync(verifierReference, ct).ConfigureAwait(false);
-            return new(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, null, null, null);
+            return BeginResult(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, transactionId);
         }
 
         var authorizeUrl = BuildAuthorizationUrl(state, verifier);
-        return new(RepoAppAuthorizationOutcome.Success, authorizeUrl, transactionId, expiresAt)
+        return BeginResult(RepoAppAuthorizationOutcome.Success, transactionId, authorizeUrl, transactionId, expiresAt) with
         {
             CallbackCookie = callbackCookie,
         };
@@ -226,9 +234,17 @@ public sealed class RepoAppUserAuthorizationService(
     {
         const string defaultRoute = "settings";
         if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
-            return new(RepoAppAuthorizationOutcome.HumanEntraSubjectRequired, defaultRoute);
+            return CallbackResult(
+                RepoAppAuthorizationOutcome.HumanEntraSubjectRequired,
+                defaultRoute,
+                "api",
+                CreateCorrelationId());
         if (string.IsNullOrWhiteSpace(state))
-            return new(RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid, defaultRoute);
+            return CallbackResult(
+                RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid,
+                defaultRoute,
+                "api",
+                CreateCorrelationId());
 
         var transaction = await persistence.GetRepoAppAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
         if (transaction is null ||
@@ -238,24 +254,31 @@ public sealed class RepoAppUserAuthorizationService(
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > transaction.ExpiresAtUnixMilliseconds ||
             string.IsNullOrWhiteSpace(callbackCookie) ||
             !FixedTimeCookieHashEquals(transaction.CallbackCookieHash, callbackCookie))
-            return new(RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid, transaction?.ReturnRouteKey ?? defaultRoute);
+            return CallbackResult(
+                RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid,
+                transaction?.ReturnRouteKey ?? defaultRoute,
+                "api",
+                transaction?.ExternalTransactionId ?? CreateCorrelationId());
 
         var claimed = await persistence.ClaimAuthorizationAsync(state, caller.EntraObjectId!, DateTimeOffset.UtcNow, ct)
             .ConfigureAwait(false);
         if (claimed != AuthorizationClaimResult.Claimed)
-            return new(
+            return CallbackResult(
                 claimed == AuthorizationClaimResult.Consumed
                     ? RepoAppAuthorizationOutcome.AuthorizationTransactionConsumed
                     : RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid,
-                transaction.ReturnRouteKey);
+                transaction.ReturnRouteKey,
+                "api",
+                transaction.ExternalTransactionId);
 
-        return await CompleteClaimedAsync(transaction, caller.EntraObjectId!, code, ct).ConfigureAwait(false);
+        return await CompleteClaimedAsync(transaction, caller.EntraObjectId!, code, "api", ct).ConfigureAwait(false);
     }
 
     private async Task<RepoAppAuthorizationCallbackResult> CompleteClaimedAsync(
         RepoAppAuthorizationTransaction transaction,
         string entraObjectId,
         string? code,
+        string callbackKind,
         CancellationToken ct)
     {
         string? credentialReference = null;
@@ -265,14 +288,22 @@ public sealed class RepoAppUserAuthorizationService(
             if (string.IsNullOrWhiteSpace(code))
             {
                 await CompleteFailureAsync(transaction, entraObjectId, ct).ConfigureAwait(false);
-                return new(RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid, transaction.ReturnRouteKey);
+                return CallbackResult(
+                    RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid,
+                    transaction.ReturnRouteKey,
+                    callbackKind,
+                    transaction.ExternalTransactionId);
             }
 
             var verifierResult = await secretStore.GetSecretAsync(transaction.PkceVerifierProtected, ct).ConfigureAwait(false);
             if (!verifierResult.Found || string.IsNullOrWhiteSpace(verifierResult.Value))
             {
                 await CompleteFailureAsync(transaction, entraObjectId, ct).ConfigureAwait(false);
-                return new(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, transaction.ReturnRouteKey);
+                return CallbackResult(
+                    RepoAppAuthorizationOutcome.GitHubBindingUnavailable,
+                    transaction.ReturnRouteKey,
+                    callbackKind,
+                    transaction.ExternalTransactionId);
             }
 
             var credential = await ExchangeCodeAsync(code, verifierResult.Value, ct).ConfigureAwait(false);
@@ -280,7 +311,11 @@ public sealed class RepoAppUserAuthorizationService(
             if (credential is null)
             {
                 await CompleteFailureAsync(transaction, entraObjectId, ct).ConfigureAwait(false);
-                return new(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, transaction.ReturnRouteKey);
+                return CallbackResult(
+                    RepoAppAuthorizationOutcome.GitHubBindingUnavailable,
+                    transaction.ReturnRouteKey,
+                    callbackKind,
+                    transaction.ExternalTransactionId);
             }
 
             var credentialVersion = CreateRandomValue();
@@ -307,17 +342,49 @@ public sealed class RepoAppUserAuthorizationService(
             if (!completion.Completed)
                 throw new InvalidOperationException();
             completionCommitted = true;
+            logger.LogInformation(
+                CredentialPersistenceEvent,
+                "GitHub App authorization lifecycle: app {AppKind}, purpose {Purpose}, phase {Phase}, outcome {Outcome}, correlation {CorrelationId}, credential present {CredentialPresent}, replaced credential present {ReplacedCredentialPresent}",
+                "repo",
+                "interactive_repository",
+                "credential_persistence",
+                "success",
+                transaction.ExternalTransactionId,
+                true,
+                completion.RevokedCredentials.Count > 0);
 
             foreach (var previous in completion.RevokedCredentials)
                 await WriteTombstoneAsync(previous.CredentialReference, ct).ConfigureAwait(false);
-            return new(RepoAppAuthorizationOutcome.Success, transaction.ReturnRouteKey);
+            return CallbackResult(
+                RepoAppAuthorizationOutcome.Success,
+                transaction.ReturnRouteKey,
+                callbackKind,
+                transaction.ExternalTransactionId);
         }
         catch
         {
             if (completionCommitted)
-                return new(RepoAppAuthorizationOutcome.Success, transaction.ReturnRouteKey);
+                return CallbackResult(
+                    RepoAppAuthorizationOutcome.Success,
+                    transaction.ReturnRouteKey,
+                    callbackKind,
+                    transaction.ExternalTransactionId);
+            logger.LogWarning(
+                CredentialPersistenceEvent,
+                "GitHub App authorization lifecycle: app {AppKind}, purpose {Purpose}, phase {Phase}, outcome {Outcome}, correlation {CorrelationId}, credential present {CredentialPresent}, replaced credential present {ReplacedCredentialPresent}",
+                "repo",
+                "interactive_repository",
+                "credential_persistence",
+                ToStateCode(RepoAppAuthorizationOutcome.GitHubBindingUnavailable),
+                transaction.ExternalTransactionId,
+                false,
+                false);
             await FinalizeClaimFailureAsync(transaction, entraObjectId, credentialReference).ConfigureAwait(false);
-            return new(RepoAppAuthorizationOutcome.GitHubBindingUnavailable, transaction.ReturnRouteKey);
+            return CallbackResult(
+                RepoAppAuthorizationOutcome.GitHubBindingUnavailable,
+                transaction.ReturnRouteKey,
+                callbackKind,
+                transaction.ExternalTransactionId);
         }
     }
 
@@ -335,7 +402,11 @@ public sealed class RepoAppUserAuthorizationService(
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(state))
-            return new(RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid, "settings");
+            return CallbackResult(
+                RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid,
+                "settings",
+                "browser",
+                CreateCorrelationId());
 
         var transaction = await persistence.GetRepoAppAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
         if (transaction is null ||
@@ -347,18 +418,29 @@ public sealed class RepoAppUserAuthorizationService(
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > transaction.ExpiresAtUnixMilliseconds ||
             string.IsNullOrWhiteSpace(callbackCookie) ||
             !FixedTimeCookieHashEquals(transaction.CallbackCookieHash, callbackCookie))
-            return new(RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid, "settings");
+            return CallbackResult(
+                RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid,
+                "settings",
+                "browser",
+                transaction?.ExternalTransactionId ?? CreateCorrelationId());
 
         var claimed = await persistence.ClaimAuthorizationAsync(
             transaction.State, transaction.EntraObjectId, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         if (claimed != AuthorizationClaimResult.Claimed)
-            return new(
+            return CallbackResult(
                 claimed == AuthorizationClaimResult.Consumed
                     ? RepoAppAuthorizationOutcome.AuthorizationTransactionConsumed
                     : RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid,
-                transaction.ReturnRouteKey);
+                transaction.ReturnRouteKey,
+                "browser",
+                transaction.ExternalTransactionId);
 
-        return await CompleteClaimedAsync(transaction, transaction.EntraObjectId, code, ct).ConfigureAwait(false);
+        return await CompleteClaimedAsync(
+            transaction,
+            transaction.EntraObjectId,
+            code,
+            "browser",
+            ct).ConfigureAwait(false);
     }
 
     public async Task<RepoAppAuthorizationPollResult> PollAsync(
@@ -368,15 +450,35 @@ public sealed class RepoAppUserAuthorizationService(
         CancellationToken ct = default)
     {
         if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
-            return new(RepoAppAuthorizationOutcome.HumanEntraSubjectRequired, null);
+        {
+            var deniedResult = new RepoAppAuthorizationPollResult(
+                RepoAppAuthorizationOutcome.HumanEntraSubjectRequired,
+                null);
+            LogStatus(deniedResult.Outcome, deniedResult.Status, connected: null, correlationId: CreateCorrelationId());
+            return deniedResult;
+        }
         if (!TryConsumeRateLimit(caller.EntraObjectId!))
-            return new(RepoAppAuthorizationOutcome.RateLimited, null);
+        {
+            var rateLimitedResult = new RepoAppAuthorizationPollResult(RepoAppAuthorizationOutcome.RateLimited, null);
+            LogStatus(
+                rateLimitedResult.Outcome,
+                rateLimitedResult.Status,
+                connected: null,
+                correlationId: CreateCorrelationId());
+            return rateLimitedResult;
+        }
 
         var transaction = await persistence.GetAuthorizationTransactionAsync(
             transactionId, GitHubAppKind.Repo, caller.EntraObjectId!, ct).ConfigureAwait(false);
-        return transaction is null
+        RepoAppAuthorizationPollResult result = transaction is null
             ? new(RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid, null)
             : new(RepoAppAuthorizationOutcome.Success, ToPublicStatus(transaction.Status));
+        LogStatus(
+            result.Outcome,
+            result.Status,
+            connected: null,
+            transaction?.TransactionId ?? CreateCorrelationId());
+        return result;
     }
 
     public async Task<RepoAppAuthorizationOutcome> RefreshAsync(
@@ -441,28 +543,28 @@ public sealed class RepoAppUserAuthorizationService(
         CancellationToken ct = default)
     {
         if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
-            return new(RepoAppAuthorizationOutcome.HumanEntraSubjectRequired, false, null);
+            return ConnectionResult(RepoAppAuthorizationOutcome.HumanEntraSubjectRequired, false);
 
         var reference = await persistence.GetActiveRepoAppCredentialAsync(caller.EntraObjectId!, ct).ConfigureAwait(false);
         if (reference is null)
-            return new(RepoAppAuthorizationOutcome.Success, false, null);
+            return ConnectionResult(RepoAppAuthorizationOutcome.Success, false);
 
         var secret = await secretStore.GetSecretAsync(reference.CredentialReference, ct).ConfigureAwait(false);
         var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
         if (credential is null || credential.Status != CredentialStatusSignedIn || string.IsNullOrWhiteSpace(credential.AccessToken))
-            return new(RepoAppAuthorizationOutcome.Success, false, null);
+            return ConnectionResult(RepoAppAuthorizationOutcome.Success, false);
 
         var login = IsGitHubLogin(credential.GitHubLogin)
             ? credential.GitHubLogin
             : await GetGitHubLoginAsync(credential.AccessToken, ct).ConfigureAwait(false);
         if (!IsGitHubLogin(login))
-            return new(RepoAppAuthorizationOutcome.Success, false, null);
+            return ConnectionResult(RepoAppAuthorizationOutcome.Success, false);
 
         if (!string.Equals(credential.GitHubLogin, login, StringComparison.Ordinal))
             await TryPersistGitHubLoginAsync(reference.CredentialReference, secret.ETag, credential, login!, ct)
                 .ConfigureAwait(false);
 
-        return new(RepoAppAuthorizationOutcome.Success, true, login);
+        return ConnectionResult(RepoAppAuthorizationOutcome.Success, true, login);
     }
 
     public async Task<RepoAppAuthorizationOutcome> RevokeAsync(
@@ -521,6 +623,68 @@ public sealed class RepoAppUserAuthorizationService(
 
     private static string AppendQuery(string path, string key, string value) =>
         $"{path}{(path.Contains('?') ? '&' : '?')}{key}={Uri.EscapeDataString(value)}";
+
+    private RepoAppAuthorizationBeginResult BeginResult(
+        RepoAppAuthorizationOutcome outcome,
+        string correlationId,
+        string? authorizationUrl = null,
+        string? transactionId = null,
+        DateTimeOffset? expiresAt = null)
+    {
+        logger.LogInformation(
+            AuthorizationBeginEvent,
+            "GitHub App authorization lifecycle: app {AppKind}, purpose {Purpose}, phase {Phase}, outcome {Outcome}, correlation {CorrelationId}",
+            "repo",
+            "interactive_repository",
+            "begin",
+            ToStateCode(outcome),
+            correlationId);
+        return new(outcome, authorizationUrl, transactionId, expiresAt);
+    }
+
+    private RepoAppAuthorizationCallbackResult CallbackResult(
+        RepoAppAuthorizationOutcome outcome,
+        string returnPath,
+        string callbackKind,
+        string correlationId)
+    {
+        logger.LogInformation(
+            AuthorizationCallbackEvent,
+            "GitHub App authorization lifecycle: app {AppKind}, purpose {Purpose}, phase {Phase}, outcome {Outcome}, correlation {CorrelationId}",
+            "repo",
+            "interactive_repository",
+            callbackKind == "browser" ? "browser_callback" : "api_callback",
+            ToStateCode(outcome),
+            correlationId);
+        return new(outcome, returnPath);
+    }
+
+    private RepoAppConnectionResult ConnectionResult(
+        RepoAppAuthorizationOutcome outcome,
+        bool connected,
+        string? login = null)
+    {
+        LogStatus(outcome, status: null, connected, correlationId: CreateCorrelationId());
+        return new(outcome, connected, login);
+    }
+
+    private void LogStatus(
+        RepoAppAuthorizationOutcome outcome,
+        string? status,
+        bool? connected,
+        string correlationId) =>
+        logger.LogInformation(
+            AuthorizationStatusEvent,
+            "GitHub App authorization lifecycle: app {AppKind}, purpose {Purpose}, phase {Phase}, outcome {Outcome}, correlation {CorrelationId}, status present {StatusPresent}, connected {Connected}",
+            "repo",
+            "interactive_repository",
+            "status",
+            ToStateCode(outcome),
+            correlationId,
+            status is not null,
+            connected);
+
+    private static string CreateCorrelationId() => Guid.NewGuid().ToString("N");
 
     private string BuildMcpHandoffUrl(string transactionId) =>
         CallbackBaseUrl() + "/auth/github/repo-app/handoff/" + Uri.EscapeDataString(transactionId);

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Git;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
@@ -17,17 +18,20 @@ public sealed class ProjectService
     private readonly IProjectStore _store;
     private readonly IProjectWorkspaceProvider _workspace;
     private readonly ProjectGitInitializer _gitInit;
+    private readonly GitHubConnectionsPersistenceStore _githubConnections;
     private readonly ILogger<ProjectService> _logger;
 
     public ProjectService(
         IProjectStore store,
         IProjectWorkspaceProvider workspace,
         ProjectGitInitializer gitInit,
+        GitHubConnectionsPersistenceStore githubConnections,
         ILogger<ProjectService> logger)
     {
         _store = store;
         _workspace = workspace;
         _gitInit = gitInit;
+        _githubConnections = githubConnections;
         _logger = logger;
     }
 
@@ -215,7 +219,10 @@ public sealed class ProjectService
         _gitInit.PushToNewRemote(project.WorkingDirectory, cloneUrl, project.DefaultBranch, accessToken);
         var now = DateTimeOffset.UtcNow;
         var origin = ProjectOrigin.FromGitHub(fullName);
-        await _store.UpdateOriginAsync(id, origin, now, ct).ConfigureAwait(false);
+        await _githubConnections.CompleteRepositoryAttachmentAsync(
+            id.ToString(),
+            token => _store.UpdateOriginAsync(id, origin, now, token),
+            ct).ConfigureAwait(false);
         return project with { Origin = origin, UpdatedAt = now };
     }
 

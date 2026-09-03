@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Claims;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
 using FluentAssertions;
@@ -24,8 +25,10 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
 
         (await service.BeginAsync(Human("member"), HumanPrincipal()))
             .Outcome.Should().Be(PlatformDefaultCopilotBindingOutcome.PlatformAdminRequired);
+        (await service.BeginAsync(Admin("admin"), HumanPrincipal()))
+            .Outcome.Should().Be(PlatformDefaultCopilotBindingOutcome.HumanEntraSubjectRequired);
 
-        var begin = await service.BeginAsync(Admin("admin"), HumanPrincipal());
+        var begin = await service.BeginAsync(Admin("admin"), HumanPrincipal(), AdminSession("admin").Id);
         begin.Outcome.Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
         var stored = await db.GitHubAuthorizations.SingleAsync();
         stored.ProjectId.Should().BeNull();
@@ -42,10 +45,11 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
         await using var db = await OpenDatabaseAsync();
         var httpClientFactory = new StubHttpClientFactory("""{"access_token":"ghu_platform","refresh_token":"refresh-secret"}""");
         var service = CreateService(db, new InMemorySecretStore(), httpClientFactory: httpClientFactory);
-        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal());
+        var session = AdminSession("platform-admin");
+        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal(), session.Id);
         var state = Query(begin.AuthorizationUrl!, "state");
 
-        (await service.CompleteBrowserCallbackAsync(null, null, state, "code", begin.CallbackCookie))
+        (await service.CompleteBrowserCallbackAsync(session, state, "code", begin.CallbackCookie))
             .Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
         httpClientFactory.LastTokenRequestForm.Should().NotBeNull();
         httpClientFactory.LastTokenRequestForm!["redirect_uri"].Should().Be(ConfiguredCallbackUrl);
@@ -59,13 +63,44 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
     }
 
     [Fact]
+    public async Task CompleteBrowserCallback_RequiresAuthenticatedMatchingPlatformAdmin()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var service = CreateService(db, new InMemorySecretStore(), """{"access_token":"ghu_platform"}""");
+        var session = AdminSession("platform-admin");
+        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal(), session.Id);
+        var state = Query(begin.AuthorizationUrl!, "state");
+
+        (await service.CompleteBrowserCallbackAsync(null, state, "code", begin.CallbackCookie))
+            .Should().Be(PlatformDefaultCopilotBindingOutcome.HumanEntraSubjectRequired);
+        (await service.CompleteBrowserCallbackAsync(AdminSession("other-admin"), state, "code", begin.CallbackCookie))
+            .Should().Be(PlatformDefaultCopilotBindingOutcome.AuthorizationTransactionInvalid);
+        (await service.CompleteBrowserCallbackAsync(
+            new BrowserEntraSession
+            {
+                Id = session.Id,
+                EntraObjectId = session.EntraObjectId,
+                PlatformRoles = PlatformRoles.Contributor,
+                ExpiresAt = session.ExpiresAt,
+            },
+            state,
+            "code",
+            begin.CallbackCookie)).Should().Be(PlatformDefaultCopilotBindingOutcome.PlatformAdminRequired);
+
+        db.PlatformDefaultCopilotBindings.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ConnectionStatus_ReturnsVerifiedGitHubLoginWithoutCredentialMaterial()
     {
         await using var db = await OpenDatabaseAsync();
         var service = CreateService(db, new InMemorySecretStore(), """{"access_token":"ghu_platform","refresh_token":"refresh-secret"}""");
-        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal());
+        var begin = await service.BeginAsync(
+            Admin("platform-admin"),
+            HumanPrincipal(),
+            AdminSession("platform-admin").Id);
 
-        (await service.CompleteBrowserCallbackAsync(null, null, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+        (await service.CompleteBrowserCallbackAsync(AdminSession("platform-admin"), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
             .Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
 
         var connection = await service.GetConnectionAsync(Admin("platform-admin"), HumanPrincipal());
@@ -158,9 +193,12 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
         });
         await secrets.SetSecretAsync("copilot-app-platform-default-old", """{"access_token":"ghu_old","refresh_token":"refresh-old","status":"signed-in","github_login":"old-login"}""");
         var service = CreateService(db, secrets, """{"access_token":"ghu_platform","refresh_token":"refresh-secret"}""");
-        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal());
+        var begin = await service.BeginAsync(
+            Admin("platform-admin"),
+            HumanPrincipal(),
+            AdminSession("platform-admin").Id);
 
-        (await service.CompleteBrowserCallbackAsync(null, null, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+        (await service.CompleteBrowserCallbackAsync(AdminSession("platform-admin"), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
             .Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
 
         db.ChangeTracker.Clear();
@@ -187,9 +225,12 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
         });
         await secrets.SetSecretAsync("copilot-app-platform-default-old", """{"Status":"signed-in","AccessToken":"ghu_old","RefreshToken":"refresh-old","GitHubLogin":"octocat"}""");
         var service = CreateService(db, secrets, httpClientFactory: httpClientFactory);
-        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal());
+        var begin = await service.BeginAsync(
+            Admin("platform-admin"),
+            HumanPrincipal(),
+            AdminSession("platform-admin").Id);
 
-        (await service.CompleteBrowserCallbackAsync(null, null, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+        (await service.CompleteBrowserCallbackAsync(AdminSession("platform-admin"), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
             .Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
 
         httpClientFactory.ProviderGrantRevocations.Should().Be(1);
@@ -214,9 +255,12 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
         });
         await secrets.SetSecretAsync("copilot-app-platform-default-old", """{"Status":"signed-in","AccessToken":"ghu_same","RefreshToken":"refresh-old","GitHubLogin":"octocat"}""");
         var service = CreateService(db, secrets, httpClientFactory: httpClientFactory);
-        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal());
+        var begin = await service.BeginAsync(
+            Admin("platform-admin"),
+            HumanPrincipal(),
+            AdminSession("platform-admin").Id);
 
-        (await service.CompleteBrowserCallbackAsync(null, null, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+        (await service.CompleteBrowserCallbackAsync(AdminSession("platform-admin"), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
             .Should().Be(PlatformDefaultCopilotBindingOutcome.Success);
 
         httpClientFactory.ProviderGrantRevocations.Should().Be(0);
@@ -255,6 +299,13 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
     private static CallerContext Human(string id) => new() { User = id, EntraObjectId = id };
     private static CallerContext Admin(string id) => new() { User = id, EntraObjectId = id, PlatformRoles = [PlatformRoles.PlatformAdmin] };
     private static ClaimsPrincipal HumanPrincipal() => new(new ClaimsIdentity([new Claim("oid", "user")], "test"));
+    private static BrowserEntraSession AdminSession(string id) => new()
+    {
+        Id = $"session-{id}",
+        EntraObjectId = id,
+        PlatformRoles = PlatformRoles.PlatformAdmin,
+        ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+    };
 
     private static async Task<MemoryDbContext> OpenDatabaseAsync()
     {

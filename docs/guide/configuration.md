@@ -213,6 +213,14 @@ flows: the project-scoped flow and the deployment-wide **platform-default
 Copilot** flow used when no BYOK provider is saved. The MCP browser handoff is
 an entry point into the project-scoped flow, not a third completion flow.
 
+Both flows persist a durable Copilot binding in Agentweaver's credential store. Runs do not use
+an ambient browser user's GitHub token, and the permission-free Copilot App does not require a
+GitHub App installation or repository-selection screen. A project binding is project-scoped; if
+no project binding exists, the active platform provider supplies both interactive and unattended
+AI access. An active BYOK provider is valid for both modes and does not require Copilot
+authorization. Platform-default Copilot consent applies to every inheriting user, project, and
+background run, but grants no repository access.
+
 ```
 https://<public-host>/auth/github/copilot-app/callback
 ```
