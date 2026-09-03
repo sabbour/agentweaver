@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentweaverClient } from '../lib/client.mjs';
+import { resolveToken } from '../run-persona.mjs';
+
+test('remote API auth accepts only an explicit Agentweaver token source', () => {
+  assert.equal(resolveToken('explicit', { GITHUB_TOKEN: 'github-canary' }), 'explicit');
+  assert.equal(resolveToken(null, { AGENTWEAVER_TOKEN: 'agentweaver', GITHUB_TOKEN: 'github-canary' }), 'agentweaver');
+  assert.equal(resolveToken(null, { GITHUB_TOKEN: 'github-canary', GH_TOKEN: 'gh-canary' }), null);
+});
 
 test('API client accepts an arbitrary HTTPS host and rejects insecure remote transport', () => {
   assert.doesNotThrow(() => new AgentweaverClient({ baseUrl: 'https://example.internal', token: 'x' }));

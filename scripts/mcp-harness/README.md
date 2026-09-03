@@ -40,10 +40,12 @@ There are two entry points:
   automate a one-time browser handoff.
 - Project ownership: `--project-id` / `AGENTWEAVER_SMOKE_PROJECT_ID` requires
   `--project-is-disposable`; the run is archived but that caller-owned project
-  is never deleted. Without an ID, smoke always creates a unique owned project
-  with a remote-safe empty working-directory request and
-  `blueprint-software-development` (override with `--working-directory` /
-  `--blueprint-id`), then deletes only that project in `finally`.
+  is never deleted. Without an ID, local stdio smoke creates a unique owned
+  `origin: "blank"` project with `working_directory: "."`. Remote smoke requires
+  `--working-directory` or `AGENTWEAVER_SMOKE_WORKING_DIRECTORY` naming a path valid
+  inside the deployed provider workspace; never pass a local workstation path.
+  The default blueprint is `blueprint-software-development`, and the harness deletes
+  only its owned project in `finally`.
 
 Stdio example:
 
@@ -55,7 +57,8 @@ HTTP example (against a locally running server; the `/mcp` suffix is required,
 and `$env:AGENTWEAVER_TOKEN` must be a valid OAuth-derived bearer token):
 
 ```powershell
-npm run smoke -- --target http://localhost:5000/mcp --token $env:AGENTWEAVER_TOKEN --project-id <id> --project-is-disposable
+$env:AGENTWEAVER_TOKEN = '<OAuth broker token>'
+npm run smoke -- --target http://localhost:5000/mcp --project-id <id> --project-is-disposable
 ```
 
 From the repository root, the equivalent command is `npm run test:mcp-smoke -- ...`.

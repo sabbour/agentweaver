@@ -61,7 +61,6 @@ around that dynamic drive, in two phases the Harness agent runs in order:
 node scripts/mcp-harness/run-persona.mjs `
   --scenario priya `
   --target http://localhost:5000/mcp `
-  --token $env:AGENTWEAVER_TOKEN `
   --project-id <disposable-project-id> `
   --batch-id mcp-validation-001 `
   --seed priya
@@ -84,7 +83,6 @@ The sub-agent drives the server live and appends the JSONL transcript itself.
 node scripts/mcp-harness/run-persona.mjs `
   --scenario priya `
   --target http://localhost:5000/mcp `
-  --token $env:AGENTWEAVER_TOKEN `
   --transcript scripts/mcp-harness/transcripts/priya-live-<timestamp>.jsonl `
   --dump-evidence scripts/mcp-harness/verdicts/priya-evidence.json `
   --prompt-out scripts/mcp-harness/verdicts/priya-judge-prompt.txt
@@ -162,8 +160,11 @@ a reason to bypass discovery or call a guessed tool.
 - Network targets use the host-agnostic transport rules above; stdio is exempt.
 - `--project-id` requires `--project-is-disposable`. The run is archived, but a
   caller-supplied project is never deleted.
-- Without `--project-id`, smoke creates a uniquely named project with a remote-safe
-  empty working-directory request and the software-development blueprint. It deletes
+- Without `--project-id`, local stdio smoke defaults `working_directory` to `.`.
+  Remote smoke requires `--working-directory` or
+  `AGENTWEAVER_SMOKE_WORKING_DIRECTORY` naming a directory valid in the deployed
+  provider workspace; it never sends a local workstation path to AKS. Creation
+  always sends `origin: "blank"` and the software-development blueprint. It deletes
   only that owned project after archiving the run, on success or failure.
 
 Exit codes for `run-persona.mjs`: `0` means the phase completed (finalize produced

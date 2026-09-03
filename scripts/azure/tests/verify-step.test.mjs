@@ -14,6 +14,8 @@ import {
   httpJson,
   httpDiscoveryJson,
   firstProjectId,
+  certificateValueUsability,
+  verifyOAuthCertificateFamily,
 } from "../steps/40-verify.mjs";
 
 const CFG = Object.freeze({ NAMESPACE: "agentweaver" });
@@ -235,7 +237,15 @@ test("run: verifies configured OAuth certificate families and enabled Key Vault 
     if (joined.includes("OAUTH_SIGNING_CERTIFICATE_NAME")) return { stdout: "oauth-signing-custom", stderr: "", code: 0 };
     if (joined.includes("OAUTH_ENCRYPTION_CERTIFICATE_NAME")) return { stdout: "oauth-encryption-custom", stderr: "", code: 0 };
     if (joined.includes("keyvault certificate show")) return { stdout: "", stderr: "", code: 0 };
-    if (joined.includes("keyvault secret list-versions")) return { stdout: "2", stderr: "", code: 0 };
+    if (joined.includes("keyvault secret list-versions")) return {
+      stdout: JSON.stringify([
+        { id: "https://test.vault.azure.net/secrets/cert/v2", attributes: { enabled: true, created: "2026-01-02T00:00:00Z" } },
+        { id: "https://test.vault.azure.net/secrets/cert/v1", attributes: { enabled: true, created: "2026-01-01T00:00:00Z" } },
+      ]),
+      stderr: "",
+      code: 0,
+    };
+    if (joined.includes("keyvault secret show")) return { stdout: "mock-secret", stderr: "", code: 0 };
     if (joined.includes("secretproviderclasspodstatus")) return { stdout: "spc-1\n", stderr: "", code: 0 };
     if (joined.includes("auth can-i")) return { stdout: "yes", stderr: "", code: 0 };
     if (joined.includes("agentweaver-sandbox")) return { stdout: "", stderr: "", code: 1 };
@@ -255,7 +265,73 @@ test("run: verifies configured OAuth certificate families and enabled Key Vault 
     KEYVAULT_NAME: "test-kv",
     OAUTH_SIGNING_CERTIFICATE_NAME: "oauth-signing-custom",
     OAUTH_ENCRYPTION_CERTIFICATE_NAME: "oauth-encryption-custom",
-  }, { exec: fakeExec(captureImpl), log: noopLog(), env: {}, fetchImpl });
+  }, {
+    exec: fakeExec(captureImpl),
+    log: noopLog(),
+    env: {},
+    fetchImpl,
+    certificateInspector: async () => ({ usable: true, reason: "mock runtime-usable certificate" }),
+  });
   assert.equal(result.ok, true);
-  assert.ok(result.results.some((entry) => entry.message.includes("runtime retains the newest two usable versions")));
+  assert.ok(result.results.some((entry) => entry.message.includes("runtime-usable active/previous version")));
+});
+
+test("verifyOAuthCertificateFamily rejects disabled, expired, and not-yet-valid versions before secret reads", async () => {
+  const calls = [];
+  const now = new Date("2026-09-02T12:00:00Z");
+  const exec = fakeExec((_cmd, args) => {
+    calls.push(args);
+    if (args.includes("list-versions")) return {
+      code: 0,
+      stderr: "",
+      stdout: JSON.stringify([
+        { id: "https://kv/secrets/cert/disabled", attributes: { enabled: false, created: "2026-09-01T00:00:00Z" } },
+        { id: "https://kv/secrets/cert/expired", attributes: { enabled: true, exp: "2026-09-02T11:59:59Z", created: "2026-08-31T00:00:00Z" } },
+        { id: "https://kv/secrets/cert/future", attributes: { enabled: true, nbf: "2026-09-02T12:00:01Z", created: "2026-08-30T00:00:00Z" } },
+      ]),
+    };
+    return { code: 0, stderr: "", stdout: "must-not-be-read" };
+  });
+  const result = await verifyOAuthCertificateFamily({ vaultName: "kv", name: "cert", exec, now });
+  assert.equal(result.usable, 0);
+  assert.match(result.reason, /valid time window/);
+  assert.equal(calls.filter((args) => args.includes("show")).length, 0);
+});
+
+test("verifyOAuthCertificateFamily reports malformed, private-key-less, and undersized mocked versions", async () => {
+  for (const reason of [
+    "malformed certificate encoding",
+    "private-key-less certificate secret",
+    "RSA private key is smaller than 2048 bits",
+  ]) {
+    const exec = fakeExec((_cmd, args) => args.includes("list-versions")
+      ? {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify([
+          { id: "https://kv/secrets/cert/v1", attributes: { enabled: true, created: "2026-09-01T00:00:00Z" } },
+        ]),
+      }
+      : { code: 0, stderr: "", stdout: "secret material is never logged" });
+    const result = await verifyOAuthCertificateFamily({
+      vaultName: "kv",
+      name: "cert",
+      exec,
+      inspectValue: async () => ({ usable: false, reason }),
+    });
+    assert.equal(result.usable, 0);
+    assert.equal(result.reason, reason);
+    assert.doesNotMatch(JSON.stringify(result), /secret material/);
+  }
+});
+
+test("certificateValueUsability rejects malformed and private-key-less values without exposing them", async () => {
+  assert.deepEqual(await certificateValueUsability("not@base64"), {
+    usable: false,
+    reason: "malformed certificate encoding",
+  });
+  assert.deepEqual(await certificateValueUsability("-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----"), {
+    usable: false,
+    reason: "private-key-less certificate secret",
+  });
 });

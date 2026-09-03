@@ -874,7 +874,7 @@ Flow:
    `AUTH_EXPIRED` result** telling the operator to re-run `login` — it never tries to
    re-auth programmatically and never treats an expired session as a product bug.
 5. **The `login` step is the only headful, human-gated part.** Everything after it
-   is unattended, matching how the API harness uses a `gh auth token` bearer without
+   is unattended, matching how the API harness uses an explicitly supplied bearer without
    re-minting it per run.
 
 This mirrors the API harness's bearer-token model (resolve once, reuse) at the

@@ -121,6 +121,7 @@ function commandPreflight(surface, command, environment) {
       authSource: 'none', tlsMode: 'system-default', validationError: error.message,
     };
   }
+
   return {
     ...evidence,
     projectId: option(command, ['--project-id']),
@@ -128,6 +129,22 @@ function commandPreflight(surface, command, environment) {
     cleanupIntent: surface === 'mcp' ? 'surface-owned cleanup policy' : 'surface runner cleanup policy',
     cleanupResult: 'delegated-to-surface',
   };
+}
+
+function requireExplicitRemoteAuth(commands, environment) {
+  for (const { surface, command } of commands) {
+    if (surface !== 'api' && surface !== 'mcp') continue;
+    const explicitTarget = option(command, ['--target', '--base-url']);
+    const target = explicitTarget ?? environment.AGENTWEAVER_BASE_URL ?? null;
+    const remote = surface === 'api' ? Boolean(target) : Boolean(target && target !== 'stdio');
+    const provider = surface === 'api' && option(command, ['--auth-provider']);
+    if (remote && !provider && !option(command, ['--token']) && !environment.AGENTWEAVER_TOKEN) {
+      throw new Error(
+        `${surface} remote flow requires an explicit --token or AGENTWEAVER_TOKEN` +
+        (surface === 'api' ? ' (or an explicitly selected secure auth provider)' : ''),
+      );
+    }
+  }
 }
 
 export function spawnCommand(command, options = {}) {
@@ -161,11 +178,12 @@ export async function runCombined(args, dependencies = {}) {
 
   await makeDir(verdictDir, { recursive: true });
   const childEnvironment = {
-    ...process.env,
+    ...(dependencies.env ?? process.env),
     AGENTWEAVER_BATCH_ID: batchId,
     AGENTWEAVER_SCENARIO_ID: scenarioId,
     AGENTWEAVER_VERDICT_DIR: verdictDir,
   };
+  requireExplicitRemoteAuth(commands, childEnvironment);
   const results = await Promise.all(commands.map(async ({ surface, command }) => {
     const outcome = await run(command, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' });
     return {
@@ -193,9 +211,10 @@ export async function runCombined(args, dependencies = {}) {
     verdictCount: verdicts.length, missingSurfaces,
     preflight: commands.map(({ surface, command }) => commandPreflight(surface, command, childEnvironment)),
   };
+  const safeReport = redact(report);
   await makeDir(path.dirname(reportPathFor(args, verdictDir)), { recursive: true });
-  await save(reportPathFor(args, verdictDir), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  return report;
+  await save(reportPathFor(args, verdictDir), `${JSON.stringify(safeReport, null, 2)}\n`, 'utf8');
+  return safeReport;
 }
 
 function usage() {

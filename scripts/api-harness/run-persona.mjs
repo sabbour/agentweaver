@@ -20,7 +20,7 @@
 //   node run-persona.mjs --scenario generated-artifacts-seam \
 //     --base-url https://agentweaver.example.com
 //
-//   Token resolution order: --token <t>  >  $AGENTWEAVER_TOKEN  >  `gh auth token`.
+//   Token resolution order: --token <t>  >  $AGENTWEAVER_TOKEN.
 //   Base URL: --base-url  >  $AGENTWEAVER_BASE_URL.
 //
 // Exit code 0 = driver drove + captured evidence cleanly (P0 platform-correctness
@@ -32,7 +32,6 @@
 // verdict. That P1 quality verdict is rendered by a separate LLM judge reading the
 // emitted finding JSON (judgeInputs + evidence). The driver never judges quality.
 
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readdir, writeFile } from 'node:fs/promises';
@@ -49,6 +48,7 @@ import { loadPersona } from '../persona-briefs/index.mjs';
 import { adaptApiEvidence } from '../harness-judge/adapters/api.mjs';
 import { judgeEvidence } from '../harness-judge/core.mjs';
 import { networkTargetEvidence, validateNetworkTarget } from '../harness-shared/target-guard.mjs';
+import { redact } from '../harness-shared/redaction.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -89,14 +89,9 @@ function parseArgs(argv) {
   return out;
 }
 
-function resolveToken(explicit) {
+export function resolveToken(explicit, env = process.env) {
   if (explicit) return explicit;
-  if (process.env.AGENTWEAVER_TOKEN) return process.env.AGENTWEAVER_TOKEN;
-  try {
-    return execFileSync('gh', ['auth', 'token'], { encoding: 'utf8' }).trim();
-  } catch {
-    return null;
-  }
+  return env.AGENTWEAVER_TOKEN || null;
 }
 
 function resolveAuthProvider(args) {
@@ -132,12 +127,14 @@ async function main() {
     return 2;
   }
 
+  let validatedTarget;
   try {
-    validateNetworkTarget(baseUrl);
+    validatedTarget = validateNetworkTarget(baseUrl);
   } catch (error) {
     console.error(`error: ${error.message}`);
     return 2;
   }
+  const persistedTarget = `${validatedTarget.origin}${validatedTarget.pathname}`;
 
   let authProvider;
   try {
@@ -148,7 +145,7 @@ async function main() {
   }
   const token = authProvider ? null : resolveToken(args.token);
   if (!authProvider && !token) {
-    console.error('error: no token (pass --token, set $AGENTWEAVER_TOKEN, or run `gh auth login`)');
+    console.error('error: no token (pass --token or set $AGENTWEAVER_TOKEN)');
     return 2;
   }
 
@@ -178,7 +175,7 @@ async function main() {
 
   console.log(`Driving "${scenario.title}"`);
   console.log(`  persona : ${personaTitle}`);
-  console.log(`  target  : ${baseUrl}`);
+  console.log(`  target  : ${persistedTarget}`);
   console.log('  mode    : API-only (no browser), generated-artifact seam validation');
 
   const client = new AgentweaverClient({
@@ -219,11 +216,11 @@ async function main() {
   const finding = {
     schema: 'agentweaver.persona-finding/v2',
     generatedAt: new Date().toISOString(),
-    target: baseUrl,
+    target: persistedTarget,
     preflight: {
       ...networkTargetEvidence(baseUrl, {
         surface: 'api',
-        authSource: authProvider ? `provider:${args.authProvider}` : args.token ? 'cli-token' : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'github-cli',
+        authSource: authProvider ? `provider:${args.authProvider}` : args.token ? 'cli-token' : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none',
       }),
       projectId: evidence.projectId ?? null,
       runId: evidence.runId ?? null,
@@ -299,7 +296,7 @@ async function main() {
     // (required by REQUIRED_JOIN_KEY_FIELDS) without inventing a fake version.
     adapterVersion: sharedPersona?.adapter?.version ?? NO_PERSONA_VERSION_SENTINEL,
     personaCoreVersion: sharedPersona?.version ?? NO_PERSONA_VERSION_SENTINEL,
-    targetRevision: args.targetRevision ?? baseUrl,
+    targetRevision: redact(args.targetRevision ?? persistedTarget),
     runId: result.evidence.runId ?? `harness-${stamp}`,
     timestamp: finding.generatedAt,
     persona: sharedPersona?.name ?? personaTitle,

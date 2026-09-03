@@ -85,7 +85,7 @@ test('buildDispatchPrompt embeds the charter, brief, target and transcript path,
   const prompt = buildDispatchPrompt({
     persona,
     transport: { mode: 'http', target: 'https://mcp.staging.example.test/mcp' },
-    token: 'secret-token',
+    tokenAvailable: true,
     transcriptPath: '/repo/scripts/mcp-harness/transcripts/priya-live-x.jsonl',
     projectId: 'proj-1',
     goal: 'inspect a triage plan and push back twice',
@@ -99,6 +99,7 @@ test('buildDispatchPrompt embeds the charter, brief, target and transcript path,
   assert.match(prompt, /tools\/list/);
   // The token value itself must not be echoed into the dispatch prompt.
   assert.doesNotMatch(prompt, /secret-token/);
+  assert.match(prompt, /AGENTWEAVER_TOKEN/);
 });
 
 test('buildDispatchPrompt tells a stdio driver no token is needed', () => {
@@ -166,6 +167,27 @@ test('parseTranscriptJsonl normalizes turns and tolerates blank lines and bad JS
   assert.equal(turns[1].mcp.rawContent, 'boom');
   assert.equal(turns[1].note, 'pushback: 1');
   assert.equal(turns[1].outcome.ok, false);
+});
+
+test('dispatch and normalized transcript artifacts never contain bearer or query canaries', () => {
+  const canary = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+  const prompt = buildDispatchPrompt({
+    persona: { id: 'priya', name: 'Priya', text: 'brief' },
+    transport: { mode: 'http', target: 'https://example.test/mcp' },
+    tokenAvailable: true,
+    transcriptPath: '/repo/transcript.jsonl',
+  });
+  const parsed = parseTranscriptJsonl(JSON.stringify({
+    turn: 1,
+    thought: `Bearer ${canary}`,
+    request: {
+      tool: 'run_status',
+      arguments: { url: `https://example.test/path?${canary}=${canary}` },
+    },
+    response: { rawContent: `Bearer ${canary}`, error: { token: canary } },
+  }));
+  assert.doesNotMatch(prompt, new RegExp(canary));
+  assert.doesNotMatch(JSON.stringify(parsed), new RegExp(canary));
 });
 
 test('runCapabilityCheck fails closed without a client and runs the contract with one', async () => {

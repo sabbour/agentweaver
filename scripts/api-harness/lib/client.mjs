@@ -3,9 +3,8 @@
 // Every persona scenario drives Agentweaver exclusively through these calls —
 // the same surface a human user's browser talks to. No browser automation.
 //
-// Auth: a bearer token is sent on every /api request, matching apps/Agentweaver.Api/API.md.
-// GitHubLegacy deployments accept a GitHub token from `gh auth token`; Entra deployments
-// require an Entra bearer token supplied through --token or AGENTWEAVER_TOKEN.
+// Auth: an explicitly supplied bearer token is sent on every /api request, matching
+// apps/Agentweaver.Api/API.md. The harness never borrows GitHub CLI credentials.
 
 /**
  * @typedef {Object} ApiCall

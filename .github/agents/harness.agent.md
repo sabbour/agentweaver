@@ -283,7 +283,9 @@ running as an actual Harness agent session:
 
 - No API URL is hardcoded for this agent. Resolve the target base URL in this order: (1) an explicit `--base-url`/`--target` flag or `reproManifest.targetRevision` provided by the caller; (2) the `$AGENTWEAVER_BASE_URL` environment variable in the current shell; (3) look up the live staging ingress hostname via `kubectl get ingress -A` (requires the correct cluster context/subscription to be current).
 - If none of the above resolves a target, stop and ask the requester for the base URL rather than guessing or reusing a stale one from memory/prior runs.
-- Resolve the bearer token in this order: an explicit token if supplied by the caller, else `$AGENTWEAVER_TOKEN`, else `gh auth token`.
+- Require an explicit bearer token from `--token` or `$AGENTWEAVER_TOKEN`. Never
+  borrow `gh auth token`/`GITHUB_TOKEN`, and never put a raw token in a task prompt,
+  command argument, dispatch file, transcript, or process report.
 - Target validation is host-agnostic. `scripts/harness-shared/target-guard.mjs`
   requires an absolute HTTP(S) URL, permits HTTP only for loopback, rejects URL
   credentials and fragments, and always uses normal TLS validation. API bearer
@@ -318,8 +320,8 @@ prompt: |
     build a prototype end to end. (This is the requester's actual ask, lightly
     cleaned up — not a fixed phase list Harness invented.)
   Target base URL: <resolved base URL>
-  Bearer token: <resolved bearer token, or "resolve via gh auth token">
-  TLS: <"-k is fine, this is a staging/localhost target" or "do not pass -k, this is not staging/localhost">
+  Bearer token environment variable: AGENTWEAVER_TOKEN (never include its value)
+  TLS: normal certificate verification is mandatory
   Transcript path: scripts/api-harness/transcripts/oracle-live-<timestamp>.jsonl
   Fetch the live OpenAPI spec yourself via curl "$BASE_URL/openapi/v1.yaml" before
   acting. Drive one turn at a time via your own curl calls, in pursuit of the

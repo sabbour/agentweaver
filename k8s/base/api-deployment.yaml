@@ -28,6 +28,7 @@ spec:
         azure.workload.identity/use: "true"
       annotations:
         secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
+        agentweaver.io/oauth-certificate-config-checksum: "placeholder"
     spec:
       # Assistant-chat-termination fix: operator assistant turns can legitimately run
       # 60-100+s across multiple MCP tool calls. The default 30s terminationGracePeriodSeconds

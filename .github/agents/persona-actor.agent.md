@@ -65,9 +65,10 @@ Each dispatch supplies, in the task prompt:
   lifecycle/phase list. If Harness tells you no further goal was specified
   beyond running this persona, pursue whatever your persona's identity would
   naturally do next against the target, rather than inventing a synthetic goal.
-- The resolved target base URL (`$BASE_URL`) and bearer token (`$BEARER_TOKEN`),
-  stated plainly in the prompt (or an instruction to resolve the token yourself,
-  e.g. via `gh auth token`, if Harness did not resolve one) — you do not resolve
+- The resolved target base URL (`$BASE_URL`) and the name of the environment
+  variable holding the bearer token. Raw token values are never included in task
+  prompts, argv, dispatch files, transcripts, or process reports. Never borrow
+  GitHub CLI credentials. You do not resolve
   target-safety/prod decisions yourself; Harness has already vetted the target
   before dispatching you.
 - TLS uses normal certificate validation. Never bypass certificate verification.
@@ -85,7 +86,7 @@ Each dispatch supplies, in the task prompt:
    says).
 2. Fetch the live OpenAPI surface yourself, first thing:
    ```
-   curl -s [-k] "$BASE_URL/openapi/v1.yaml"
+   curl -s "$BASE_URL/openapi/v1.yaml"
    ```
    Prefer the **YAML** form — it is more compact and token-efficient to read than
    JSON, and is what the spec is served for by default. Only fetch the `.json`
@@ -113,9 +114,9 @@ Each dispatch supplies, in the task prompt:
    b. Issue it for real, with the bearer token on every call except the spec
       fetch:
       ```
-      curl -s -w '\nHTTP_STATUS:%{http_code}\n' [-k] -X <METHOD> \
+      curl -s -w '\nHTTP_STATUS:%{http_code}\n' -X <METHOD> \
         "$BASE_URL<path>" \
-        -H "Authorization: Bearer $BEARER_TOKEN" \
+        -H "Authorization: Bearer $AGENTWEAVER_TOKEN" \
         -H "Content-Type: application/json" \
         [-d '<json body>']
       ```

@@ -8,6 +8,7 @@ import { McpHarnessClient } from '../mcp-client/client.mjs';
 import { assertCapabilitiesCompatible, checkCapabilities, loadCapabilitiesContract } from '../lib/capabilities-contract.mjs';
 import { classifySmokeStatus } from '../lib/smoke-confirm-gate.mjs';
 import { networkTargetEvidence } from '../../harness-shared/target-guard.mjs';
+import { redact } from '../../harness-shared/redaction.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -23,7 +24,7 @@ function resolvedTool(report, capability) {
 }
 
 function resultError(result) {
-  return result.rawContent || result.error?.message || `protocol error ${result.protocolErrorCode ?? 'unknown'}`;
+  return redact(result.rawContent || result.error?.message || `protocol error ${result.protocolErrorCode ?? 'unknown'}`);
 }
 
 async function callStep(client, report, capability, step, arguments_ = {}) {
@@ -32,7 +33,7 @@ async function callStep(client, report, capability, step, arguments_ = {}) {
   try {
     result = await client.callTool(tool, arguments_);
   } catch (error) {
-    throw new Error(`${step} failed (${tool}): ${error.message}`, { cause: error });
+    throw new Error(`${step} failed (${tool}): ${redact(error.message)}`, { cause: error });
   }
   if (result.isError) throw new Error(`${step} failed (${tool}): ${resultError(result)}`);
   return result.structuredContent;
@@ -50,10 +51,23 @@ async function resolveProject(client, report, options) {
     return { id: options.projectId, source: 'provided', owned: false };
   }
 
+  if (options.remote && !options.workingDirectory) {
+    throw new Error(
+      'configuration failed: remote project creation requires --working-directory or ' +
+      'AGENTWEAVER_SMOKE_WORKING_DIRECTORY; use a path valid inside the deployed Agentweaver workspace',
+    );
+  }
+  if (options.remote && (!options.workingDirectory.startsWith('/') || options.workingDirectory.includes('\\'))) {
+    throw new Error(
+      'configuration failed: remote working directory must be an absolute provider path (for example /workspace/smoke); ' +
+      'local Windows paths are never sent to deployed targets',
+    );
+  }
   const name = `${options.projectName ?? 'agentweaver-mcp-smoke'}-${options.uniqueId()}`;
   const created = await callStep(client, report, 'create-project', 'project creation', {
     name,
-    working_directory: options.workingDirectory ?? '',
+    working_directory: options.workingDirectory ?? '.',
+    origin: 'blank',
     blueprint_id: options.blueprintId ?? 'blueprint-software-development',
   });
   const id = projectIdFrom(created);
@@ -93,6 +107,7 @@ export async function runSmoke({
   try {
     project = await resolveProject(client, report, {
       projectId, projectIsDisposable, projectName, workingDirectory, blueprintId, uniqueId,
+      remote: preflight.transport === 'http',
     });
     preflight.projectId = project.id;
     const submit = await callStep(client, report, 'submit-run', 'run submission', {
@@ -174,6 +189,40 @@ export async function runSmoke({
   }
 }
 
+export async function finishSmokeLifecycle({
+  primaryError,
+  client,
+  preflight,
+  preflightOut,
+  mkdirImpl = mkdir,
+  writeFileImpl = writeFile,
+}) {
+  const finalizationErrors = [];
+  try {
+    await mkdirImpl(path.dirname(preflightOut), { recursive: true });
+    await writeFileImpl(preflightOut, `${JSON.stringify(preflight, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch (error) {
+    finalizationErrors.push(new Error(`preflight evidence write failed: ${error.message}`, { cause: error }));
+  } finally {
+    try {
+      await client?.close();
+    } catch (error) {
+      finalizationErrors.push(new Error(`MCP client close failed: ${error.message}`, { cause: error }));
+    }
+  }
+
+  if (primaryError) {
+    if (finalizationErrors.length) {
+      primaryError.finalizationErrors = finalizationErrors.map((error) => error.message);
+    }
+    throw primaryError;
+  }
+  if (finalizationErrors.length === 1) throw finalizationErrors[0];
+  if (finalizationErrors.length > 1) {
+    throw new AggregateError(finalizationErrors, finalizationErrors.map((error) => error.message).join('; '));
+  }
+}
+
 async function main() {
   if (process.argv.includes('--list')) {
     const { listPersonas } = await import('../../persona-briefs/index.mjs');
@@ -184,6 +233,10 @@ async function main() {
 
   const baseUrl = process.env.AGENTWEAVER_BASE_URL?.replace(/\/+$/, '');
   const target = arg('--target') ?? (baseUrl ? `${baseUrl}/mcp` : 'stdio');
+  const token = arg('--token') ?? process.env.AGENTWEAVER_TOKEN;
+  if (target !== 'stdio' && !token) {
+    throw new Error('configuration failed: remote MCP smoke requires --token or AGENTWEAVER_TOKEN');
+  }
   const tokenSource = arg('--token') ? 'cli-token' : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none';
   const preflight = networkTargetEvidence(target, {
     surface: 'mcp',
@@ -198,12 +251,13 @@ async function main() {
   const onCancel = (signal) => { cancelledSignal = signal; };
   process.once('SIGINT', onCancel);
   process.once('SIGTERM', onCancel);
+  let primaryError = null;
   try {
     client = await McpHarnessClient.connect({
       target,
       command: arg('--server-command'),
       args: arg('--server-args') ? JSON.parse(arg('--server-args')) : ['--stdio'],
-      token: arg('--token') ?? process.env.AGENTWEAVER_TOKEN,
+      token,
     });
     const contract = await loadCapabilitiesContract(path.join(ROOT, 'required-capabilities.json'));
     const result = await runSmoke({
@@ -221,12 +275,12 @@ async function main() {
       preflight,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } catch (error) {
+    primaryError = error;
   } finally {
     process.removeListener('SIGINT', onCancel);
     process.removeListener('SIGTERM', onCancel);
-    await mkdir(path.dirname(preflightOut), { recursive: true });
-    await writeFile(preflightOut, `${JSON.stringify(preflight, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await client?.close();
+    await finishSmokeLifecycle({ primaryError, client, preflight, preflightOut });
   }
 }
 

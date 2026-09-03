@@ -256,6 +256,11 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__OAuth__PublicOrigin\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_PUBLIC_ORIGIN\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__OAuth__ForwardedHeaders__TrustedNetworks\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_TRUSTED_PROXY_NETWORKS\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__OAuth__Certificates__SigningName\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_SIGNING_CERTIFICATE_NAME\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(
+    builtYaml,
+    /agentweaver\.io\/oauth-certificate-config-checksum: [a-f0-9]{64}/,
+    "API pod template must roll when OAuth certificate-family configuration changes",
+  );
   assert.match(builtYaml, /name: Auth__CopilotApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: COPILOT_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__RepoApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: REPO_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
   // Post-authorization browser redirect target for both GitHub Apps must reuse the same
@@ -399,6 +404,27 @@ test("runtime config preserves operator-selected OAuth certificate families for 
   assert.equal(literals.OAUTH_SIGNING_CERTIFICATE_NAME, "oauth-signing-rotation");
   assert.equal(literals.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "oauth-encryption-rotation");
   assert.equal(literals.OAUTH_PUBLIC_ORIGIN, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
+});
+
+test("OAuth certificate family checksum changes only when active/previous family configuration changes", () => {
+  const first = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
+  });
+  const unchanged = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
+  });
+  const changed = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing-b",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
+  });
+  assert.equal(first.OAUTH_CERTIFICATE_CONFIG_CHECKSUM, unchanged.OAUTH_CERTIFICATE_CONFIG_CHECKSUM);
+  assert.notEqual(first.OAUTH_CERTIFICATE_CONFIG_CHECKSUM, changed.OAUTH_CERTIFICATE_CONFIG_CHECKSUM);
+  assert.match(first.OAUTH_CERTIFICATE_CONFIG_CHECKSUM, /^[a-f0-9]{64}$/);
 });
 
 test("manifestForFilename() throws a clear error for an unknown filename (fail-fast, no silent partial applies)", () => {

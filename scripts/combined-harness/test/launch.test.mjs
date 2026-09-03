@@ -15,6 +15,27 @@ test('buildCommands replaces shared batch and scenario tokens', () => {
   ]);
 });
 
+test('combined remote API and MCP flows require explicit Agentweaver authentication', async () => {
+  for (const [surface, target] of [
+    ['api', 'https://example.test'],
+    ['mcp', 'https://example.test/mcp'],
+  ]) {
+    await assert.rejects(
+      runCombined({
+        'scenario-id': 'case-1',
+        surfaces: surface,
+        [`${surface}-command`]: JSON.stringify(['node', 'runner.mjs', '--target', target]),
+      }, {
+        env: {},
+        mkdir: async () => {},
+        runCommand: async () => ({ code: 0 }),
+        readVerdicts: () => [],
+      }),
+      /requires an explicit --token or AGENTWEAVER_TOKEN/,
+    );
+  }
+});
+
 test('runs all children independently and aggregates successful sibling verdicts after a failure', async () => {
   const calls = [];
   const writes = [];
@@ -22,6 +43,7 @@ test('runs all children independently and aggregates successful sibling verdicts
     'scenario-id': 'case-1', 'batch-id': 'batch-1', 'verdict-dir': 'test-verdicts',
     'api-command': command('api'), 'ui-command': command('ui'), 'mcp-command': command('mcp'),
   }, {
+    env: { AGENTWEAVER_TOKEN: 'explicit-test-token' },
     mkdir: async () => {},
     writeFile: async (file, content) => writes.push({ file, content }),
     runCommand: async (argv, options) => {
@@ -69,10 +91,33 @@ test('combined report never persists extra child outcome fields', async () => {
     runCommand: async () => ({ code: 0, signal: null, error: null, env: { TOKEN: 'leak' }, stdout: 'leak' }),
     readVerdicts: () => [{ batchId: 'batch-1', scenarioId: 'case-1', surface: 'mcp' }],
   });
+
   const report = JSON.parse(writes[0]);
   assert.equal(report.processes[0].command.at(-1), '[REDACTED]');
   assert.equal('env' in report.processes[0], false);
   assert.equal('stdout' in report.processes[0], false);
   assert.equal(report.preflight[0].surface, 'mcp');
   assert.equal(report.preflight[0].cleanupResult, 'delegated-to-surface');
+});
+
+test('combined report strips query credentials from targets, commands, and process errors', async () => {
+  const canary = 'query-secret-canary';
+  const writes = [];
+  await runCombined({
+    'scenario-id': 'case-1',
+    'batch-id': 'batch-1',
+    'verdict-dir': 'test-verdicts',
+    surfaces: 'mcp',
+    'mcp-command': JSON.stringify([
+      'node', 'runner.mjs', '--target',
+      `https://example.test/mcp?${canary}=${canary}#${canary}`,
+    ]),
+  }, {
+    mkdir: async () => {},
+    writeFile: async (_file, content) => writes.push(content),
+    env: { AGENTWEAVER_TOKEN: 'explicit-test-token' },
+    runCommand: async () => ({ code: 1, signal: null, error: `failed at https://example.test/mcp?${canary}=${canary}` }),
+    readVerdicts: () => [],
+  });
+  assert.doesNotMatch(writes[0], new RegExp(canary));
 });

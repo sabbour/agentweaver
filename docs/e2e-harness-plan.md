@@ -141,7 +141,7 @@ Full lifecycle: dispatch → build/test gate → review gates → merge → reac
 - **NEVER approve a human-review/preview gate without live-testing the preview URL first (hard rule, added 2026-07-14 after a real incident).** Root cause: on `ForumHubE2E-v1`, the human-review gate was approved 68 seconds after `coordinator.preview_ready` fired, with no HTTP check against `preview_url` in between — a rubber-stamp approval on the event alone. By the time the user tried the URL, the ephemeral preview pod had already been torn down and the URL 404'd/failed DNS. **Fix going forward:** the moment `coordinator.preview_ready` (or equivalent event/API field) appears with a `preview_url`, issue a real `curl`/HTTP GET against that exact URL and confirm a genuine 2xx response with expected page content (not just "port open") *before* calling the review-approve endpoint. Preview pods are ephemeral and torn down soon after run completion/approval — there is no "check it later," only "check it now, before you approve." This applies to every agent driving E2E scenarios (Smith and any future scenario-driver), and to the coordinator itself when auto-approving on the user's behalf.
 
 ```powershell
-$token = gh auth token
+$token = $env:AGENTWEAVER_TOKEN
 $base = "https://agentweaver.6a528e9e153d92000129afcb.westus2.staging.aksapp.io"
 curl.exe -H "Authorization: Bearer $token" "$base/api/projects" -Method POST -Body (@{prompt="..."} | ConvertTo-Json) -ContentType "application/json"
 kubectl logs -n agentweaver <pod> --tail=200

@@ -45,7 +45,7 @@ function mergeParamsIntoEnv(baseEnv, paramsFile) {
  * deploy-from-commit, deploy-from-release) so none of them silently fall back to
  * requiring every variable to be set by hand in the shell.
  */
-async function resolveDeployEnv(rest, { importFn, modules, log }) {
+async function resolveDeployEnv(rest, { importFn, modules, log, findParamsFile = findUserParamsFile }) {
   const { loadParamsFile } = modules.config ?? (await importFn("./lib/config.mjs"));
   const paramsFileIdx = rest.findIndex((a) => a === "--params-file" || a.startsWith("--params-file="));
   let paramsFilePath = null;
@@ -54,7 +54,7 @@ async function resolveDeployEnv(rest, { importFn, modules, log }) {
       ? rest[paramsFileIdx].split("=").slice(1).join("=")
       : rest[paramsFileIdx + 1];
   } else {
-    paramsFilePath = findUserParamsFile();
+    paramsFilePath = findParamsFile();
     if (paramsFilePath) log.info(`[params] Auto-loading ${paramsFilePath}`);
   }
   const paramsFile = loadParamsFile(paramsFilePath);
@@ -105,7 +105,12 @@ Run 'node scripts/azure/cli.mjs <command> --help' for command-specific options.
  * @param {(specifier: string) => Promise<unknown>} [opts.importFn] Injectable dynamic import, for testing.
  */
 export async function run(argv = [], opts = {}) {
-  const { log = logDefault, modules = {}, importFn = (specifier) => import(specifier) } = opts;
+  const {
+    log = logDefault,
+    modules = {},
+    importFn = (specifier) => import(specifier),
+    findParamsFile = findUserParamsFile,
+  } = opts;
 
   const [command, ...rest] = argv;
 
@@ -155,12 +160,13 @@ export async function run(argv = [], opts = {}) {
       log.info(
         mod.HELP_TEXT ??
           "verify -- Post-deploy health verification (port of 40-verify.sh/.ps1)\n\n" +
-            "Usage:\n  node scripts/azure/cli.mjs verify\n",
+            "Usage:\n  node scripts/azure/cli.mjs verify [--params-file <path>]\n",
       );
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const cfg = await resolveVariables();
+    const env = await resolveDeployEnv(rest, { importFn, modules, log, findParamsFile });
+    const cfg = await resolveVariables({ env });
     return mod.run(cfg, { log });
   }
 
@@ -170,7 +176,7 @@ export async function run(argv = [], opts = {}) {
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const env = await resolveDeployEnv(rest, { importFn, modules, log });
+    const env = await resolveDeployEnv(rest, { importFn, modules, log, findParamsFile });
     const cfg = await resolveVariables({ env });
     const allowDirty = rest.includes("--allow-dirty");
     return mod.run(cfg, { log, allowDirty });
@@ -184,7 +190,7 @@ export async function run(argv = [], opts = {}) {
     // Same per-user params.<username>.json auto-load as deploy-from-local -- these
     // subcommands also deploy real infrastructure and previously required every
     // variable (e.g. KEYVAULT_NAME) to be set by hand in the shell.
-    const env = await resolveDeployEnv(rest, { importFn, modules, log });
+    const env = await resolveDeployEnv(rest, { importFn, modules, log, findParamsFile });
     return mod.run({ argv: rest, log, env });
   }
 

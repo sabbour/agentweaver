@@ -4,8 +4,8 @@
 //
 // Post-deploy health verification: pod running counts per tier, Gateway/
 // HTTPRoute programming status, an optional authenticated HTTP feature probe
-// (unauthenticated 401 + authenticated 200s using AGENTWEAVER_VALIDATION_TOKEN
-// / GH_TOKEN, exactly like the legacy scripts), SecretProviderClass sync,
+// (unauthenticated 401 + authenticated 200s using an explicitly supplied
+// AGENTWEAVER_VALIDATION_TOKEN), SecretProviderClass sync,
 // API RBAC can-i checks, sandbox CRDs/resources, and storage prerequisites.
 //
 // Every check is recorded as {ok, message} in `results` and tallied into
@@ -16,11 +16,121 @@
 // whether to exit non-zero.
 //
 // cfg is the resolved variables.mjs output: NAMESPACE. Optional:
-// VALIDATION_TOKEN (falls back to env.AGENTWEAVER_VALIDATION_TOKEN /
-// env.GH_TOKEN, matching the legacy scripts' precedence).
+// VALIDATION_TOKEN (falls back to env.AGENTWEAVER_VALIDATION_TOKEN).
 
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
+import { createPrivateKey, createPublicKey, X509Certificate } from "node:crypto";
+
+function certificatePem(text) {
+  return String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/)?.[0] ?? null;
+}
+
+function timestamp(value) {
+  if (typeof value === "number") return value < 10_000_000_000 ? value * 1000 : value;
+  const parsed = Date.parse(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export async function certificateValueUsability(value, { exec = execDefault, now = new Date() } = {}) {
+  let pem = String(value ?? "").trim();
+  if (!pem) return { usable: false, reason: "empty or private-key-less certificate secret" };
+  if (!pem.includes("-----BEGIN")) {
+    if (!/^[A-Za-z0-9+/=\r\n]+$/.test(pem)) return { usable: false, reason: "malformed certificate encoding" };
+    const pfx = Buffer.from(pem.replace(/\s/g, ""), "base64");
+    if (!pfx.length) return { usable: false, reason: "malformed certificate encoding" };
+    const extracted = await exec.capture(
+      "openssl",
+      ["pkcs12", "-in", "-", "-nodes", "-passin", "pass:"],
+      { input: pfx, allowFailure: true },
+    );
+    if (extracted.code !== 0) return { usable: false, reason: "malformed PKCS#12 certificate secret" };
+    pem = extracted.stdout;
+  }
+
+  const certPem = certificatePem(pem);
+  if (!certPem || !/-----BEGIN (?:RSA )?PRIVATE KEY-----/.test(pem)) {
+    return { usable: false, reason: "private-key-less certificate secret" };
+  }
+  try {
+    const certificate = new X509Certificate(certPem);
+    const privateKey = createPrivateKey(pem);
+    if (privateKey.asymmetricKeyType !== "rsa" || certificate.publicKey.asymmetricKeyType !== "rsa") {
+      return { usable: false, reason: "certificate algorithm is not RSA" };
+    }
+    const privatePublic = createPublicKey(privateKey).export({ type: "spki", format: "der" });
+    const certificatePublic = certificate.publicKey.export({ type: "spki", format: "der" });
+    if (!privatePublic.equals(certificatePublic)) {
+      return { usable: false, reason: "certificate private key does not match its public key" };
+    }
+    const keySize = privateKey.asymmetricKeyDetails?.modulusLength ?? 0;
+    if (keySize < 2048) return { usable: false, reason: "RSA private key is smaller than 2048 bits" };
+    const instant = now.getTime();
+    if (Date.parse(certificate.validFrom) > instant) return { usable: false, reason: "certificate is not yet valid" };
+    if (Date.parse(certificate.validTo) <= instant) return { usable: false, reason: "certificate is expired" };
+    return { usable: true, reason: "usable RSA certificate with private key" };
+  } catch {
+    return { usable: false, reason: "malformed certificate or private-key material" };
+  }
+}
+
+export async function verifyOAuthCertificateFamily({
+  vaultName,
+  name,
+  exec = execDefault,
+  now = new Date(),
+  inspectValue = certificateValueUsability,
+}) {
+  const listed = await exec.capture("az", [
+    "keyvault", "secret", "list-versions",
+    "--vault-name", vaultName,
+    "--name", name,
+    "--output", "json",
+  ], { allowFailure: true });
+  if (listed.code !== 0) return { usable: 0, reason: "certificate versions could not be listed" };
+  let versions;
+  try {
+    versions = JSON.parse(listed.stdout);
+  } catch {
+    return { usable: 0, reason: "certificate version metadata was malformed" };
+  }
+  const instant = now.getTime();
+  const candidates = (Array.isArray(versions) ? versions : [])
+    .filter((version) => version?.attributes?.enabled !== false)
+    .filter((version) => !version?.attributes?.nbf || timestamp(version.attributes.nbf) <= instant)
+    .filter((version) => !version?.attributes?.exp || timestamp(version.attributes.exp) > instant)
+    .sort((a, b) => timestamp(b?.attributes?.created) - timestamp(a?.attributes?.created))
+    .slice(0, 2);
+
+  const failures = [];
+  let usable = 0;
+  for (const version of candidates) {
+    const versionId = String(version?.id ?? "").split("/").at(-1);
+    if (!versionId) {
+      failures.push("version metadata had no version id");
+      continue;
+    }
+    const secret = await exec.capture("az", [
+      "keyvault", "secret", "show",
+      "--vault-name", vaultName,
+      "--name", name,
+      "--version", versionId,
+      "--query", "value",
+      "--output", "tsv",
+    ], { allowFailure: true });
+    if (secret.code !== 0) {
+      failures.push("certificate secret version could not be read");
+      continue;
+    }
+    const inspected = await inspectValue(secret.stdout, { exec, now });
+    if (inspected.usable) usable += 1;
+    else failures.push(inspected.reason);
+  }
+  return {
+    usable,
+    reason: usable ? `${usable} runtime-usable active/previous version(s)` : failures[0] ?? "no enabled version in its valid time window",
+  };
+}
 
 const RUNNING_POD_SELECTORS = [
   { label: "API", selector: "app=agentweaver-api" },
@@ -155,7 +265,13 @@ export function firstProjectId(projectsJson) {
  * @param {Record<string,string>} [opts.env] Defaults to process.env.
  */
 export async function run(cfg, opts = {}) {
-  const { exec = execDefault, log = logDefault, fetchImpl = fetch, env = process.env } = opts;
+  const {
+    exec = execDefault,
+    log = logDefault,
+    fetchImpl = fetch,
+    env = process.env,
+    certificateInspector = certificateValueUsability,
+  } = opts;
   const NAMESPACE = cfg.NAMESPACE;
 
   const results = [];
@@ -275,19 +391,17 @@ export async function run(cfg, opts = {}) {
             ? `OAuth ${usage} certificate '${name}' exists in Key Vault`
             : `OAuth ${usage} certificate '${name}' is missing from Key Vault`,
         );
-        const versions = await exec.capture("az", [
-          "keyvault", "secret", "list-versions",
-          "--vault-name", cfg.KEYVAULT_NAME,
-          "--name", name,
-          "--query", 'length([?attributes.enabled != `false`])',
-          "--output", "tsv",
-        ], { allowFailure: true });
-        const usableVersionCount = Number.parseInt(versions.stdout.trim(), 10);
+        const versions = await verifyOAuthCertificateFamily({
+          vaultName: cfg.KEYVAULT_NAME,
+          name,
+          exec,
+          inspectValue: certificateInspector,
+        });
         record(
-          versions.code === 0 && usableVersionCount >= 1,
-          versions.code === 0 && usableVersionCount >= 1
-            ? `OAuth ${usage} certificate has ${usableVersionCount} enabled version(s); runtime retains the newest two usable versions`
-            : `OAuth ${usage} certificate has no enabled secret version`,
+          versions.usable >= 1,
+          versions.usable >= 1
+            ? `OAuth ${usage} certificate has ${versions.reason}`
+            : `OAuth ${usage} certificate is not runtime-usable: ${versions.reason}`,
         );
       }
     } else {
@@ -343,9 +457,9 @@ export async function run(cfg, opts = {}) {
         : `Unauthenticated /api/projects -> HTTP ${unauthProjectsStatus} (expected 401)`,
     );
 
-    const validationToken = cfg.VALIDATION_TOKEN || env.AGENTWEAVER_VALIDATION_TOKEN || env.GH_TOKEN || "";
+    const validationToken = cfg.VALIDATION_TOKEN || env.AGENTWEAVER_VALIDATION_TOKEN || "";
     if (!validationToken) {
-      info("Set AGENTWEAVER_VALIDATION_TOKEN or GH_TOKEN to validate signed-in identity plus project memory/decision APIs");
+      info("Set AGENTWEAVER_VALIDATION_TOKEN to validate signed-in identity plus project memory/decision APIs");
     } else {
       const authStatus = await httpStatus(`https://${host}/api/auth/github`, { bearerToken: validationToken, fetchImpl });
       const projectsStatus = await httpStatus(`https://${host}/api/projects`, { bearerToken: validationToken, fetchImpl });

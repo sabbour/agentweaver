@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runSmoke } from '../smoke/mcp-cli-smoke.mjs';
+import { finishSmokeLifecycle, runSmoke } from '../smoke/mcp-cli-smoke.mjs';
 
 const tool = (name, required = []) => ({
   name,
@@ -89,11 +89,61 @@ test('runs project creation, submit, poll, artifacts, and cleanup end to end', a
   assert.deepEqual(client.calls[0].arguments, {
     name: 'smoke-unique',
     working_directory: '.',
+    origin: 'blank',
     blueprint_id: 'blueprint-software-development',
   });
   assert.equal(result.preflight.cleanupResult, 'completed');
   assert.equal(result.preflight.projectId, 'project-1');
   assert.equal(result.preflight.runId, 'run-1');
+});
+
+test('local project creation defaults to the current workspace and blank origin', async () => {
+  const client = fakeClient({
+    project_create: { id: 'project-1' },
+    run_submit: { run_id: 'run-1' },
+    run_status: { status: 'completed' },
+    run_show_artifacts: { artifacts: [{}] },
+    run_archive: {},
+    project_delete: {},
+  });
+  await runSmoke({ client, contract, sleepFn: async () => {}, uniqueId: () => 'default' });
+  assert.deepEqual(client.calls[0].arguments, {
+    name: 'agentweaver-mcp-smoke-default',
+    working_directory: '.',
+    origin: 'blank',
+    blueprint_id: 'blueprint-software-development',
+  });
+});
+
+test('remote project creation requires an explicit deployed-workspace directory', async () => {
+  const client = fakeClient({});
+  await assert.rejects(
+    runSmoke({
+      client,
+      contract,
+      preflight: { transport: 'http' },
+      uniqueId: () => 'remote',
+    }),
+    /AGENTWEAVER_SMOKE_WORKING_DIRECTORY/,
+  );
+  assert.equal(client.calls.length, 0);
+});
+
+test('remote project creation rejects local Windows working directories', async () => {
+  for (const workingDirectory of ['C:\\repo\\smoke', '\\\\server\\share', '.']) {
+    const client = fakeClient({});
+    await assert.rejects(
+      runSmoke({
+        client,
+        contract,
+        preflight: { transport: 'http' },
+        workingDirectory,
+        uniqueId: () => 'remote',
+      }),
+      /absolute provider path|Windows paths/,
+    );
+    assert.equal(client.calls.length, 0);
+  }
 });
 
 test('provided project must be explicitly disposable and is archived but never deleted', async () => {
@@ -180,4 +230,48 @@ test('cancellation still archives the run and deletes the owned project', async 
     /smoke cancelled/,
   );
   assert.deepEqual(client.calls.slice(-2).map((call) => call.name), ['run_archive', 'project_delete']);
+});
+
+test('preflight write failure preserves the primary error and still closes the client', async () => {
+  const primary = new Error('primary smoke failure');
+  let closed = false;
+  await assert.rejects(
+    finishSmokeLifecycle({
+      primaryError: primary,
+      client: { close: async () => { closed = true; } },
+      preflight: {},
+      preflightOut: 'unwritable/preflight.json',
+      mkdirImpl: async () => {},
+      writeFileImpl: async () => { throw new Error('read-only artifact directory'); },
+    }),
+    (error) => {
+      assert.equal(error, primary);
+      assert.deepEqual(error.finalizationErrors, [
+        'preflight evidence write failed: read-only artifact directory',
+      ]);
+      return true;
+    },
+  );
+  assert.equal(closed, true);
+});
+
+test('preflight and close failures are surfaced deterministically without losing either', async () => {
+  await assert.rejects(
+    finishSmokeLifecycle({
+      primaryError: null,
+      client: { close: async () => { throw new Error('close exploded'); } },
+      preflight: {},
+      preflightOut: 'unwritable/preflight.json',
+      mkdirImpl: async () => {},
+      writeFileImpl: async () => { throw new Error('write exploded'); },
+    }),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors.map((item) => item.message), [
+        'preflight evidence write failed: write exploded',
+        'MCP client close failed: close exploded',
+      ]);
+      return true;
+    },
+  );
 });

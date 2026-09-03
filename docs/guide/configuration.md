@@ -67,8 +67,12 @@ Azure tooling exposes those names as `OAUTH_SIGNING_CERTIFICATE_NAME` and
 `OAUTH_ENCRYPTION_CERTIFICATE_NAME` in environment/params files and as matching
 `--oauth-*-certificate-name` provisioning flags. Routine rotation creates another
 certificate version under the same name; changing the name migrates to another
-certificate family. `azure:verify` checks the canonical public origin, runtime
-ConfigMap names, Key Vault certificate objects/versions, discovery metadata, resource,
+certificate family. Certificate-family names are hashed into the API pod template, so
+changing either family triggers a rolling restart; unchanged names do not cause a
+certificate-config rollout. `azure:verify` checks the canonical public origin, runtime
+ConfigMap names, and the newest two versions using the same enabled/time-window,
+private-key, encoding, RSA algorithm, and 2048-bit minimum rules as runtime loading,
+without logging certificate material. It also verifies discovery metadata, resource,
 and JWKS.
 
 Anonymous dynamic registration accepts public native clients only. It permits

@@ -6,8 +6,9 @@ request/response evidence, and emit a normalized
 end-to-end validation; use the UI or MCP harness for those surfaces.
 
 Run all commands below from the repository root. The harness requires Node 18 or
-newer. It resolves an access token from `--token`, then `AGENTWEAVER_TOKEN`, then
-`gh auth token`. The GitHub CLI fallback applies only to GitHubLegacy deployments.
+newer. It requires an access token from `--token` or `AGENTWEAVER_TOKEN`, or the
+explicit recorder-session provider. It never borrows `gh auth token` or
+`GITHUB_TOKEN` for a remote target.
 
 ### Token acquisition for staging (Entra Conditional Access)
 
@@ -85,7 +86,6 @@ driving LLM needs to interpret live.
 node scripts/api-harness/run-persona.mjs `
   --scenario generated-artifacts-seam `
   --target https://agentweaver.example.staging.example `
-  --token $env:AGENTWEAVER_TOKEN `
   --batch-id api-validation-001 `
   --seed generated-artifacts-seam `
   --out scripts/api-harness/verdicts/generated-artifacts-seam.json

@@ -35,6 +35,24 @@ test('sanitized preflight evidence records source and transport but never a cred
   });
 });
 
+test('persisted API target evidence strips query names, values, fragments, and userinfo', () => {
+    const evidence = networkTargetEvidence('https://example.test/api/path?credential=canary', {
+      surface: 'api',
+      authSource: 'environment',
+    });
+    assert.equal(evidence.targetOrigin, 'https://example.test');
+    assert.equal(evidence.targetPath, '/api/path');
+    assert.doesNotMatch(JSON.stringify(evidence), /credential|canary/);
+    assert.throws(
+      () => networkTargetEvidence('https://user:secret@example.test/api', { surface: 'api' }),
+      /userinfo/,
+    );
+    assert.throws(
+      () => networkTargetEvidence('https://example.test/api#secret', { surface: 'api' }),
+      /fragment/,
+    );
+});
+
 test('exact path validation rejects path prefixes, suffixes, and trailing slashes', () => {
   assert.equal(validateNetworkTarget('https://example.com/mcp', { exactPath: '/mcp' }).pathname, '/mcp');
   for (const target of [

@@ -22,7 +22,7 @@ export function validateNetworkTarget(target, { exactPath } = {}) {
   try {
     url = new URL(target);
   } catch {
-    throw new Error(`target "${target}" must be an absolute http:// or https:// URL`);
+    throw new Error('target must be an absolute http:// or https:// URL');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error(`target protocol "${url.protocol}" is unsupported; use http:// or https://`);
@@ -59,7 +59,7 @@ export function networkTargetEvidence(target, { surface, authSource = 'none', ex
     surface,
     transport: 'http',
     targetOrigin: url.origin,
-    targetPath: `${url.pathname}${url.search}`,
+    targetPath: url.pathname,
     authSource,
     projectId: null,
     runId: null,

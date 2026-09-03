@@ -3,6 +3,16 @@ const SIGNED_URL = /https?:\/\/[^\s"'\\]+[?&](?:sig|signature|token)=[^\s"'\\]+/
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const GITHUB_TOKEN = /\bgh(?:p|o|u|s|r)_[A-Za-z0-9_]{20,}\b/g;
+const URL_PATTERN = /https?:\/\/[^\s"'\\]+/gi;
+
+function sanitizeUrl(match) {
+  try {
+    const url = new URL(match);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return '[REDACTED_URL]';
+  }
+}
 
 export function redact(value) {
   if (Array.isArray(value)) return value.map(redact);
@@ -14,6 +24,7 @@ export function redact(value) {
   return typeof value === 'string'
     ? value
       .replace(SIGNED_URL, '[REDACTED_SIGNED_URL]')
+      .replace(URL_PATTERN, sanitizeUrl)
       .replace(BEARER, 'Bearer [REDACTED]')
       .replace(JWT, '[REDACTED_JWT]')
       .replace(GITHUB_TOKEN, '[REDACTED_GITHUB_TOKEN]')

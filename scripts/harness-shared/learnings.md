@@ -65,7 +65,8 @@ The Agentweaver MCP server's live HTTP endpoint is at the `/mcp`-suffixed path
 reach the MCP endpoint. The server also requires OAuth: connecting over http
 transport needs a valid, authenticated bearer token (`--token`/`AGENTWEAVER_TOKEN`),
 not an arbitrary string. Obtain one via the app's own OAuth sign-in flow, or
-`gh auth token` where that identity is what the server trusts. Stdio transport has
+an explicit `AGENTWEAVER_TOKEN` where that identity is what the server trusts. Never
+borrow GitHub CLI credentials for a remote target. Stdio transport has
 neither requirement since it never leaves the local subprocess.
 
 ---

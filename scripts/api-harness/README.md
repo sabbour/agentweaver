@@ -23,8 +23,9 @@ The JSON and YAML variants describe the same live route surface. Prefer the YAML
 
 ## Run a persona scenario (dynamic)
 
-`PersonaActor` (dispatched by Harness with a resolved base URL + bearer token + a
-transcript path to write to) drives itself, one real call at a time — there is no
+`PersonaActor` (dispatched by Harness with a resolved base URL + the
+`AGENTWEAVER_TOKEN` variable name + a transcript path to write to) drives itself,
+one real call at a time. Raw tokens never enter prompts or argv — there is no
 scripted command surface to invoke on its behalf. Roughly, inside its own shell:
 
 ```powershell
@@ -32,7 +33,7 @@ curl -s https://agentweaver.example.staging.example/openapi/v1.yaml
 # ...decide the next call from the spec + persona brief + prior real response...
 curl -s -w '\nHTTP_STATUS:%{http_code}\n' -X GET `
   "https://agentweaver.example.staging.example/api/blueprints" `
-  -H "Authorization: Bearer $BEARER_TOKEN"
+  -H "Authorization: Bearer $AGENTWEAVER_TOKEN"
 # ...append the real request+response to the transcript path, then repeat...
 ```
 
@@ -43,7 +44,8 @@ See `.github/agents/persona-actor.agent.md` for the full turn-by-turn contract
 
 ```powershell
 npm test
-node run-persona.mjs --scenario generated-artifacts-seam --target https://agentweaver.example.staging.example --token <token> --batch-id batch-1 --seed seed-1
+$env:AGENTWEAVER_TOKEN = '<explicit Agentweaver token>'
+node run-persona.mjs --scenario generated-artifacts-seam --target https://agentweaver.example.staging.example --batch-id batch-1 --seed seed-1
 ```
 
 `--target` is an alias for the legacy `--base-url`. The default rung is `scoping`; deeper approval driving remains opt-in through scenario configuration.

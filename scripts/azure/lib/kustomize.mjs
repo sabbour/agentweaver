@@ -29,6 +29,7 @@
 //      migration and is out of scope to redesign here.
 
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import path from "node:path";
 
@@ -306,6 +307,11 @@ export function buildRuntimeConfigLiterals(vars) {
   }
 
   const oauthOrigin = isEntra ? entraOrigin : host ? `https://${host}` : "";
+  const signingCertificateName = str(vars.OAUTH_SIGNING_CERTIFICATE_NAME) || "agentweaver-oauth-signing";
+  const encryptionCertificateName = str(vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME) || "agentweaver-oauth-encryption";
+  const oauthCertificateConfigChecksum = createHash("sha256")
+    .update(JSON.stringify({ signingCertificateName, encryptionCertificateName }))
+    .digest("hex");
   return {
     HOST: host,
     PREVIEW_HOSTNAME: str(vars.PREVIEW_HOSTNAME),
@@ -319,8 +325,9 @@ export function buildRuntimeConfigLiterals(vars) {
     AUTH_MODE: authMode,
     OAUTH_PUBLIC_ORIGIN: oauthOrigin,
     OAUTH_TRUSTED_PROXY_NETWORKS: str(vars.OAUTH_TRUSTED_PROXY_NETWORKS),
-    OAUTH_SIGNING_CERTIFICATE_NAME: str(vars.OAUTH_SIGNING_CERTIFICATE_NAME) || "agentweaver-oauth-signing",
-    OAUTH_ENCRYPTION_CERTIFICATE_NAME: str(vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME) || "agentweaver-oauth-encryption",
+    OAUTH_SIGNING_CERTIFICATE_NAME: signingCertificateName,
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: encryptionCertificateName,
+    OAUTH_CERTIFICATE_CONFIG_CHECKSUM: oauthCertificateConfigChecksum,
     ENTRA_CLIENT_ID: str(vars.ENTRA_CLIENT_ID),
     ENTRA_TENANT_ID: str(vars.ENTRA_TENANT_ID),
     ENTRA_ENTERPRISE_APP_OBJECT_ID: str(vars.ENTRA_ENTERPRISE_APP_OBJECT_ID),
