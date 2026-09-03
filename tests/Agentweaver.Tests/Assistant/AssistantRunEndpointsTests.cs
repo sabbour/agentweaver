@@ -204,6 +204,148 @@ public sealed class AssistantRunEndpointsTests
     }
 
     [Fact]
+    public async Task StartRun_AgentHostWithIncidentalProjectCopilotBinding_AndPlatformByokActive_SelectsByok()
+    {
+        // Scope-mismatch regression. Provider SELECTION used to resolve against the incidental
+        // project the caller happened to be viewing, where an active project Copilot binding always
+        // beats platform BYOK — so switching the deployment to BYOK silently changed nothing for
+        // Sessions, and the resulting "GitHub Copilot" label disagreed with the run's own credential
+        // CHECK, which is deliberately platform-scoped. Selection now resolves at platform scope too,
+        // so the deployment-wide BYOK provider wins and no Copilot binding is required at all.
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        var client = AuthedClient(factory);
+        var projectDirectory = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-project-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectDirectory);
+        try
+        {
+            var projectResponse = await client.PostAsJsonAsync("/api/projects", new
+            {
+                name = "Assistant byok with incidental project binding",
+                origin = "blank",
+                working_directory = projectDirectory,
+            });
+            projectResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+            var projectId = (await projectResponse.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("project_id").GetString()!;
+            await SeedProjectCopilotBindingAsync(factory, projectId);
+            await SeedByokProviderConfigurationAsync(factory);
+
+            var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+            {
+                project_id = projectId,
+                message = "Start a BYOK session from inside a project with its own Copilot binding",
+            });
+
+            response.StatusCode.Should().Be(HttpStatusCode.Created,
+                "a platform-scoped BYOK deployment needs no Copilot binding, so an incidental project " +
+                "binding must not drag the session back onto GitHub Copilot");
+            var runId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("run_id").GetString()!;
+
+            var runStore = factory.Services.GetRequiredService<IRunStore>();
+            var run = await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None);
+            run!.ModelSource.Should().Be(ModelSource.Byok,
+                "provider selection must use the same platform scope the credential check uses");
+
+            await using var scope = factory.Services.CreateAsyncScope();
+            var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
+            (await persistence.GetCapabilitySnapshotsAsync(runId, CancellationToken.None))
+                .Should().BeEmpty("a BYOK session never needs a GitHub Copilot capability snapshot");
+        }
+        finally
+        {
+            try { Directory.Delete(projectDirectory, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task SendMessage_ByokSessionWithNoConfigChange_StaysOnByokAcrossTurns()
+    {
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        await SeedByokProviderConfigurationAsync(factory);
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "opening turn" });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "second turn" });
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var run = await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None);
+        run!.ModelSource.Should().Be(ModelSource.Byok,
+            "re-resolving each turn must be a no-op while the resolver's answer is unchanged");
+        factory.Agent.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task SendMessage_PlatformSwitchedToByokBetweenTurns_UsesByokOnTheNextTurn()
+    {
+        // The provider used to be pinned at session-creation time forever: StartRunAsync resolved it
+        // once and no later turn revisited it, so a mid-conversation platform switch only took effect
+        // for brand-new sessions.
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        await SeedPlatformDefaultCopilotBindingAsync(factory);
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "opening turn on Copilot" });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        (await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None))!
+            .ModelSource.Should().Be(ModelSource.GitHubCopilot);
+
+        await SeedByokProviderConfigurationAsync(factory);
+
+        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None))!
+            .ModelSource.Should().Be(ModelSource.Byok,
+                "a platform provider switch must take effect on the next message, not only on a new session");
+    }
+
+    [Fact]
+    public async Task SendMessage_PlatformSwitchedFromByokToCopilotBetweenTurns_CapturesPlatformScopedCredential()
+    {
+        // The mirror direction: a session opened under BYOK that later needs GitHub Copilot must
+        // acquire its capability snapshot from the PLATFORM connection on the very next turn, so the
+        // credential check keeps agreeing with the (re-resolved) provider selection.
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        await SeedByokProviderConfigurationAsync(factory);
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "opening turn on BYOK" });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        await SeedPlatformDefaultCopilotBindingAsync(factory);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            await byok.SetActiveAsync(null, CancellationToken.None);
+        }
+
+        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        (await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None))!
+            .ModelSource.Should().Be(ModelSource.GitHubCopilot);
+
+        await using var assertScope = factory.Services.CreateAsyncScope();
+        var persistence = assertScope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
+        var snapshots = await persistence.GetCapabilitySnapshotsAsync(runId, CancellationToken.None);
+        snapshots.Should().ContainSingle(snapshot =>
+            snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+            snapshot.SourceBindingId == PlatformDefaultCopilotBindingRecord.SingletonId &&
+            snapshot.ProjectId == null,
+            "the re-resolved turn's credential must come from the same platform scope selection used");
+    }
+
+    [Fact]
     public async Task StartRun_AgentHostWithoutProjectAndWithoutPlatformDefault_ReturnsPlatformConnectionRequirement()
     {
         await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
