@@ -99,7 +99,8 @@ public sealed class RemoteOperatorAssistantAgent(
                 new AgentHostLaunchContext(
                     SharedWorkingDirectory: null,
                     Purpose: AgentHostPurpose.OperatorAssistant,
-                    CallerBearerToken: request.CallerBearerToken),
+                    CallerBearerToken: request.CallerBearerToken,
+                    HolderToken: request.PodHolderToken),
                 ct).ConfigureAwait(false);
         }
         catch (ModelProviderConnectionRequiredException)

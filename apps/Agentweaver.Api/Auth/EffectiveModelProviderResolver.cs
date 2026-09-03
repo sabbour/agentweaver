@@ -111,6 +111,34 @@ public abstract record EffectiveModelProviderResult
     {
     }
 
+    /// <summary>
+    /// A stable, comparable fingerprint of WHICH provider this result actually names — provider kind
+    /// plus the binding/configuration identity behind it — for callers that must notice a change
+    /// between two resolutions of the same scope.
+    ///
+    /// <para>
+    /// The two-value <see cref="Agentweaver.Domain.ModelSource"/> label is not sufficient for that:
+    /// switching the active BYOK provider from one configuration to another, or rebinding the
+    /// platform GitHub Copilot connection to a different account, leaves <c>ModelSource</c>
+    /// completely unchanged — so anything that compares only <c>ModelSource</c> concludes "nothing
+    /// changed" and keeps serving from the stale provider. Long-lived interactive sessions, which
+    /// re-resolve their provider on every turn and cache provider-bound state (an already-configured
+    /// AgentHost pod) between turns, must compare this instead.
+    /// </para>
+    ///
+    /// <para>
+    /// Deliberately built from identity fields only, never from credential material.
+    /// </para>
+    /// </summary>
+    public string ProviderIdentity => this switch
+    {
+        Byok byok => $"byok:{byok.ProviderType}:{byok.ProviderId}",
+        ProjectGitHubCopilot project => $"copilot-project:{project.BindingId}:{project.GitHubLogin}",
+        PlatformGitHubCopilot platform => $"copilot-platform:{platform.BindingId}:{platform.GitHubLogin}",
+        Unavailable unavailable => $"unavailable:{unavailable.UnavailableReason}",
+        _ => "unknown",
+    };
+
     /// <summary>The deployment-wide "bring your own key" provider is active.</summary>
     public sealed record Byok(string ProviderId, string ProviderType) : EffectiveModelProviderResult;
 

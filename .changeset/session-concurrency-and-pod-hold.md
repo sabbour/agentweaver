@@ -34,3 +34,29 @@ Held pods are given back by a new, deliberately short `Assistant:PodIdleTimeout`
 skipped while a tool-approval is armed), by conversation dormancy at `IdleTimeout`, and on turn
 failure or cancellation — a compare-and-swap guarantees exactly one release, with
 `AgentHostReaperService` as the existing backstop.
+
+Holding the pod across turns also had to be reconciled with mid-conversation provider changes, which
+it would otherwise have silently defeated. A pod resolves BYOK vs GitHub Copilot and builds its model
+client EXACTLY ONCE, at its one-shot `/configure`; the per-turn refresh rebuilds only the tool set and
+system message. So once a pod was held, repointing the run row at a newly-selected provider changed
+the bookkeeping while the held pod kept serving every turn from the old one. Per-turn re-resolution
+now compares the full provider IDENTITY (provider kind plus binding / configuration id) rather than
+the two-value `ModelSource` enum — which cannot see a swapped BYOK configuration or a rebound Copilot
+account at all — and releases the held pod whenever it really changed, so the next turn cold-starts
+one configured for the provider now in effect. The cost is exactly one cold start on the turn after
+an administrator changed the provider.
+
+Releasing a held pod is now fenced. Claims are named deterministically from the run id while
+everything that decides to release one is process-local, so an API replica whose conversation had
+moved to the other replica could delete a claim that replica was actively serving a turn from. Each
+conversation's owner stamps a holder token on the claim it creates and a release proceeds only while
+that stamp still matches, making it a compare-and-swap rather than an unconditional delete. This is
+deliberately not a distributed lease: the cross-replica `AgentHostReaperService` remains the backstop
+for genuinely orphaned claims.
+
+Finally, a durable `InProgress` assistant run is only ever parked by the owning API pod's in-memory
+sweep, so a pod that restarted first stranded the row as `InProgress` forever and permanently burned
+one of that user's concurrency slots. When (and only when) the bound is about to refuse a start, the
+counted rows are re-examined against the run's last durable event and any silent past
+`Assistant:StaleActiveRunThreshold` (default 90 min) is discounted and CAS-parked, so the repair is
+shared cluster-wide without a new background job.

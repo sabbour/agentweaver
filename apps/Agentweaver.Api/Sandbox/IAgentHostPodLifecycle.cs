@@ -61,9 +61,45 @@ public interface IAgentHostPodLifecycle
     /// when <c>Sandbox:ReleasePodOnSuspend=true</c>.
     /// </summary>
     Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default);
+
+    /// <summary>
+    /// FENCED release: deletes the run's <c>SandboxClaim</c> only while it is still the one stamped
+    /// with <paramref name="holderToken"/> (<see cref="AgentHostLaunchContext.HolderToken"/>).
+    /// Returns <see langword="true"/> when the claim was released (or was already gone), and
+    /// <see langword="false"/> when a DIFFERENT holder now owns it, in which case nothing is deleted.
+    ///
+    /// <para>
+    /// A claim is addressed by a deterministic name derived from the run id, so an owner that has
+    /// since lost the conversation — e.g. an API replica whose process-local pod-hold state went
+    /// stale after the next turn landed on the other replica — would otherwise delete a claim that
+    /// another replica is actively serving a turn from. This is the compare-and-swap that prevents
+    /// it. The unfenced <see cref="ReleaseAgentHostPodAsync"/> remains correct for callers that are
+    /// deliberately reclaiming whatever is there (the cross-replica reaper, turn-scoped failure
+    /// paths that just bound the claim themselves).
+    /// </para>
+    ///
+    /// <para>
+    /// The default implementation falls back to the unfenced release, preserving behaviour for
+    /// lifecycle doubles and non-Kubernetes providers that have no claim to stamp.
+    /// </para>
+    /// </summary>
+    async Task<bool> TryReleaseHeldAgentHostPodAsync(
+        string runId,
+        string holderToken,
+        CancellationToken ct = default)
+    {
+        await ReleaseAgentHostPodAsync(runId, ct).ConfigureAwait(false);
+        return true;
+    }
 }
 
 /// <summary>Run-scoped inputs delivered to the warm AgentHost through <c>POST /configure</c>.</summary>
+/// <param name="HolderToken">
+/// Optional fencing token stamped on the run's <c>SandboxClaim</c> when this launch creates it, so a
+/// later <see cref="IAgentHostPodLifecycle.TryReleaseHeldAgentHostPodAsync"/> can prove the claim it
+/// is about to delete is still the one its caller created, rather than a newer one another API
+/// replica has since put in its place under the same deterministic name.
+/// </param>
 public sealed record AgentHostLaunchContext(
     string? SharedWorkingDirectory,
     string? SourceRepositoryPath = null,
@@ -75,7 +111,8 @@ public sealed record AgentHostLaunchContext(
     string? ScratchRoot = null,
     string? CommitAuthorName = null,
     string? CommitAuthorEmail = null,
-    string? CallerBearerToken = null)
+    string? CallerBearerToken = null,
+    string? HolderToken = null)
 {
     /// <summary>
     /// Whether this launch must resolve its effective model provider at PLATFORM scope

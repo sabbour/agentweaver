@@ -43,6 +43,21 @@ public sealed class AssistantRunOptions
     public TimeSpan SweepInterval { get; set; } = TimeSpan.FromMinutes(1);
 
     /// <summary>
+    /// How long a durable <c>InProgress</c> assistant run may go without a single persisted event
+    /// before the concurrency check stops counting it against its owner and parks it.
+    ///
+    /// <para>
+    /// Only the owning API pod's in-memory sweep ever parks a conversation, so a pod that restarts
+    /// before it gets there strands the durable row as <c>InProgress</c> forever — nothing else
+    /// transitions it, and the AgentHost reaper reclaims the pod without touching run status. Each
+    /// such restart permanently burns one of that user's slots. Comfortably longer than
+    /// <see cref="IdleTimeout"/> so a genuinely live-but-quiet conversation is never mistaken for a
+    /// stranded one: by the time this elapses a healthy owner would already have parked it.
+    /// </para>
+    /// </summary>
+    public TimeSpan StaleActiveRunThreshold { get; set; } = TimeSpan.FromMinutes(90);
+
+    /// <summary>
     /// De-dupe window for <see cref="IAssistantRunService.StartRunAsync"/>. <c>StartRunAsync</c> runs
     /// the opening turn SYNCHRONOUSLY before the HTTP response returns, so a first turn with several
     /// tool calls can outlast a client-side fetch/proxy timeout; if the client then retries with the
@@ -280,6 +295,25 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         // conversation is one row no matter how many replicas have it resident.
         var durableActive = recentRuns.Count(r => r.Status == RunStatus.InProgress);
 
+        // ... but a durable InProgress row only frees its slot when SOMEONE parks it, and the only
+        // thing that parks an assistant conversation is the owning API pod's idle sweep. If that pod
+        // restarts (deploy, OOM, node drain) before it gets there, the row stays InProgress forever:
+        // nothing durable ever transitions it, and AgentHostReaperService reclaims the abandoned pod
+        // and claim without touching run status. Those rows are indistinguishable from live
+        // conversations here, so each restart permanently burns one of the user's slots until they
+        // are all gone and every new conversation is refused.
+        //
+        // So before refusing, re-examine the counted rows against the one replica-independent
+        // activity signal there is (the run's last DURABLE event) and discount any that have been
+        // silent past the staleness threshold, CAS-parking them so the repair is shared cluster-wide
+        // instead of re-derived on every start. Done only on the about-to-refuse path: the happy
+        // path stays exactly as cheap as before, and no new background job is needed.
+        if (durableActive >= _options.MaxConcurrentRunsPerUser)
+        {
+            durableActive = await DiscountStaleActiveRunsAsync(
+                recentRuns.Where(r => r.Status == RunStatus.InProgress), now, ct).ConfigureAwait(false);
+        }
+
         // In-flight starts have no durable row yet (InsertAsync happens below), so the store count
         // alone would let concurrent starts on THIS replica all slip past the bound. Reserve under
         // the same lock the original code used so that race stays closed within a process; across
@@ -390,31 +424,139 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     /// agent-host mode actually needs a redeemable capability and none is available.
     /// </para>
     /// </summary>
-    private async Task<ModelSource> ResolveAssistantModelSourceAsync(CancellationToken ct)
+    private async Task<ModelSource> ResolveAssistantModelSourceAsync(CancellationToken ct) =>
+        ToModelSource(await ResolveAssistantProviderAsync(ct).ConfigureAwait(false));
+
+    /// <summary>
+    /// Returns how many of <paramref name="activeRuns"/> should still count against the caller's
+    /// concurrency bound, excluding any that have been durably silent past
+    /// <see cref="AssistantRunOptions.StaleActiveRunThreshold"/> and CAS-parking those so the repair
+    /// is durable and shared by every replica rather than re-derived on each start.
+    /// </summary>
+    /// <remarks>
+    /// A run whose last activity cannot be determined (no persisted events yet, or an event store
+    /// that cannot answer) is counted, so an unanswerable question can never reclaim a live
+    /// conversation's slot; the failure mode stays "refuses a start it could have allowed", never
+    /// "kills a conversation that was running".
+    /// </remarks>
+    private async Task<int> DiscountStaleActiveRunsAsync(
+        IEnumerable<Run> activeRuns, DateTimeOffset now, CancellationToken ct)
+    {
+        var counted = 0;
+        foreach (var run in activeRuns)
+        {
+            var runId = run.Id.ToString();
+            DateTimeOffset? lastActivity;
+            try
+            {
+                lastActivity = await _eventStream.GetLastEventTimestampAsync(runId, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogDebug(ex,
+                    "Could not read the durable last-activity timestamp for operator run {RunId}; counting it as active.",
+                    runId);
+                counted++;
+                continue;
+            }
+
+            // Fall back to StartedAt: a run that never managed to persist an event is still bounded
+            // by when it began, so a row stranded before its first event self-heals too.
+            var reference = lastActivity ?? run.StartedAt;
+            if (now - reference < _options.StaleActiveRunThreshold)
+            {
+                counted++;
+                continue;
+            }
+
+            // Never reclaim a conversation that is resident and live on THIS replica; its in-memory
+            // activity clock is authoritative and beats any inference from the event log.
+            if (_runs.ContainsKey(runId))
+            {
+                counted++;
+                continue;
+            }
+
+            try
+            {
+                var parked = await _runStore.TryTransitionToIdleAsync(run.Id, ct).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Operator run {RunId} has been durably silent for {QuietMinutes:F0} minutes; " +
+                    "parking it as Idle so its concurrency slot is not stranded (parked: {Parked}). " +
+                    "The conversation stays resumable.",
+                    runId, (now - reference).TotalMinutes, parked);
+
+                // A lost CAS means another replica changed the row concurrently; be conservative and
+                // keep counting it this time round.
+                if (!parked)
+                    counted++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to park durably-stale operator run {RunId}; counting it as active.", runId);
+                counted++;
+            }
+        }
+
+        return counted;
+    }
+
+    /// <summary>Resolves the full effective provider (kind AND binding/configuration identity) for an
+    /// Assistant session at platform scope. See <see cref="ResolveAssistantModelSourceAsync"/> for why
+    /// the scope is deliberately <c>projectId: null</c>.</summary>
+    private async Task<EffectiveModelProviderResult> ResolveAssistantProviderAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var modelProviderResolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
-        var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false);
-        return effectiveProvider is EffectiveModelProviderResult.Byok
-            ? ModelSource.Byok
-            : ModelSource.GitHubCopilot;
+        return await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false);
     }
 
+    private static ModelSource ToModelSource(EffectiveModelProviderResult provider) =>
+        provider is EffectiveModelProviderResult.Byok ? ModelSource.Byok : ModelSource.GitHubCopilot;
+
     /// <summary>
-    /// Re-resolves the effective model provider at the START OF EVERY TURN and repoints the persisted
-    /// run at it when it has changed since the previous turn.
+    /// Re-resolves the effective model provider at the START OF EVERY TURN, repoints the persisted
+    /// run at it when the coarse <see cref="ModelSource"/> changed, and — critically for a
+    /// conversation that HOLDS its AgentHost pod between turns — gives that pod back whenever the
+    /// provider IDENTITY changed, so the next turn rebuilds it against the provider that is actually
+    /// in effect now.
     ///
     /// <para>
-    /// Without this the provider was pinned at session-creation time forever: <c>ModelSource</c> was
-    /// computed once in <see cref="StartRunAsync"/>, and neither <see cref="SendMessageAsync"/> nor
-    /// <see cref="RehydrateRunAsync"/> (which rebuilds state from the stored row) ever revisited it —
-    /// so switching the deployment to BYOK mid-conversation had no visible effect until the user
-    /// started a brand-new session.
+    /// Without the re-resolution the provider was pinned at session-creation time forever:
+    /// <c>ModelSource</c> was computed once in <see cref="StartRunAsync"/>, and neither
+    /// <see cref="SendMessageAsync"/> nor <see cref="RehydrateRunAsync"/> (which rebuilds state from
+    /// the stored row) ever revisited it — so switching the deployment to BYOK mid-conversation had
+    /// no visible effect until the user started a brand-new session.
     /// </para>
     ///
     /// <para>
-    /// A change is applied transparently to the NEXT turn: the conversation keeps its history (which
-    /// is replayed as plain text on every turn and is not provider-specific), and the persisted
+    /// Two things make comparing only the two-value <c>ModelSource</c> insufficient here.
+    /// </para>
+    ///
+    /// <para>
+    /// First, <c>ModelSource</c> cannot see a same-kind provider change at all: switching the active
+    /// BYOK provider from one configuration to another, or rebinding the platform GitHub Copilot
+    /// connection to a different account, leaves it identical, so the run kept being served by the
+    /// stale provider. The comparison is therefore made on
+    /// <see cref="EffectiveModelProviderResult.ProviderIdentity"/> (provider kind + binding /
+    /// configuration id), recorded per conversation on the previous turn.
+    /// </para>
+    ///
+    /// <para>
+    /// Second, a held pod resolves its provider EXACTLY ONCE. <c>CopilotAIAgent.SetupAsync</c> — which
+    /// decides BYOK vs Copilot and builds the SDK client — runs only at the pod's one-shot
+    /// <c>/configure</c>, and the per-turn refresh (<c>CopilotAIAgent.ApplyPerTurnContext</c>) rebuilds
+    /// only the tool set and system message, never the client. So once the pod is held across turns,
+    /// repointing the DB row alone changes nothing about which provider actually serves the AI calls.
+    /// Releasing the held pod here is what makes the switch real: the next turn re-launches, and
+    /// <c>KubernetesSandboxExecutor</c> resolves the provider and configures the fresh pod from
+    /// scratch. The cost is exactly one cold start on the turn after an admin changed the provider.
+    /// </para>
+    ///
+    /// <para>
+    /// A change is otherwise applied transparently: the conversation keeps its history (which is
+    /// replayed as plain text on every turn and is not provider-specific), and the persisted
     /// <c>ModelSource</c> is what the downstream per-turn credential fence reads — including
     /// <c>RemoteOperatorAssistantAgent.EnsureAgentHostCapabilityAsync</c>, which loads the run row
     /// fresh each turn — so selection and validation stay in agreement after the switch too. When the
@@ -422,7 +564,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     /// platform connection fails fast with the "Connect GitHub" CTA rather than deep inside the turn.
     /// </para>
     /// </summary>
-    private async Task ReresolveModelSourceForTurnAsync(string runId, CancellationToken ct)
+    private async Task ReresolveModelSourceForTurnAsync(OperatorRunState state, string runId, CancellationToken ct)
     {
         if (!RunId.TryParse(runId, out var parsedRunId))
             return;
@@ -431,18 +573,41 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         if (run is null)
             return;
 
-        var modelSource = await ResolveAssistantModelSourceAsync(ct).ConfigureAwait(false);
-        if (modelSource == run.ModelSource)
+        var provider = await ResolveAssistantProviderAsync(ct).ConfigureAwait(false);
+        var modelSource = ToModelSource(provider);
+
+        // Null on the conversation's very first turn on this replica (a fresh start, or a rehydration
+        // that has no pod and no cached provider state yet) — there is nothing to compare against and
+        // nothing provider-bound to invalidate, so the identity is simply recorded.
+        var previousIdentity = state.ExchangeModelProviderIdentity(provider.ProviderIdentity);
+        var identityChanged = previousIdentity is not null &&
+            !string.Equals(previousIdentity, provider.ProviderIdentity, StringComparison.Ordinal);
+        var modelSourceChanged = modelSource != run.ModelSource;
+
+        if (!identityChanged && !modelSourceChanged)
             return;
 
         _logger.LogInformation(
-            "Operator run {RunId}: effective model provider changed {Previous} -> {Current} since the last " +
-            "turn; the new provider takes effect for this turn.",
-            runId, run.ModelSource.ToApiString(), modelSource.ToApiString());
+            "Operator run {RunId}: effective model provider changed ({PreviousSource}/{PreviousIdentity} -> " +
+            "{CurrentSource}/{CurrentIdentity}) since the last turn; the new provider takes effect for this turn.",
+            runId,
+            run.ModelSource.ToApiString(),
+            previousIdentity ?? "(none)",
+            modelSource.ToApiString(),
+            provider.ProviderIdentity);
 
-        var repointed = run with { ModelSource = modelSource };
-        await PrepareAgentHostCapabilityAsync(repointed, ct).ConfigureAwait(false);
-        await _runStore.UpdateModelSourceAsync(parsedRunId, modelSource, ct).ConfigureAwait(false);
+        if (modelSourceChanged)
+        {
+            var repointed = run with { ModelSource = modelSource };
+            await PrepareAgentHostCapabilityAsync(repointed, ct).ConfigureAwait(false);
+            await _runStore.UpdateModelSourceAsync(parsedRunId, modelSource, ct).ConfigureAwait(false);
+        }
+
+        // Give the held, provider-bound pod back so this turn cold-starts one configured for the
+        // provider now in effect. The CAS keeps this to exactly one release even if the pod-idle
+        // sweeper fires concurrently.
+        if (identityChanged && state.TryMarkAgentHostPodReleasing())
+            await ReleaseAgentHostPodAsync(state, runId, "model_provider_changed").ConfigureAwait(false);
     }
 
     private async Task PrepareAgentHostCapabilityAsync(Run run, CancellationToken ct)
@@ -537,8 +702,9 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             state.Touch();
 
             // Re-resolve the effective provider for THIS turn (a platform provider switch must take
-            // effect on the next message, not only on a brand-new session).
-            await ReresolveModelSourceForTurnAsync(runId, ct).ConfigureAwait(false);
+            // effect on the next message, not only on a brand-new session) and give back a held pod
+            // that was configured for a provider that is no longer the effective one.
+            await ReresolveModelSourceForTurnAsync(state, runId, ct).ConfigureAwait(false);
 
             var userMessageId = Guid.NewGuid().ToString("N");
             await AppendAsync(runId, EventTypes.AgentMessage, new
@@ -558,7 +724,11 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 ModelId: state.ModelId,
                 AgentDefinition: AgentDefinitionTemplate.Content,
                 CallerBearerToken: callerBearerToken,
-                History: state.HistorySnapshot());
+                History: state.HistorySnapshot(),
+                // Fencing token for this conversation's AgentHost claim (see
+                // OperatorRunState.AgentHostPodHolderToken): stamped on the claim when this replica
+                // creates it, and checked before any later release from this replica deletes it.
+                PodHolderToken: state.AgentHostPodHolderToken);
 
             var assistantMessageId = Guid.NewGuid().ToString("N");
             var sink = new RunEventSink(this, runId, assistantMessageId, ct);
@@ -586,6 +756,16 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                     message = ex.UserMessage,
                     kind = ex.FailureKind.ToString(),
                 }, CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                // A cancelled turn ALSO releases the real pod: RemoteOperatorAssistantAgent gives it
+                // back on its OperationCanceledException path too (rethrowing the cancellation as-is
+                // rather than wrapping it, so it never reaches the handler above). Without mirroring
+                // that here the local flag stayed stuck at "held" for a pod that no longer exists,
+                // and the pod-idle/dormancy sweeps later issued a redundant release for it.
+                state.MarkAgentHostPodReleased();
                 throw;
             }
 
@@ -765,7 +945,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 }
                 else if (state.TryMarkAgentHostPodReleasing())
                 {
-                    _ = ReleaseAgentHostPodAsync(key, "pod_idle_timeout");
+                    _ = ReleaseAgentHostPodAsync(state, key, "pod_idle_timeout");
                 }
             }
 
@@ -794,7 +974,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             // Parking the conversation as dormant also gives its pod back, if the pod-idle sweep
             // above has not already done so.
             if (state.TryMarkAgentHostPodReleasing())
-                _ = ReleaseAgentHostPodAsync(key, "conversation_idle_timeout");
+                _ = ReleaseAgentHostPodAsync(state, key, "conversation_idle_timeout");
 
             _ = CloseIdleRunAsync(key);
         }
@@ -807,8 +987,19 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     /// Kubernetes — local dev and the test host — this is a no-op. Never throws: a failed release is
     /// picked up by <c>AgentHostReaperService</c>, which reaps any claim whose run is no longer
     /// active.
+    ///
+    /// <para>
+    /// FENCED. The claim is a shared cluster object with a deterministic, run-derived name, while
+    /// everything that decides to release it here (the hold flag, the activity clock, the sweep
+    /// timer) is process-local. With two API replicas and no session affinity, a conversation whose
+    /// next turn lands on the other replica gets a brand-new pod under that same name there — and
+    /// this replica, still believing it holds one, would otherwise delete the OTHER replica's live
+    /// claim mid-turn. The release is therefore gated on
+    /// <see cref="OperatorRunState.AgentHostPodHolderToken"/> still matching the token stamped on the
+    /// claim, so it is a no-op once a newer launch has taken it over.
+    /// </para>
     /// </summary>
-    private async Task ReleaseAgentHostPodAsync(string runId, string reason)
+    private async Task ReleaseAgentHostPodAsync(OperatorRunState state, string runId, string reason)
     {
         try
         {
@@ -817,7 +1008,18 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             if (lifecycle is null)
                 return;
 
-            await lifecycle.ReleaseAgentHostPodAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            var released = await lifecycle
+                .TryReleaseHeldAgentHostPodAsync(runId, state.AgentHostPodHolderToken, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (!released)
+            {
+                _logger.LogInformation(
+                    "Skipped releasing the AgentHost pod for operator run {RunId} ({Reason}): the claim is no " +
+                    "longer the one this replica holds — another replica has taken the conversation over.",
+                    runId, reason);
+                return;
+            }
+
             _logger.LogInformation(
                 "Released the held AgentHost pod for operator run {RunId} ({Reason}); the conversation stays resumable.",
                 runId, reason);
@@ -917,6 +1119,40 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
         // 0 = no pod held, 1 = an AgentHost pod is held for this conversation between turns.
         private int _podHeld;
+
+        /// <summary>
+        /// Fencing token for this conversation's AgentHost claim, stamped on the claim when THIS
+        /// replica creates it and re-checked before this replica deletes it.
+        ///
+        /// <para>
+        /// The hold flag above, <see cref="LastActivityUtc"/>, and the whole pod-idle sweep are
+        /// process-local, but the claim they act on is a shared cluster object addressed by a
+        /// DETERMINISTIC name derived from the run id. With two API replicas and no session affinity
+        /// a conversation's next turn can land on the other replica, which correctly cold-starts its
+        /// own pod under that same name — while this replica still believes it holds one. Its idle
+        /// sweep would then delete a claim the OTHER replica is actively using, mid-turn. The token
+        /// makes the release a compare-and-swap: it proceeds only while the claim on the cluster is
+        /// still the one this replica stamped.
+        /// </para>
+        ///
+        /// <para>
+        /// Deliberately NOT a full distributed lease. It is a single generation stamp on the object
+        /// being deleted, which is all "do not delete someone else's newer claim" requires; the
+        /// cross-replica reaper remains the backstop for genuinely orphaned claims.
+        /// </para>
+        /// </summary>
+        public string AgentHostPodHolderToken { get; } = Guid.NewGuid().ToString("N");
+
+        /// <summary>
+        /// The <see cref="EffectiveModelProviderResult.ProviderIdentity"/> observed on this
+        /// conversation's previous turn, so a turn can tell a genuine provider change from a no-op.
+        /// Null until the first turn records one.
+        /// </summary>
+        private string? _modelProviderIdentity;
+
+        /// <summary>Records the identity observed for this turn and returns the previous one.</summary>
+        public string? ExchangeModelProviderIdentity(string identity) =>
+            Interlocked.Exchange(ref _modelProviderIdentity, identity);
 
         /// <summary>Whether this conversation currently holds an AgentHost pod between turns.</summary>
         public bool AgentHostPodHeld => Volatile.Read(ref _podHeld) == 1;

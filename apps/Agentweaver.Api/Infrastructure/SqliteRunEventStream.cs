@@ -194,6 +194,36 @@ public sealed class SqliteRunEventStream : IRunEventStream
         return Task.FromResult(events);
     }
 
+    /// <inheritdoc />
+    public Task<DateTimeOffset?> GetLastEventTimestampAsync(string runId, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT MAX("CreatedAt") FROM "RunEvents" WHERE "RunId" = $runId;
+            """;
+        cmd.Parameters.AddWithValue("$runId", runId);
+
+        var raw = cmd.ExecuteScalar();
+        if (raw is null || raw is DBNull)
+            return Task.FromResult<DateTimeOffset?>(null);
+
+        var parsed = raw switch
+        {
+            DateTime dt => new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
+            string s when DateTime.TryParse(
+                s, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dt)
+                => new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
+            _ => (DateTimeOffset?)null,
+        };
+
+        return Task.FromResult(parsed);
+    }
+
     private static Channel<RunEvent> CreateChannel() =>
         Channel.CreateBounded<RunEvent>(new BoundedChannelOptions(ChannelCapacity)
         {

@@ -1195,10 +1195,114 @@ public sealed class KubernetesSandboxExecutorClaimTests
             "non-preview deployments (null preview service) must keep the original unconditional release");
     }
 
+    private static string ClaimJsonWithHolder(string claimName, string? holderToken)
+    {
+        var annotations = holderToken is null
+            ? string.Empty
+            : ",\"annotations\":{\"" + KubernetesSandboxExecutor.HolderTokenAnnotation + "\":\"" + holderToken + "\"}";
+        return "{\"metadata\":{\"name\":\"" + claimName + "\"" + annotations + "}}";
+    }
+
+    [Fact]
+    public async Task TryReleaseHeldAgentHostPod_refuses_to_delete_a_claim_held_by_another_owner()
+    {
+        // Claims are addressed by a name deterministically derived from the run id, while everything
+        // that decides to release one (an API replica's in-memory pod-hold flag, activity clock and
+        // sweep timer) is process-local. With no session affinity a conversation's next turn can land
+        // on the other replica, which correctly cold-starts its own pod under that SAME name — and
+        // the first replica, still believing it holds one, would delete a claim the other replica is
+        // actively serving a turn from. The stamped holder token makes the release a CAS.
+        const string runId = "run-fenced-release-foreign";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, "owner-on-the-other-replica"));
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+
+        var released = await executor.TryReleaseHeldAgentHostPodAsync(runId, "our-stale-token");
+
+        released.Should().BeFalse("the claim now belongs to a newer owner");
+        fake.Requests.Should().NotContain(
+            r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
+            "deleting another replica's live claim would kill a turn that is in flight");
+    }
+
+    [Fact]
+    public async Task TryReleaseHeldAgentHostPod_deletes_the_claim_it_still_holds()
+    {
+        const string runId = "run-fenced-release-own";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, "still-ours"));
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+
+        var released = await executor.TryReleaseHeldAgentHostPodAsync(runId, "still-ours");
+
+        released.Should().BeTrue();
+        fake.Requests.Should().Contain(
+            r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+    }
+
+    [Fact]
+    public async Task TryReleaseHeldAgentHostPod_still_reclaims_an_unstamped_claim()
+    {
+        // An unstamped claim (created before this fencing existed, or by a path that does not hold a
+        // pod across turns) is still ours to reclaim: the token guards against a NEWER owner, and
+        // must not become a new way to leak pods.
+        const string runId = "run-fenced-release-unstamped";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, holderToken: null));
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+
+        var released = await executor.TryReleaseHeldAgentHostPodAsync(runId, "some-token");
+
+        released.Should().BeTrue();
+        fake.Requests.Should().Contain(
+            r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_stamps_the_holder_token_on_the_claim_it_creates()
+    {
+        const string runId = "run-claim-holder-stamp";
+
+        var fake = new FakeKubeHandler();
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+
+        try
+        {
+            await executor.LaunchAgentHostPodAsync(
+                runId,
+                new AgentHostLaunchContext(
+                    SharedWorkingDirectory: null,
+                    Purpose: AgentHostPurpose.OperatorAssistant,
+                    HolderToken: "owner-token-abc"),
+                new CancellationTokenSource(TimeSpan.FromMilliseconds(50)).Token);
+        }
+        catch (Exception)
+        {
+            // Only the CREATE body matters here; readiness never completes against the fake cluster.
+        }
+
+        var create = fake.Requests.FirstOrDefault(r => r.Method == "POST" && r.Path.EndsWith("/sandboxclaims"));
+        create.Should().NotBeNull();
+        create!.Body.Should().Contain(KubernetesSandboxExecutor.HolderTokenAnnotation)
+            .And.Contain("owner-token-abc",
+                "a claim that is not stamped at creation cannot be fenced when it is released");
+    }
+
     // Minimal ISandboxPreviewService test double: only lifecycle reconciliation is exercised by the
     // release path; every other member throws so an unexpected call is caught loudly.
-    private sealed class StubPreviewService : Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService
-    {
+    private sealed class StubPreviewService : Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService    {
         private readonly PreviewLifecycleState _state;
         public StubPreviewService(bool hasActivePreview) =>
             _state = hasActivePreview ? PreviewLifecycleState.PreviewActive : PreviewLifecycleState.Previewable;
