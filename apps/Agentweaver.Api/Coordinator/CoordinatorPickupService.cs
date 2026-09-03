@@ -58,16 +58,18 @@ public sealed class CoordinatorPickupService
         if (!string.IsNullOrWhiteSpace(task.WorkflowOverrideId))
             goal = $"use {task.WorkflowOverrideId.Trim()}\n\n{goal}";
 
-        // The coordinator provider is fixed to GitHub Copilot (Constitution Principle II). The model
-        // id is resolved the same way the project coordinator-run endpoint does: the project default.
+        // The model id is resolved the same way the project coordinator-run endpoint does: the
+        // project default. The PROVIDER, however, comes from the shared resolver — a pickup run must
+        // record the provider that actually serves it (BYOK or Copilot), not a hardcoded literal.
         var modelId = project.ProviderSettings.GitHubCopilotModel;
+        var effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
 
         var run = new Run
         {
             Id = runId,
             RepositoryPath = project.WorkingDirectory,
             OriginatingBranch = project.DefaultBranch,
-            ModelSource = ModelSource.GitHubCopilot,
+            ModelSource = effectiveProvider.ToModelSource(),
             ModelId = modelId,
             Task = goal,
             // Keep the human-facing GitHub login in CapturedBy while carrying the durable auth
@@ -179,5 +181,18 @@ public sealed class CoordinatorPickupService
 
             // Task stays Claimed -> Failed coordinator run shown in the terminal column. No silent re-queue (FR-012).
         }
+    }
+
+    /// <summary>
+    /// Resolves the effective model provider for <paramref name="projectId"/> through the single
+    /// shared <see cref="EffectiveModelProviderResolver"/>, so the reserved coordinator run row
+    /// records the provider that actually serves it.
+    /// </summary>
+    private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderAsync(
+        ProjectId projectId, CancellationToken ct)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
+        return await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
     }
 }

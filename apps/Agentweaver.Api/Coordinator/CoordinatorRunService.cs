@@ -138,12 +138,16 @@ public sealed class CoordinatorRunService
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
 
+        // The resolver — not a hardcoded literal — decides the run's durable ModelSource, so a BYOK
+        // run is persisted (and rendered) as BYOK instead of always claiming GitHub Copilot.
+        var effectiveProvider = await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
+
         var run = new Run
         {
             Id = runId,
             RepositoryPath = repositoryPath,
             OriginatingBranch = originatingBranch,
-            ModelSource = ModelSource.GitHubCopilot,
+            ModelSource = effectiveProvider.ToModelSource(),
             Task = goal,
             SubmittingUser = submittingUser,
             Status = RunStatus.InProgress,
@@ -156,7 +160,7 @@ public sealed class CoordinatorRunService
             RetriedFrom = retriedFrom,
         };
 
-        await EnsureAgentHostCapabilityAsync(run, ct).ConfigureAwait(false);
+        await EnsureAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
         await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
 
         // Interactive define-outcome runs stop at the confirmation gate; Direct runs skip only that
@@ -166,7 +170,8 @@ public sealed class CoordinatorRunService
                 new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
                 workflowOverrideId,
                 direct: startMode == CoordinatorStartMode.Direct,
-                submittingUserDisplayName: submittingUserDisplayName)
+                submittingUserDisplayName: submittingUserDisplayName,
+                effectiveProvider: effectiveProvider)
             .ConfigureAwait(false);
 
         // Autopilot honors the same unattended outcome-spec confirmation as the backlog-pickup paths (#228).
@@ -197,12 +202,14 @@ public sealed class CoordinatorRunService
         var runId = RunId.New();
         var now = DateTimeOffset.UtcNow;
 
+        var effectiveProvider = await ResolveEffectiveProviderAsync(source.ProjectId, ct).ConfigureAwait(false);
+
         var run = new Run
         {
             Id = runId,
             RepositoryPath = source.RepositoryPath,
             OriginatingBranch = source.OriginatingBranch,
-            ModelSource = ModelSource.GitHubCopilot,
+            ModelSource = effectiveProvider.ToModelSource(),
             ModelId = source.ModelId,
             Task = source.Task,
             SubmittingUser = source.SubmittingUser,    // accountable human carried through (Principle IX)
@@ -217,13 +224,14 @@ public sealed class CoordinatorRunService
             RetriedFrom = source.Id.ToString(),
         };
 
-        await EnsureAgentHostCapabilityAsync(run, ct).ConfigureAwait(false);
+        await EnsureAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
         await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
 
         await ActivateAsync(
                 run,
                 new RunOptions(AutoApproveTools: autoApproveTools, Autopilot: autopilot),
-                submittingUserDisplayName: submittingUserDisplayName)
+                submittingUserDisplayName: submittingUserDisplayName,
+                effectiveProvider: effectiveProvider)
             .ConfigureAwait(false);
 
         // Unattended confirm on behalf of the accountable human — only when Autopilot is on,
@@ -266,7 +274,8 @@ public sealed class CoordinatorRunService
     /// </summary>
     private async Task ActivateAsync(
         Run run, RunOptions options, string? workflowOverrideId = null, bool direct = false,
-        string? submittingUserDisplayName = null)
+        string? submittingUserDisplayName = null,
+        EffectiveModelProviderResult? effectiveProvider = null)
     {
         await PrepareGitHubCapabilitySnapshotsAsync(run, _appStopping).ConfigureAwait(false);
 
@@ -275,6 +284,15 @@ public sealed class CoordinatorRunService
 
         var entry = _streamStore.Create(runId, run.SubmittingUser);
         entry.RecordNext(EventTypes.CoordinatorStarted, new { goal = run.Task, mode = direct ? "direct" : "defineOutcome" });
+
+        // Durable provenance for the provider that actually serves this run's model turns. The
+        // reserved-pickup path activates a row it did not resolve itself, so resolve here when the
+        // caller had no result to hand over.
+        var resolvedProvider = effectiveProvider
+            ?? await ResolveEffectiveProviderAsync(run.ProjectId, _appStopping).ConfigureAwait(false);
+        entry.RecordNext(
+            EventTypes.RunModelProviderResolved,
+            resolvedProvider.ToProvenancePayload(runId, run.ModelId));
 
         var outcomeSpecGenerationModel = await ResolveOutcomeSpecGenerationModelAsync(
             run.ProjectId!.Value, _appStopping).ConfigureAwait(false);
@@ -324,25 +342,43 @@ public sealed class CoordinatorRunService
                 $"Run {run.Id} has an unavailable immutable GitHub capability snapshot.");
     }
 
-    private async Task EnsureAgentHostCapabilityAsync(Run run, CancellationToken ct)
+    /// <summary>
+    /// Resolves "which model provider is actually in effect" for <paramref name="projectId"/> through
+    /// the single shared <see cref="EffectiveModelProviderResolver"/>. Its result is what stamps the
+    /// run's durable <see cref="Run.ModelSource"/> and what the <c>run.model_provider_resolved</c>
+    /// provenance event carries.
+    /// </summary>
+    private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderAsync(
+        ProjectId? projectId, CancellationToken ct)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
+        return await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Fails a pod-per-run launch closed when the resolver found no usable provider (or the run's
+    /// Copilot capability snapshot cannot be fenced), with the connection-required scope the resolver
+    /// ACTUALLY reported — project binding vs platform-default binding.
+    /// </summary>
+    private async Task EnsureAgentHostCapabilityAsync(
+        Run run, EffectiveModelProviderResult effectiveProvider, CancellationToken ct)
     {
         if (!_sandboxRuntime.IsPodPerRun)
             return;
 
-        await using var scope = _scopeFactory.CreateAsyncScope();
         // BYOK-active runs never need a GitHub Copilot capability snapshot at pod startup — only
         // require (and fence) one when the resolver's result is actually Copilot-sourced, matching
         // the same precedence every other model-provider consumer uses.
-        var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
-        var effectiveProvider = await resolver.ResolveAsync(run.ProjectId, ct).ConfigureAwait(false);
         if (effectiveProvider is EffectiveModelProviderResult.Byok)
             return;
         if (effectiveProvider is EffectiveModelProviderResult.Unavailable)
-            throw new ModelProviderConnectionRequiredException(run.ProjectId!.Value);
+            throw effectiveProvider.ToConnectionRequiredException(run.ProjectId);
 
+        await using var scope = _scopeFactory.CreateAsyncScope();
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
-            throw new ModelProviderConnectionRequiredException(run.ProjectId!.Value);
+            throw effectiveProvider.ToConnectionRequiredException(run.ProjectId);
     }
 
     private async Task<string?> ResolveOutcomeSpecGenerationModelAsync(ProjectId projectId, CancellationToken ct)
