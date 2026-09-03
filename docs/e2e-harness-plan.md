@@ -143,7 +143,14 @@ Full lifecycle: dispatch → build/test gate → review gates → merge → reac
 ```powershell
 $token = $env:AGENTWEAVER_TOKEN
 $base = "https://agentweaver.6a528e9e153d92000129afcb.westus2.staging.aksapp.io"
-curl.exe -H "Authorization: Bearer $token" "$base/api/projects" -Method POST -Body (@{prompt="..."} | ConvertTo-Json) -ContentType "application/json"
+@'
+await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/projects`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${process.env.AGENTWEAVER_TOKEN}`, 'Content-Type': 'application/json' },
+  redirect: 'error',
+  body: JSON.stringify({ prompt: '...' }),
+});
+'@ | node --input-type=module -
 kubectl logs -n agentweaver <pod> --tail=200
 # + Application Insights transaction search on the run's correlation/session ID
 ```

@@ -39,6 +39,12 @@ sessions remain isolated, and `finish` closes the worker and deletes its private
 recovery state. An abandoned worker is recovered from the last completed action without
 opening a CDP or remote-debugging endpoint.
 
+Persisted snapshots, actions, errors, screenshot metadata, and normalized artifacts keep
+URLs only as origin plus pathname; userinfo, query strings, and fragments remain
+in-memory only as required for the live page. `finish` closes the browser/runtime and
+removes harness-owned session state before writing evidence, so artifact failures cannot
+strand local resources.
+
 ## Pointer drag
 
 Use stable test IDs to reproduce canvas interactions with a real pointer sequence:

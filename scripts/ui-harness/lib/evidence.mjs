@@ -1,15 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { redact as redactSecrets } from '../../harness-shared/redaction.mjs';
 
-const REDACTED = '[REDACTED]';
-const SENSITIVE_KEY = /token|cookie|authorization|storage.?state|secret|password/i;
-
-export function redact(value, key = '') {
-  if (SENSITIVE_KEY.test(key)) return REDACTED;
-  if (Array.isArray(value)) return value.map((item) => redact(item));
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, redact(item, name)]));
-  return value;
+export function redact(value) {
+  return redactSecrets(value);
 }
 
 export function evidenceHash(value) {

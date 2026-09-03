@@ -31,6 +31,7 @@
  */
 
 import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
+import { redact } from '../../harness-shared/redaction.mjs';
 
 // Response headers, in priority order, that carry a backend correlation id we can
 // pin each turn to. traceparent (W3C) first — that's what App Insights ingests.
@@ -94,19 +95,8 @@ export class AgentweaverClient {
         init.headers['Content-Type'] = 'application/json';
         init.body = JSON.stringify(body);
       }
-      init.redirect = 'manual';
-      let res = await fetch(url, init);
-      let redirects = 0;
-      while (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-        const redirected = new URL(res.headers.get('location'), url);
-        validateNetworkTarget(redirected);
-        if (redirected.origin !== this.origin) {
-          throw new Error(`refusing cross-origin API redirect from ${this.origin} to ${redirected.origin}`);
-        }
-        if (++redirects > 5) throw new Error('API redirect limit exceeded');
-        url = redirected;
-        res = await fetch(url, init);
-      }
+      init.redirect = 'error';
+      const res = await fetch(url, init);
       status = res.status;
       for (const h of CORRELATION_HEADERS) {
         const v = res.headers.get(h);
@@ -135,10 +125,10 @@ export class AgentweaverClient {
       path: new URL(path, `${this.baseUrl}/`).pathname,
       status,
       ms: Date.now() - started,
-      requestBody: body ?? null,
-      responseBody,
+      requestBody: redact(body ?? null),
+      responseBody: redact(responseBody),
       ok: status >= 200 && status < 300,
-      traceId,
+      traceId: redact(traceId),
       upstreamMs,
     };
     this.calls.push(record);

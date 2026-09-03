@@ -14,7 +14,8 @@
 //
 //   prepare  (default): resolve the persona brief (core + <id>.mcp.md adapter), apply
 //            shared transport validation (http only; stdio is a local subprocess and exempt),
-//            resolve the token, construct the transcript path under transcripts/, and
+//            resolve authentication from the transient environment, construct the
+//            transcript path under transcripts/, and
 //            assemble the exact dispatch prompt for the agent-driver charter. It writes
 //            that prompt under dispatch/ and prints a DISPATCH-REQUIRED banner for the
 //            Harness agent to dispatch via `task`. It NEVER fabricates a transcript.
@@ -59,7 +60,6 @@ export function parseArgs(argv) {
     const a = argv[i];
     if (a === '--scenario' || a === '--persona') out.scenario = argv[++i];
     else if (a === '--target' || a === '--base-url') out.target = argv[++i];
-    else if (a === '--token') out.token = argv[++i];
     else if (a === '--project-id') out.projectId = argv[++i];
     else if (a === '--batch-id') out.batchId = argv[++i];
     else if (a === '--seed') out.seed = argv[++i];
@@ -74,6 +74,7 @@ export function parseArgs(argv) {
     else if (a === '--timeout') out.timeoutMs = Number(argv[++i]) * 1000;
     else if (a === '--no-capability-check') out.skipCapabilityCheck = true;
     else if (a === '--list') out.list = true;
+    else throw new Error(`unknown option: ${a.split('=', 1)[0]}`);
   }
   return out;
 }
@@ -122,8 +123,7 @@ function relativize(p) {
   return p.startsWith(root) ? p.slice(root.length + 1).replaceAll('\\', '/') : p;
 }
 
-function resolveToken(explicit) {
-  if (explicit) return explicit;
+function resolveToken() {
   return process.env.AGENTWEAVER_TOKEN || null;
 }
 
@@ -140,8 +140,8 @@ export function buildDispatchPrompt({ persona, transport, tokenAvailable, transc
     : 'Broker token: NONE - obtain one through the Agentweaver OAuth flow (stdio transport needs none).';
   const targetLine = transport.mode === 'stdio'
     ? 'Transport: stdio (a local MCP server subprocess Harness already started — no network target, no token needed).'
-    : `Transport: http — MCP endpoint ${transport.target} (already transport-validated). Attach the bearer token on every request.`;
-  return [
+    : `Transport: http — MCP endpoint ${redact(transport.target)} (already transport-validated). Attach the bearer token on every request.`;
+  return redact([
     '# MCP persona-driver dispatch',
     '',
     'You are the MCP persona driver. Operate strictly under the charter in',
@@ -176,7 +176,7 @@ export function buildDispatchPrompt({ persona, transport, tokenAvailable, transc
     '4. NEVER blind-approve an outcome-spec / confirmation gate; stop at it unless the real evidence genuinely justifies proceeding per the brief.',
     '5. Append each turn to the transcript path immediately as JSONL (see the charter for the exact line shape) — never reconstruct it after the fact.',
     '6. Return the transcript path and a short factual summary (not a quality judgment) of what happened and where you stopped.',
-  ].join('\n');
+  ].join('\n'));
 }
 
 export function buildVerdictMetadata({ args, persona, transport, sessionId, runId, now = new Date() }) {
@@ -213,7 +213,7 @@ export function parseTranscriptJsonl(text) {
     if (!line) return;
     let obj;
     try {
-      obj = JSON.parse(line);
+      obj = redact(JSON.parse(line));
     } catch (err) {
       parseErrors.push({ line: index + 1, message: err.message });
       return;
@@ -262,7 +262,7 @@ export async function runCapabilityCheck({ client, contractPath = CONTRACT_PATH 
     const report = checkCapabilities(tools, contract);
     return { available: true, report };
   } catch (err) {
-    return { available: false, reason: String(err?.message ?? err) };
+    return { available: false, reason: redact(String(err?.message ?? err)) };
   }
 }
 
@@ -276,7 +276,7 @@ export function prepareJudgeEvidence({
 }) {
   const { turns, parseErrors } = parseTranscriptJsonl(transcriptText);
   const p0 = computeMcpP0({ turns });
-  const normalized = adaptMcpEvidence({
+  const normalized = redact(adaptMcpEvidence({
     metadata,
     persona: {
       name: persona?.name ?? metadata.persona ?? null,
@@ -296,7 +296,7 @@ export function prepareJudgeEvidence({
       ...(parseErrors.length ? [{ kind: 'transcript-parse-errors', evidence: JSON.stringify(parseErrors) }] : []),
     ],
     summary: `MCP harness ${metadata.scenarioId}`,
-  });
+  }));
   return {
     normalized,
     prompt: buildJudgePrompt(normalized),
@@ -346,7 +346,7 @@ async function connectClient(transport, args) {
     target: transport.target,
     command: args.serverCommand,
     args: args.serverArgs ? JSON.parse(args.serverArgs) : ['--stdio'],
-    token: resolveToken(args.token) ?? undefined,
+    token: resolveToken() ?? undefined,
     ownershipPolicy: { ownedProjectId: null },
   });
 }
@@ -385,7 +385,7 @@ async function main() {
   const preflight = {
     ...networkTargetEvidence(transport.target, {
       surface: 'mcp',
-      authSource: args.token ? 'cli-token' : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none',
+      authSource: process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none',
       exactPath: transport.mode === 'http' ? '/mcp' : undefined,
     }),
     projectId: args.projectId ?? null,
@@ -418,7 +418,7 @@ async function main() {
         client = await connectClient(transport, args);
         capability = await runCapabilityCheck({ client });
       } catch (err) {
-        capability = { available: false, reason: String(err?.message ?? err) };
+        capability = { available: false, reason: redact(String(err?.message ?? err)) };
       } finally {
         await client?.close?.();
       }
@@ -464,9 +464,9 @@ async function main() {
 
   // ---- PREPARE phase: assemble + emit the dispatch, fail closed (no fabricated run). ----
   const transcriptPath = buildTranscriptPath({ sessionId });
-  const token = transport.mode === 'http' ? resolveToken(args.token) : null;
+  const token = transport.mode === 'http' ? resolveToken() : null;
   if (transport.mode === 'http' && !token) {
-    console.error('error: http transport needs an Agentweaver broker token (pass --token or set $AGENTWEAVER_TOKEN)');
+    console.error('error: http transport needs an Agentweaver broker token in $AGENTWEAVER_TOKEN');
     return 2;
   }
 
@@ -483,7 +483,7 @@ async function main() {
 
   console.log('DISPATCH-REQUIRED — a fresh agent-driver sub-agent must drive this persona.');
   console.log(`Persona        : ${metadata.persona}`);
-  console.log(`Transport      : ${transport.mode}${transport.mode === 'http' ? ` (${transport.target})` : ''}`);
+  console.log(`Transport      : ${transport.mode}${transport.mode === 'http' ? ` (${redact(transport.target)})` : ''}`);
   console.log(`Charter        : ${relativize(CHARTER_PATH)}`);
   console.log(`Dispatch prompt: ${relativize(dispatchPath)}`);
   console.log(`Preflight      : ${relativize(preflightPath)}`);
@@ -503,7 +503,7 @@ if (import.meta.url === `file://${process.argv[1]}` || import.meta.url === pathT
   main()
     .then((code) => process.exit(code))
     .catch((err) => {
-      console.error(err);
+      console.error(redact(String(err?.stack ?? err?.message ?? err)));
       process.exit(2);
     });
 }

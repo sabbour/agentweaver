@@ -32,7 +32,7 @@ Both transports work the same for either entry point:
   exact `/mcp` pathname** (e.g. `https://<host>/mcp`; the bare origin and
   `/mcp/` are not the endpoint). Any HTTPS host is accepted; HTTP is loopback-only.
   URL credentials/fragments and TLS bypasses are rejected.
-  http transport also requires **OAuth**: `--token`/`AGENTWEAVER_TOKEN` must be an
+  http transport also requires **OAuth**: transient `AGENTWEAVER_TOKEN` must be an
   Agentweaver broker token for the exact `/mcp` resource with `mcp:invoke`, obtained
   through the app's OAuth flow. Raw Entra and GitHub tokens are rejected. Stdio
   transport still uses `AGENTWEAVER_TOKEN` for downstream API calls.
@@ -76,6 +76,10 @@ verdict exists yet — never a pass). It **never fabricates a transcript**.
 The Harness agent then dispatches a fresh sub-agent under
 `scripts/mcp-harness/agent-driver/AGENT.md` (via the `task` tool) with that prompt.
 The sub-agent drives the server live and appends the JSONL transcript itself.
+It must use `appendRedactedJsonLine` from `scripts/harness-shared/safe-jsonl.mjs`;
+that serializer
+recursively removes bearer values, sensitive headers/keys, URL
+userinfo/query/fragment data, and secret canaries before persistence.
 
 ### 2) finalize — export MCP-adapted evidence, then judge natively (recommended)
 
@@ -136,12 +140,14 @@ npm --prefix scripts/mcp-harness run smoke -- `
   --project-is-disposable
 ```
 
-The smoke command supports `--target stdio|http`, `--token`, `--project-id`,
+The smoke command supports `--target stdio|http`, `--project-id`,
 `--project-is-disposable`, `--goal`, `--timeout-ms`, `--poll-ms`, and
 `--list` (a no-connect print of the reviewed persona IDs with MCP adapters). On
 success it emits JSON headed by `DRIVE+CAPTURE OK`, including the run ID, terminal
 status, artifact count, and compatibility report. A non-zero exit means the driver
 or its capability contract failed; preserve its output when reporting the failure.
+Bearer material is never accepted in argv; set `AGENTWEAVER_TOKEN` only in the
+transient environment of the harness process.
 
 ## Discovery and contract rules
 

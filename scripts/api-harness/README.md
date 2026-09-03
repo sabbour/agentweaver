@@ -19,21 +19,24 @@ curl.exe -s https://agentweaver.example.staging.example/openapi/v1.json | jq .
 
 The JSON and YAML variants describe the same live route surface. Prefer the YAML variant when reading it as an LLM (more compact/token-efficient); the JSON form is a straightforward fallback if a client needs strict JSON parsing. The spec also carries richer summaries/descriptions from XML doc comments for the persona-critical project / blueprint / casting / coordinator lifecycle routes, plus a bearer-token security scheme so an agent can learn authentication requirements directly from the contract.
 
-**Persona-behavior scenarios (Priya, Jordan, ...) are no longer fixed scripts, and there is no HTTP-calling script in between the actor and the target either.** There is no per-persona `scenarios/*.mjs` step sequence, and no `drive.mjs`-style wrapper around the API calls. Harness dispatches a fresh **`PersonaActor`** sub-agent (`.github/agents/persona-actor.agent.md`, a real CLI agent with shell/`execute` access) that fully impersonates the persona in an isolated context: it reads the relevant persona-brief + surface adapter, `curl`s `/openapi/v1.yaml` itself to discover the live API contract, and decides every next action live via its own `curl` calls, one turn at a time, reacting only to the real response — including if/when to push back with a revision, grounded in what it actually received. It appends each turn (thought + real request + real response) to a transcript file itself via shell redirection. See `.github/agents/harness.agent.md`/`persona-actor.agent.md` for the full model. `run-persona.mjs` remains only for `generated-artifacts-seam` — a deterministic structural conformance check with no persona/pushback dimension.
+**Persona-behavior scenarios (Priya, Jordan, ...) are no longer fixed scripts, and there is no HTTP-calling script in between the actor and the target either.** There is no per-persona `scenarios/*.mjs` step sequence, and no `drive.mjs`-style wrapper around the API calls. Harness dispatches a fresh **`PersonaActor`** sub-agent (`.github/agents/persona-actor.agent.md`, a real CLI agent with shell/`execute` access) that fully impersonates the persona in an isolated context: it reads the relevant persona-brief + surface adapter, fetches `/openapi/v1.yaml` itself to discover the live API contract, and decides every next action live via its own Node `fetch` calls, one turn at a time, reacting only to the real response — including if/when to push back with a revision, grounded in what it actually received. It appends each turn (thought + real request + real response) through the shared redacted JSONL serializer. See `.github/agents/harness.agent.md`/`persona-actor.agent.md` for the full model. `run-persona.mjs` remains only for `generated-artifacts-seam` — a deterministic structural conformance check with no persona/pushback dimension.
 
 ## Run a persona scenario (dynamic)
 
 `PersonaActor` (dispatched by Harness with a resolved base URL + the
 `AGENTWEAVER_TOKEN` variable name + a transcript path to write to) drives itself,
-one real call at a time. Raw tokens never enter prompts or argv — there is no
-scripted command surface to invoke on its behalf. Roughly, inside its own shell:
+one real call at a time. Raw tokens never enter prompts or argv. Authenticated
+Node `fetch` scripts are supplied over stdin and read only the transient
+environment. Roughly, inside its own shell:
 
 ```powershell
-curl -s https://agentweaver.example.staging.example/openapi/v1.yaml
-# ...decide the next call from the spec + persona brief + prior real response...
-curl -s -w '\nHTTP_STATUS:%{http_code}\n' -X GET `
-  "https://agentweaver.example.staging.example/api/blueprints" `
-  -H "Authorization: Bearer $AGENTWEAVER_TOKEN"
+@'
+const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/blueprints`, {
+  headers: { Authorization: `Bearer ${process.env.AGENTWEAVER_TOKEN}` },
+  redirect: 'error',
+});
+console.log(await response.text());
+'@ | node --input-type=module -
 # ...append the real request+response to the transcript path, then repeat...
 ```
 
@@ -52,8 +55,9 @@ node run-persona.mjs --scenario generated-artifacts-seam --target https://agentw
 
 Targets are environment-agnostic: any absolute HTTPS URL is accepted, while HTTP is
 limited to loopback. URL credentials and fragments are rejected, normal TLS validation
-is always used, and bearer credentials never cross the configured origin or a
-cross-origin redirect.
+is always used, and authenticated requests reject every redirect before credentials
+can be forwarded. The generation-seam runner deletes only its owned throwaway project
+from `finally`, including when judging or artifact persistence fails.
 
 The generated verdict uses `agentweaver.persona-judge-verdict/v1`, including its batch/scenario join key and repro provenance. When running as the `Harness` agent, the preferred judging path is agent-native: build the prompt with `node scripts/harness-judge/core.mjs <evidence.json> --prompt-out <prompt.txt>`, dispatch it via the `task` tool to `agent_type: "Judge"` (`.github/agents/judge.agent.md`, `tools: []` — pure text-in/text-out, no file/shell/network access), then parse and persist the result with `scripts/harness-judge/save-verdict.mjs`. See `.github/agents/harness.agent.md`'s "Judging" section for the exact flow.
 

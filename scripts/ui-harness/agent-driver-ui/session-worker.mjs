@@ -8,6 +8,7 @@ import { openBrowserSession } from '../lib/browser.mjs';
 import { executeUiAction } from '../lib/ui-actions.mjs';
 import { loadSession } from '../lib/session-store.mjs';
 import { runtimeDirectory } from '../lib/session-runtime.mjs';
+import { redact, sanitizeUrl } from '../../harness-shared/redaction.mjs';
 
 const HEARTBEAT_INTERVAL_MS = 1_000;
 const POLL_INTERVAL_MS = 50;
@@ -49,7 +50,7 @@ async function saveRecovery(runtime, browserRuntime) {
   await browserRuntime.context.storageState({ path: storageState });
   await chmod(storageState, 0o600).catch(() => {});
   await writeJsonAtomic(path.join(runtime, 'recovery.json'), {
-    lastUrl: browserRuntime.page.url(),
+    lastUrl: sanitizeUrl(browserRuntime.page.url()),
     sessionStorageSeed: { origin, entries },
     updatedAt: new Date().toISOString(),
   });
@@ -94,7 +95,7 @@ async function main() {
     };
     stateWrite = stateWrite.catch(() => {}).then(() => writeFile(
       stateFile,
-      JSON.stringify(state, null, 2),
+      JSON.stringify(redact(state), null, 2),
       { encoding: 'utf8', mode: 0o600 },
     ));
     return stateWrite;
@@ -174,18 +175,18 @@ async function main() {
           action: request.args._[0],
           eventId: request.eventId,
           step: error.evidenceStep ?? null,
-          error: {
+          error: redact({
             code: error.code ?? 'COMMAND_FAILED',
             message: String(error.message ?? error),
             readiness: error.readiness ?? null,
-          },
+          }),
           completedAt: new Date().toISOString(),
         });
       }
     }
   } catch (error) {
     await writeState('failed', {
-      error: { code: error.code ?? 'SESSION_WORKER_FAILED', message: String(error.message ?? error) },
+      error: redact({ code: error.code ?? 'SESSION_WORKER_FAILED', message: String(error.message ?? error) }),
     }).catch(() => {});
     process.exitCode = 2;
   } finally {
@@ -196,6 +197,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(String(error?.message ?? error));
+  console.error(redact(String(error?.message ?? error)));
   process.exitCode = 2;
 });

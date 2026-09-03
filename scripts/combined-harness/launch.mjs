@@ -19,7 +19,7 @@ export function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (!value.startsWith('--')) throw new Error(`unexpected argument: ${value}`);
+    if (!value.startsWith('--')) throw new Error('unexpected positional argument');
     const key = value.slice(2);
     if (!argv[index + 1] || argv[index + 1].startsWith('--')) throw new Error(`missing value for --${key}`);
     args[key] = argv[++index];
@@ -45,6 +45,17 @@ function replaceTokens(part, tokens) {
   return part.replace(/\{(batchId|scenarioId|verdictDir)\}/g, (_, key) => tokens[key]);
 }
 
+function rejectArgvSecrets(command, surface) {
+  const containsCredential = command.some((part) =>
+    /^--(?:authorization|api[-_]?key|secret|password|to[k]en)(?:=|$)/i.test(part)
+    || /^[A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)=/i.test(part)
+    || /\bAuthorization\s*:/i.test(part)
+    || /^\s*Bearer\s+/i.test(part));
+  if (containsCredential) {
+    throw new Error(`--${surface}-command must not carry authentication in argv; use AGENTWEAVER_TOKEN in the transient launcher environment`);
+  }
+}
+
 export function buildCommands(args, tokens) {
   const configured = {
     // Default targets the one remaining fixed, one-shot API check: the structural
@@ -68,11 +79,12 @@ export function buildCommands(args, tokens) {
   return selected.map((surface) => {
     const command = configured[surface];
     if (!command) throw new Error(`--${surface}-command is required when ${surface} is selected`);
+    rejectArgvSecrets(command, surface);
     return { surface, command: command.map((part) => replaceTokens(part, tokens)) };
   });
 }
 
-const SENSITIVE_ARG = /^--(?:token|authorization|api[-_]?key|secret|password|storage-state)$/i;
+const SENSITIVE_ARG = /^--(?:authorization|api[-_]?key|secret|password|storage-state)$/i;
 
 export function sanitizeCommand(command) {
   return command.map((part, index) => {
@@ -80,7 +92,7 @@ export function sanitizeCommand(command) {
     if (/^[A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)=/i.test(part)) {
       return `${part.slice(0, part.indexOf('=') + 1)}[REDACTED]`;
     }
-    if (/^--(?:token|authorization|api[-_]?key|secret|password|storage-state)=/i.test(part)) {
+    if (/^--(?:authorization|api[-_]?key|secret|password|storage-state)=/i.test(part)) {
       return `${part.slice(0, part.indexOf('=') + 1)}[REDACTED]`;
     }
     return redact(part);
@@ -106,9 +118,7 @@ function commandPreflight(surface, command, environment) {
     evidence = target
       ? networkTargetEvidence(target, {
         surface,
-        authSource: option(command, ['--token'])
-          ? 'cli-token'
-          : environment.AGENTWEAVER_TOKEN ? 'environment' : surface === 'ui' ? 'playwright-storage-state' : 'none',
+        authSource: environment.AGENTWEAVER_TOKEN ? 'environment' : surface === 'ui' ? 'playwright-storage-state' : 'none',
         exactPath: surface === 'mcp' && target !== 'stdio' ? '/mcp' : undefined,
       })
       : {
@@ -138,9 +148,9 @@ function requireExplicitRemoteAuth(commands, environment) {
     const target = explicitTarget ?? environment.AGENTWEAVER_BASE_URL ?? null;
     const remote = surface === 'api' ? Boolean(target) : Boolean(target && target !== 'stdio');
     const provider = surface === 'api' && option(command, ['--auth-provider']);
-    if (remote && !provider && !option(command, ['--token']) && !environment.AGENTWEAVER_TOKEN) {
+    if (remote && !provider && !environment.AGENTWEAVER_TOKEN) {
       throw new Error(
-        `${surface} remote flow requires an explicit --token or AGENTWEAVER_TOKEN` +
+        `${surface} remote flow requires AGENTWEAVER_TOKEN in the transient launcher environment` +
         (surface === 'api' ? ' (or an explicitly selected secure auth provider)' : ''),
       );
     }
@@ -227,7 +237,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     if (report.processes.some((result) => result.code !== 0) || report.missingSurfaces.length || report.aggregation.code !== 0) process.exitCode = 1;
   } catch (error) {
-    console.error(`${error.message}\n${usage()}`);
+    console.error(`${redact(error.message)}\n${usage()}`);
     process.exitCode = 2;
   }
 }

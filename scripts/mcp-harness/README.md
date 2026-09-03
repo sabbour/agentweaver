@@ -30,14 +30,20 @@ There are two entry points:
   loopback-only. URL credentials/fragments and TLS bypasses are rejected.
 - The Agentweaver MCP server requires **OAuth**: connecting over http transport
   needs a valid, authenticated bearer token, not an arbitrary string.
-  `transport-http.mjs` attaches `--token`/`AGENTWEAVER_TOKEN` as the request's
+  `transport-http.mjs` attaches transient `AGENTWEAVER_TOKEN` as the request's
   `Authorization` header only when a token is supplied — an unauthenticated
   request will be rejected by the server. Obtain an Agentweaver broker token via
   the app's OAuth flow; raw Entra and GitHub tokens are rejected. Stdio transport
   passes its configured broker token only to downstream API calls.
-- Authentication: `AGENTWEAVER_TOKEN` or `--token`. The smoke
+- Authentication: transient `AGENTWEAVER_TOKEN` only; bearer material is rejected
+  from process arguments. The smoke
   assumes GitHub capability authorization is supplied out of band; it does not
   automate a one-time browser handoff.
+- Prompt construction, MCP client results, JSONL serialization, verdict inputs, and
+  process reports recursively redact sensitive headers/keys, bearer values, URL
+  userinfo/query/fragment data, and secret canaries. Drivers must append JSONL with
+  `appendRedactedJsonLine` from `scripts/harness-shared/safe-jsonl.mjs`; raw copies
+  are forbidden.
 - Project ownership: `--project-id` / `AGENTWEAVER_SMOKE_PROJECT_ID` requires
   `--project-is-disposable`; the run is archived but that caller-owned project
   is never deleted. Without an ID, local stdio smoke creates a unique owned

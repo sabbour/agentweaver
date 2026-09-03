@@ -200,7 +200,7 @@ export async function finishSmokeLifecycle({
   const finalizationErrors = [];
   try {
     await mkdirImpl(path.dirname(preflightOut), { recursive: true });
-    await writeFileImpl(preflightOut, `${JSON.stringify(preflight, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await writeFileImpl(preflightOut, `${JSON.stringify(redact(preflight), null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   } catch (error) {
     finalizationErrors.push(new Error(`preflight evidence write failed: ${error.message}`, { cause: error }));
   } finally {
@@ -224,6 +224,9 @@ export async function finishSmokeLifecycle({
 }
 
 async function main() {
+  if (process.argv.some((value) => /^--(?:authorization|api[-_]?key|secret|password|to[k]en)(?:=|$)/i.test(value))) {
+    throw new Error('configuration failed: authentication material is not accepted in argv; set AGENTWEAVER_TOKEN in the transient process environment');
+  }
   if (process.argv.includes('--list')) {
     const { listPersonas } = await import('../../persona-briefs/index.mjs');
     const scenarios = await listPersonas({ surface: 'mcp' });
@@ -233,11 +236,11 @@ async function main() {
 
   const baseUrl = process.env.AGENTWEAVER_BASE_URL?.replace(/\/+$/, '');
   const target = arg('--target') ?? (baseUrl ? `${baseUrl}/mcp` : 'stdio');
-  const token = arg('--token') ?? process.env.AGENTWEAVER_TOKEN;
+  const token = process.env.AGENTWEAVER_TOKEN;
   if (target !== 'stdio' && !token) {
-    throw new Error('configuration failed: remote MCP smoke requires --token or AGENTWEAVER_TOKEN');
+    throw new Error('configuration failed: remote MCP smoke requires AGENTWEAVER_TOKEN');
   }
-  const tokenSource = arg('--token') ? 'cli-token' : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none';
+  const tokenSource = process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none';
   const preflight = networkTargetEvidence(target, {
     surface: 'mcp',
     authSource: tokenSource,
@@ -274,7 +277,7 @@ async function main() {
       isCancelled: () => cancelledSignal !== null,
       preflight,
     });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(redact(result), null, 2)}\n`);
   } catch (error) {
     primaryError = error;
   } finally {
@@ -286,7 +289,7 @@ async function main() {
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    console.error(`CLI→MCP SMOKE FAIL: ${error.message}`);
+    console.error(`CLI→MCP SMOKE FAIL: ${redact(error.message)}`);
     process.exitCode = 1;
   });
 }

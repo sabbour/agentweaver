@@ -20,6 +20,7 @@ import {
   prepareJudgeEvidence,
   finalizeVerdict,
 } from '../run-persona.mjs';
+import { serializeTranscriptLine } from '../lib/transcript.mjs';
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const execFile = promisify(execFileCallback);
@@ -33,14 +34,13 @@ async function scratchDir() {
 
 test('parseArgs maps the api-parity CLI shape', () => {
   const args = parseArgs([
-    '--scenario', 'priya', '--target', 'http://localhost:5000/mcp', '--token', 't',
+    '--scenario', 'priya', '--target', 'http://localhost:5000/mcp',
     '--project-id', 'proj-1', '--batch-id', 'b1', '--seed', 's1', '--out', 'v.json',
     '--transcript', 'tr.jsonl', '--dump-evidence', 'evidence.json', '--prompt-out', 'prompt.txt',
     '--server-command', 'dotnet', '--server-args', '["run"]',
   ]);
   assert.equal(args.scenario, 'priya');
   assert.equal(args.target, 'http://localhost:5000/mcp');
-  assert.equal(args.token, 't');
   assert.equal(args.projectId, 'proj-1');
   assert.equal(args.batchId, 'b1');
   assert.equal(args.seed, 's1');
@@ -56,6 +56,15 @@ test('parseArgs accepts --persona and --base-url aliases', () => {
   const args = parseArgs(['--persona', 'jordan', '--base-url', 'stdio']);
   assert.equal(args.scenario, 'jordan');
   assert.equal(args.target, 'stdio');
+});
+
+test('retired credential argv options are rejected without echoing their values', () => {
+  const canary = 'secret-canary-argv-55';
+  const retiredOption = `--${'to'}${'ken'}`;
+  assert.throws(
+    () => parseArgs([`${retiredOption}=${canary}`]),
+    (error) => error.message.includes(retiredOption) && !error.message.includes(canary),
+  );
 });
 
 test('resolveTransport treats stdio as a sentinel and any URL as http', () => {
@@ -188,6 +197,44 @@ test('dispatch and normalized transcript artifacts never contain bearer or query
   }));
   assert.doesNotMatch(prompt, new RegExp(canary));
   assert.doesNotMatch(JSON.stringify(parsed), new RegExp(canary));
+});
+
+test('MCP prompt, JSONL, normalized evidence, and Judge input recursively redact secrets', () => {
+  const canary = 'secret-canary-nested-42';
+  const secretUrl = `https://user:${canary}@example.test/path?key=${canary}#${canary}`;
+  const exchange = {
+    thought: `observed Bearer ${canary}`,
+    request: {
+      headers: { Authorization: `Bearer ${canary}` },
+      arguments: { callbackUrl: secretUrl },
+    },
+    response: {
+      structuredContent: { nested: [{ token: canary }, { url: secretUrl }] },
+      rawContent: `token=${canary}; request failed at ${secretUrl}`,
+      error: new Error(`Bearer ${canary}`),
+    },
+  };
+  const line = serializeTranscriptLine(exchange);
+  const driverPrompt = buildDispatchPrompt({
+    persona: { id: 'priya', name: 'Priya', text: 'brief' },
+    transport: { mode: 'http', target: secretUrl },
+    tokenAvailable: true,
+    transcriptPath: '/repo/transcript.jsonl',
+  });
+  const prepared = prepareJudgeEvidence({
+    transcriptText: line,
+    persona: { name: 'Priya', text: 'brief', adapter: { content: 'adapter' }, content: 'core' },
+    metadata: {
+      batchId: 'b1', scenarioId: 'priya', inputSeed: 's1', adapterVersion: 'a1',
+      personaCoreVersion: 'p1', targetRevision: secretUrl, surface: 'mcp',
+      runId: 'r1', timestamp: '2026-09-03T00:00:00.000Z',
+    },
+  });
+  for (const artifact of [line, driverPrompt, JSON.stringify(prepared.normalized), prepared.prompt]) {
+    assert.doesNotMatch(artifact, new RegExp(canary));
+    assert.doesNotMatch(artifact, /[?#]secret-canary/i);
+  }
+  assert.match(line, /https:\/\/example\.test\/path/);
 });
 
 test('runCapabilityCheck fails closed without a client and runs the contract with one', async () => {

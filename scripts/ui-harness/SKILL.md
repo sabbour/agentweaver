@@ -123,6 +123,10 @@ anchor, declare either `--ready-test-id <test-id>` or both
 when necessary with `--readiness-timeout <milliseconds>`. A declared readiness anchor
 is mandatory for that command: the generic app shell cannot satisfy it.
 
+Persisted evidence and recovery metadata store URLs as origin plus pathname only.
+Userinfo, query strings, and fragments are removed recursively from snapshots,
+actions, errors, screenshot metadata, and result artifacts.
+
 Cross-origin preview navigation is intentionally not available from an authenticated
 harness context. Validate preview URLs from a separate credential-free browser context.
 
@@ -157,3 +161,5 @@ artifacts, and archives `result.json` beside the screenshots. If a worker crashe
 times out while idle, the next action starts a replacement from the last completed
 action's URL and protected browser-storage snapshot. Separate session IDs use separate
 workers and recovery directories; no CDP or remote-debugging endpoint is exposed.
+Cleanup runs before result persistence, so an artifact write failure cannot strand the
+browser worker or harness-owned session state.

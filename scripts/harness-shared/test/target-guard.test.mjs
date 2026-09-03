@@ -78,6 +78,7 @@ test('retired environment and TLS bypass flags are absent from active harness en
     'ui-harness/agent-driver-ui/session-worker.mjs',
     'mcp-harness/run-persona.mjs',
     'mcp-harness/smoke/mcp-cli-smoke.mjs',
+    'combined-harness/launch.mjs',
   ];
   const retired = [
     ['allow', 'prod'].join('-'),
@@ -85,6 +86,7 @@ test('retired environment and TLS bypass flags are absent from active harness en
     ['allow', 'insecure', 'prod'].join('-'),
     ['confirm', 'production'].join('-'),
     ['NODE', 'TLS', 'REJECT', 'UNAUTHORIZED'].join('_'),
+    `--${['to', 'ken'].join('')}`,
   ];
   for (const file of files) {
     const source = await readFile(join(root, file), 'utf8');

@@ -54,6 +54,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
+import { sanitizeUrl } from '../harness-shared/redaction.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const AUTH_DIR = path.join(HERE, '.auth');
@@ -101,7 +102,7 @@ async function captureState(page, context) {
     hasToken: Boolean(token),
     tokenLength: token ? String(token).length : 0,
     sessionStorageKeys: Object.keys(entries),
-    url: page.url(),
+    url: sanitizeUrl(page.url()),
   }, null, 2));
 }
 
@@ -152,7 +153,7 @@ async function runWithCDP() {
   if (!page) throw new Error('No open pages found. Navigate to the staging app first.');
 
   page.setDefaultTimeout(180000);
-  console.log(`Using page: ${page.url()}`);
+  console.log(`Using page: ${sanitizeUrl(page.url())}`);
 
   if (!page.url().startsWith(BASE_URL)) {
     console.log(`Navigating to ${BASE_URL}`);

@@ -1,11 +1,16 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { redact } from '../../harness-shared/redaction.mjs';
+import {
+  appendRedactedJsonLine,
+  serializeRedactedJsonLine,
+} from '../../harness-shared/safe-jsonl.mjs';
 
 export const MCP_TRANSCRIPT_SCHEMA = 'agentweaver.mcp-transcript/v1';
 
 export function createTranscript(metadata = {}) {
-  return { schema: MCP_TRANSCRIPT_SCHEMA, sessionId: metadata.sessionId ?? `mcp-${randomUUID()}`, startedAt: new Date().toISOString(), metadata, turns: [] };
+  return redact({ schema: MCP_TRANSCRIPT_SCHEMA, sessionId: metadata.sessionId ?? `mcp-${randomUUID()}`, startedAt: new Date().toISOString(), metadata, turns: [] });
 }
 
 export function appendExchange(transcript, exchange) {
@@ -18,13 +23,22 @@ export function appendExchange(transcript, exchange) {
     outcome: { ok: exchange.ok ?? !exchange.isError, isError: exchange.isError ?? false, protocolErrorCode: exchange.protocolErrorCode ?? null },
     note: exchange.note ?? null,
   };
-  transcript.turns.push(turn);
-  return turn;
+  const safeTurn = redact(turn);
+  transcript.turns.push(safeTurn);
+  return safeTurn;
 }
 
 export async function writeTranscript(transcript, directory) {
   await mkdir(directory, { recursive: true });
   const file = path.join(directory, `${transcript.sessionId}.json`);
-  await writeFile(file, `${JSON.stringify(transcript, null, 2)}\n`, 'utf8');
+  await writeFile(file, `${JSON.stringify(redact(transcript), null, 2)}\n`, 'utf8');
   return file;
+}
+
+export function serializeTranscriptLine(value) {
+  return serializeRedactedJsonLine(value);
+}
+
+export async function appendTranscriptLine(file, value) {
+  await appendRedactedJsonLine(file, value);
 }

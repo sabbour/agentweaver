@@ -31,7 +31,7 @@ test('combined remote API and MCP flows require explicit Agentweaver authenticat
         runCommand: async () => ({ code: 0 }),
         readVerdicts: () => [],
       }),
-      /requires an explicit --token or AGENTWEAVER_TOKEN/,
+      /requires AGENTWEAVER_TOKEN in the transient launcher environment/,
     );
   }
 });
@@ -68,8 +68,8 @@ test('runs all children independently and aggregates successful sibling verdicts
 test('persisted process reports redact token-bearing arguments and environment values', () => {
   const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.signaturevalue';
   assert.deepEqual(
-    sanitizeCommand(['node', 'runner.mjs', '--token', jwt, `--authorization=Bearer ${jwt}`, 'AGENTWEAVER_TOKEN=opaque', '--scenario', 'safe']),
-    ['node', 'runner.mjs', '--token', '[REDACTED]', '--authorization=[REDACTED]', 'AGENTWEAVER_TOKEN=[REDACTED]', '--scenario', 'safe'],
+    sanitizeCommand(['node', 'runner.mjs', '--secret', jwt, `--authorization=Bearer ${jwt}`, 'AGENTWEAVER_TOKEN=opaque', '--scenario', 'safe']),
+    ['node', 'runner.mjs', '--secret', '[REDACTED]', '--authorization=[REDACTED]', 'AGENTWEAVER_TOKEN=[REDACTED]', '--scenario', 'safe'],
   );
   assert.deepEqual(sanitizeEnvironment({
     AGENTWEAVER_TOKEN: jwt,
@@ -78,14 +78,32 @@ test('persisted process reports redact token-bearing arguments and environment v
     AGENTWEAVER_TOKEN: '[REDACTED]',
     SAFE: 'prefix Bearer [REDACTED]',
   });
+
+});
+
+test('combined launcher rejects authentication embedded in child argv', () => {
+    for (const credentialArgument of [
+      ['--authorization', 'bearer-canary-argv'],
+      ['AGENTWEAVER_TOKEN=bearer-canary-argv'],
+      ['--header', 'Authorization: Bearer bearer-canary-argv'],
+    ]) {
+      assert.throws(
+        () => buildCommands({
+          surfaces: 'mcp',
+          'mcp-command': JSON.stringify(['node', 'runner.mjs', ...credentialArgument]),
+        }, { batchId: 'batch-1', scenarioId: 'case-1', verdictDir: 'verdicts' }),
+        /must not carry authentication in argv/,
+      );
+    }
 });
 
 test('combined report never persists extra child outcome fields', async () => {
   const writes = [];
   await runCombined({
     'scenario-id': 'case-1', 'batch-id': 'batch-1', 'verdict-dir': 'test-verdicts',
-    surfaces: 'mcp', 'mcp-command': JSON.stringify(['node', 'runner.mjs', '--token', 'top-secret']),
+    surfaces: 'mcp', 'mcp-command': JSON.stringify(['node', 'runner.mjs', '--target', 'stdio']),
   }, {
+    env: {},
     mkdir: async () => {},
     writeFile: async (_file, content) => writes.push(content),
     runCommand: async () => ({ code: 0, signal: null, error: null, env: { TOKEN: 'leak' }, stdout: 'leak' }),
@@ -93,7 +111,7 @@ test('combined report never persists extra child outcome fields', async () => {
   });
 
   const report = JSON.parse(writes[0]);
-  assert.equal(report.processes[0].command.at(-1), '[REDACTED]');
+  assert.equal(report.processes[0].command.at(-1), 'stdio');
   assert.equal('env' in report.processes[0], false);
   assert.equal('stdout' in report.processes[0], false);
   assert.equal(report.preflight[0].surface, 'mcp');

@@ -12,6 +12,7 @@
 import { chromium } from '@playwright/test';
 import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { sanitizeUrl } from '../harness-shared/redaction.mjs';
 
 const base = process.argv[2];
 const outDir = process.argv[3];
@@ -46,7 +47,7 @@ console.log(JSON.stringify({
   hasToken: Boolean(token),
   tokenLen: token ? String(token).length : 0,
   keys: Object.keys(entries),
-  url: page.url(),
+  url: sanitizeUrl(page.url()),
 }, null, 2));
 if (token) {
   await writeFile(path.join(outDir, 'session-token.txt'), String(token), 'utf8');

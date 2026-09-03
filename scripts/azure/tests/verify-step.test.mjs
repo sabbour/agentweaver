@@ -58,6 +58,36 @@ test("httpStatus: returns numeric status", async () => {
   assert.equal(await httpStatus("https://example.test/api/projects", { fetchImpl }), 401);
 });
 
+test("authenticated verification fetches reject redirects before credentials can be forwarded", async () => {
+  const calls = [];
+  const fetchImpl = async (_url, init) => {
+    calls.push(init);
+    throw new TypeError("redirect rejected");
+  };
+  assert.equal(await httpStatus("https://example.test/api/projects", {
+    bearerToken: "token-canary-redirect",
+    fetchImpl,
+  }), "000");
+  assert.deepEqual(await httpJson(
+    "https://example.test/api/projects",
+    "token-canary-redirect",
+    { fetchImpl },
+  ), []);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((init) => init.redirect === "error"));
+});
+
+test("anonymous deployment discovery keeps normal redirect behavior", async () => {
+  let init;
+  await httpStatus("https://example.test/health", {
+    fetchImpl: async (_url, options) => {
+      init = options;
+      return { status: 200 };
+    },
+  });
+  assert.equal(init.redirect, undefined);
+});
+
 test("httpStatus: returns '000' on network failure", async () => {
   const fetchImpl = async () => {
     throw new Error("network down");

@@ -196,7 +196,12 @@ export async function httpStatus(url, { bearerToken, fetchImpl = fetch, timeoutM
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const headers = bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {};
-    const resp = await fetchImpl(url, { method: "GET", headers, signal: controller.signal });
+    const resp = await fetchImpl(url, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+      ...(bearerToken ? { redirect: "error" } : {}),
+    });
     return resp.status;
   } catch {
     return "000";
@@ -214,6 +219,7 @@ export async function httpJson(url, bearerToken, { fetchImpl = fetch, timeoutMs 
       method: "GET",
       headers: { Authorization: `Bearer ${bearerToken}` },
       signal: controller.signal,
+      redirect: "error",
     });
     if (!resp.ok) return [];
     return await resp.json();

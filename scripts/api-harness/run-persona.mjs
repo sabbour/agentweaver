@@ -3,7 +3,7 @@
 //
 // NOTE: this file NO LONGER drives persona scenarios. Persona-behavior scenarios
 // (Priya, Jordan, ...) are driven dynamically by a dispatched PersonaActor
-// sub-agent that curls the live API directly, guided by a persona-brief + the
+// sub-agent that calls the live API directly, guided by a persona-brief + the
 // live OpenAPI/Swagger spec it fetches itself — deciding every next action
 // (including pushback/objections) live from real responses, with no scripted
 // HTTP-calling layer in between. See .github/agents/persona-actor.agent.md and
@@ -20,7 +20,7 @@
 //   node run-persona.mjs --scenario generated-artifacts-seam \
 //     --base-url https://agentweaver.example.com
 //
-//   Token resolution order: --token <t>  >  $AGENTWEAVER_TOKEN.
+//   Remote bearer authentication comes only from $AGENTWEAVER_TOKEN.
 //   Base URL: --base-url  >  $AGENTWEAVER_BASE_URL.
 //
 // Exit code 0 = driver drove + captured evidence cleanly (P0 platform-correctness
@@ -67,7 +67,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // for scenarios that do have a real persona.
 const NO_PERSONA_VERSION_SENTINEL = 'unknown';
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const out = { keep: false, rung: 'scoping' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -80,17 +80,16 @@ function parseArgs(argv) {
     else if (a === '--target-revision') out.targetRevision = argv[++i];
     else if (a === '--rung') out.rung = argv[++i];
     else if (a === '--out') out.out = argv[++i];
-    else if (a === '--token') out.token = argv[++i];
     else if (a === '--auth-provider') out.authProvider = argv[++i];
     else if (a === '--recorder-auth-root') out.recorderAuthRoot = argv[++i];
     else if (a === '--timeout') out.timeoutMs = Number(argv[++i]) * 1000;
     else if (a === '--list') out.list = true;
+    else throw new Error(`unknown option: ${a.split('=', 1)[0]}`);
   }
   return out;
 }
 
-export function resolveToken(explicit, env = process.env) {
-  if (explicit) return explicit;
+export function resolveToken(env = process.env) {
   return env.AGENTWEAVER_TOKEN || null;
 }
 
@@ -143,9 +142,9 @@ async function main() {
     console.error(`error: ${err.message}`);
     return 2;
   }
-  const token = authProvider ? null : resolveToken(args.token);
+  const token = authProvider ? null : resolveToken();
   if (!authProvider && !token) {
-    console.error('error: no token (pass --token or set $AGENTWEAVER_TOKEN)');
+    console.error('error: no token (set $AGENTWEAVER_TOKEN or select a secure auth provider)');
     return 2;
   }
 
@@ -162,7 +161,7 @@ async function main() {
     console.error(
       `error: run-persona.mjs only drives kind: 'generation-seam' scenarios (structural generator ` +
       `checks). Persona-behavior scenarios (Priya, Jordan, ...) are no longer fixed scripts and are ` +
-      `not run through this file at all — dispatch a PersonaActor sub-agent that curls the live API ` +
+      `not run through this file at all — dispatch a PersonaActor sub-agent that calls the live API ` +
       `directly against the fetched OpenAPI/Swagger spec, guided by the persona brief. See ` +
       `.github/agents/persona-actor.agent.md and .github/agents/harness.agent.md.`,
     );
@@ -183,14 +182,20 @@ async function main() {
   });
 
   let result;
+  let primaryError = null;
   try {
-    result = await runGenerationSeams(client, scenario, { keep: args.keep });
-  } catch (err) {
-    console.error(`error: scenario driver threw: ${err.stack ?? err}`);
-    return 2;
-  }
+    try {
+      result = await runGenerationSeams(client, scenario, { keep: args.keep });
+    } catch (err) {
+      primaryError = err;
+      console.error(`error: scenario driver threw: ${redact(String(err?.stack ?? err?.message ?? err))}`);
+      for (const cleanupError of err.cleanupErrors ?? []) {
+        console.error(`error: cleanup also failed: ${redact(cleanupError)}`);
+      }
+      return 2;
+    }
 
-  const evidence = result.evidence;
+    const evidence = result.evidence;
 
   // Performance/cost metrics (requirement 4) — reuse the dashboard's own endpoint.
   // Fetch BEFORE cleanup deletes the project. Never fails the scenario.
@@ -220,12 +225,12 @@ async function main() {
     preflight: {
       ...networkTargetEvidence(baseUrl, {
         surface: 'api',
-        authSource: authProvider ? `provider:${args.authProvider}` : args.token ? 'cli-token' : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none',
+        authSource: authProvider ? `provider:${args.authProvider}` : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none',
       }),
       projectId: evidence.projectId ?? null,
       runId: evidence.runId ?? null,
       cleanupIntent: args.keep ? 'retain-harness-created-resources' : 'delete-harness-created-resources',
-      cleanupResult: args.keep ? 'retained' : 'completed-by-scenario',
+      cleanupResult: 'pending-finalization',
     },
     kind,
     persona: {
@@ -284,6 +289,8 @@ async function main() {
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const outPath = join(HERE, 'findings', `${scenario.id}-${stamp}.json`);
+  await result.cleanup();
+  finding.preflight.cleanupResult = args.keep ? 'retained' : 'completed';
   await writeFinding(finding, outPath);
 
   const metadata = {
@@ -332,15 +339,29 @@ async function main() {
   console.log(`Finding written: ${outPath.replace(join(HERE, '..', '..') + '\\', '')}`);
   console.log(`Verdict written: ${verdictPath.replace(join(HERE, '..', '..') + '\\', '')}`);
 
-  await result.cleanup();
-  if (!args.keep) {
-    console.log('Cleaned up throwaway project (pass --keep to retain).');
+    // Exit 3 = inconclusive (e.g. the generator's model provider was unavailable, so the
+    // seam couldn't be assessed) — distinct from a real structural FAIL (exit 1).
+    if (inconclusive && platformPass) return 3;
+    return platformPass ? 0 : 1;
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    if (result?.cleanup) {
+      try {
+        await result.cleanup();
+        if (!args.keep) console.log('Cleaned up throwaway project (pass --keep to retain).');
+      } catch (cleanupError) {
+        const message = String(cleanupError?.message ?? cleanupError);
+        if (primaryError) {
+          primaryError.cleanupErrors = [...(primaryError.cleanupErrors ?? []), message];
+          console.error(`error: cleanup also failed: ${redact(message)}`);
+        } else {
+          throw cleanupError;
+        }
+      }
+    }
   }
-
-  // Exit 3 = inconclusive (e.g. the generator's model provider was unavailable, so the
-  // seam couldn't be assessed) — distinct from a real structural FAIL (exit 1).
-  if (inconclusive && platformPass) return 3;
-  return platformPass ? 0 : 1;
 }
 
 // Only run the CLI when executed directly — importing this module (e.g. from
@@ -349,7 +370,7 @@ if (import.meta.url === `file://${process.argv[1]}` || import.meta.url === pathT
   main()
     .then((code) => process.exit(code))
     .catch((err) => {
-      console.error(err);
+      console.error(redact(String(err?.stack ?? err?.message ?? err)));
       process.exit(2);
     });
 }

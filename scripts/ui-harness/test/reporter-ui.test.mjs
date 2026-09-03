@@ -180,3 +180,78 @@ test('a completed worker response is reconciled after the invoking CLI process d
     await rm(runtimeDirectory(SESSIONS, sessionId), { recursive: true, force: true });
   }
 });
+
+test('finish cleans runtime and session before surfacing evidence write failure', async () => {
+  const sessionId = `test-${randomUUID()}`;
+  const sessionFile = path.join(SESSIONS, `${sessionId}.json`);
+  await mkdir(SESSIONS, { recursive: true });
+  await writeFile(sessionFile, JSON.stringify({
+    id: sessionId,
+    baseUrl: 'https://agentweaver.example.staging/',
+    storageState: 'unused.storageState.json',
+    persona: { id: 'priya', name: 'Priya', coreVersion: '1', adapterVersion: '1', text: 'Test persona' },
+    steps: [],
+    commandFailures: [],
+  }), 'utf8');
+  let runtimeStopped = false;
+  let sessionRemoved = false;
+  try {
+    await assert.rejects(
+      finish({ session: sessionId }, {
+        write: () => {},
+        stopRuntime: async () => {
+          runtimeStopped = true;
+          throw new Error('browser close failed');
+        },
+        removeStoredSession: async () => { sessionRemoved = true; },
+        mkdirImpl: async () => {},
+        writeFileImpl: async () => { throw new Error('artifact disk failure'); },
+      }),
+      (error) => {
+        assert.equal(error.message, 'artifact disk failure');
+        assert.deepEqual(error.cleanupErrors, [
+          'browser/runtime cleanup failed: browser close failed',
+        ]);
+        return true;
+      },
+    );
+    assert.equal(runtimeStopped, true);
+    assert.equal(sessionRemoved, true);
+  } finally {
+    await rm(sessionFile, { force: true });
+    await rm(runtimeDirectory(SESSIONS, sessionId), { recursive: true, force: true });
+  }
+});
+
+test('finish preserves a primary failure and separately records all cleanup failures', async () => {
+  const sessionId = `test-${randomUUID()}`;
+  const sessionFile = path.join(SESSIONS, `${sessionId}.json`);
+  await mkdir(SESSIONS, { recursive: true });
+  await writeFile(sessionFile, JSON.stringify({
+    id: sessionId,
+    baseUrl: 'https://agentweaver.example.staging/',
+    storageState: 'unused.storageState.json',
+    persona: null,
+    steps: [],
+    commandFailures: [],
+  }), 'utf8');
+  try {
+    await assert.rejects(
+      finish({ session: sessionId }, {
+        stopRuntime: async () => { throw new Error('browser close failed'); },
+        removeStoredSession: async () => { throw new Error('session remove failed'); },
+      }),
+      (error) => {
+        assert.match(error.message, /Cannot read properties|null/);
+        assert.deepEqual(error.cleanupErrors, [
+          'browser/runtime cleanup failed: browser close failed',
+          'session cleanup failed: session remove failed',
+        ]);
+        return true;
+      },
+    );
+  } finally {
+    await rm(sessionFile, { force: true });
+    await rm(runtimeDirectory(SESSIONS, sessionId), { recursive: true, force: true });
+  }
+});
