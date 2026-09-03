@@ -39,11 +39,9 @@ public sealed class OAuthMaintenanceService(
             return;
 
         var now = DateTimeOffset.UtcNow;
-        var configuration = scope.ServiceProvider.GetRequiredService<OAuthServerConfiguration>();
         await OAuthDynamicClientLifecycle.DisableExpiredAsync(
             db,
             scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>(),
-            configuration,
             now,
             ct).ConfigureAwait(false);
 

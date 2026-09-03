@@ -69,10 +69,22 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         response.StatusCode.Should().Be(
             HttpStatusCode.Created, await response.Content.ReadAsStringAsync());
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        document.RootElement.GetProperty("client_id").GetString().Should().StartWith("aw_native_");
-        document.RootElement.GetProperty("client_id_expires_at").GetInt64()
-            .Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        var clientId = document.RootElement.GetProperty("client_id").GetString()!;
+        var advertisedExpiration = document.RootElement.GetProperty("client_id_expires_at").GetInt64();
+        clientId.Should().StartWith("aw_native_");
+        advertisedExpiration.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         document.RootElement.TryGetProperty("client_secret", out _).Should().BeFalse();
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        var application = await applications.FindByClientIdAsync(clientId);
+        application.Should().NotBeNull();
+        var descriptor = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(descriptor, application!);
+        OAuthDynamicClientExpiration.TryGetExpiration(descriptor, out var persistedExpiration)
+            .Should().BeTrue();
+        persistedExpiration.ToUnixTimeSeconds().Should().Be(advertisedExpiration,
+            "the durable application metadata must retain the exact advertised expiration");
     }
 
     [Theory]
@@ -210,57 +222,8 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         var clientId = (await registration.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("client_id").GetString()!;
 
-        var sessionId = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
-        await using (var scope = _factory.Services.CreateAsyncScope())
-        {
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            db.BrowserEntraSessions.Add(new BrowserEntraSession
-            {
-                Id = sessionId,
-                EntraObjectId = "00000000-0000-0000-0000-000000000123",
-                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
-            });
-            await db.SaveChangesAsync();
-        }
-
-        var verifier = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
-        var challenge = Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
-        var authorizeParameters = new Dictionary<string, string>
-        {
-            ["client_id"] = clientId,
-            ["redirect_uri"] = redirectUri,
-            ["response_type"] = "code",
-            ["scope"] = "mcp:invoke offline_access",
-            ["state"] = "client-state",
-            ["code_challenge"] = challenge,
-            ["code_challenge_method"] = "S256",
-            ["resource"] = "http://localhost:5000/mcp",
-        };
-        using var authorize = new HttpRequestMessage(
-            HttpMethod.Get, "/oauth/authorize" + QueryString.Create(
-                authorizeParameters.Select(x => KeyValuePair.Create(x.Key, (string?)x.Value))));
-        authorize.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
-        using var consent = await _client.SendAsync(authorize);
-        consent.StatusCode.Should().Be(HttpStatusCode.OK);
-        var html = await consent.Content.ReadAsStringAsync();
-        var consentHandle = Regex.Match(html, "name=\"consent_handle\" value=\"([^\"]+)\"").Groups[1].Value;
-        consentHandle.Should().NotBeNullOrWhiteSpace();
-
-        var form = new Dictionary<string, string>(authorizeParameters)
-        {
-            ["consent_handle"] = consentHandle,
-            ["decision"] = "approve",
-        };
-        using var approval = new HttpRequestMessage(HttpMethod.Post, "/oauth/authorize")
-        {
-            Content = new FormUrlEncodedContent(form),
-        };
-        approval.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
-        using var approved = await _client.SendAsync(approval);
-        approved.StatusCode.Should().Be(HttpStatusCode.Redirect);
-        var callback = approved.Headers.Location!;
-        var code = ParseQuery(callback.Query)["code"];
-        ParseQuery(callback.Query)["state"].Should().Be("client-state");
+        var (code, verifier) = await IssueAuthorizationCodeAsync(
+            clientId, redirectUri, "mcp:invoke offline_access");
 
         async Task<JsonElement> RedeemAsync(Dictionary<string, string> values)
         {
@@ -354,17 +317,141 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
     }
 
     [Fact]
-    public async Task DynamicRegistration_MaintenanceDisablesExpiredApplicationAndReclaimsQuota()
+    public async Task ExpiredDynamicClient_IsRejectedBeforeMaintenanceForAuthorizationAndTokenRequests()
     {
-        var firstId = await RegisterClientAsync("http://127.0.0.1:49163/callback");
+        const string redirectUri = "http://127.0.0.1:49163/callback";
+        var clientId = await RegisterClientAsync(redirectUri);
+        var (code, verifier) = await IssueAuthorizationCodeAsync(clientId, redirectUri, "mcp:invoke");
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            var application = await applications.FindByClientIdAsync(clientId);
+            var descriptor = new OpenIddictApplicationDescriptor();
+            await applications.PopulateAsync(descriptor, application!);
+            descriptor.Properties[OAuthDynamicClientExpiration.ExpirationProperty] =
+                JsonSerializer.SerializeToElement(DateTimeOffset.UtcNow.AddSeconds(-1).ToUnixTimeSeconds());
+            await applications.UpdateAsync(application!, descriptor);
+        }
+
+        var query = QueryString.Create(new Dictionary<string, string?>
+        {
+            ["client_id"] = clientId,
+            ["redirect_uri"] = redirectUri,
+            ["response_type"] = "code",
+            ["scope"] = "mcp:invoke",
+            ["code_challenge"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ["code_challenge_method"] = "S256",
+            ["resource"] = "http://localhost:5000/mcp",
+        });
+        using var authorization = await _client.GetAsync("/oauth/authorize" + query);
+        authorization.StatusCode.Should().BeOneOf(HttpStatusCode.BadRequest, HttpStatusCode.Unauthorized);
+        (await authorization.Content.ReadAsStringAsync()).Should().Contain("invalid_client");
+
+        using var token = await _client.PostAsync("/oauth/token", new FormUrlEncodedContent(
+            new Dictionary<string, string>
+            {
+                ["grant_type"] = "authorization_code",
+                ["client_id"] = clientId,
+                ["code"] = code,
+                ["redirect_uri"] = redirectUri,
+                ["code_verifier"] = verifier,
+                ["resource"] = "http://localhost:5000/mcp",
+            }));
+        token.StatusCode.Should().BeOneOf(HttpStatusCode.BadRequest, HttpStatusCode.Unauthorized);
+        var tokenBody = await token.Content.ReadAsStringAsync();
+        tokenBody.Should().Contain("invalid_client");
+        tokenBody.Should().Contain("dynamically registered client has expired");
+
+        await using var verificationScope = _factory.Services.CreateAsyncScope();
+        var verificationDb = verificationScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verificationDb.OAuthDynamicRegistrations.SingleAsync(x => x.ClientId == clientId))
+            .DisabledAt.Should().BeNull("request validation must not depend on the maintenance sweep");
+    }
+
+    [Fact]
+    public async Task StaticClient_IsUnaffectedByDynamicExpirationValidation()
+    {
+        var clientId = $"static-expiration-test-{Guid.NewGuid():N}";
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            await applications.CreateAsync(OAuthStaticClientReconciler.CreateDescriptor(
+                new OAuthStaticClient
+                {
+                    ClientId = clientId,
+                    DisplayName = "Static expiration test",
+                    RedirectUris = ["http://127.0.0.1:49164/callback"],
+                },
+                "http://localhost:5000/mcp"));
+        }
+
+        using var response = await _client.PostAsync("/oauth/token", new FormUrlEncodedContent(
+            new Dictionary<string, string>
+            {
+                ["grant_type"] = "refresh_token",
+                ["client_id"] = clientId,
+                ["refresh_token"] = "not-a-token",
+                ["resource"] = "http://localhost:5000/mcp",
+            }));
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("invalid_grant");
+        body.Should().NotContain("client has expired");
+    }
+
+    [Fact]
+    public async Task DynamicRegistration_UsesPersistedExpirationAcrossConfigChangesAndMaintenanceReclaimsQuota()
+    {
+        var firstId = await RegisterClientAsync("http://127.0.0.1:49165/callback");
+        DateTimeOffset persistedExpiration;
         await using (var scope = _factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             var registration = await db.OAuthDynamicRegistrations.SingleAsync(x => x.ClientId == firstId);
             registration.RegisteredAt = DateTimeOffset.UtcNow.AddDays(-31);
+            var configChangeApplications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+            var application = await configChangeApplications.FindByClientIdAsync(firstId);
+            var descriptor = new OpenIddictApplicationDescriptor();
+            await configChangeApplications.PopulateAsync(descriptor, application!);
+            persistedExpiration = DateTimeOffset.UtcNow.AddDays(2);
+            descriptor.Properties[OAuthDynamicClientExpiration.ExpirationProperty] =
+                JsonSerializer.SerializeToElement(persistedExpiration.ToUnixTimeSeconds());
+            await configChangeApplications.UpdateAsync(application!, descriptor);
             await db.SaveChangesAsync();
+
+            var changedConfiguration = scope.ServiceProvider.GetRequiredService<OAuthServerConfiguration>() with
+            {
+                DynamicRegistrationLifetime = TimeSpan.FromDays(1),
+            };
+            var configChangeService = new OAuthDynamicClientRegistrationService(
+                db, configChangeApplications, changedConfiguration);
+            using var configChangeDocument = JsonDocument.Parse(
+                """{"client_name":"Config change client","redirect_uris":["http://127.0.0.1:49166/callback"]}""");
+            await configChangeService.RegisterAsync(
+                configChangeDocument.RootElement, "config-change-test", CancellationToken.None);
+            (await db.OAuthDynamicRegistrations.SingleAsync(x => x.ClientId == firstId))
+                .DisabledAt.Should().BeNull(
+                    "the changed one-day lifetime must not replace the first client's persisted expiration");
+
+            application = await configChangeApplications.FindByClientIdAsync(firstId);
+            descriptor = new OpenIddictApplicationDescriptor();
+            await configChangeApplications.PopulateAsync(descriptor, application!);
+            OAuthDynamicClientExpiration.TryGetExpiration(descriptor, out var expirationAfterConfigChange)
+                .Should().BeTrue();
+            expirationAfterConfigChange.ToUnixTimeSeconds()
+                .Should().Be(persistedExpiration.ToUnixTimeSeconds());
+
+            descriptor.Properties[OAuthDynamicClientExpiration.ExpirationProperty] =
+                JsonSerializer.SerializeToElement(DateTimeOffset.UtcNow.AddSeconds(-1).ToUnixTimeSeconds());
+            await configChangeApplications.UpdateAsync(application!, descriptor);
         }
 
+        int activeBeforeMaintenance;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            activeBeforeMaintenance = await db.OAuthDynamicRegistrations.CountAsync(x => x.DisabledAt == null);
+        }
         var maintenance = new OAuthMaintenanceService(
             _factory.Services.GetRequiredService<IServiceScopeFactory>(),
             NullLogger<OAuthMaintenanceService>.Instance);
@@ -380,19 +467,24 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         (await applications.GetRedirectUrisAsync(expiredApplication!)).Should().BeEmpty();
         (await applications.GetPermissionsAsync(expiredApplication!)).Should().BeEmpty();
 
-        var activeCount = await verificationDb.OAuthDynamicRegistrations.CountAsync(x => x.DisabledAt == null);
+        var activeAfterMaintenance = await verificationDb.OAuthDynamicRegistrations
+            .CountAsync(x => x.DisabledAt == null);
+        activeAfterMaintenance.Should().BeLessThan(activeBeforeMaintenance);
         var configuration = verificationScope.ServiceProvider
             .GetRequiredService<OAuthServerConfiguration>() with
         {
-            DynamicRegistrationsTotal = activeCount + 1,
+            DynamicRegistrationsTotal = activeAfterMaintenance + 1,
         };
         var service = new OAuthDynamicClientRegistrationService(
             verificationDb, applications, configuration);
         using var document = JsonDocument.Parse(
-            """{"client_name":"Replacement client","redirect_uris":["http://127.0.0.1:49164/callback"]}""");
+            """{"client_name":"Replacement client","redirect_uris":["http://127.0.0.1:49167/callback"]}""");
         var replacement = await service.RegisterAsync(
             document.RootElement, "quota-test", CancellationToken.None);
         replacement.client_id.Should().StartWith("aw_native_");
+        (await verificationDb.OAuthDynamicRegistrations.CountAsync(x => x.DisabledAt == null))
+            .Should().Be(activeAfterMaintenance + 1,
+                "maintenance must reclaim the expired client's active-registration quota");
     }
 
     private async Task<string> RegisterClientAsync(string redirectUri)
@@ -405,6 +497,64 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         registration.EnsureSuccessStatusCode();
         return (await registration.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("client_id").GetString()!;
+    }
+
+    private async Task<(string Code, string Verifier)> IssueAuthorizationCodeAsync(
+        string clientId,
+        string redirectUri,
+        string scope)
+    {
+        var sessionId = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+        await using (var serviceScope = _factory.Services.CreateAsyncScope())
+        {
+            var db = serviceScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.BrowserEntraSessions.Add(new BrowserEntraSession
+            {
+                Id = sessionId,
+                EntraObjectId = $"expiration-test-{Guid.NewGuid():N}",
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var verifier = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+        var challenge = Base64UrlEncoder.Encode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
+        var authorizeParameters = new Dictionary<string, string>
+        {
+            ["client_id"] = clientId,
+            ["redirect_uri"] = redirectUri,
+            ["response_type"] = "code",
+            ["scope"] = scope,
+            ["state"] = "client-state",
+            ["code_challenge"] = challenge,
+            ["code_challenge_method"] = "S256",
+            ["resource"] = "http://localhost:5000/mcp",
+        };
+        using var authorize = new HttpRequestMessage(
+            HttpMethod.Get, "/oauth/authorize" + QueryString.Create(
+                authorizeParameters.Select(x => KeyValuePair.Create(x.Key, (string?)x.Value))));
+        authorize.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
+        using var consent = await _client.SendAsync(authorize);
+        consent.StatusCode.Should().Be(HttpStatusCode.OK);
+        var html = await consent.Content.ReadAsStringAsync();
+        var consentHandle = Regex.Match(html, "name=\"consent_handle\" value=\"([^\"]+)\"").Groups[1].Value;
+        consentHandle.Should().NotBeNullOrWhiteSpace();
+
+        var form = new Dictionary<string, string>(authorizeParameters)
+        {
+            ["consent_handle"] = consentHandle,
+            ["decision"] = "approve",
+        };
+        using var approval = new HttpRequestMessage(HttpMethod.Post, "/oauth/authorize")
+        {
+            Content = new FormUrlEncodedContent(form),
+        };
+        approval.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
+        using var approved = await _client.SendAsync(approval);
+        approved.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        var callback = approved.Headers.Location!;
+        ParseQuery(callback.Query)["state"].Should().Be("client-state");
+        return (ParseQuery(callback.Query)["code"], verifier);
     }
 
     private static async Task AssertInvalidTargetAsync(HttpResponseMessage response)

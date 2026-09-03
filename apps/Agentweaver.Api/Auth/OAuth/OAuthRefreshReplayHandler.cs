@@ -41,6 +41,35 @@ public sealed class OAuthExactResourceTokenRequestHandler(
     }
 }
 
+public sealed class OAuthDynamicClientExpirationHandler(
+    IOpenIddictApplicationManager applications)
+    : IOpenIddictServerHandler<ValidateAuthorizationRequestContext>,
+      IOpenIddictServerHandler<ValidateTokenRequestContext>
+{
+    public ValueTask HandleAsync(ValidateAuthorizationRequestContext context) =>
+        ValidateAsync(context.Request.ClientId, context);
+
+    public ValueTask HandleAsync(ValidateTokenRequestContext context) =>
+        ValidateAsync(context.Request.ClientId, context);
+
+    private async ValueTask ValidateAsync(string? clientId, BaseValidatingContext context)
+    {
+        if (string.IsNullOrWhiteSpace(clientId))
+            return;
+
+        var application = await applications.FindByClientIdAsync(
+            clientId, context.CancellationToken).ConfigureAwait(false);
+        if (application is null)
+            return;
+
+        var descriptor = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(
+            descriptor, application, context.CancellationToken).ConfigureAwait(false);
+        if (OAuthDynamicClientExpiration.HasExpired(descriptor, DateTimeOffset.UtcNow))
+            context.Reject(Errors.InvalidClient, "The dynamically registered client has expired.");
+    }
+}
+
 public sealed class OAuthRefreshReplayHandler(
     IOpenIddictTokenManager tokens,
     OAuthRefreshTokenFamilyRevoker familyRevoker) : IOpenIddictServerHandler<ValidateTokenRequestContext>

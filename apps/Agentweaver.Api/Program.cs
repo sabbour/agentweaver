@@ -831,9 +831,15 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
             .AddCore(options => options.UseEntityFrameworkCore().UseDbContext<MemoryDbContext>())
             .AddServer(options =>
             {
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateAuthorizationRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthDynamicClientExpirationHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Authentication.ValidateAuthentication.Descriptor.Order - 500));
                 options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenRequestContext>(
                     handler => handler.UseScopedHandler<OAuthExactResourceTokenRequestHandler>()
                         .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Exchange.ValidateAuthentication.Descriptor.Order - 1_000));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthDynamicClientExpirationHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Exchange.ValidateAuthentication.Descriptor.Order - 750));
                 options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenRequestContext>(
                     handler => handler.UseScopedHandler<OAuthRefreshReplayHandler>()
                         .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Exchange.ValidateAuthentication.Descriptor.Order - 500));

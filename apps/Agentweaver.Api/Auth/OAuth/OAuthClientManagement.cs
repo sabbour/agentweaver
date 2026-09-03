@@ -150,7 +150,7 @@ public sealed class OAuthDynamicClientRegistrationService(
         }
         var now = DateTimeOffset.UtcNow;
         await OAuthDynamicClientLifecycle.DisableExpiredAsync(
-            db, manager, configuration, now, ct).ConfigureAwait(false);
+            db, manager, now, ct).ConfigureAwait(false);
         var since = now.AddDays(-1);
         var sourceRegistrations = await db.OAuthDynamicRegistrations.AsNoTracking()
             .Where(x => x.DisabledAt == null && x.SourceHash == sourceHash)
@@ -164,9 +164,12 @@ public sealed class OAuthDynamicClientRegistrationService(
         var clientId = $"aw_native_{Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(24))}";
         var descriptor = OAuthStaticClientReconciler.BaseDescriptor(
             clientId, name, redirects, scopes, configuration.Resource.AbsoluteUri);
-        descriptor.Properties["agentweaver_dynamic"] = JsonSerializer.SerializeToElement(true);
-        var expiresAt = now.Add(configuration.DynamicRegistrationLifetime);
-        descriptor.Properties["agentweaver_expires_at"] = JsonSerializer.SerializeToElement(expiresAt);
+        descriptor.Properties[OAuthDynamicClientExpiration.DynamicProperty] =
+            JsonSerializer.SerializeToElement(true);
+        var expiresAt = DateTimeOffset.FromUnixTimeSeconds(
+            now.Add(configuration.DynamicRegistrationLifetime).ToUnixTimeSeconds());
+        descriptor.Properties[OAuthDynamicClientExpiration.ExpirationProperty] =
+            JsonSerializer.SerializeToElement(expiresAt.ToUnixTimeSeconds());
         await manager.CreateAsync(descriptor, ct).ConfigureAwait(false);
         db.OAuthDynamicRegistrations.Add(new OAuthDynamicRegistration
         {
@@ -230,36 +233,79 @@ internal static class OAuthDynamicClientLifecycle
     public static async Task<int> DisableExpiredAsync(
         MemoryDbContext db,
         IOpenIddictApplicationManager manager,
-        OAuthServerConfiguration configuration,
         DateTimeOffset now,
         CancellationToken ct)
     {
         var active = await db.OAuthDynamicRegistrations
             .Where(x => x.DisabledAt == null)
             .ToListAsync(ct).ConfigureAwait(false);
-        var expired = active
-            .Where(x => x.RegisteredAt.Add(configuration.DynamicRegistrationLifetime) <= now)
-            .ToArray();
+        var disabled = 0;
 
-        foreach (var registration in expired)
+        foreach (var registration in active)
         {
             var application = await manager.FindByClientIdAsync(registration.ClientId, ct).ConfigureAwait(false);
-            if (application is not null)
-            {
-                var descriptor = new OpenIddictApplicationDescriptor();
-                await manager.PopulateAsync(descriptor, application, ct).ConfigureAwait(false);
-                descriptor.Permissions.Clear();
-                descriptor.RedirectUris.Clear();
-                descriptor.DisplayName = $"Expired: {descriptor.DisplayName}";
-                descriptor.Properties["agentweaver_disabled"] = JsonSerializer.SerializeToElement(true);
-                await manager.UpdateAsync(application, descriptor, ct).ConfigureAwait(false);
-            }
+            if (application is null)
+                continue;
 
+            var descriptor = new OpenIddictApplicationDescriptor();
+            await manager.PopulateAsync(descriptor, application, ct).ConfigureAwait(false);
+            if (!OAuthDynamicClientExpiration.HasExpired(descriptor, now))
+                continue;
+
+            descriptor.Permissions.Clear();
+            descriptor.RedirectUris.Clear();
+            descriptor.DisplayName = $"Expired: {descriptor.DisplayName}";
+            descriptor.Properties["agentweaver_disabled"] = JsonSerializer.SerializeToElement(true);
+            await manager.UpdateAsync(application, descriptor, ct).ConfigureAwait(false);
             registration.DisabledAt = now;
+            disabled++;
         }
 
-        if (expired.Length > 0)
+        if (disabled > 0)
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
-        return expired.Length;
+        return disabled;
+    }
+}
+
+internal static class OAuthDynamicClientExpiration
+{
+    internal const string DynamicProperty = "agentweaver_dynamic";
+    internal const string ExpirationProperty = "agentweaver_expires_at";
+
+    internal static bool HasExpired(OpenIddictApplicationDescriptor descriptor, DateTimeOffset now) =>
+        IsDynamic(descriptor)
+        && (!TryGetExpiration(descriptor, out var expiration) || expiration <= now);
+
+    internal static bool IsDynamic(OpenIddictApplicationDescriptor descriptor) =>
+        descriptor.Properties.TryGetValue(DynamicProperty, out var value)
+        && value.ValueKind == JsonValueKind.True;
+
+    internal static bool TryGetExpiration(
+        OpenIddictApplicationDescriptor descriptor,
+        out DateTimeOffset expiration)
+    {
+        expiration = default;
+        if (!descriptor.Properties.TryGetValue(ExpirationProperty, out var value))
+            return false;
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var seconds))
+        {
+            try
+            {
+                expiration = DateTimeOffset.FromUnixTimeSeconds(seconds);
+                return true;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return false;
+            }
+        }
+
+        if (value.ValueKind != JsonValueKind.String
+            || !value.TryGetDateTimeOffset(out var legacyExpiration))
+            return false;
+
+        expiration = DateTimeOffset.FromUnixTimeSeconds(legacyExpiration.ToUnixTimeSeconds());
+        return true;
     }
 }
