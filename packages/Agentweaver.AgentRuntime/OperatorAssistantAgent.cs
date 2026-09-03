@@ -16,6 +16,12 @@ namespace Agentweaver.AgentRuntime;
 /// context for the next turn.</summary>
 public sealed record ConsoleFacadeHistoryMessage(string Role, string Text);
 
+/// <param name="PodHolderToken">
+/// Optional fencing token identifying the owner of this conversation's held AgentHost pod. It is
+/// stamped on the pod's claim at launch so a later release from that owner can prove the claim is
+/// still the one it created, instead of one another API replica has since put in its place under the
+/// same deterministic, run-derived name.
+/// </param>
 public sealed record OperatorAssistantRequest(
     string ConversationId,
     string Message,
@@ -26,7 +32,8 @@ public sealed record OperatorAssistantRequest(
     string? ModelId,
     string AgentDefinition,
     string CallerBearerToken,
-    IReadOnlyList<ConsoleFacadeHistoryMessage> History);
+    IReadOnlyList<ConsoleFacadeHistoryMessage> History,
+    string? PodHolderToken = null);
 
 public sealed record OperatorAssistantResponse(string Message, IReadOnlyList<string> ToolNamesInvoked);
 

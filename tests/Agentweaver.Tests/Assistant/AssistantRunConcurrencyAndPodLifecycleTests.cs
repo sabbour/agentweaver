@@ -6,6 +6,7 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -168,8 +169,228 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
         lifecycle.Releases.Should().ContainSingle();
     }
 
-    private static async Task<string> StartRunAsync(HttpClient client, string? message = null)
+    [Fact]
+    public async Task PlatformProviderChangedBetweenTurns_ReleasesTheHeldPod_SoTheNextTurnRebuildsAgainstIt()
     {
+        // The point of per-turn re-resolution is that a platform provider change takes effect on the
+        // NEXT message. Holding the pod across turns silently defeated that: CopilotAIAgent.SetupAsync
+        // — which decides BYOK vs Copilot and builds the SDK client — runs only at the pod's one-shot
+        // /configure, and the per-turn refresh never rebuilds the client. So repointing the run row
+        // changed the bookkeeping while the held pod kept serving every turn from the OLD provider.
+        // Giving the pod back is what makes the switch real.
+        var lifecycle = new RecordingPodLifecycle();
+        await using var factory = new AssistantWebApplicationFactory
+        {
+            UseAgentHost = true,
+            PodLifecycle = lifecycle,
+        };
+        await SeedByokProviderConfigurationAsync(factory);
+        var client = AuthedClient(factory);
+
+        var runId = await StartRunAsync(client, message: "opening turn on BYOK");
+        lifecycle.Releases.Should().BeEmpty("the opening turn has nothing to invalidate");
+
+        await SeedPlatformDefaultCopilotBindingAsync(factory);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            await byok.SetActiveAsync(null, CancellationToken.None);
+        }
+
+        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        lifecycle.Releases.Should().Contain(runId,
+            "the held pod was configured for BYOK and cannot re-resolve its provider in place, so it " +
+            "must be given back for the turn that follows a provider change");
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        (await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None))!
+            .ModelSource.Should().Be(ModelSource.GitHubCopilot);
+    }
+
+    [Fact]
+    public async Task ActiveByokProviderSwappedBetweenTurns_StillReleasesTheHeldPod_ThoughModelSourceIsUnchanged()
+    {
+        // Comparing only the two-value ModelSource enum cannot see this at all: swapping the active
+        // BYOK configuration (a different endpoint, key and model) leaves ModelSource == Byok, so the
+        // conversation kept being served by the provider that is no longer configured. The comparison
+        // is on provider IDENTITY, which does change here.
+        var lifecycle = new RecordingPodLifecycle();
+        await using var factory = new AssistantWebApplicationFactory
+        {
+            UseAgentHost = true,
+            PodLifecycle = lifecycle,
+        };
+        await SeedByokProviderConfigurationAsync(factory, name: "Provider A");
+        var client = AuthedClient(factory);
+
+        var runId = await StartRunAsync(client, message: "opening turn on provider A");
+        lifecycle.Releases.Should().BeEmpty();
+
+        await SeedByokProviderConfigurationAsync(factory, name: "Provider B");
+
+        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        lifecycle.Releases.Should().Contain(runId,
+            "a same-kind provider swap is invisible to ModelSource but still changes which provider " +
+            "actually serves the conversation");
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        (await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None))!
+            .ModelSource.Should().Be(ModelSource.Byok, "the provider KIND did not change");
+    }
+
+    [Fact]
+    public async Task ProviderUnchangedBetweenTurns_KeepsTheHeldPod()
+    {
+        // The control for the two tests above: invalidation must be driven by a real change, or the
+        // pod hold — worth 15-20s of cold start per message — would be pointless.
+        var lifecycle = new RecordingPodLifecycle();
+        await using var factory = new AssistantWebApplicationFactory
+        {
+            UseAgentHost = true,
+            PodLifecycle = lifecycle,
+        };
+        await SeedByokProviderConfigurationAsync(factory);
+        var client = AuthedClient(factory);
+
+        var runId = await StartRunAsync(client, message: "first turn");
+        for (var i = 0; i < 3; i++)
+        {
+            var turn = await client.PostAsJsonAsync(
+                $"/api/assistant/runs/{runId}/messages", new { message = $"turn {i}" });
+            turn.StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+
+        lifecycle.Releases.Should().BeEmpty("nothing about the effective provider changed");
+    }
+
+    [Fact]
+    public async Task HeldPodHolderToken_IsStableAcrossTurns_AndDistinctPerReplica()
+    {
+        // The fencing token that makes a release a compare-and-swap: one owner per conversation per
+        // replica, stable for as long as that owner holds the pod, and necessarily different on the
+        // replica that cold-starts its own pod for the same conversation.
+        var sharedDb = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-shared-{Guid.NewGuid():N}.db");
+        await using var replica1 = new AssistantWebApplicationFactory { SharedDatabasePath = sharedDb };
+        await using var replica2 = new AssistantWebApplicationFactory { SharedDatabasePath = sharedDb };
+        // Both hosts are started before any run exists: the startup recovery sweep fails whatever it
+        // finds InProgress, which is unrelated to what this test is about.
+        var client1 = AuthedClient(replica1);
+        var client2 = AuthedClient(replica2);
+
+        var runId = await StartRunAsync(client1, message: "first turn");
+        (await client1.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "second turn" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var tokensOnReplica1 = replica1.Agent.Requests.Select(r => r.PodHolderToken).ToList();
+        tokensOnReplica1.Should().HaveCount(2);
+        tokensOnReplica1.Should().AllSatisfy(t => t.Should().NotBeNullOrWhiteSpace());
+        tokensOnReplica1.Distinct().Should().ContainSingle(
+            "the same owner holds the pod for the whole conversation on this replica");
+
+        (await client2.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "third turn, elsewhere" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        replica2.Agent.Requests.Should().ContainSingle();
+        replica2.Agent.Requests.Single().PodHolderToken.Should().NotBe(tokensOnReplica1[0],
+            "the other replica cold-starts its OWN pod, so a stale release from replica 1 must no " +
+            "longer match the claim and must therefore be refused");
+    }
+
+    [Fact]
+    public async Task CancelledTurn_ClearsTheLocalPodHold_SoNoRedundantReleaseIsIssued()
+    {
+        // RemoteOperatorAssistantAgent gives the real pod back on its cancellation path too, but it
+        // rethrows OperationCanceledException as-is rather than wrapping it, so the service's
+        // provider-failure handler never saw it and the local hold flag stayed stuck at held.
+        var lifecycle = new RecordingPodLifecycle();
+        await using var factory = new AssistantWebApplicationFactory
+        {
+            UseAgentHost = true,
+            PodLifecycle = lifecycle,
+            PodIdleTimeout = TimeSpan.FromMinutes(5),
+        };
+        await SeedByokProviderConfigurationAsync(factory);
+        var client = AuthedClient(factory);
+
+        var runId = await StartRunAsync(client, message: "first turn");
+
+        factory.Agent.ThrowOnNextTurn = new OperationCanceledException();
+        try
+        {
+            await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "cancelled turn" });
+        }
+        catch (Exception)
+        {
+            // The transport outcome of a cancelled turn is not what this test is about.
+        }
+
+        var service = (AssistantRunService)factory.Services.GetRequiredService<IAssistantRunService>();
+        service.SweepIdleRuns(DateTimeOffset.UtcNow.AddMinutes(6));
+        await Task.Delay(200);
+
+        lifecycle.Releases.Should().BeEmpty(
+            "the cancelled turn already gave the pod back, so the sweep must not issue a second " +
+            "release for a pod that no longer exists");
+    }
+
+    [Fact]
+    public async Task StartRun_DurablyStaleInProgressRun_DoesNotStrandAConcurrencySlotForever()
+    {
+        // A durable InProgress row is only ever parked by the owning API pod's in-memory sweep. If
+        // that pod restarts first the row stays InProgress forever — the AgentHost reaper reclaims
+        // the pod but never touches run status — so every restart permanently burned one of the
+        // user's slots until they were all gone.
+        var sharedDb = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-shared-{Guid.NewGuid():N}.db");
+        await using var owner = new AssistantWebApplicationFactory
+        {
+            MaxConcurrentRunsPerUser = 1,
+            SharedDatabasePath = sharedDb,
+        };
+        // A replica that never had the conversation resident is exactly what the run's owner looks
+        // like once it is gone: the durable row is still InProgress, but no in-memory sweep anywhere
+        // will ever park it. Both of these are started BEFORE the run exists, because the startup
+        // recovery sweep fails whatever it finds InProgress and would mask the behaviour under test.
+        await using var otherReplica = new AssistantWebApplicationFactory
+        {
+            MaxConcurrentRunsPerUser = 1,
+            SharedDatabasePath = sharedDb,
+            StaleActiveRunThreshold = TimeSpan.FromMinutes(90),
+        };
+        await using var afterLongOutage = new AssistantWebApplicationFactory
+        {
+            MaxConcurrentRunsPerUser = 1,
+            SharedDatabasePath = sharedDb,
+            StaleActiveRunThreshold = TimeSpan.FromMilliseconds(1),
+        };
+        var ownerClient = AuthedClient(owner);
+        var otherClient = AuthedClient(otherReplica);
+        var outageClient = AuthedClient(afterLongOutage);
+
+        var strandedRunId = await StartRunAsync(ownerClient, message: "stranded by a restart");
+
+        var blocked = await otherClient.PostAsJsonAsync("/api/assistant/runs", new { });
+        blocked.StatusCode.Should().Be(HttpStatusCode.TooManyRequests,
+            "a recently-active conversation must keep its slot — staleness, not mere non-residency, " +
+            "is what frees one");
+
+        await Task.Delay(20);
+
+        var allowed = await outageClient.PostAsJsonAsync("/api/assistant/runs", new { });
+        allowed.StatusCode.Should().Be(HttpStatusCode.Created,
+            "a run that has been durably silent past the staleness threshold is stranded, not active");
+
+        var runStore = afterLongOutage.Services.GetRequiredService<IRunStore>();
+        (await runStore.GetAsync(RunId.Parse(strandedRunId), CancellationToken.None))!
+            .Status.Should().Be(RunStatus.Idle,
+                "the repair is CAS-parked durably so every replica sees the slot freed, rather than " +
+                "being re-derived on every start");
+    }
+
+    private static async Task<string> StartRunAsync(HttpClient client, string? message = null)    {
         var response = message is null
             ? await client.PostAsJsonAsync("/api/assistant/runs", new { })
             : await client.PostAsJsonAsync("/api/assistant/runs", new { message });
@@ -215,21 +436,44 @@ public sealed class AssistantRunConcurrencyAndPodLifecycleTests
     }
 
     /// <summary>Makes the platform resolve to BYOK so the AgentHost capability gate (which is only
-    /// armed for GitHub Copilot) stays out of these pod-lifecycle assertions.</summary>
-    private static async Task SeedByokProviderConfigurationAsync(AssistantWebApplicationFactory factory)
+    /// armed for GitHub Copilot) stays out of these pod-lifecycle assertions. Each call adds a
+    /// DISTINCT configuration and makes it the active one, so callers can also swap providers.</summary>
+    private static async Task SeedByokProviderConfigurationAsync(
+        AssistantWebApplicationFactory factory, string name = "Test Azure provider")
     {
         await using var scope = factory.Services.CreateAsyncScope();
         var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
         var created = await settings.AddAsync(
             new ByokProviderConfiguration(
                 Id: string.Empty,
-                Name: "Test Azure provider",
+                Name: name,
                 Type: "azure",
                 BaseUrl: "https://byok-resource.openai.azure.com",
                 Model: "gpt-4.1",
                 ApiKey: "test-byok-key"),
             CancellationToken.None);
         await settings.SetActiveAsync(created.Id, CancellationToken.None);
+    }
+
+    private static async Task SeedPlatformDefaultCopilotBindingAsync(AssistantWebApplicationFactory factory)
+    {
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "platform-version",
+            GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await secrets.SetSecretAsync(
+            "copilot-app-platform-default-version",
+            """{"status":"signed-in","accessToken":"platform-token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"platform-bot"}""");
+        await db.SaveChangesAsync();
     }
 
     private sealed class RecordingPodLifecycle : IAgentHostPodLifecycle

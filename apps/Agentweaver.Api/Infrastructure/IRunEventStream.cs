@@ -51,4 +51,48 @@ public interface IRunEventStream
     /// </remarks>
     Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(string runId, int fromSequence = 0, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not implement GetPersistedEventsAsync.");
+
+    /// <summary>
+    /// Returns the timestamp of the most recent DURABLE event for a run, or <see langword="null"/>
+    /// when the run has no persisted events or this store cannot answer the question.
+    /// </summary>
+    /// <remarks>
+    /// This is the only replica-independent "when did this run last do anything" signal available:
+    /// <see cref="Run"/> carries <c>StartedAt</c>/<c>EndedAt</c> but no heartbeat column, and every
+    /// in-memory activity clock dies with the process that owns it. Callers use it to recognise a
+    /// durable row that is still <c>InProgress</c> only because the pod that owned it restarted
+    /// before it could be parked.
+    ///
+    /// <para>
+    /// The default implementation derives the answer from <see cref="GetPersistedEventsAsync"/>, and
+    /// returns <see langword="null"/> for stores that do not implement it, so test doubles keep
+    /// working and an unanswerable run is simply treated as "not known to be stale" (fail-safe: it
+    /// keeps counting rather than being wrongly reclaimed). Production stores override it with a
+    /// single aggregate query.
+    /// </para>
+    /// </remarks>
+    async Task<DateTimeOffset?> GetLastEventTimestampAsync(string runId, CancellationToken ct = default)
+    {
+        try
+        {
+            var events = await GetPersistedEventsAsync(runId, 0, ct).ConfigureAwait(false);
+            if (events.Count == 0)
+                return null;
+
+            DateTimeOffset? latest = null;
+            foreach (var evt in events)
+            {
+                if (evt.TimestampUtc == default)
+                    continue;
+                if (latest is null || evt.TimestampUtc > latest.Value)
+                    latest = evt.TimestampUtc;
+            }
+
+            return latest;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+    }
 }

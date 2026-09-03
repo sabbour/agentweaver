@@ -1257,6 +1257,10 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
     /// <summary>How long a conversation's AgentHost pod is held after its last turn.</summary>
     public TimeSpan PodIdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
+    /// <summary>How long a durable InProgress run may be silent before the concurrency check stops
+    /// counting it and parks it. Lets tests simulate a run stranded by an API pod restart.</summary>
+    public TimeSpan StaleActiveRunThreshold { get; set; } = TimeSpan.FromMinutes(90);
+
     private readonly string _ownDbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-{Guid.NewGuid():N}.db");
     private string _dbPath => SharedDatabasePath ?? _ownDbPath;
     private readonly string _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-wt-{Guid.NewGuid():N}");
@@ -1295,6 +1299,7 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["RunBounds:MaxMinutes"] = "10",
                 ["Assistant:MaxConcurrentRunsPerUser"] = MaxConcurrentRunsPerUser.ToString(),
                 ["Assistant:PodIdleTimeout"] = PodIdleTimeout.ToString(),
+                ["Assistant:StaleActiveRunThreshold"] = StaleActiveRunThreshold.ToString(),
                 ["Sandbox:AgentExecutionMode"] = UseAgentHost ? "pod-per-run" : "in-api",
             });
         });
@@ -1359,6 +1364,10 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
     public OperatorAssistantRequest? LastRequest { get; private set; }
     public System.Collections.Concurrent.ConcurrentQueue<OperatorAssistantRequest> Requests { get; } = new();
 
+    /// <summary>When set, the fake throws this instead of replying, and clears it so only the NEXT
+    /// turn fails. Lets tests exercise the service's per-turn failure and cancellation unwinding.</summary>
+    public Exception? ThrowOnNextTurn { get; set; }
+
     public async Task<OperatorAssistantResponse> RunTurnAsync(
         OperatorAssistantRequest request,
         IOperatorAssistantTurnSink? sink,
@@ -1366,6 +1375,12 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
     {
         LastRequest = request;
         Requests.Enqueue(request);
+
+        if (ThrowOnNextTurn is { } failure)
+        {
+            ThrowOnNextTurn = null;
+            throw failure;
+        }
 
         if (sink is not null && EmitApproval)
         {
