@@ -457,7 +457,7 @@ public sealed class A2ARoundTripIntegrationTests
             Purpose: AgentHostPurpose.OperatorAssistant,
             ProjectId: "proj-1",
             AgentName: "Operator",
-            CallerBearerToken: "entra-platform-token-xyz")).Should().BeTrue();
+            McpBrokerToken: "broker-token-xyz")).Should().BeTrue();
 
         var approvalGate = new InMemoryToolApprovalGate();
         var fakeAssistant = new GatedFakeOperatorAssistantAgent();
@@ -537,9 +537,9 @@ public sealed class A2ARoundTripIntegrationTests
             fakeAssistant.LastRequest.Should().NotBeNull();
             fakeAssistant.LastRequest!.ConversationId.Should().Be("run-operator-roundtrip-1");
             fakeAssistant.LastRequest.CallerUser.Should().Be("user-1");
-            fakeAssistant.LastRequest.CallerBearerToken.Should().Be("entra-platform-token-xyz",
-                "MCP calls must preserve the platform caller credential rather than substituting the linked GitHub/Copilot token");
-            fakeAssistant.LastRequest.CallerBearerToken.Should().NotBe("gh-oauth-token-abc");
+            fakeAssistant.LastRequest.McpBrokerToken.Should().Be("broker-token-xyz",
+                "MCP calls must receive only the API-issued broker token");
+            fakeAssistant.LastRequest.McpBrokerToken.Should().NotBe("gh-oauth-token-abc");
             fakeAssistant.LastRequest.ProjectId.Should().Be("proj-1");
             fakeAssistant.LastRequest.Message.Should().Be("please run the tool");
             fakeAssistant.LastRequest.AgentDefinition.Should().Be("You are the operator.");
@@ -579,7 +579,7 @@ public sealed class A2ARoundTripIntegrationTests
             PreviewRunnerCredential: null,
             SharedWorkingDirectory: null,
             Purpose: AgentHostPurpose.OperatorAssistant,
-            CallerBearerToken: "platform-caller-token"));
+            McpBrokerToken: "broker-token"));
 
         var runner = new OperatorPodTurnRunner(
             new GatedFakeOperatorAssistantAgent(),

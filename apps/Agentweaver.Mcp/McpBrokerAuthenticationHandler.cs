@@ -90,8 +90,13 @@ internal sealed class McpBrokerAuthenticationHandler(
 
     protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
     {
-        Response.StatusCode = StatusCodes.Status401Unauthorized;
         var error = Context.Items[McpBrokerAuthenticationDefaults.ChallengeErrorItem] as string;
+        Response.StatusCode = string.Equals(
+            error,
+            OpenIddictConstants.Errors.InsufficientScope,
+            StringComparison.Ordinal)
+            ? StatusCodes.Status403Forbidden
+            : StatusCodes.Status401Unauthorized;
         var challenge =
             $"Bearer resource_metadata=\"{configuration.ResourceMetadata.AbsoluteUri}\", " +
             $"scope=\"{McpOAuthConfiguration.RequiredScope}\"";

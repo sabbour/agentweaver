@@ -1,18 +1,24 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.AgentRuntime;
+using Agentweaver.Api.Assistant;
+using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Tests.Assistant;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 
@@ -32,6 +38,7 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
     private readonly int _mcpPort = GetFreeTcpPort();
     private Process? _mcpProcess;
     private string? _lastApiAuthorization;
+    private string? _jwksOverride;
 
     public McpBrokerRealProcessTests()
     {
@@ -70,7 +77,10 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
 
         _authority.MapGet("/.well-known/openid-configuration", () => Results.Json(metadata));
         _authority.MapGet("/.well-known/oauth-authorization-server", () => Results.Json(metadata));
-        _authority.MapGet("/oauth/jwks", () => Results.Json(jwks));
+        _authority.MapGet("/oauth/jwks", () =>
+            _jwksOverride is null
+                ? Results.Json(jwks)
+                : Results.Text(_jwksOverride, "application/json"));
         _authority.MapGet("/api/projects", (HttpContext context) =>
         {
             _lastApiAuthorization = context.Request.Headers.Authorization.ToString();
@@ -81,6 +91,11 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         await _authority.StartAsync();
+        await StartMcpProcessAsync();
+    }
+
+    private async Task StartMcpProcessAsync()
+    {
         var mcpDll = FindMcpAssemblyPath();
         var startInfo = new ProcessStartInfo("dotnet", $"\"{mcpDll}\"")
         {
@@ -122,15 +137,21 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        await StopMcpProcessAsync();
+        await _authority.StopAsync();
+        await _authority.DisposeAsync();
+        _trustedRsa.Dispose();
+    }
+
+    private async Task StopMcpProcessAsync()
+    {
         if (_mcpProcess is { HasExited: false })
         {
             _mcpProcess.Kill(entireProcessTree: true);
             await _mcpProcess.WaitForExitAsync();
         }
         _mcpProcess?.Dispose();
-        await _authority.StopAsync();
-        await _authority.DisposeAsync();
-        _trustedRsa.Dispose();
+        _mcpProcess = null;
     }
 
     [Fact]
@@ -176,7 +197,6 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
             ["API key"] = ("internal-api-key", "invalid_token"),
             ["wrong issuer"] = (CreateToken(issuer: "https://other.example/"), "invalid_token"),
             ["wrong audience"] = (CreateToken(audience: _origin + "/other"), "invalid_token"),
-            ["wrong scope"] = (CreateToken(scope: "project:read"), "insufficient_scope"),
             ["expired"] = (CreateToken(expires: DateTime.UtcNow.AddMinutes(-5)), "invalid_token"),
             ["unknown key"] = (CreateToken(
                 credentials: new SigningCredentials(
@@ -202,6 +222,13 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
                 ExpectedChallenge(invalid.Error),
                 because: tokenClass);
         }
+
+        using var insufficientScope = await PostInitializeAsync(
+            client,
+            CreateToken(scope: "project:read"));
+        insufficientScope.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        insufficientScope.Headers.WwwAuthenticate.ToString().Should().Be(
+            ExpectedChallenge("insufficient_scope"));
     }
 
     [Fact]
@@ -222,6 +249,61 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
         forwarded!.Scheme.Should().Be("Bearer");
         forwarded.Parameter.Should().Be(token,
             "MCP must forward the exact validated broker token and no service credential");
+    }
+
+    [Fact]
+    public async Task AssistantEndpoint_IssuesToken_ThatRealMcpAcceptsAndForwards()
+    {
+        var probe = new McpProbeOperatorAssistantAgent(
+            new Uri($"http://127.0.0.1:{_mcpPort}/mcp"));
+        await using var factory = new AssistantWebApplicationFactory
+        {
+            AgentOverride = probe,
+            OAuthPublicOrigin = _origin,
+        };
+        using var apiClient = factory.CreateClient();
+        apiClient.BaseAddress = new Uri(_origin);
+        apiClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", AssistantWebApplicationFactory.TestApiKey);
+
+        var signingKey = factory.Services.GetRequiredService<OAuthCertificateSet>()
+            .SigningKeys.OfType<X509SecurityKey>().Single();
+        using (var rsa = signingKey.Certificate.GetRSAPublicKey())
+        {
+            var parameters = rsa!.ExportParameters(false);
+            _jwksOverride = JsonSerializer.Serialize(new
+            {
+                keys = new[]
+                {
+                    new
+                    {
+                        kty = "RSA",
+                        use = "sig",
+                        alg = SecurityAlgorithms.RsaSha256,
+                        kid = signingKey.KeyId,
+                        n = Base64UrlEncoder.Encode(parameters.Modulus),
+                        e = Base64UrlEncoder.Encode(parameters.Exponent),
+                    },
+                },
+            });
+        }
+        await StopMcpProcessAsync();
+        await StartMcpProcessAsync();
+        using var response = await apiClient.PostAsJsonAsync(
+            "/api/assistant/runs",
+            new { message = "list projects through MCP" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created, await response.Content.ReadAsStringAsync());
+        probe.BrokerToken.Should().NotBeNullOrWhiteSpace();
+        probe.ListedProjectTool.Should().BeTrue();
+        _lastApiAuthorization.Should().Be("Bearer " + probe.BrokerToken,
+            "the exact server-issued credential must survive the assistant provider, MCP authentication, and backend forwarding");
+
+        var jwt = new JsonWebTokenHandler().ReadJsonWebToken(probe.BrokerToken);
+        jwt.Issuer.Should().Be(_origin + "/");
+        jwt.Audiences.Should().Equal(_origin + "/mcp");
+        jwt.Claims.Single(claim => claim.Type == "scope").Value.Should().Be("mcp:invoke");
+        jwt.Subject.Should().Be(AssistantWebApplicationFactory.TestUser);
     }
 
     private HttpClient CreateClient() => new()
@@ -310,5 +392,43 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
         return Directory.GetFiles(bin, "Agentweaver.Mcp.dll", SearchOption.AllDirectories)
             .OrderByDescending(File.GetLastWriteTimeUtc)
             .First();
+    }
+
+    private sealed class McpProbeOperatorAssistantAgent(Uri endpoint) : IOperatorAssistantAgent
+    {
+        public string? BrokerToken { get; private set; }
+        public bool ListedProjectTool { get; private set; }
+
+        public async Task<OperatorAssistantResponse> RunTurnAsync(
+            OperatorAssistantRequest request,
+            IOperatorAssistantTurnSink? sink,
+            CancellationToken ct)
+        {
+            BrokerToken = request.McpBrokerToken;
+            var provider = new AgentweaverMcpToolProvider(
+                new AgentweaverMcpConnectionOptions { Endpoint = endpoint });
+            AgentweaverMcpToolSession session;
+            try
+            {
+                session = await provider.ConnectAsync(request.McpBrokerToken, ct);
+            }
+            catch (HttpRequestException exception)
+            {
+                using var client = new HttpClient { BaseAddress = new Uri(endpoint.GetLeftPart(UriPartial.Authority)) };
+                using var diagnostic = await PostInitializeAsync(client, request.McpBrokerToken);
+                var jwt = new JsonWebTokenHandler().ReadJsonWebToken(request.McpBrokerToken);
+                throw new InvalidOperationException(
+                    $"MCP rejected the issued token with {(int)diagnostic.StatusCode}: " +
+                    $"{diagnostic.Headers.WwwAuthenticate}; {await diagnostic.Content.ReadAsStringAsync(ct)}; " +
+                    $"iss={jwt.Issuer}; aud={string.Join(',', jwt.Audiences)}; kid={jwt.Kid}; alg={jwt.Alg}; " +
+                    $"typ={jwt.Typ}; sub={jwt.Subject}; scope={jwt.Claims.FirstOrDefault(c => c.Type == "scope")?.Value}",
+                    exception);
+            }
+            await using var ownedSession = session;
+            var tool = ownedSession.Tools.Single(candidate => candidate.Name == "project_list");
+            await tool.InvokeAsync(new AIFunctionArguments(), ct);
+            ListedProjectTool = true;
+            return new OperatorAssistantResponse("MCP broker token accepted.", ["project_list"]);
+        }
     }
 }

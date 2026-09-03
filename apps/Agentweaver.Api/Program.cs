@@ -205,6 +205,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReade
 // and streams turns onto the existing run event stream, unchanged.
 builder.Services.AddSingleton<IOperatorAssistantAgent, Agentweaver.Api.Assistant.RemoteOperatorAssistantAgent>();
 builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(builder.Configuration.GetSection("Assistant"));
+builder.Services.AddSingleton<IOperatorAssistantBrokerTokenIssuer, OperatorAssistantBrokerTokenIssuer>();
 builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Agentweaver.Api.Assistant.AssistantRunService>();
 
 // GitHub Repo App / Copilot App connection credentials live in the server-side secret store.

@@ -75,4 +75,4 @@ public sealed record AgentHostLaunchContext(
     string? ScratchRoot = null,
     string? CommitAuthorName = null,
     string? CommitAuthorEmail = null,
-    string? CallerBearerToken = null);
+    string? McpBrokerToken = null);

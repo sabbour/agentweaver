@@ -381,6 +381,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         AgentHostLaunchContext launchContext,
         CancellationToken ct = default)
     {
+        var hasMcpBrokerToken = !string.IsNullOrWhiteSpace(launchContext.McpBrokerToken);
+        if ((launchContext.Purpose == AgentHostPurpose.OperatorAssistant) != hasMcpBrokerToken)
+        {
+            throw new InvalidOperationException(
+                "An MCP broker token is required exclusively for OperatorAssistant AgentHost launches.");
+        }
+
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
         var requestedWorkingDirectory = string.IsNullOrWhiteSpace(launchContext.SharedWorkingDirectory)
             ? null
@@ -980,7 +987,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             copilotCredential,
             byokProviderConfiguration,
             repositoryAccessToken,
-            callerBearerToken = launchContext.CallerBearerToken,
+            mcpBrokerToken = launchContext.McpBrokerToken,
             toolApprovalApiBaseUrl = _options.ToolApprovalApiBaseUrl,
             // Keep the legacy property during rolling upgrades; new AgentHosts prefer the explicit
             // sharedWorkingDirectory descriptor and create any local workspace inside the pod.

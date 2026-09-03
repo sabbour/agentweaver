@@ -482,10 +482,10 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
-    public async Task LaunchAgentHostPod_operator_configure_carries_platform_caller_token_separately()
+    public async Task LaunchAgentHostPod_operator_configure_carries_mcp_broker_token_separately()
     {
         const string runId = "run-claim-operator-caller";
-        const string callerBearerToken = "entra-platform-bearer-token";
+        const string mcpBrokerToken = "agentweaver-broker-token";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         var handler = new FakeKubeHandler();
@@ -507,14 +507,14 @@ public sealed class KubernetesSandboxExecutorClaimTests
             new AgentHostLaunchContext(
                 SharedWorkingDirectory: null,
                 Purpose: AgentHostPurpose.OperatorAssistant,
-                CallerBearerToken: callerBearerToken));
+                McpBrokerToken: mcpBrokerToken));
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         var body = doc.RootElement;
-        body.GetProperty("callerBearerToken").GetString().Should().Be(callerBearerToken);
+        body.GetProperty("mcpBrokerToken").GetString().Should().Be(mcpBrokerToken);
         body.GetProperty("copilotCredential").GetProperty("snapshotReference").GetString().Should().Be("snapshot-test");
-        body.GetProperty("copilotCredential").GetProperty("accessToken").GetString().Should().NotBe(callerBearerToken,
-            "the Entra platform credential and Copilot capability have different trust purposes");
+        body.GetProperty("copilotCredential").GetProperty("accessToken").GetString().Should().NotBe(mcpBrokerToken,
+            "the MCP broker credential and Copilot capability have different trust purposes");
     }
 
     [Fact]
@@ -548,14 +548,14 @@ public sealed class KubernetesSandboxExecutorClaimTests
             new AgentHostLaunchContext(
                 SharedWorkingDirectory: null,
                 Purpose: AgentHostPurpose.OperatorAssistant,
-                CallerBearerToken: "current-entra-token"));
+                McpBrokerToken: "current-broker-token"));
 
         conflictFirst.ClaimCreateRequests.Should().Be(2,
             "an existing one-shot-configured operator pod must be replaced before a refreshed bearer is delivered");
         fake.Requests.Should().Contain(request =>
             request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
         using var doc = JsonDocument.Parse(configureHandler.Body!);
-        doc.RootElement.GetProperty("callerBearerToken").GetString().Should().Be("current-entra-token");
+        doc.RootElement.GetProperty("mcpBrokerToken").GetString().Should().Be("current-broker-token");
         turnTokens.TryGetTurnToken(runId).Should().NotBeNullOrEmpty();
     }
 

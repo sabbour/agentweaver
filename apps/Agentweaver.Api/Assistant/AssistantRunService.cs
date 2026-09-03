@@ -3,6 +3,7 @@ using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Security;
@@ -71,7 +72,6 @@ public interface IAssistantRunService
     /// idle-closed) — the old run itself is never modified or revived.</summary>
     Task<StartAssistantRunResult> StartRunAsync(
         CallerContext caller,
-        string callerBearerToken,
         string? firstMessage,
         string? projectId,
         string? contextRunId,
@@ -82,7 +82,6 @@ public interface IAssistantRunService
     /// <summary>Runs the next conversational turn on an existing operator run owned by the caller.</summary>
     Task<OperatorAssistantResponse> SendMessageAsync(
         CallerContext caller,
-        string callerBearerToken,
         string runId,
         string message,
         CancellationToken ct);
@@ -102,9 +101,9 @@ public interface IAssistantRunService
 /// whose turns stream onto the existing <see cref="IRunEventStream"/> so the unchanged
 /// <c>GET /api/runs/{id}/stream</c> and <c>/events</c> endpoints serve the transcript.
 ///
-/// It wires <see cref="IOperatorAssistantAgent"/> (the in-API Copilot loop sourcing its tools from the
-/// AgentweaverMCP server) to run one turn at a time using the caller's platform bearer token, threaded
-/// through per call — no token is cached or shared across users. An in-memory per-user concurrency
+/// It wires <see cref="IOperatorAssistantAgent"/> to run one turn at a time using a server-issued,
+/// five-minute MCP broker token bound to the authenticated caller. No browser credential or broker
+/// token is cached or shared across users. An in-memory per-user concurrency
 /// bound and an idle-timeout sweep keep the number of live Copilot/MCP sessions bounded (v1: single
 /// instance; a distributed bound is a fast-follow if the API scales out).
 ///
@@ -123,6 +122,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     private readonly IToolApprovalGate _approvalGate;
     private readonly AssistantRunOptions _options;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IOperatorAssistantBrokerTokenIssuer _brokerTokenIssuer;
     private readonly bool _agentHostEnabled;
     private readonly ILogger<AssistantRunService> _logger;
 
@@ -146,6 +146,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         IToolApprovalGate approvalGate,
         IOptions<AssistantRunOptions> options,
         IServiceScopeFactory scopeFactory,
+        IOperatorAssistantBrokerTokenIssuer brokerTokenIssuer,
         IConfiguration configuration,
         ILogger<AssistantRunService> logger)
     {
@@ -155,6 +156,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         _approvalGate = approvalGate;
         _options = options.Value;
         _scopeFactory = scopeFactory;
+        _brokerTokenIssuer = brokerTokenIssuer;
         _agentHostEnabled = string.Equals(
             configuration["Sandbox:AgentExecutionMode"],
             "pod-per-run",
@@ -167,7 +169,6 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
     public async Task<StartAssistantRunResult> StartRunAsync(
         CallerContext caller,
-        string callerBearerToken,
         string? firstMessage,
         string? projectId,
         string? contextRunId,
@@ -291,7 +292,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
         OperatorAssistantResponse? firstTurn = null;
         if (!string.IsNullOrWhiteSpace(firstMessage))
-            firstTurn = await RunTurnAsync(caller, callerBearerToken, key, firstMessage!, contextRunId, ct)
+            firstTurn = await RunTurnAsync(caller, key, firstMessage!, contextRunId, ct)
                 .ConfigureAwait(false);
 
         return new StartAssistantRunResult(runId, RunStatus.InProgress, firstTurn);
@@ -338,7 +339,6 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
     public Task<OperatorAssistantResponse> SendMessageAsync(
         CallerContext caller,
-        string callerBearerToken,
         string runId,
         string message,
         CancellationToken ct)
@@ -347,7 +347,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         if (string.IsNullOrWhiteSpace(message))
             throw new AssistantRunHttpException(StatusCodes.Status400BadRequest, "message_required", "message is required.");
 
-        return RunTurnAsync(caller, callerBearerToken, runId, message, contextRunId: null, ct);
+        return RunTurnAsync(caller, runId, message, contextRunId: null, ct);
     }
 
     public async Task<IReadOnlyList<AssistantRunSummary>> ListRunsAsync(
@@ -388,7 +388,6 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
     private async Task<OperatorAssistantResponse> RunTurnAsync(
         CallerContext caller,
-        string callerBearerToken,
         string runId,
         string message,
         string? contextRunId,
@@ -407,6 +406,10 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         {
             state.Touch();
 
+            var brokerToken = await _brokerTokenIssuer
+                .IssueAsync(caller, runId, state.ProjectId, ct)
+                .ConfigureAwait(false);
+
             var userMessageId = Guid.NewGuid().ToString("N");
             await AppendAsync(runId, EventTypes.AgentMessage, new
             {
@@ -424,7 +427,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 RunId: contextRunId,
                 ModelId: state.ModelId,
                 AgentDefinition: AgentDefinitionTemplate.Content,
-                CallerBearerToken: callerBearerToken,
+                McpBrokerToken: brokerToken,
                 History: state.HistorySnapshot());
 
             var assistantMessageId = Guid.NewGuid().ToString("N");

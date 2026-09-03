@@ -61,6 +61,9 @@ public sealed class RemoteOperatorAssistantAgent(
     {
         ArgumentNullException.ThrowIfNull(request);
         var runId = request.ConversationId;
+        if (string.IsNullOrWhiteSpace(request.McpBrokerToken))
+            throw new InvalidOperationException(
+                "The operator assistant AgentHost requires a per-turn MCP broker token.");
 
         // IAgentHostPodLifecycle is only registered in-cluster (mirrors every other pod-per-run
         // consumer, e.g. KubernetesPodAgentEndpointResolver's optional podLifecycle) so DI validation
@@ -85,7 +88,7 @@ public sealed class RemoteOperatorAssistantAgent(
                 new AgentHostLaunchContext(
                     SharedWorkingDirectory: null,
                     Purpose: AgentHostPurpose.OperatorAssistant,
-                    CallerBearerToken: request.CallerBearerToken),
+                    McpBrokerToken: request.McpBrokerToken),
                 ct).ConfigureAwait(false);
         }
         catch (ModelProviderConnectionRequiredException)

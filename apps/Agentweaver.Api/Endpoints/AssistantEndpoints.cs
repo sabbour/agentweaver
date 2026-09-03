@@ -33,8 +33,6 @@ public static class AssistantEndpoints
             CancellationToken ct) =>
         {
             var caller = httpContext.GetCaller();
-            var bearer = ExtractBearer(httpContext);
-
             try
             {
                 if (!string.IsNullOrWhiteSpace(request.ProjectId))
@@ -58,7 +56,6 @@ public static class AssistantEndpoints
 
                 var result = await assistant.StartRunAsync(
                     caller,
-                    bearer,
                     request.Message,
                     request.ProjectId,
                     request.RunId,
@@ -99,7 +96,7 @@ public static class AssistantEndpoints
                 logger.LogError(ex, "Failed to start operator assistant run.");
                 return Results.Problem("Failed to start operator assistant run.", statusCode: StatusCodes.Status500InternalServerError);
             }
-        });
+        }).AuthenticatedPlatform();
 
         // GET /api/assistant/runs — list the caller's own operator conversations, newest-first. Scoped
         // to the authenticated caller (never leaks other users' runs). Optional ?limit= caps the count.
@@ -130,7 +127,7 @@ public static class AssistantEndpoints
                 logger.LogError(ex, "Failed to list operator assistant runs.");
                 return Results.Problem("Failed to list operator assistant runs.", statusCode: StatusCodes.Status500InternalServerError);
             }
-        });
+        }).AuthenticatedPlatform();
 
         // POST /api/assistant/runs/{id}/messages — send the next user turn into a running conversation.
         app.MapPost("/api/assistant/runs/{id}/messages", async (
@@ -142,14 +139,13 @@ public static class AssistantEndpoints
             CancellationToken ct) =>
         {
             var caller = httpContext.GetCaller();
-            var bearer = ExtractBearer(httpContext);
             var message = request.Message?.Trim();
             if (string.IsNullOrWhiteSpace(message))
                 return Results.Json(new { error = "message_required", message = "message is required." }, statusCode: StatusCodes.Status400BadRequest);
 
             try
             {
-                var response = await assistant.SendMessageAsync(caller, bearer, id, message, ct).ConfigureAwait(false);
+                var response = await assistant.SendMessageAsync(caller, id, message, ct).ConfigureAwait(false);
                 return Results.Json(new AssistantMessageResponse
                 {
                     RunId = id,
@@ -177,19 +173,7 @@ public static class AssistantEndpoints
                 logger.LogError(ex, "Failed to run operator assistant turn.");
                 return Results.Problem("Failed to run operator assistant turn.", statusCode: StatusCodes.Status500InternalServerError);
             }
-        });
-    }
-
-    /// <summary>Extracts the raw bearer token (without the scheme) to thread through to the MCP
-    /// provider as the caller's per-call identity. Returns empty when the header is absent (the auth
-    /// middleware guarantees a valid credential reached the endpoint).</summary>
-    private static string ExtractBearer(HttpContext httpContext)
-    {
-        var header = httpContext.Request.Headers.Authorization.ToString();
-        const string prefix = "Bearer ";
-        return header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? header[prefix.Length..].Trim()
-            : header.Trim();
+        }).AuthenticatedPlatform();
     }
 
     private static int ProviderFailureStatus(AgentProviderFailureKind kind) =>

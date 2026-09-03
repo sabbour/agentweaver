@@ -84,7 +84,7 @@ internal sealed class OperatorPodTurnRunner : IPodTurnRunner
             RunId: _runtimeState.RunId,
             ModelId: null,
             AgentDefinition: envelope.AgentDefinition,
-            CallerBearerToken: _runtimeState.CallerBearerToken ?? string.Empty,
+            McpBrokerToken: _runtimeState.McpBrokerToken ?? string.Empty,
             History: envelope.History);
 
         // Fail closed rather than silently degrading to an ungated turn: OperatorAssistantAgent only

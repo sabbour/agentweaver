@@ -14,7 +14,7 @@ namespace Agentweaver.Tests.Assistant;
 public sealed class RemoteOperatorAssistantAgentTests
 {
     [Fact]
-    public async Task RunTurn_LaunchesAgentHostWithCurrentCallerBearerToken()
+    public async Task RunTurn_LaunchesAgentHostWithCurrentMcpBrokerToken()
     {
         var lifecycle = new RecordingPodLifecycle();
         var agent = new RemoteOperatorAssistantAgent(
@@ -33,14 +33,35 @@ public sealed class RemoteOperatorAssistantAgentTests
             NullLogger<RemoteOperatorAssistantAgent>.Instance,
             lifecycle);
 
-        await RunUntilEndpointFailureAsync(agent, Request("conversation-1", "entra-token-v1"));
-        await RunUntilEndpointFailureAsync(agent, Request("conversation-2", "entra-token-v2"));
+        await RunUntilEndpointFailureAsync(agent, Request("conversation-1", "broker-token-v1"));
+        await RunUntilEndpointFailureAsync(agent, Request("conversation-2", "broker-token-v2"));
 
-        lifecycle.Launches.Select(launch => launch.Context.CallerBearerToken).Should().Equal(
-            ["entra-token-v1", "entra-token-v2"],
-            "a later message must propagate its refreshed platform credential instead of reusing an earlier turn's token");
+        lifecycle.Launches.Select(launch => launch.Context.McpBrokerToken).Should().Equal(
+            ["broker-token-v1", "broker-token-v2"],
+            "each turn must propagate only its short-lived MCP broker token");
         lifecycle.Launches.Should().OnlyContain(launch =>
             launch.Context.Purpose == Agentweaver.Domain.AgentHostPurpose.OperatorAssistant);
+    }
+
+    [Fact]
+    public async Task RunTurn_WithoutMcpBrokerToken_FailsBeforeAgentHostLaunch()
+    {
+        var lifecycle = new RecordingPodLifecycle();
+        var agent = new RemoteOperatorAssistantAgent(
+            new MissingEndpointResolver(),
+            new PodNameRegistry(),
+            new ThrowingHttpClientFactory(),
+            NullLoggerFactory.Instance,
+            Options.Create(new RemoteAgentProxyOptions()),
+            new ConfigurationBuilder().Build(),
+            null!,
+            NullLogger<RemoteOperatorAssistantAgent>.Instance,
+            lifecycle);
+
+        var act = () => agent.RunTurnAsync(Request("conversation-missing-token", ""), null, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*MCP broker token*");
+        lifecycle.Launches.Should().BeEmpty();
     }
 
     private static async Task RunUntilEndpointFailureAsync(
@@ -52,7 +73,7 @@ public sealed class RemoteOperatorAssistantAgentTests
             .Where(ex => ex.ErrorCode == "agenthost_unavailable");
     }
 
-    private static OperatorAssistantRequest Request(string conversationId, string callerBearerToken) =>
+    private static OperatorAssistantRequest Request(string conversationId, string mcpBrokerToken) =>
         new(
             ConversationId: conversationId,
             Message: "test",
@@ -62,7 +83,7 @@ public sealed class RemoteOperatorAssistantAgentTests
             RunId: null,
             ModelId: null,
             AgentDefinition: "You are the operator.",
-            CallerBearerToken: callerBearerToken,
+            McpBrokerToken: mcpBrokerToken,
             History: []);
 
     private sealed class MissingEndpointResolver : ISandboxAgentEndpointResolver

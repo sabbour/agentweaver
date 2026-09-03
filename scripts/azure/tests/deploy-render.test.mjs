@@ -327,6 +327,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
     "/oauth/authorize",
     "/oauth/token",
     "/oauth/register",
+    "/oauth/resume",
     "/oauth/revoke",
     "/oauth/jwks",
   ]) {

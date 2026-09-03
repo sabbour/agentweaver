@@ -25,7 +25,7 @@ public sealed record OperatorAssistantRequest(
     string? RunId,
     string? ModelId,
     string AgentDefinition,
-    string CallerBearerToken,
+    string McpBrokerToken,
     IReadOnlyList<ConsoleFacadeHistoryMessage> History);
 
 public sealed record OperatorAssistantResponse(string Message, IReadOnlyList<string> ToolNamesInvoked);
@@ -93,8 +93,8 @@ public interface IOperatorAssistantAgent
 ///   2. There is no regex pre-router: the LLM routes via MCP tool descriptions.
 ///
 /// The regex router and the existing facade are intentionally left untouched — this is an additive
-/// spike that proves the MCP tool-adapter path works end to end. Per-call caller bearer passthrough
-/// is preserved: the caller's token is forwarded to the MCP server on every tools/call.
+/// spike that proves the MCP tool-adapter path works end to end. The API-issued, short-lived broker
+/// token is forwarded to the MCP server on every tools/call.
 /// </summary>
 public sealed class OperatorAssistantAgent(
     GitHubCopilotClientFactory factory,
@@ -142,7 +142,7 @@ public sealed class OperatorAssistantAgent(
 
         // Connect to the real MCP server as the caller and adapt its tools to AIFunctions.
         await using var mcpSession = await mcpToolProvider
-            .ConnectAsync(request.CallerBearerToken, ct)
+            .ConnectAsync(request.McpBrokerToken, ct)
             .ConfigureAwait(false);
         var toolDeclarations = BuildToolDeclarations(mcpSession, sink, ct);
         logger.LogInformation(
@@ -493,7 +493,7 @@ public sealed class OperatorAssistantAgent(
             RunId: runId,
             ModelId: null,
             AgentDefinition: agentDefinition,
-            CallerBearerToken: "test",
+            McpBrokerToken: "test",
             History: []), mcpToolCount);
 
     private static string BuildSystemPrompt(OperatorAssistantRequest request, int mcpToolCount = 0)

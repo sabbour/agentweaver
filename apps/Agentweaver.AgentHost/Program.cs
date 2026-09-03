@@ -224,6 +224,9 @@ app.MapPost("/configure", async (HttpContext ctx) =>
 
     if (body is null || string.IsNullOrWhiteSpace(body.RunId))
         return Results.BadRequest("runId is required");
+    var hasMcpBrokerToken = !string.IsNullOrWhiteSpace(body.McpBrokerToken);
+    if ((body.Purpose == AgentHostPurpose.OperatorAssistant) != hasMcpBrokerToken)
+        return Results.BadRequest("mcpBrokerToken is required exclusively for the operator assistant purpose");
     if (body.ByokProviderConfiguration is null && (body.CopilotCredential is null ||
         string.IsNullOrWhiteSpace(body.CopilotCredential.SnapshotReference) ||
         string.IsNullOrWhiteSpace(body.CopilotCredential.AccessToken) ||
@@ -538,11 +541,10 @@ internal sealed record ConfigureRequest
     public string? RepositoryAccessToken { get; init; }
 
     /// <summary>
-    /// Authenticated platform caller token used by the operator assistant's MCP connection. Kept
-    /// separate from <see cref="CopilotCredential"/> because Entra deployments use different
-    /// credentials for Agentweaver API authorization and the linked GitHub/Copilot account.
+    /// Short-lived Agentweaver broker token used only by the operator assistant's MCP connection.
+    /// It is separate from both the browser's Entra bearer and the linked GitHub/Copilot credential.
     /// </summary>
-    public string? CallerBearerToken { get; init; }
+    public string? McpBrokerToken { get; init; }
 
     /// <summary>
     /// Internal API endpoint used only for this run's durable tool-approval-policy lookups.
@@ -633,7 +635,7 @@ internal sealed record ConfigureRequest
         CommitAuthorEmail,
         ProjectId,
         AgentName,
-        CallerBearerToken,
+        McpBrokerToken,
         RepositoryAccessToken,
         ToolApprovalApiBaseUrl,
         ByokProviderConfiguration);

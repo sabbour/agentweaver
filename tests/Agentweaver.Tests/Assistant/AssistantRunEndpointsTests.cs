@@ -5,6 +5,7 @@ using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
@@ -14,6 +15,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.JsonWebTokens;
 
 namespace Agentweaver.Tests.Assistant;
 
@@ -264,7 +268,7 @@ public sealed class AssistantRunEndpointsTests
     }
 
     [Fact]
-    public async Task SendMessage_UsesCurrentCallerTokenEachTurn_WithoutPersistingIt()
+    public async Task SendMessage_IssuesFreshBrokerTokenEachTurn_WithoutForwardingCallerToken()
     {
         await using var factory = new AssistantWebApplicationFactory();
         var initialClient = AuthedClient(factory);
@@ -282,17 +286,89 @@ public sealed class AssistantRunEndpointsTests
             $"/api/assistant/runs/{runId}/messages", new { message = "second refreshed turn" });
         secondTurn.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        factory.Agent.Requests.Select(request => request.CallerBearerToken).Should().Equal(
-            [
-                AssistantWebApplicationFactory.RefreshedTestToken,
-                AssistantWebApplicationFactory.NewestTestToken,
-            ],
-            "every turn must use the bearer presented on that request rather than caching the session's original credential");
+        var brokerTokens = factory.Agent.Requests.Select(request => request.McpBrokerToken).ToList();
+        brokerTokens.Should().HaveCount(2).And.OnlyHaveUniqueItems();
+        brokerTokens.Should().OnlyContain(token =>
+            token != AssistantWebApplicationFactory.RefreshedTestToken
+            && token != AssistantWebApplicationFactory.NewestTestToken,
+            "the browser's bearer must never be forwarded to MCP");
 
         var persistedEvents = JsonSerializer.Serialize(await GetEventsAsync(initialClient, runId));
         persistedEvents.Should().NotContain(AssistantWebApplicationFactory.RefreshedTestToken)
             .And.NotContain(AssistantWebApplicationFactory.NewestTestToken,
-                "caller bearer tokens are transport-only secrets and must never enter run history or event payloads");
+                "caller bearer tokens must never enter run history or event payloads");
+        brokerTokens.Should().OnlyContain(token => !persistedEvents.Contains(token, StringComparison.Ordinal),
+            "short-lived broker tokens are transport-only and must never be persisted");
+    }
+
+    [Fact]
+    public async Task StartRun_IssuesFiveMinuteExactMcpToken_BoundToCallerAndProject()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        var client = AuthedClient(factory, AssistantWebApplicationFactory.RefreshedTestToken);
+        var projectId = await SeedProjectAsync(factory);
+
+        var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        {
+            project_id = projectId,
+            message = "verify broker identity",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        factory.Agent.Requests.Should().ContainSingle();
+        var token = factory.Agent.Requests.Single().McpBrokerToken;
+        var jwt = new JsonWebTokenHandler().ReadJsonWebToken(token);
+        jwt.Issuer.Should().Be("http://localhost:5000/");
+        jwt.Audiences.Should().Equal("http://localhost:5000/mcp");
+        jwt.Claims.Single(claim => claim.Type == "scope").Value.Should().Be("mcp:invoke");
+        jwt.Subject.Should().Be(AssistantWebApplicationFactory.TestUser);
+        jwt.Claims.Single(claim => claim.Type == "agentweaver_project_id").Value.Should().Be(projectId);
+        jwt.ValidTo.Should().BeAfter(DateTime.UtcNow.AddMinutes(4))
+            .And.BeOnOrBefore(DateTime.UtcNow.AddMinutes(5).AddSeconds(5));
+        (await response.Content.ReadAsStringAsync()).Should().NotContain(token,
+            "the server-only broker credential must never be returned to the browser");
+    }
+
+    [Fact]
+    public async Task SendMessage_AfterProjectAccessRevoked_RefusesTokenIssuance()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        var client = AuthedClient(factory, AssistantWebApplicationFactory.RefreshedTestToken);
+        var projectId = await SeedProjectAsync(factory);
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { project_id = projectId });
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        var assignments = factory.Services.GetRequiredService<IProjectRoleAssignmentStore>();
+        (await assignments.DeleteAsync(ProjectId.Parse(projectId), AssistantWebApplicationFactory.TestUser))
+            .Should().BeTrue();
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/assistant/runs/{runId}/messages",
+            new { message = "must not mint a token" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        factory.Agent.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AssistantEndpoints_RejectBrokerTokens_InsteadOfMintingTokenChains()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        var platformClient = AuthedClient(factory);
+        var start = await platformClient.PostAsJsonAsync(
+            "/api/assistant/runs",
+            new { message = "mint one bounded token" });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var brokerToken = factory.Agent.Requests.Single().McpBrokerToken;
+
+        var brokerClient = factory.CreateClient();
+        brokerClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", brokerToken);
+        var response = await brokerClient.GetAsync("/api/assistant/runs");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        factory.Agent.Requests.Should().ContainSingle(
+            "a broker credential must not be able to enter the assistant and trigger another issuance");
     }
 
     [Fact]
@@ -619,10 +695,16 @@ public sealed class AssistantRunEndpointsTests
             runStore, eventStream, factory.Agent, gate,
             Microsoft.Extensions.Options.Options.Create(new AssistantRunOptions()),
             factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            factory.Services.GetRequiredService<Agentweaver.Api.Auth.OAuth.IOperatorAssistantBrokerTokenIssuer>(),
             factory.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AssistantRunService>.Instance);
-        var caller = new Agentweaver.Api.Security.CallerContext { User = AssistantWebApplicationFactory.TestUser };
-        await serviceB.SendMessageAsync(caller, "token", runId, "still here?", CancellationToken.None);
+        var caller = new Agentweaver.Api.Security.CallerContext
+        {
+            User = AssistantWebApplicationFactory.TestUser,
+            EntraObjectId = AssistantWebApplicationFactory.TestUser,
+            AuthenticationScheme = Agentweaver.Api.Auth.AgentweaverAuthenticationSchemes.TestBypass,
+        };
+        await serviceB.SendMessageAsync(caller, runId, "still here?", CancellationToken.None);
 
         // Both replicas now hold the run in memory; each independently decides it is idle and parks
         // it against the shared store/stream (the exact race that once produced two idle_timeout
@@ -1081,6 +1163,35 @@ public sealed class AssistantRunEndpointsTests
         await settings.SetActiveAsync(created.Id, CancellationToken.None);
     }
 
+    private static async Task<string> SeedProjectAsync(AssistantWebApplicationFactory factory)
+    {
+        var projectId = ProjectId.New();
+        var now = DateTimeOffset.UtcNow;
+        await factory.Services.GetRequiredService<IProjectStore>().InsertAsync(new Project
+        {
+            Id = projectId,
+            Name = "Assistant broker project",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = Environment.CurrentDirectory,
+            DefaultBranch = "dev",
+            Owner = AssistantWebApplicationFactory.TestUser,
+            ProviderSettings = new ProjectProviderSettings { DefaultProvider = ModelSource.GitHubCopilot },
+            State = ProjectState.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await factory.Services.GetRequiredService<IProjectRoleAssignmentStore>().UpsertAsync(
+            new ProjectRoleAssignment
+            {
+                ProjectId = projectId,
+                PrincipalId = AssistantWebApplicationFactory.TestUser,
+                Role = ProjectRole.Owner,
+                GrantedBy = AssistantWebApplicationFactory.TestUser,
+                GrantedAt = now,
+            });
+        return projectId.ToString();
+    }
+
     private sealed record EventRow(int Sequence, string Type, JsonElement Payload);
 }
 
@@ -1098,6 +1209,8 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
     public const string NewestTestToken = "assistant-newest-token";
 
     public FakeOperatorAssistantAgent Agent { get; } = new();
+    public IOperatorAssistantAgent? AgentOverride { get; set; }
+    public string OAuthPublicOrigin { get; set; } = "http://localhost:5000";
     public int MaxConcurrentRunsPerUser { get; set; } = 3;
     public bool UseAgentHost { get; set; }
 
@@ -1123,8 +1236,10 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["Auth:User"] = TestUser,
                 ["Auth:Keys:refreshed:Token"] = RefreshedTestToken,
                 ["Auth:Keys:refreshed:User"] = TestUser,
+                ["Auth:Keys:refreshed:PlatformRoles"] = PlatformRoles.Contributor,
                 ["Auth:Keys:newest:Token"] = NewestTestToken,
                 ["Auth:Keys:newest:User"] = TestUser,
+                ["Auth:Keys:newest:PlatformRoles"] = PlatformRoles.Contributor,
                 ["Git:Author:Name"] = "Test",
                 ["Git:Author:Email"] = "test@localhost",
                 ["Providers:GitHubCopilot:ApiKey"] = "test-copilot-key",
@@ -1138,6 +1253,7 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["RunBounds:MaxMinutes"] = "10",
                 ["Assistant:MaxConcurrentRunsPerUser"] = MaxConcurrentRunsPerUser.ToString(),
                 ["Sandbox:AgentExecutionMode"] = UseAgentHost ? "pod-per-run" : "in-api",
+                ["Auth:OAuth:PublicOrigin"] = OAuthPublicOrigin,
             });
         });
 
@@ -1145,7 +1261,29 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
         {
             var existing = services.FirstOrDefault(d => d.ServiceType == typeof(IOperatorAssistantAgent));
             if (existing is not null) services.Remove(existing);
-            services.AddSingleton<IOperatorAssistantAgent>(Agent);
+            services.AddSingleton<IOperatorAssistantAgent>(AgentOverride ?? Agent);
+
+            if (!string.Equals(OAuthPublicOrigin, "http://localhost:5000", StringComparison.Ordinal))
+            {
+                var issuer = services.FirstOrDefault(
+                    descriptor => descriptor.ServiceType == typeof(IOperatorAssistantBrokerTokenIssuer));
+                if (issuer is not null) services.Remove(issuer);
+                services.AddSingleton<IOperatorAssistantBrokerTokenIssuer>(sp =>
+                {
+                    var configured = sp.GetRequiredService<OAuthServerConfiguration>();
+                    var origin = new Uri(OAuthPublicOrigin, UriKind.Absolute);
+                    return new OperatorAssistantBrokerTokenIssuer(
+                        sp.GetRequiredService<IServiceScopeFactory>(),
+                        configured with
+                        {
+                            PublicOrigin = origin,
+                            Resource = new Uri(origin, "/mcp"),
+                        },
+                        sp.GetRequiredService<IHostEnvironment>(),
+                        sp.GetRequiredService<IConfiguration>(),
+                        sp.GetRequiredService<ILogger<OperatorAssistantBrokerTokenIssuer>>());
+                });
+            }
         });
     }
 

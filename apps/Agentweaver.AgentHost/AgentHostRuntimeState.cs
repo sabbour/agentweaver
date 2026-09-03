@@ -89,11 +89,10 @@ internal sealed class AgentHostRuntimeState
     public string? RepositoryAccessToken { get; private set; }
 
     /// <summary>
-    /// The authenticated platform caller token forwarded only for operator-assistant MCP requests.
-    /// This is distinct from <see cref="GitHubAccessToken"/>: in Entra deployments the former is the
-    /// Entra API access token while the latter is the linked GitHub token used by Copilot.
+    /// The short-lived Agentweaver broker token forwarded only for operator-assistant MCP requests.
+    /// It is never the browser's Entra bearer or the linked GitHub token used by Copilot.
     /// </summary>
-    public string? CallerBearerToken { get; private set; }
+    public string? McpBrokerToken { get; private set; }
 
     /// <summary>
     /// API address and credential used only by the internal approval-policy reader. The run
@@ -117,7 +116,7 @@ internal sealed class AgentHostRuntimeState
         CopilotCredential = null; // env-var launches cannot bypass run snapshot redemption
         ByokProviderConfiguration = null;
         RepositoryAccessToken = null;
-        CallerBearerToken = null; // operator-assistant-only warm-pod input
+        McpBrokerToken = null; // operator-assistant-only warm-pod input
         SetToolApprovalApiAccess(options.ApiBaseUrl, options.ApiKey);
         Purpose = AgentHostPurpose.Default;
         WorkspaceMode = ExecutionWorkspaceMode.Shared;
@@ -165,9 +164,9 @@ internal sealed class AgentHostRuntimeState
         RepositoryAccessToken = string.IsNullOrWhiteSpace(configuration.RepositoryAccessToken)
             ? null
             : configuration.RepositoryAccessToken;
-        CallerBearerToken = string.IsNullOrWhiteSpace(configuration.CallerBearerToken)
+        McpBrokerToken = string.IsNullOrWhiteSpace(configuration.McpBrokerToken)
             ? null
-            : configuration.CallerBearerToken;
+            : configuration.McpBrokerToken;
         Purpose = configuration.Purpose;
         WorkspaceMode = configuration.WorkspaceMode;
         SharedWorkingDirectory = configuration.SharedWorkingDirectory;
@@ -187,14 +186,11 @@ internal sealed class AgentHostRuntimeState
 
     public void SetToolApprovalApiAccess(string? apiBaseUrl, string? apiKey)
     {
-        var bearerToken = string.IsNullOrWhiteSpace(apiKey)
-            ? CallerBearerToken
-            : apiKey;
         Volatile.Write(
             ref _toolApprovalApiAccess,
-            string.IsNullOrWhiteSpace(apiBaseUrl) || string.IsNullOrWhiteSpace(bearerToken)
+            string.IsNullOrWhiteSpace(apiBaseUrl) || string.IsNullOrWhiteSpace(apiKey)
                 ? null
-                : new ToolApprovalApiAccess(apiBaseUrl, bearerToken));
+                : new ToolApprovalApiAccess(apiBaseUrl, apiKey));
     }
 
     public void SetEffectiveWorkingDirectory(string workingDirectory) =>
@@ -234,7 +230,7 @@ internal sealed record AgentHostRunConfiguration(
     string? CommitAuthorEmail = null,
     string? ProjectId = null,
     string? AgentName = null,
-    string? CallerBearerToken = null,
+    string? McpBrokerToken = null,
     string? RepositoryAccessToken = null,
     string? ToolApprovalApiBaseUrl = null,
     ByokProviderConfiguration? ByokProviderConfiguration = null);

@@ -51,6 +51,9 @@ spec:
             value: /oauth/register
         - path:
             type: Exact
+            value: /oauth/resume
+        - path:
+            type: Exact
             value: /oauth/revoke
         - path:
             type: Exact
