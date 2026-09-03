@@ -557,7 +557,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.AppKind).HasColumnName("app_kind");
             e.Property(x => x.Purpose).HasColumnName("purpose");
             e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
-            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.ProjectId).HasColumnName("project_id").IsRequired(false);
             e.Property(x => x.ExpiresAtUnixMilliseconds).HasColumnName("expires_at_unix_ms");
             e.Property(x => x.ReturnRouteKey).HasColumnName("return_route_key");
             e.Property(x => x.PkceVerifierProtected).HasColumnName("pkce_verifier_protected");
