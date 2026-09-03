@@ -56,6 +56,16 @@ public interface IAgentHostPodLifecycle
         LaunchAgentHostPodAsync(runId, context.SharedWorkingDirectory, ct);
 
     /// <summary>
+    /// Replaces the in-memory operator-assistant MCP token on an already-configured AgentHost. The
+    /// token is sent only over the authenticated API-to-pod control plane.
+    /// </summary>
+    Task RefreshAgentHostMcpBrokerTokenAsync(
+        string runId,
+        string mcpBrokerToken,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("This AgentHost lifecycle does not support MCP broker token renewal.");
+
+    /// <summary>
     /// Releases the AgentHost pod for the given run by deleting its
     /// <c>SandboxClaim</c>. Called on workflow suspension (HITL / coordinator-idle)
     /// when <c>Sandbox:ReleasePodOnSuspend=true</c>.
@@ -111,7 +121,7 @@ public sealed record AgentHostLaunchContext(
     string? ScratchRoot = null,
     string? CommitAuthorName = null,
     string? CommitAuthorEmail = null,
-    string? CallerBearerToken = null,
+    string? McpBrokerToken = null,
     string? HolderToken = null)
 {
     /// <summary>

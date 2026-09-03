@@ -54,9 +54,6 @@ export async function executeUiAction({
   try {
     if (command === 'goto') {
       readiness = await navigateForAppEvidence(runtime, args.path ?? '/', readinessOptions(args));
-    } else if (command === 'open-preview') {
-      if (!args.url) throw new Error('--url is required for open-preview');
-      await runtime.gotoPreview(args.url);
     } else if (command === 'click') {
       await keyedLocator(runtime.page, {
         testId: args['test-id'],

@@ -32,6 +32,12 @@ public sealed class EntraOAuthState
     /// <summary>The PKCE code_verifier bound to this state; replayed at the token endpoint (S256).</summary>
     public required string CodeVerifier { get; set; }
 
+    /// <summary>Optional local OAuth transaction handle; never an arbitrary URL.</summary>
+    public string? ReturnHandle { get; set; }
+
+    /// <summary>OIDC nonce used only by an Agentweaver authorization-server broker transaction.</summary>
+    public string? Nonce { get; set; }
+
     /// <summary>When this state expires (10 minutes after it was armed).</summary>
     public DateTimeOffset ExpiresAt { get; set; }
 }

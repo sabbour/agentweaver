@@ -42,12 +42,12 @@ internal static async Task<IResult?> RequireRunAccessAsync(
     bool allowInternalService = false)
 {
     var configuration = context.RequestServices.GetRequiredService<IConfiguration>();
-    var caller = ApiKeyAuthMiddleware.GetCaller(context);
+    var caller = context.GetCaller();
     if (run.ProjectId is not { } projectId)
     {
         return caller.Owns(run.SubmittingUser)
             || (allowInternalService
-                && ProjectAuthorization.IsInternalServiceCaller(caller, configuration))
+                && ProjectAuthorization.IsInternalServiceCaller(caller))
             ? null
             : Results.StatusCode(StatusCodes.Status403Forbidden);
     }
@@ -275,9 +275,8 @@ internal static async Task ReleaseAgentHostPodSafeAsync(
 /// <summary>
 /// Authorizes either a human OWNER of the run (<see cref="IsOwner"/>) OR the run's own agent
 /// callback channel, which authenticates with the shared service API key and therefore resolves
-/// to <see cref="Agentweaver.Api.Security.ProjectAuthorization.InternalServiceUser"/> (the
-/// hardcoded internal-key identity — see <c>GitHubTokenAuthMiddleware</c>'s internal-key path) or,
-/// if configured, the <c>Auth:User</c> identity — never the human owner. The agent-callback write
+/// to <see cref="Agentweaver.Api.Security.ProjectAuthorization.InternalServiceUser"/> with the
+/// immutable internal-service authentication-scheme claim — never the human owner. The callback write
 /// endpoints (memory/decision/backlog) rely on the global auth middleware only; this helper lets
 /// the run's own agent reach a run-scoped action (e.g. <c>start_preview</c>) without weakening
 /// security: the runId is server-bound in the tool closure, so a service-identity caller can only
@@ -297,9 +296,9 @@ internal static bool IsOwnerOrServiceCaller(HttpContext context, Run run, IConfi
 
 internal static bool IsOwnerOrServiceCaller(HttpContext context, string? ownerUser, IConfiguration configuration)
 {
-    var caller = ApiKeyAuthMiddleware.GetCaller(context);
+    var caller = context.GetCaller();
     return caller.Owns(ownerUser)
-        || Agentweaver.Api.Security.ProjectAuthorization.IsInternalServiceCaller(caller, configuration);
+        || Agentweaver.Api.Security.ProjectAuthorization.IsInternalServiceCaller(caller);
 }
 
 internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent evt, CancellationToken ct)

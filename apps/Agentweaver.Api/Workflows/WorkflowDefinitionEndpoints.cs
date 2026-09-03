@@ -1,6 +1,7 @@
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Options;
 using Agentweaver.Squad.Catalog;
@@ -20,7 +21,7 @@ namespace Agentweaver.Api.Workflows;
 /// </summary>
 public static class WorkflowDefinitionEndpoints
 {
-    public static void MapWorkflowDefinitionEndpoints(this WebApplication app)
+    public static void MapWorkflowDefinitionEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{projectId}/workflows — list discovered workflows + validation status.
         app.MapGet("/api/projects/{projectId}/workflows", async (
@@ -401,7 +402,7 @@ public static class WorkflowDefinitionEndpoints
             if (bindErrors.Count > 0)
                 return Results.BadRequest(new { error = "workflow_not_bindable", validation_errors = bindErrors });
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var task = await WorkflowTriggerBacklogFactory.CreateReadyTaskAsync(
                 backlogStore,
                 project!,
@@ -592,7 +593,7 @@ public static class WorkflowDefinitionEndpoints
             // FR-061: constrain generated nodes to the project's actual cast roles so the workflow is
             // immediately runnable. Falls back to the full catalog inside the generator when none exist.
             var teamRoles = TryReadTeamRoles(project!);
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var baseWorkflowId = Normalize(request.BaseWorkflowId);
             var baseYaml = string.IsNullOrWhiteSpace(request.BaseYaml) ? null : request.BaseYaml;
             var baseWorkflowIsBuiltIn = false;
@@ -771,7 +772,7 @@ public static class WorkflowDefinitionEndpoints
         var project = await projectStore.GetAsync(pid, ct);
         if (project is null) return (null, Results.NotFound());
 
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
         if (!caller.Owns(project.Owner))
             return (null, Results.StatusCode(StatusCodes.Status403Forbidden));
 

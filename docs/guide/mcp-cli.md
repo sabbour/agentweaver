@@ -11,17 +11,16 @@ Use this guide when driving Agentweaver from Copilot CLI, Claude Desktop, or ano
 The hosted MCP endpoint is `https://<your-agentweaver-host>/mcp`. In the web app,
 open **Account settings → MCP clients** to copy the URL and a client-specific configuration.
 
-The MCP server accepts the same authenticated Agentweaver caller context as the web/API
-session. Microsoft Entra is the product sign-in boundary; GitHub App capability is connected
-separately, not used as an application identity. Set a deployment-authorized caller bearer in
-the client environment as `AGENTWEAVER_TOKEN`; do not commit it to a configuration file.
+The MCP server accepts only Agentweaver-issued broker access tokens for the exact
+`https://<your-agentweaver-host>/mcp` resource and `mcp:invoke` scope. Microsoft Entra remains
+the upstream product sign-in boundary; its access tokens are not MCP credentials. Do not commit
+broker tokens to a configuration file.
 
 ### Local (stdio)
 
 For a locally launched server (`dotnet run --project apps/Agentweaver.Mcp -- --stdio`, which is what
 Copilot CLI does via the workspace `.mcp.json`), there is no interactive OAuth handshake and no
-inbound HTTP request to carry your identity. Provide your **own** per-user token so the backend
-attributes calls to you and enforces project ownership:
+inbound HTTP request to carry your identity. Provide an Agentweaver broker token:
 
 ```jsonc
 {
@@ -31,7 +30,7 @@ attributes calls to you and enforces project ownership:
       "args": ["run", "--project", "apps/Agentweaver.Mcp", "--no-build"],
       "env": {
         "AGENTWEAVER_API_URL": "http://localhost:5000",
-        // Your own authenticated caller bearer. Do NOT use the shared internal service key.
+        // Agentweaver broker token for the MCP resource and mcp:invoke scope.
         "AGENTWEAVER_TOKEN": "${input:agentweaver-token}"
       }
     }
@@ -39,13 +38,10 @@ attributes calls to you and enforces project ownership:
 }
 ```
 
-::: danger Never configure `AGENTWEAVER_API_KEY` on a stdio client
-`AGENTWEAVER_API_KEY` is the internal service-to-service credential. The API maps it to the
-`agentweaver-internal` identity, which is **exempt from project-ownership checks**, so a stdio
-client holding it could read or mutate *any* project regardless of ownership (issue #474). Use your
-personal `AGENTWEAVER_TOKEN` instead. If a stdio server starts with only `AGENTWEAVER_API_KEY` set,
-it refuses to start and logs an error to stderr. To force the insecure fallback for legitimate
-service-to-service use cases, you must explicitly set `AGENTWEAVER_ALLOW_SHARED_KEY=true`.
+::: danger Broker tokens only
+Raw Entra access tokens, GitHub tokens, and API keys are rejected. Stdio mode refuses to start
+without `AGENTWEAVER_TOKEN`; the API independently validates the configured broker token and
+applies project authorization on every tool call.
 :::
 
 ### Claude Desktop
@@ -170,27 +166,34 @@ Run the deterministic CLI-to-MCP smoke test from the repository root:
 
 ```powershell
 $env:AGENTWEAVER_BASE_URL = "https://<staging-host>"
-$env:GITHUB_TOKEN = gh auth token
-$env:AGENTWEAVER_SMOKE_PROJECT_ID = "<configured-staging-project-id>" # optional
+$env:AGENTWEAVER_TOKEN = "<agentweaver-broker-token>"
 npm run test:mcp-smoke
 ```
 
-The test discovers the live MCP tools, verifies their capability contract, checks
-Agentweaver sign-in, creates or reuses a project, submits a minimal run, polls for at
-most five minutes, confirms an outcome gate when needed, requires a successful
-terminal state and at least one artifact, then archives the run. Each failure
-names the workflow step and MCP tool that failed.
+The test discovers the live MCP tools (including `project_delete`), verifies their
+capability contract, creates a uniquely named project using a server-assigned workspace
+path and the software-development blueprint, submits a minimal run, polls for at most
+five minutes, confirms an outcome gate when needed, and requires an artifact. In
+`finally`, it archives the run and deletes only the project it created, including after
+failure, timeout, or cancellation. The primary failure remains separate from cleanup
+failures.
 
 For local stdio testing, pass the server command explicitly:
 
 ```powershell
 npm run test:mcp-smoke -- --target stdio --server-command dotnet `
   --server-args '["run","--project","apps/Agentweaver.Mcp","--","--stdio"]' `
-  --project-id <id>
+  --project-id <id> `
+  --project-is-disposable
 ```
 
-HTTP targets must be localhost or staging unless both `--allow-prod` and
-`--i-understand-prod` are supplied. Prefer a preconfigured smoke project; if no
-project exists, use `AGENTWEAVER_SMOKE_PROJECT_NAME`,
-`AGENTWEAVER_SMOKE_WORKING_DIRECTORY`, and `AGENTWEAVER_SMOKE_BLUEPRINT_ID` to
-control project creation.
+An explicit project ID is accepted only with `--project-is-disposable`; smoke archives
+its run but never deletes a caller-owned project. Without an ID, use
+`AGENTWEAVER_SMOKE_PROJECT_NAME`, `AGENTWEAVER_SMOKE_WORKING_DIRECTORY`, and
+`AGENTWEAVER_SMOKE_BLUEPRINT_ID` only to override creation defaults. Do not pass a local
+Windows path to a deployed AKS target.
+
+HTTP targets must be absolute URLs with pathname exactly `/mcp`. Any HTTPS host is
+accepted; HTTP is loopback-only. URL credentials, fragments, `/mcp/`, and TLS bypasses
+are rejected. Sanitized preflight evidence records origin/path, auth source, project/run
+IDs, cleanup intent/result, and TLS mode without recording the token.

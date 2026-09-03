@@ -15,7 +15,7 @@ public static class GitHubWebhookEndpoints
     public const string EventNamePrefix = "github.";
     private const int DefaultBodyLimitBytes = 1_048_576;
 
-    public static void MapGitHubWebhookEndpoints(this WebApplication app)
+    public static void MapGitHubWebhookEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost(RepoAppWebhookPath, async (
             HttpContext httpContext,
@@ -132,7 +132,7 @@ public static class GitHubWebhookEndpoints
             if (!await CompleteDeliveryAsync(lifecycle, deliveryId, ct).ConfigureAwait(false))
                 return Results.StatusCode(StatusCodes.Status500InternalServerError);
             return Results.Ok(new GitHubWebhookResponse { Duplicate = false, FiredWorkflowIds = firedWorkflowIds });
-        }).AllowAnonymous();
+        }).WebhookHmacAuthenticated();
     }
 
     private static async Task<bool> CompleteDeliveryAsync(

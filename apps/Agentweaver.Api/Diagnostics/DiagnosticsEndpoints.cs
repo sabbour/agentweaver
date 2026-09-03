@@ -14,19 +14,21 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class DiagnosticsEndpoints
 {
-    public static void MapDiagnosticsEndpoints(this WebApplication app)
+    public static void MapDiagnosticsEndpoints(this IEndpointRouteBuilder app)
     {
-        // FR-013: Lightweight API-reachability probe. This path does NOT start with /api so
-        // ApiKeyAuthMiddleware passes it through unauthenticated — the web status dot works
-        // before the user has signed in and without exposing any sensitive data.
-        app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+        // FR-013: Lightweight API-reachability probe. Operational metadata keeps the web status
+        // dot available before sign-in without exposing sensitive data.
+        app.MapGet("/health", () => Results.Ok(new { status = "ok" }))
+            .OperationalAnonymous();
 
-        // /api/health: same reachability probe under the /api prefix for gateway and
-        // Kubernetes readiness checks. ApiKeyAuthMiddleware explicitly allows this path.
-        app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+        // /api/health: same operational probe under the /api prefix for gateway and Kubernetes
+        // readiness checks.
+        app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }))
+            .OperationalAnonymous();
 
         // Lightweight liveness probe: no database, GitHub, Key Vault, or workspace checks.
-        app.MapGet("/api/ping", () => Results.Ok(new { status = "ok" }));
+        app.MapGet("/api/ping", () => Results.Ok(new { status = "ok" }))
+            .OperationalAnonymous();
 
         // Workspace mount readiness probe. Returns 200 when the workspace mount root is
         // present and writable; 503 when the volume is missing or read-only. Kubernetes
@@ -39,7 +41,7 @@ public static class DiagnosticsEndpoints
                 ? Results.Ok(new { status = "ok" })
                 : Results.Json(new { status = "unavailable", error = "workspace_mount_unavailable" },
                     statusCode: StatusCodes.Status503ServiceUnavailable);
-        });
+        }).OperationalAnonymous();
 
         // FR-016: Global system diagnostics — real executed checks, no mocks.
         // Reachable from the MCP server at parity (FR-016a).

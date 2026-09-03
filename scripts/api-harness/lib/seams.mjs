@@ -1,7 +1,7 @@
 // Generated-artifact SEAM driver (issue #1 expansion, requirement 2).
 //
 // Where a dynamically-driven persona run (a dispatched PersonaActor sub-agent
-// curling the live API directly, guided by a persona brief + the live OpenAPI
+// calling the live API directly, guided by a persona brief + the live OpenAPI
 // spec — see .github/agents/persona-actor.agent.md) judges a *product outcome*
 // (a drafted plan), this driver targets the GENERATION SEAMS themselves:
 // it asks the product to
@@ -35,6 +35,31 @@ const PROVIDER_FAIL_STATUS = new Set([401, 402, 429, 500, 502, 503, 504]);
  * @param {boolean} [opts.keep]
  */
 export async function runGenerationSeams(client, scenario, opts = {}) {
+  const lifecycle = { projectId: null, cleanupAttempted: false };
+  const cleanup = async () => {
+    if (opts.keep || !lifecycle.projectId || lifecycle.cleanupAttempted) return;
+    lifecycle.cleanupAttempted = true;
+    const response = await client.del(`/api/projects/${lifecycle.projectId}?confirm=true`);
+    if (!response.ok) {
+      throw new Error(`throwaway project cleanup failed with status ${response.status}`);
+    }
+  };
+
+  try {
+    const result = await executeGenerationSeams(client, scenario, { ...opts, lifecycle });
+    result.cleanup = cleanup;
+    return result;
+  } catch (primaryError) {
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      primaryError.cleanupErrors = [String(cleanupError?.message ?? cleanupError)];
+    }
+    throw primaryError;
+  }
+}
+
+async function executeGenerationSeams(client, scenario, opts = {}) {
   const started = Date.now();
   const timings = {};
   const evidence = {
@@ -159,6 +184,7 @@ export async function runGenerationSeams(client, scenario, opts = {}) {
     }),
   );
   evidence.projectId = create.responseBody?.project_id ?? null;
+  opts.lifecycle.projectId = evidence.projectId;
   add(
     'Throwaway project created to host workflow generation',
     create.status === 201 && !!evidence.projectId,
@@ -228,10 +254,7 @@ export async function runGenerationSeams(client, scenario, opts = {}) {
       triggeredFailureSignals: [],
       evidence,
       durationMs: Date.now() - started,
-      cleanup: async () => {
-        if (opts.keep) return;
-        if (evidence.projectId) await client.del(`/api/projects/${evidence.projectId}?confirm=true`).catch(() => {});
-      },
+      cleanup: async () => {},
     };
   }
 }

@@ -26,8 +26,8 @@ public sealed record AgentweaverMcpConnectionOptions
 /// into <c>SessionConfig.Tools</c> (which is a list of <see cref="AIFunctionDeclaration"/>).
 ///
 /// This replaces the 15 hand-wrapped read-only tools that used to live in the legacy Console facade agent with
-/// the single source of truth (all ~91 MCP tools). The authenticated caller's bearer token is passed through
-/// on every request: it is set as the <c>Authorization</c> header on the streamable-HTTP transport, so
+/// the single source of truth (all ~91 MCP tools). The caller's Agentweaver broker token is passed through
+/// on every request through the streamable-HTTP transport, so
 /// each JSON-RPC <c>tools/call</c> (a distinct HTTP POST in stateless streamable-HTTP mode) carries the
 /// caller identity that the MCP server's bearer middleware forwards to the backend API.
 /// </summary>
@@ -37,7 +37,7 @@ public interface IAgentweaverMcpToolProvider
     /// Connects to the MCP server as the given caller and enumerates its tools. The returned session
     /// owns the live MCP connection and MUST be disposed when the conversation ends.
     /// </summary>
-    Task<AgentweaverMcpToolSession> ConnectAsync(string callerBearerToken, CancellationToken ct = default);
+    Task<AgentweaverMcpToolSession> ConnectAsync(string brokerToken, CancellationToken ct = default);
 }
 
 /// <inheritdoc />
@@ -49,25 +49,27 @@ public sealed class AgentweaverMcpToolProvider : IAgentweaverMcpToolProvider
     // Optional factory so tests can supply an HttpClient bound to an in-process host. Production
     // leaves this null and the transport creates its own pooled HttpClient.
     private readonly Func<HttpClient>? _httpClientFactory;
+    private readonly bool _ownsHttpClient;
 
     public AgentweaverMcpToolProvider(
         AgentweaverMcpConnectionOptions options,
         ILoggerFactory? loggerFactory = null,
-        Func<HttpClient>? httpClientFactory = null)
+        Func<HttpClient>? httpClientFactory = null,
+        bool ownsHttpClient = false)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options;
         _loggerFactory = loggerFactory;
         _httpClientFactory = httpClientFactory;
+        _ownsHttpClient = ownsHttpClient;
     }
 
-    public async Task<AgentweaverMcpToolSession> ConnectAsync(string callerBearerToken, CancellationToken ct = default)
+    public async Task<AgentweaverMcpToolSession> ConnectAsync(string brokerToken, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(callerBearerToken))
+        if (string.IsNullOrWhiteSpace(brokerToken))
             throw new ArgumentException(
-                "A caller bearer token is required: the operator assistant forwards the signed-in user's " +
-                "token to the MCP server per call; it never uses a shared or installation identity.",
-                nameof(callerBearerToken));
+                "An Agentweaver broker token for the MCP resource is required.",
+                nameof(brokerToken));
 
         var transportOptions = new SseClientTransportOptions
         {
@@ -79,14 +81,14 @@ public sealed class AgentweaverMcpToolProvider : IAgentweaverMcpToolProvider
             // Per-call bearer passthrough: every streamable-HTTP request carries the caller's token.
             AdditionalHeaders = new Dictionary<string, string>
             {
-                ["Authorization"] = $"Bearer {callerBearerToken}",
+                ["Authorization"] = "Bearer " + brokerToken,
             },
         };
 
         var http = _httpClientFactory?.Invoke();
         var transport = http is null
             ? new SseClientTransport(transportOptions, _loggerFactory)
-            : new SseClientTransport(transportOptions, http, _loggerFactory, ownsHttpClient: false);
+            : new SseClientTransport(transportOptions, http, _loggerFactory, ownsHttpClient: _ownsHttpClient);
 
         var client = await McpClientFactory
             .CreateAsync(transport, clientOptions: null, loggerFactory: _loggerFactory, cancellationToken: ct)

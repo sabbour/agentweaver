@@ -30,3 +30,8 @@ surface-specific session/target configuration. A nonzero child exit, absent
 verdict, or aggregation failure is recorded in `launcher-report.json`; completed
 sibling processes are still aggregated. Use `--surfaces api,mcp` (or another
 subset) for a scoped pass.
+
+Remote API/MCP authentication is inherited only from transient
+`AGENTWEAVER_TOKEN`; child command arrays containing authentication material are
+rejected. Launcher reports recursively redact secrets and persist target URLs without
+userinfo, query strings, or fragments.

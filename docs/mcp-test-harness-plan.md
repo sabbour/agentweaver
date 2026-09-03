@@ -1,5 +1,12 @@
 # Agentweaver MCP Test Harness Plan
 
+> **Superseded safety model (2026-09-02):** Hostname allowlists and production
+> confirmation flags described below are historical only. MCP HTTP targets use normal
+> TLS, arbitrary HTTPS hosts, and the exact `/mcp` pathname. Deterministic remote smoke
+> requires an explicit deployed-workspace directory and creates an `origin: "blank"`
+> project, archives its run, and deletes only that project in
+> `finally`; caller-supplied disposable projects are never deleted.
+
 _Last updated: 2026-07-14 — author: Morpheus (Runtime Engineer)_
 
 > **Status: design spec only.** No code in this plan is built yet. This document
@@ -137,13 +144,12 @@ index (`docs/reference/mcp-tools.md`), and epic **#295** + children.
   tools discovered from `[McpServerTool]` attributes across
   `apps/Agentweaver.Mcp/Tools/*.cs`.
 - Two transports:
-  - **stdio** (`--stdio`): single-user/local. The server forwards the caller's own
-    bearer to the backend; **no JWT validation** is performed (local trust). Falls
-    back to a shared `AGENTWEAVER_API_KEY` only when there is no inbound token.
+  - **stdio** (`--stdio`): single-user/local. The server requires and forwards an
+    Agentweaver broker token from `AGENTWEAVER_TOKEN`; the API validates it.
   - **HTTP streamable** (`app.MapMcp("/mcp")`): the hosted staging surface. Runs in
     **stateless** mode (`WithHttpTransport(o => o.Stateless = true)`) so each tool
-    call executes in its own HTTP scope and the caller's bearer (captured by
-    `McpBearerTokenMiddleware`) flows into the tool. (The stateful transport left
+    call executes in its own HTTP scope and the OpenIddict-validated broker token
+    flows into the tool. (The stateful transport left
     `IHttpContextAccessor.HttpContext` null during tool calls and 401'd every call —
     a real bug already fixed; the harness must exercise the stateless HTTP path that
     Copilot CLI actually hits.)
@@ -194,7 +200,7 @@ This 1:1 mapping is why persona briefs can be **surface-agnostic** and reused ve
 
 ### Auth & session model
 
-Investigated in `McpBearerTokenMiddleware.cs` + `AgentweaverApiClient.cs` +
+Investigated in `McpBrokerAuthenticationHandler.cs` + `AgentweaverApiClient.cs` +
 `GitHubAuthTools.cs`:
 
 - The hosted MCP endpoint is an **OAuth 2.0 protected resource** (RFC 9728). It
@@ -202,21 +208,11 @@ Investigated in `McpBearerTokenMiddleware.cs` + `AgentweaverApiClient.cs` +
   pointing at the Authorization Server; unauthenticated calls get a `401` with a
   `WWW-Authenticate` challenge advertising the resource-metadata URL. This is the
   exact discovery dance Copilot CLI / VS Code perform.
-- **Two accepted bearer types:**
-  1. **Agentweaver-minted OAuth access token** (signed JWT) — validated **offline**
-     against the AS JWKS (`iss`/`aud`/`exp`/RS256) by `McpAccessTokenValidator`. The
-     backend then does the authoritative `jti`-denylist + per-user org enforcement.
-  2. **Raw GitHub OAuth token** (transitional passthrough) — validated by calling
-     `GET https://api.github.com/user`, cached 5 min. Gated by
-     `Auth:Mcp:AllowGitHubPassthrough` (default on).
-- Either way, the resolved identity + raw bearer are stashed in `HttpContext.Items`
-  and **forwarded to the backend API** by `AgentweaverApiClient` — so the backend sees
-  the real caller, not a service identity. **This is the critical difference from the
-  API harness:** the API harness supplies its own `gh auth token` bearer directly to
-  `/api/*`; the MCP harness must obtain a bearer the **MCP server** accepts and let
-  the MCP server forward it. For staging validation the harness will use the
-  **GitHub-token passthrough** path (a `gh auth token`), which is the simplest bearer
-  the hosted `/mcp` currently accepts.
+- **One accepted bearer type:** an Agentweaver broker JWT validated through
+  ASP.NET/OpenIddict remote discovery/JWKS with exact issuer, resource audience,
+  keyed RS256 signature, lifetime, subject, and `mcp:invoke`.
+- The validated bearer is **forwarded to the backend API** by `AgentweaverApiClient`,
+  so the API independently validates it and applies project authorization.
 - **In-band GitHub capability tools:** `github_repo_app_connect` and
   `project_copilot_app_connect` return only an opaque transaction ID, browser URL, and
   expiry. A human completes the browser handoff, then the matching status tool polls
@@ -441,7 +437,7 @@ targets, selectable by flag, so we test both real client paths:
 
 - **`--target http`** (primary, staging): speak MCP **streamable HTTP** JSON-RPC to
   `https://<staging-host>/mcp`, performing the RFC 9728 discovery + bearer auth exactly
-  as Copilot CLI does. Bearer obtained via `gh auth token` (GitHub passthrough path).
+  as Copilot CLI does, using an Agentweaver broker token obtained through the app OAuth flow.
 - **`--target stdio`** (secondary, local/CI): launch the MCP server with `--stdio`
   and speak JSON-RPC over stdio — the simplest deterministic path for the #131 CI
   smoke test (no OAuth, forwards the local bearer).
@@ -544,7 +540,7 @@ system improve in response to each pushback, was an error message actually actio
 
 ### 4. Auth/session handling in the harness
 
-- `--target http`: on startup the harness (a) obtains `gh auth token`, (b) performs
+- `--target http`: on startup the harness (a) receives an Agentweaver broker token, (b) performs
   the MCP `initialize` handshake, (c) resolves the RFC 9728 protected-resource
   metadata, (d) attaches `Authorization: Bearer <token>` to every `tools/call`. If the
   server returns a 401/`invalid_token` challenge, the harness records it verbatim (it
@@ -552,8 +548,8 @@ system improve in response to each pushback, was an error message actually actio
   persona, the LLM may guide the user through `github_repo_app_connect` and poll
   `github_repo_app_authorization_status`. Browser handoffs need a one-time human
   action; unattended CI uses pre-established capabilities.
-- `--target stdio`: the local bearer/`AGENTWEAVER_API_KEY` is forwarded; no device
-  flow. This is the deterministic CI path (#131).
+- `--target stdio`: the configured Agentweaver broker token is forwarded to the API.
+  This is the deterministic CI path (#131).
 - Session tools (`session_start`/`session_current`) are driven as first-class turns so
   the harness validates the operator-session lifecycle the `agentweaver.agent.md`
   auth-first rule depends on.
@@ -1190,7 +1186,7 @@ API or UI surface.
 
 **The special value for the MCP surface:** because this harness **authenticates and
 transports exactly the way GitHub Copilot CLI itself does** (streamable-HTTP JSON-RPC with a
-`gh auth token` bearer via the RFC 9728 discovery dance on `--target http`, or a launched
+an Agentweaver broker bearer via the RFC 9728 discovery dance on `--target http`, or a launched
 `--stdio` server on `--target stdio`), the pointer skill effectively lets **Copilot CLI test
 its own MCP integration path** — a Copilot session invoking the skill drives Agentweaver's MCP
 surface through the same seam Copilot CLI uses in production, so the harness doubles as a

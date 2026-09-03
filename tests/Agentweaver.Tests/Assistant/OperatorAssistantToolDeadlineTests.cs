@@ -74,4 +74,52 @@ public sealed class OperatorAssistantToolDeadlineTests
         await act.Should().ThrowAsync<OperationCanceledException>(
             "turn cancellation must surface as cancellation, not be swallowed into a timeout message");
     }
+
+    [Fact]
+    public async Task RenewableTool_RefreshesAfterApprovalBeforeEveryMcpInvocation()
+    {
+        var order = new List<string>();
+        var inner = AIFunctionFactory.Create(
+            () =>
+            {
+                order.Add("invoke");
+                return "ok";
+            },
+            "coordinator_start");
+        var sink = new RecordingRenewalSink(order);
+        var tool = OperatorAssistantAgent.CreateRenewableToolForTests(
+            inner, sink, requiresApproval: true, CancellationToken.None);
+
+        await tool.InvokeAsync(new AIFunctionArguments(), CancellationToken.None);
+        await tool.InvokeAsync(new AIFunctionArguments(), CancellationToken.None);
+
+        order.Should().Equal(
+            "approval", "refresh", "invoke",
+            "approval", "refresh", "invoke");
+    }
+
+    private sealed class RecordingRenewalSink(List<string> order) : IOperatorAssistantTurnSink
+    {
+        public ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct) => ValueTask.CompletedTask;
+        public ValueTask OnToolCallAsync(string toolName, string? argumentsJson, CancellationToken ct) =>
+            ValueTask.CompletedTask;
+        public ValueTask OnToolResultAsync(string toolName, bool success, CancellationToken ct) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask<bool> OnApprovalRequiredAsync(
+            string requestId,
+            string toolName,
+            string? argumentsJson,
+            CancellationToken ct)
+        {
+            order.Add("approval");
+            return ValueTask.FromResult(true);
+        }
+
+        public ValueTask OnMcpBrokerTokenRefreshRequiredAsync(CancellationToken ct)
+        {
+            order.Add("refresh");
+            return ValueTask.CompletedTask;
+        }
+    }
 }

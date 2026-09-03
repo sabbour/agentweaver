@@ -25,10 +25,10 @@ turn, so each message paid claim binding, the A2A handshake, MCP connect, histor
 one-shot `/configure` (~8s on its own — it runs `CopilotAIAgent.SetupAsync` and starts a Copilot/BYOK
 client from scratch). The pod is now HELD for the conversation. `KubernetesSandboxExecutor` reuses an
 existing operator claim instead of deleting and recreating it whenever this replica still holds the
-run's turn token, and because `/configure` is genuinely one-shot the current caller bearer instead
-rides the per-turn setup channel (new `AgentSetupParams.CallerBearerToken` →
-`AgentHostRuntimeState.RefreshCallerBearerToken`), so a refreshed browser token still reaches the pod
-every turn. A turn landing on the other replica simply falls back to the old cold-start path.
+run's turn token. Because `/configure` is genuinely one-shot, the current short-lived MCP broker
+token is renewed over the authenticated API-to-pod control plane before every turn and immediately
+before every MCP tool call, without forwarding a browser bearer into the pod. A turn landing on the
+other replica simply falls back to the old cold-start path.
 
 Held pods are given back by a new, deliberately short `Assistant:PodIdleTimeout` (default 5 min,
 skipped while a tool-approval is armed), by conversation dormancy at `IdleTimeout`, and on turn

@@ -2,12 +2,7 @@
 #
 # All requests with path prefix /api, /auth, or /openapi are forwarded to
 # agentweaver-api:8080.
-# OAuth 2.1 Authorization Server paths are also routed here:
-#   /.well-known/oauth-authorization-server      (RFC 8414 AS metadata, unauthenticated)
-#   /.well-known/oauth-authorization-server/mcp  (suffixed AS metadata, RFC 8414 path-aware)
-#   /.well-known/openid-configuration            (OIDC discovery)
-#   /.well-known/openid-configuration/mcp        (suffixed OIDC discovery, path-aware)
-#   /oauth/*                                     (authorize, token, register, revoke, jwks)
+# OAuth 2.1 Authorization Server discovery, JWKS, and protocol endpoints are also routed here.
 #
 # Request path:
 #   Client -> Gateway (agentweaver-gateway) :443, TLS terminated
@@ -37,27 +32,32 @@ spec:
         - path:
             type: PathPrefix
             value: /openapi
-        # RFC 8414 AS metadata discovery — unauthenticated, served by the API AS.
-        # Both bare and /mcp-suffixed forms are matched for Copilot CLI / VS Code
-        # path-aware RFC 8414 discovery (clients probe suffixed form first).
-        # OIDC discovery paths are also included for OIDC-aware clients.
+        # OpenIddict serves the root RFC 8414 and OIDC discovery documents.
         - path:
             type: Exact
             value: /.well-known/oauth-authorization-server
         - path:
             type: Exact
-            value: /.well-known/oauth-authorization-server/mcp
-        - path:
-            type: Exact
             value: /.well-known/openid-configuration
+        # Route only the configured OpenIddict and constrained registration endpoints.
         - path:
             type: Exact
-            value: /.well-known/openid-configuration/mcp
-        # OAuth 2.1 AS endpoints: /oauth/authorize, /oauth/token,
-        # /oauth/register (RFC 7591), /oauth/revoke (RFC 7009), /oauth/jwks
+            value: /oauth/authorize
         - path:
-            type: PathPrefix
-            value: /oauth
+            type: Exact
+            value: /oauth/token
+        - path:
+            type: Exact
+            value: /oauth/register
+        - path:
+            type: Exact
+            value: /oauth/resume
+        - path:
+            type: Exact
+            value: /oauth/revoke
+        - path:
+            type: Exact
+            value: /oauth/jwks
       backendRefs:
         - name: agentweaver-api
           port: 8080

@@ -34,17 +34,6 @@ public sealed class AgentSetupParams
     public bool IsRevision { get; init; }
 
     /// <summary>
-    /// The CURRENT authenticated platform caller token, refreshed on every turn. Only the
-    /// operator-assistant path populates it: that pod calls the platform's MCP surface on the
-    /// signed-in human's behalf, and the token it was originally <c>/configure</c>d with goes stale
-    /// as the conversation runs. Delivering it here — on the same per-turn setup part the pod already
-    /// applies before each turn — is what lets a conversation's AgentHost pod be HELD across turns
-    /// instead of being torn down and re-configured every message (the one-shot <c>/configure</c>
-    /// cannot be replayed). Null for every other purpose, where the pod has no caller token at all.
-    /// </summary>
-    public string? CallerBearerToken { get; init; }
-
-    /// <summary>
     /// Tries to decode a <see cref="DataContent"/> item (sent as the first content part of the
     /// A2A turn message by <see cref="RemoteAgentProxy"/>) back into an
     /// <see cref="AgentSetupParams"/>. Returns <see langword="null"/> when the media type does

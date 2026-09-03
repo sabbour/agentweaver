@@ -94,7 +94,7 @@ public sealed class OperatorMcpAdapterSpikeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ToolCall_PassesThroughCallerBearerToken_PerCall()
+    public async Task ToolCall_PassesThroughBrokerToken_PerCall()
     {
         const string callerToken = "caller-token-passthrough-xyz";
         var provider = new AgentweaverMcpToolProvider(new AgentweaverMcpConnectionOptions { Endpoint = _mcpEndpoint });

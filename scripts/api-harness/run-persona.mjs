@@ -3,7 +3,7 @@
 //
 // NOTE: this file NO LONGER drives persona scenarios. Persona-behavior scenarios
 // (Priya, Jordan, ...) are driven dynamically by a dispatched PersonaActor
-// sub-agent that curls the live API directly, guided by a persona-brief + the
+// sub-agent that calls the live API directly, guided by a persona-brief + the
 // live OpenAPI/Swagger spec it fetches itself — deciding every next action
 // (including pushback/objections) live from real responses, with no scripted
 // HTTP-calling layer in between. See .github/agents/persona-actor.agent.md and
@@ -18,9 +18,9 @@
 //
 // Usage:
 //   node run-persona.mjs --scenario generated-artifacts-seam \
-//     --base-url https://agentweaver.<zone>.westus2.staging.aksapp.io [--insecure]
+//     --base-url https://agentweaver.example.com
 //
-//   Token resolution order: --token <t>  >  $AGENTWEAVER_TOKEN  >  `gh auth token`.
+//   Remote bearer authentication comes only from $AGENTWEAVER_TOKEN.
 //   Base URL: --base-url  >  $AGENTWEAVER_BASE_URL.
 //
 // Exit code 0 = driver drove + captured evidence cleanly (P0 platform-correctness
@@ -32,7 +32,6 @@
 // verdict. That P1 quality verdict is rendered by a separate LLM judge reading the
 // emitted finding JSON (judgeInputs + evidence). The driver never judges quality.
 
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readdir, writeFile } from 'node:fs/promises';
@@ -48,6 +47,8 @@ import { writeFinding, printReport } from './lib/reporter.mjs';
 import { loadPersona } from '../persona-briefs/index.mjs';
 import { adaptApiEvidence } from '../harness-judge/adapters/api.mjs';
 import { judgeEvidence } from '../harness-judge/core.mjs';
+import { networkTargetEvidence, validateNetworkTarget } from '../harness-shared/target-guard.mjs';
+import { redact } from '../harness-shared/redaction.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -66,13 +67,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // for scenarios that do have a real persona.
 const NO_PERSONA_VERSION_SENTINEL = 'unknown';
 
-function parseArgs(argv) {
-  const out = { insecure: false, keep: false, allowInsecureProd: false, rung: 'scoping' };
+export function parseArgs(argv) {
+  const out = { keep: false, rung: 'scoping' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--insecure') out.insecure = true;
-    else if (a === '--allow-insecure-prod') out.allowInsecureProd = true;
-    else if (a === '--keep') out.keep = true;
+    if (a === '--keep') out.keep = true;
     else if (a === '--scenario') out.scenario = argv[++i];
     else if (a === '--base-url' || a === '--target') out.baseUrl = argv[++i];
     else if (a === '--persona') out.persona = argv[++i];
@@ -81,48 +80,17 @@ function parseArgs(argv) {
     else if (a === '--target-revision') out.targetRevision = argv[++i];
     else if (a === '--rung') out.rung = argv[++i];
     else if (a === '--out') out.out = argv[++i];
-    else if (a === '--allow-prod') out.allowProd = true;
-    else if (a === '--i-understand-this-targets-production') out.confirmProduction = true;
-    else if (a === '--token') out.token = argv[++i];
     else if (a === '--auth-provider') out.authProvider = argv[++i];
     else if (a === '--recorder-auth-root') out.recorderAuthRoot = argv[++i];
     else if (a === '--timeout') out.timeoutMs = Number(argv[++i]) * 1000;
     else if (a === '--list') out.list = true;
+    else throw new Error(`unknown option: ${a.split('=', 1)[0]}`);
   }
   return out;
 }
 
-/**
- * `--insecure` disables TLS verification, which is fine for localhost or the
- * staging zone but dangerous against production. Only allow it for hosts that are
- * clearly non-prod unless the caller explicitly opts in with --allow-insecure-prod.
- * @returns {string|null} an error message when the combination is disallowed, else null
- */
-export function checkInsecureAllowed(baseUrl, insecure, allowInsecureProd) {
-  if (!insecure) return null;
-  let host;
-  try {
-    host = new URL(baseUrl).hostname.toLowerCase();
-  } catch {
-    return `--base-url "${baseUrl}" is not a valid URL`;
-  }
-  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost');
-  const isStaging = host.includes('.staging.') || host.endsWith('.staging');
-  if (isLocal || isStaging || allowInsecureProd) return null;
-  return (
-    `refusing to disable TLS verification (--insecure) against non-staging host "${host}". ` +
-    `Use a trusted certificate, target a *.staging.* / localhost host, or pass --allow-insecure-prod to override.`
-  );
-}
-
-function resolveToken(explicit) {
-  if (explicit) return explicit;
-  if (process.env.AGENTWEAVER_TOKEN) return process.env.AGENTWEAVER_TOKEN;
-  try {
-    return execFileSync('gh', ['auth', 'token'], { encoding: 'utf8' }).trim();
-  } catch {
-    return null;
-  }
+export function resolveToken(env = process.env) {
+  return env.AGENTWEAVER_TOKEN || null;
 }
 
 function resolveAuthProvider(args) {
@@ -158,11 +126,14 @@ async function main() {
     return 2;
   }
 
-  const insecureError = checkInsecureAllowed(baseUrl, args.insecure, args.allowInsecureProd);
-  if (insecureError) {
-    console.error(`error: ${insecureError}`);
+  let validatedTarget;
+  try {
+    validatedTarget = validateNetworkTarget(baseUrl);
+  } catch (error) {
+    console.error(`error: ${error.message}`);
     return 2;
   }
+  const persistedTarget = `${validatedTarget.origin}${validatedTarget.pathname}`;
 
   let authProvider;
   try {
@@ -171,9 +142,9 @@ async function main() {
     console.error(`error: ${err.message}`);
     return 2;
   }
-  const token = authProvider ? null : resolveToken(args.token);
+  const token = authProvider ? null : resolveToken();
   if (!authProvider && !token) {
-    console.error('error: no token (pass --token, set $AGENTWEAVER_TOKEN, or run `gh auth login`)');
+    console.error('error: no token (set $AGENTWEAVER_TOKEN or select a secure auth provider)');
     return 2;
   }
 
@@ -190,7 +161,7 @@ async function main() {
     console.error(
       `error: run-persona.mjs only drives kind: 'generation-seam' scenarios (structural generator ` +
       `checks). Persona-behavior scenarios (Priya, Jordan, ...) are no longer fixed scripts and are ` +
-      `not run through this file at all — dispatch a PersonaActor sub-agent that curls the live API ` +
+      `not run through this file at all — dispatch a PersonaActor sub-agent that calls the live API ` +
       `directly against the fetched OpenAPI/Swagger spec, guided by the persona brief. See ` +
       `.github/agents/persona-actor.agent.md and .github/agents/harness.agent.md.`,
     );
@@ -203,22 +174,28 @@ async function main() {
 
   console.log(`Driving "${scenario.title}"`);
   console.log(`  persona : ${personaTitle}`);
-  console.log(`  target  : ${baseUrl}`);
+  console.log(`  target  : ${persistedTarget}`);
   console.log('  mode    : API-only (no browser), generated-artifact seam validation');
 
   const client = new AgentweaverClient({
-    baseUrl, token, authProvider, insecure: args.insecure, allowProd: args.allowProd, confirmProduction: args.confirmProduction,
+    baseUrl, token, authProvider,
   });
 
   let result;
+  let primaryError = null;
   try {
-    result = await runGenerationSeams(client, scenario, { keep: args.keep });
-  } catch (err) {
-    console.error(`error: scenario driver threw: ${err.stack ?? err}`);
-    return 2;
-  }
+    try {
+      result = await runGenerationSeams(client, scenario, { keep: args.keep });
+    } catch (err) {
+      primaryError = err;
+      console.error(`error: scenario driver threw: ${redact(String(err?.stack ?? err?.message ?? err))}`);
+      for (const cleanupError of err.cleanupErrors ?? []) {
+        console.error(`error: cleanup also failed: ${redact(cleanupError)}`);
+      }
+      return 2;
+    }
 
-  const evidence = result.evidence;
+    const evidence = result.evidence;
 
   // Performance/cost metrics (requirement 4) — reuse the dashboard's own endpoint.
   // Fetch BEFORE cleanup deletes the project. Never fails the scenario.
@@ -244,7 +221,17 @@ async function main() {
   const finding = {
     schema: 'agentweaver.persona-finding/v2',
     generatedAt: new Date().toISOString(),
-    target: baseUrl,
+    target: persistedTarget,
+    preflight: {
+      ...networkTargetEvidence(baseUrl, {
+        surface: 'api',
+        authSource: authProvider ? `provider:${args.authProvider}` : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none',
+      }),
+      projectId: evidence.projectId ?? null,
+      runId: evidence.runId ?? null,
+      cleanupIntent: args.keep ? 'retain-harness-created-resources' : 'delete-harness-created-resources',
+      cleanupResult: 'pending-finalization',
+    },
     kind,
     persona: {
       title: personaTitle,
@@ -302,6 +289,8 @@ async function main() {
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const outPath = join(HERE, 'findings', `${scenario.id}-${stamp}.json`);
+  await result.cleanup();
+  finding.preflight.cleanupResult = args.keep ? 'retained' : 'completed';
   await writeFinding(finding, outPath);
 
   const metadata = {
@@ -314,7 +303,7 @@ async function main() {
     // (required by REQUIRED_JOIN_KEY_FIELDS) without inventing a fake version.
     adapterVersion: sharedPersona?.adapter?.version ?? NO_PERSONA_VERSION_SENTINEL,
     personaCoreVersion: sharedPersona?.version ?? NO_PERSONA_VERSION_SENTINEL,
-    targetRevision: args.targetRevision ?? baseUrl,
+    targetRevision: redact(args.targetRevision ?? persistedTarget),
     runId: result.evidence.runId ?? `harness-${stamp}`,
     timestamp: finding.generatedAt,
     persona: sharedPersona?.name ?? personaTitle,
@@ -350,15 +339,29 @@ async function main() {
   console.log(`Finding written: ${outPath.replace(join(HERE, '..', '..') + '\\', '')}`);
   console.log(`Verdict written: ${verdictPath.replace(join(HERE, '..', '..') + '\\', '')}`);
 
-  await result.cleanup();
-  if (!args.keep) {
-    console.log('Cleaned up throwaway project (pass --keep to retain).');
+    // Exit 3 = inconclusive (e.g. the generator's model provider was unavailable, so the
+    // seam couldn't be assessed) — distinct from a real structural FAIL (exit 1).
+    if (inconclusive && platformPass) return 3;
+    return platformPass ? 0 : 1;
+  } catch (error) {
+    primaryError = error;
+    throw error;
+  } finally {
+    if (result?.cleanup) {
+      try {
+        await result.cleanup();
+        if (!args.keep) console.log('Cleaned up throwaway project (pass --keep to retain).');
+      } catch (cleanupError) {
+        const message = String(cleanupError?.message ?? cleanupError);
+        if (primaryError) {
+          primaryError.cleanupErrors = [...(primaryError.cleanupErrors ?? []), message];
+          console.error(`error: cleanup also failed: ${redact(message)}`);
+        } else {
+          throw cleanupError;
+        }
+      }
+    }
   }
-
-  // Exit 3 = inconclusive (e.g. the generator's model provider was unavailable, so the
-  // seam couldn't be assessed) — distinct from a real structural FAIL (exit 1).
-  if (inconclusive && platformPass) return 3;
-  return platformPass ? 0 : 1;
 }
 
 // Only run the CLI when executed directly — importing this module (e.g. from
@@ -367,7 +370,7 @@ if (import.meta.url === `file://${process.argv[1]}` || import.meta.url === pathT
   main()
     .then((code) => process.exit(code))
     .catch((err) => {
-      console.error(err);
+      console.error(redact(String(err?.stack ?? err?.message ?? err)));
       process.exit(2);
     });
 }

@@ -1,8 +1,10 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using System.Net.Http.Headers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,6 +28,7 @@ public sealed class EntraSignInEndpointsTests
     {
         AllowAutoRedirect = false,
         HandleCookies = false,
+        BaseAddress = new Uri("http://localhost:5000"),
     };
 
     [Fact]
@@ -282,6 +285,84 @@ public sealed class EntraSignInEndpointsTests
         callbackResponse.Headers.Location!.ToString().Should()
             .Contain("reason=sign_in_failed")
             .And.NotContain("sensitive-provider-detail");
+    }
+
+    [Fact]
+    public async Task BrokerCallback_WhenEntraDenies_CompletesOriginalClientWithAccessDenied()
+    {
+        await using var factory = new EntraSignInWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+        var callback = await BeginBrokerAuthorizationAsync(client, "http://127.0.0.1:49161/callback");
+
+        var callbackRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/auth/entra/callback?error=access_denied&state={Uri.EscapeDataString(callback.State)}");
+        callbackRequest.Headers.Add("Cookie", $"{EntraOAuthStateCookie.Name}={callback.State}");
+        using var response = await client.SendAsync(callbackRequest);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location!.AbsoluteUri.Should()
+            .StartWith("http://127.0.0.1:49161/callback?")
+            .And.Contain("error=access_denied")
+            .And.Contain("state=original-client-state")
+            .And.NotContain(EntraSignInWebApplicationFactory.FrontendUrlValue);
+    }
+
+    [Fact]
+    public async Task BrokerCallback_WhenTokenExchangeFails_CompletesOriginalClientWithServerError()
+    {
+        await using var factory = new FailingTokenRedemptionEntraWebApplicationFactory();
+        var client = factory.CreateClient(NoRedirectNoCookies);
+        var callback = await BeginBrokerAuthorizationAsync(client, "http://127.0.0.1:49162/callback");
+
+        var callbackRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/auth/entra/callback?code=test-code&state={Uri.EscapeDataString(callback.State)}");
+        callbackRequest.Headers.Add("Cookie", $"{EntraOAuthStateCookie.Name}={callback.State}");
+        using var response = await client.SendAsync(callbackRequest);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        response.Headers.Location!.AbsoluteUri.Should()
+            .StartWith("http://127.0.0.1:49162/callback?")
+            .And.Contain("error=server_error")
+            .And.Contain("state=original-client-state")
+            .And.NotContain("sensitive-provider-detail")
+            .And.NotContain(EntraSignInWebApplicationFactory.FrontendUrlValue);
+    }
+
+    private static async Task<(string State, string ClientId)> BeginBrokerAuthorizationAsync(
+        HttpClient client,
+        string redirectUri)
+    {
+        using var registration = await client.PostAsJsonAsync("/oauth/register", new
+        {
+            client_name = "Broker callback test",
+            redirect_uris = new[] { redirectUri },
+        });
+        registration.EnsureSuccessStatusCode();
+        var clientId = (await registration.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("client_id").GetString()!;
+        var query = QueryString.Create(new Dictionary<string, string?>
+        {
+            ["client_id"] = clientId,
+            ["redirect_uri"] = redirectUri,
+            ["response_type"] = "code",
+            ["scope"] = "mcp:invoke",
+            ["state"] = "original-client-state",
+            ["code_challenge"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ["code_challenge_method"] = "S256",
+            ["resource"] = "http://localhost:5000/mcp",
+        });
+        using var authorize = await client.GetAsync("/oauth/authorize" + query);
+        authorize.StatusCode.Should().Be(
+            HttpStatusCode.Redirect, await authorize.Content.ReadAsStringAsync());
+        authorize.Headers.Location!.ToString().Should().StartWith("/auth/entra/authorize?");
+
+        using var broker = await client.GetAsync(authorize.Headers.Location);
+        broker.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        var state = EntraOAuthStateCookie.ExtractState(broker.Headers.Location!.ToString());
+        state.Should().NotBeNullOrWhiteSpace();
+        return (state!, clientId);
     }
 
     private static string? ExtractQueryValue(string url, string key)

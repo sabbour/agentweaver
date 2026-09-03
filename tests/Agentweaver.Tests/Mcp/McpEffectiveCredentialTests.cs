@@ -1,20 +1,12 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Claims;
 using Agentweaver.Mcp;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Tests.Mcp;
 
-/// <summary>
-/// Regression coverage for #474: MCP stdio clients must forward the caller's OWN per-user token
-/// (<c>AGENTWEAVER_TOKEN</c>) to the backend, NOT the shared internal service key
-/// (<c>AGENTWEAVER_API_KEY</c>). The shared key maps to the trusted <c>agentweaver-internal</c>
-/// identity that bypasses project-ownership checks, so forwarding it from a human/stdio client would
-/// grant access to every project. These tests pin the credential-selection precedence used by
-/// <see cref="AgentweaverApiClient"/>:
-///   inbound per-request token (HTTP mode) &gt; configured user token (stdio) &gt; shared service key.
-/// </summary>
 public sealed class McpEffectiveCredentialTests
 {
     private sealed class CapturingHandler : HttpMessageHandler
@@ -31,53 +23,69 @@ public sealed class McpEffectiveCredentialTests
         }
     }
 
-    private static async Task<string?> SendAndCaptureAsync(McpConfig config, IHttpContextAccessor? accessor)
+    [Fact]
+    public async Task Stdio_ForwardsConfiguredBrokerToken()
     {
         var handler = new CapturingHandler();
-        var http = new HttpClient(handler);
-        var client = new AgentweaverApiClient(http, config, accessor);
+        var client = new AgentweaverApiClient(
+            new HttpClient(handler),
+            new McpConfig("http://localhost", "broker-token"));
 
         await client.GetAsync<object>("/api/ping", CancellationToken.None);
 
-        return handler.CapturedAuth?.Parameter;
+        handler.CapturedAuth?.Parameter.Should().Be("broker-token");
     }
 
     [Fact]
-    public async Task Stdio_WithUserToken_ForwardsUserToken_NotSharedServiceKey()
+    public async Task Stdio_WithoutBrokerToken_FailsBeforeApiCall()
     {
-        // stdio mode: no inbound HttpContext. The user configured their own AGENTWEAVER_TOKEN.
-        var config = new McpConfig("http://localhost", ApiKey: "shared-internal-service-key", UserToken: "user-personal-token");
+        var handler = new CapturingHandler();
+        var client = new AgentweaverApiClient(
+            new HttpClient(handler),
+            new McpConfig("http://localhost"));
 
-        var forwarded = await SendAndCaptureAsync(config, accessor: null);
+        var action = () => client.GetAsync<object>("/api/ping", CancellationToken.None);
 
-        forwarded.Should().Be("user-personal-token",
-            "stdio clients must authenticate as the real user, never with the shared internal service key");
-        forwarded.Should().NotBe("shared-internal-service-key");
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*validated Agentweaver MCP broker token*");
+        handler.CapturedAuth.Should().BeNull();
     }
 
     [Fact]
-    public async Task Stdio_WithoutUserToken_FallsBackToSharedKey()
+    public async Task Http_ForwardsOnlyAuthenticatedValidatedBrokerToken()
     {
-        // Back-compat: with no per-user token, the shared key is still used (in-process/service callers).
-        var config = new McpConfig("http://localhost", ApiKey: "shared-internal-service-key");
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim(ClaimTypes.NameIdentifier, "subject")],
+                "McpBroker")),
+        };
+        context.Items["mcp.validated_broker_token"] = "validated-broker-token";
+        var handler = new CapturingHandler();
+        var client = new AgentweaverApiClient(
+            new HttpClient(handler),
+            new McpConfig("http://localhost", "configured-stdio-token"),
+            new HttpContextAccessor { HttpContext = context });
 
-        var forwarded = await SendAndCaptureAsync(config, accessor: null);
+        await client.GetAsync<object>("/api/ping", CancellationToken.None);
 
-        forwarded.Should().Be("shared-internal-service-key");
+        handler.CapturedAuth?.Parameter.Should().Be("validated-broker-token");
     }
 
     [Fact]
-    public async Task Http_InboundBearer_TakesPrecedenceOverConfiguredTokens()
+    public async Task Http_DoesNotFallBackToConfiguredOrUnvalidatedTokens()
     {
-        // HTTP mode: the per-request caller token stashed by McpBearerTokenMiddleware wins.
         var context = new DefaultHttpContext();
-        context.Items["mcp.bearer_token"] = "inbound-caller-token";
-        var accessor = new HttpContextAccessor { HttpContext = context };
+        context.Items["mcp.validated_broker_token"] = "unvalidated-token";
+        var handler = new CapturingHandler();
+        var client = new AgentweaverApiClient(
+            new HttpClient(handler),
+            new McpConfig("http://localhost", "configured-stdio-token"),
+            new HttpContextAccessor { HttpContext = context });
 
-        var config = new McpConfig("http://localhost", ApiKey: "shared-internal-service-key", UserToken: "user-personal-token");
+        var action = () => client.GetAsync<object>("/api/ping", CancellationToken.None);
 
-        var forwarded = await SendAndCaptureAsync(config, accessor);
-
-        forwarded.Should().Be("inbound-caller-token");
+        await action.Should().ThrowAsync<InvalidOperationException>();
+        handler.CapturedAuth.Should().BeNull();
     }
 }

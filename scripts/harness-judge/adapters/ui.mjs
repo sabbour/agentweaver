@@ -1,3 +1,5 @@
+import { redact } from '../../harness-shared/redaction.mjs';
+
 /**
  * UI evidence adapter contract.
  *
@@ -12,6 +14,7 @@
  * }
  */
 export function adaptUiEvidence(raw = {}) {
+  raw = redact(raw);
   const steps = Array.isArray(raw.steps) ? raw.steps : [];
   const untrusted = (kind, value) => ({
     kind,

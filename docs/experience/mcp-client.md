@@ -25,24 +25,27 @@ A client configuration is conceptually one of these shapes:
 
 | Client mode | What the client points at | Auth shape |
 |---|---|---|
-| Local STDIO | A command such as `dotnet run --project apps/Agentweaver.Mcp -- --stdio` | Environment includes `AGENTWEAVER_API_URL` and `AGENTWEAVER_TOKEN` (your own per-user bearer, e.g. `gh auth token`), which is forwarded to the backend so project ownership is enforced. The shared `AGENTWEAVER_API_KEY` is an internal-only fallback that bypasses ownership checks and must not be used by human/stdio clients (#474); the server will refuse to start if only the shared key is provided, unless explicitly opted in via `AGENTWEAVER_ALLOW_SHARED_KEY`. |
+| Local STDIO | A command such as `dotnet run --project apps/Agentweaver.Mcp -- --stdio` | Environment includes `AGENTWEAVER_API_URL` and `AGENTWEAVER_TOKEN`, where the token is an Agentweaver broker access token for the exact MCP resource and `mcp:invoke` scope. |
 | Hosted HTTP | The MCP server URL ending in `/mcp` | Each request sends `Authorization: Bearer <token>`. The server validates it, stores the resolved caller identity, and forwards the same bearer token to the Agentweaver API. |
 
 The HTTP server also exposes:
 
 - `GET /healthz` for unauthenticated liveness checks.
-- `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-protected-resource/mcp` so interactive MCP clients can discover the authorization server, resource value, supported bearer method, and `mcp:invoke` scope.
+- `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-protected-resource/mcp` so interactive MCP clients can discover the same-origin authorization server, exact resource, and `mcp:invoke` scope.
 
 For the complete interactive setup flow, see [Onboarding & auth](./onboarding-auth.md).
 
 ### Authentication experience
 
-The user sees a normal bearer-token experience, with two accepted token paths:
+Interactive clients discover the OAuth resource metadata, run authorization code + PKCE through
+Agentweaver, and receive a short-lived broker access token. OpenIddict validation uses remote
+OIDC discovery/JWKS and requires the configured issuer, exact `<issuer>/mcp` audience, keyed
+RS256 signature, valid lifetime, subject, and `mcp:invoke` scope. There is no direct-Entra,
+raw-GitHub, or API-key compatibility path.
 
-1. **Agentweaver JWTs.** Interactive clients can discover the OAuth resource metadata, run the OAuth authorization-code flow with PKCE through Agentweaver, and receive a short-lived Agentweaver access token. The MCP server validates this JWT offline against the authorization server JWKS, requiring the expected issuer, audience (`<issuer>/mcp` unless configured otherwise), expiry, and RS256 signature.
-2. **Transitional raw GitHub tokens.** When enabled, the MCP server can validate a raw GitHub bearer token by calling GitHub's user API and caching the result briefly. This keeps older client setups working while interactive clients move to Agentweaver-minted tokens.
-
-If a hosted MCP request has no bearer token, the server returns `401` with a `WWW-Authenticate` challenge that advertises the OAuth protected-resource metadata URL. If a token is present but invalid, the challenge includes `invalid_token`. Health and OAuth metadata discovery stay reachable without a bearer token.
+A missing token receives a `401` challenge with exact `resource_metadata` and `scope` parameters
+and no error. Invalid credentials add `error="invalid_token"`; an otherwise valid token without
+the scope adds `error="insufficient_scope"`. Health and protected-resource discovery remain public.
 
 ## What an MCP-driven session feels like
 

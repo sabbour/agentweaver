@@ -67,11 +67,10 @@ images:
 configMapGenerator:
   - name: agentweaver-runtime-config
     options:
-      # Disabled: the base Deployments reference this ConfigMap by its plain
-      # name via configMapKeyRef (not envFrom), and steps/30-deploy.mjs already
-      # rolls every Deployment via `kubectl rollout status` on every deploy, so
-      # the hash-suffix's "roll on config change" behavior isn't needed here —
-      # a stable name keeps the base manifests simple and directly readable.
+      # Disabled because base Deployments reference this ConfigMap by its plain
+      # name via configMapKeyRef. Configuration that must restart a workload is
+      # copied into that workload's pod-template annotation below; OAuth
+      # certificate-family names use this explicit checksum rollout trigger.
       disableNameSuffixHash: true
     # Each value is double-quoted (JSON-escaped) so lib/kustomize.mjs can
     # rewrite a single literal in place with `JSON.stringify()` at deploy
@@ -84,6 +83,11 @@ configMapGenerator:
       - "KEYVAULT_NAME=changeme"
       - "TENANT_ID=changeme"
       - "AUTH_MODE=Entra"
+      - "OAUTH_PUBLIC_ORIGIN=https://agentweaver.example.com"
+      - "OAUTH_TRUSTED_PROXY_NETWORKS=10.244.0.0/16"
+      - "OAUTH_SIGNING_CERTIFICATE_NAME=agentweaver-oauth-signing"
+      - "OAUTH_ENCRYPTION_CERTIFICATE_NAME=agentweaver-oauth-encryption"
+      - "OAUTH_CERTIFICATE_CONFIG_CHECKSUM=placeholder"
       - "ENTRA_CLIENT_ID="
       - "ENTRA_TENANT_ID="
       - "ENTRA_ENTERPRISE_APP_OBJECT_ID="
@@ -97,6 +101,16 @@ configMapGenerator:
       - "SANDBOX_PREVIEW_ZONE_SUFFIX=example.com"
 
 replacements:
+  - source:
+      kind: ConfigMap
+      name: agentweaver-runtime-config
+      fieldPath: data.OAUTH_CERTIFICATE_CONFIG_CHECKSUM
+    targets:
+      - select:
+          kind: Deployment
+          name: agentweaver-api
+        fieldPaths:
+          - spec.template.metadata.annotations.[agentweaver.io/oauth-certificate-config-checksum]
   - source:
       kind: ConfigMap
       name: agentweaver-runtime-config

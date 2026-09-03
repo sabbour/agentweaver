@@ -26,7 +26,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class TeamEndpoints
 {
-    public static void MapTeamEndpoints(this WebApplication app)
+    public static void MapTeamEndpoints(this IEndpointRouteBuilder app)
     {
 // GET /api/projects/{id}/team — get team
 app.MapGet("/api/projects/{id}/team", async (

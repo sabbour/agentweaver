@@ -14,19 +14,24 @@ namespace Agentweaver.Tests.Assistant;
 public sealed class RemoteOperatorAssistantAgentTests
 {
     [Fact]
-    public async Task RunTurn_LaunchesAgentHostWithCurrentCallerBearerToken()
+    public async Task RunTurn_LaunchesAgentHostWithCurrentMcpBrokerToken()
     {
         var lifecycle = new RecordingPodLifecycle();
         var agent = NewAgent(lifecycle);
 
-        await RunUntilEndpointFailureAsync(agent, Request("conversation-1", "entra-token-v1"));
-        await RunUntilEndpointFailureAsync(agent, Request("conversation-2", "entra-token-v2"));
+        await RunUntilEndpointFailureAsync(agent, Request(
+            "conversation-1", "broker-token-v1", _ => Task.FromResult("broker-token-v1-renewed")));
+        await RunUntilEndpointFailureAsync(agent, Request(
+            "conversation-2", "broker-token-v2", _ => Task.FromResult("broker-token-v2-renewed")));
 
-        lifecycle.Launches.Select(launch => launch.Context.CallerBearerToken).Should().Equal(
-            ["entra-token-v1", "entra-token-v2"],
-            "a later message must propagate its refreshed platform credential instead of reusing an earlier turn's token");
+        lifecycle.Launches.Select(launch => launch.Context.McpBrokerToken).Should().Equal(
+            ["broker-token-v1", "broker-token-v2"],
+            "each turn must propagate only its short-lived MCP broker token");
         lifecycle.Launches.Should().OnlyContain(launch =>
             launch.Context.Purpose == Agentweaver.Domain.AgentHostPurpose.OperatorAssistant);
+        lifecycle.Refreshes.Should().Equal(
+            [("conversation-1", "broker-token-v1-renewed"), ("conversation-2", "broker-token-v2-renewed")],
+            "each token must be renewed after pod launch and immediately before model/MCP use");
     }
 
     [Fact]
@@ -38,7 +43,7 @@ public sealed class RemoteOperatorAssistantAgentTests
         var lifecycle = new RecordingPodLifecycle();
         var agent = NewAgent(lifecycle);
 
-        await RunUntilEndpointFailureAsync(agent, Request("conversation-failed", "entra-token-v1"));
+        await RunUntilEndpointFailureAsync(agent, Request("conversation-failed", "broker-token-v1"));
 
         lifecycle.Releases.Should().Equal(["conversation-failed"],
             "a failed operator turn must give its AgentHost pod back exactly once");
@@ -75,6 +80,27 @@ public sealed class RemoteOperatorAssistantAgentTests
             NullLogger<RemoteOperatorAssistantAgent>.Instance,
             lifecycle);
 
+    [Fact]
+    public async Task RunTurn_WithoutMcpBrokerToken_FailsBeforeAgentHostLaunch()
+    {
+        var lifecycle = new RecordingPodLifecycle();
+        var agent = new RemoteOperatorAssistantAgent(
+            new MissingEndpointResolver(),
+            new PodNameRegistry(),
+            new ThrowingHttpClientFactory(),
+            NullLoggerFactory.Instance,
+            Options.Create(new RemoteAgentProxyOptions()),
+            new ConfigurationBuilder().Build(),
+            null!,
+            NullLogger<RemoteOperatorAssistantAgent>.Instance,
+            lifecycle);
+
+        var act = () => agent.RunTurnAsync(Request("conversation-missing-token", ""), null, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*MCP broker token*");
+        lifecycle.Launches.Should().BeEmpty();
+    }
+
     private static async Task RunUntilEndpointFailureAsync(
         RemoteOperatorAssistantAgent agent,
         OperatorAssistantRequest request)
@@ -84,7 +110,38 @@ public sealed class RemoteOperatorAssistantAgentTests
             .Where(ex => ex.ErrorCode == "agenthost_unavailable");
     }
 
-    private static OperatorAssistantRequest Request(string conversationId, string callerBearerToken) =>
+    [Fact]
+    public async Task RunTurn_WhenPostLaunchRenewalFails_FailsExplicitly()
+    {
+        var lifecycle = new RecordingPodLifecycle();
+        var agent = new RemoteOperatorAssistantAgent(
+            new MissingEndpointResolver(),
+            new PodNameRegistry(),
+            new ThrowingHttpClientFactory(),
+            NullLoggerFactory.Instance,
+            Options.Create(new RemoteAgentProxyOptions()),
+            new ConfigurationBuilder().Build(),
+            null!,
+            NullLogger<RemoteOperatorAssistantAgent>.Instance,
+            lifecycle);
+
+        var act = () => agent.RunTurnAsync(
+            Request(
+                "conversation-renewal-failure",
+                "initial-token",
+                _ => Task.FromException<string>(new InvalidOperationException("issuer unavailable"))),
+            null,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<AgentProviderException>()
+            .WithMessage("*issuer unavailable*");
+        lifecycle.Refreshes.Should().BeEmpty();
+    }
+
+    private static OperatorAssistantRequest Request(
+        string conversationId,
+        string mcpBrokerToken,
+        Func<CancellationToken, Task<string>>? renew = null) =>
         new(
             ConversationId: conversationId,
             Message: "test",
@@ -94,8 +151,9 @@ public sealed class RemoteOperatorAssistantAgentTests
             RunId: null,
             ModelId: null,
             AgentDefinition: "You are the operator.",
-            CallerBearerToken: callerBearerToken,
-            History: []);
+            McpBrokerToken: mcpBrokerToken,
+            History: [],
+            RenewMcpBrokerTokenAsync: renew ?? (_ => Task.FromResult(mcpBrokerToken)));
 
     private sealed class MissingEndpointResolver : ISandboxAgentEndpointResolver
     {
@@ -106,6 +164,7 @@ public sealed class RemoteOperatorAssistantAgentTests
     private sealed class RecordingPodLifecycle : IAgentHostPodLifecycle
     {
         public List<(string RunId, AgentHostLaunchContext Context)> Launches { get; } = [];
+        public List<(string RunId, string Token)> Refreshes { get; } = [];
         public List<string> Releases { get; } = [];
         public bool FailLaunch { get; init; }
 
@@ -127,6 +186,15 @@ public sealed class RemoteOperatorAssistantAgentTests
             if (FailLaunch)
                 throw new InvalidOperationException("claim bind failed");
             return Task.FromResult("http://agenthost/a2a/agent");
+        }
+
+        public Task RefreshAgentHostMcpBrokerTokenAsync(
+            string runId,
+            string mcpBrokerToken,
+            CancellationToken ct = default)
+        {
+            Refreshes.Add((runId, mcpBrokerToken));
+            return Task.CompletedTask;
         }
 
         public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)

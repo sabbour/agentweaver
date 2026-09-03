@@ -60,6 +60,7 @@ const VARS = {
   ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
   ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
   ENTRA_ENTERPRISE_APP_OBJECT_ID: "77777777-8888-9999-0000-111111111111",
+  OAUTH_TRUSTED_PROXY_NETWORKS: "10.244.0.0/16",
 };
 
 test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IMAGE_TAG/AGENTHOST_IMAGE_TAG", () => {
@@ -84,7 +85,7 @@ test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IM
   );
 });
 
-test("buildRuntimeConfigLiterals() passes through deployment values without retired OAuth metadata", () => {
+test("buildRuntimeConfigLiterals() wires canonical OpenIddict and Key Vault certificate settings", () => {
   const literals = buildRuntimeConfigLiterals(VARS);
   assert.equal(literals.KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net");
   assert.equal(literals.AGENTHOST_KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net/");
@@ -92,6 +93,10 @@ test("buildRuntimeConfigLiterals() passes through deployment values without reti
   assert.equal(literals.AGENTHOST_IDENTITY_CLIENT_ID, "99999999-8888-7777-6666-555555555555");
   assert.equal(literals.APPINSIGHTS_WORKSPACE_ID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
   assert.equal(literals.SANDBOX_PREVIEW_ZONE_SUFFIX, "abc123def456.westus2.staging.aksapp.io");
+  assert.equal(literals.OAUTH_PUBLIC_ORIGIN, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
+  assert.equal(literals.OAUTH_TRUSTED_PROXY_NETWORKS, "10.244.0.0/16");
+  assert.equal(literals.OAUTH_SIGNING_CERTIFICATE_NAME, "agentweaver-oauth-signing");
+  assert.equal(literals.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "agentweaver-oauth-encryption");
 });
 
 test("buildRuntimeConfigLiterals() derives public Entra URLs from HOST and defaults AUTH_MODE to Entra", () => {
@@ -248,6 +253,14 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__Entra__EnterpriseAppObjectId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_ENTERPRISE_APP_OBJECT_ID\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__RedirectUri\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_REDIRECT_URI\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__OAuth__PublicOrigin\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_PUBLIC_ORIGIN\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__OAuth__ForwardedHeaders__TrustedNetworks\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_TRUSTED_PROXY_NETWORKS\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__OAuth__Certificates__SigningName\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_SIGNING_CERTIFICATE_NAME\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(
+    builtYaml,
+    /agentweaver\.io\/oauth-certificate-config-checksum: [a-f0-9]{64}/,
+    "API pod template must roll when OAuth certificate-family configuration changes",
+  );
   assert.match(builtYaml, /name: Auth__CopilotApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: COPILOT_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__RepoApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: REPO_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
   // Post-authorization browser redirect target for both GitHub Apps must reuse the same
@@ -263,7 +276,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.doesNotMatch(builtYaml, /name: Auth__Entra__ClientSecret/);
   assert.doesNotMatch(builtYaml, /changeme/);
   assert.doesNotMatch(builtYaml, /example\.com/);
-  assert.doesNotMatch(builtYaml, /mcp-oauth-signing-key|Auth__OAuth__|OAUTH_ISSUER|OAUTH_AUDIENCE/);
+  assert.doesNotMatch(builtYaml, /mcp-oauth-signing-key|Auth__OAuth__(?:SigningKey|Issuer|Audience)|OAUTH_ISSUER|OAUTH_AUDIENCE/);
 
   const docs = parseBuiltDocs(builtYaml);
   // issue #471: the AgentHost ServiceAccount must be wired to the DEDICATED KV-less identity, while
@@ -297,16 +310,38 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   const mcpDeployment = manifestForFilename(docs, "mcp-deployment.yaml");
   assert.match(
     mcpDeployment,
-    /name: Auth__Mode\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: AUTH_MODE\s*\n\s*name: agentweaver-runtime-config/,
-    "MCP must receive the deployment auth mode so Entra bearer validation is enabled only in Entra mode",
+    /name: Auth__OAuth__PublicOrigin\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_PUBLIC_ORIGIN\s*\n\s*name: agentweaver-runtime-config/,
+    "MCP must pin broker discovery, issuer, resource metadata, and challenges to the public origin",
   );
-  assert.match(
+  assert.doesNotMatch(
     mcpDeployment,
-    /name: Auth__Entra__ClientId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_CLIENT_ID\s*\n\s*name: agentweaver-runtime-config/,
+    /Auth__Entra__|Auth__Mode|AllowGitHubPassthrough|AGENTWEAVER_API_KEY|AGENTWEAVER_ALLOW_SHARED_KEY/,
+    "MCP must not retain direct-Entra, GitHub-token, or internal-key fallback configuration",
   );
-  assert.match(
-    mcpDeployment,
-    /name: Auth__Entra__TenantId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_TENANT_ID\s*\n\s*name: agentweaver-runtime-config/,
+  const apiDeployment = manifestForFilename(docs, "api-deployment.yaml");
+  assert.doesNotMatch(apiDeployment, /Auth__Mcp__AllowGitHubPassthrough/);
+
+  const mcpRoute = manifestForFilename(docs, "mcp-httproute.yaml");
+  assert.match(mcpRoute, /value: \/\.well-known\/oauth-protected-resource(?:\s|$)/);
+  assert.match(mcpRoute, /value: \/\.well-known\/oauth-protected-resource\/mcp(?:\s|$)/);
+
+  const apiRoute = manifestForFilename(docs, "httproute-api.yaml");
+  for (const path of [
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/openid-configuration",
+    "/oauth/authorize",
+    "/oauth/token",
+    "/oauth/register",
+    "/oauth/resume",
+    "/oauth/revoke",
+    "/oauth/jwks",
+  ]) {
+    assert.match(apiRoute, new RegExp(`value: ${path.replaceAll("/", "\\/")}(?:\\s|$)`));
+  }
+  assert.doesNotMatch(
+    apiRoute,
+    /oauth-authorization-server\/mcp|openid-configuration\/mcp|type: PathPrefix\s*\n\s*value: \/oauth/,
+    "the gateway must route only actual OpenIddict discovery, JWKS, and protocol endpoints",
   );
   const apiSaManifest = manifestForFilename(docs, "serviceaccount-api.yaml");
   assert.match(
@@ -360,6 +395,38 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   }
 });
 
+test("runtime config preserves operator-selected OAuth certificate families for active/previous version loading", () => {
+  const literals = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "oauth-signing-rotation",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "oauth-encryption-rotation",
+  });
+  assert.equal(literals.OAUTH_SIGNING_CERTIFICATE_NAME, "oauth-signing-rotation");
+  assert.equal(literals.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "oauth-encryption-rotation");
+  assert.equal(literals.OAUTH_PUBLIC_ORIGIN, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
+});
+
+test("OAuth certificate family checksum changes only when active/previous family configuration changes", () => {
+  const first = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
+  });
+  const unchanged = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
+  });
+  const changed = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing-b",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
+  });
+  assert.equal(first.OAUTH_CERTIFICATE_CONFIG_CHECKSUM, unchanged.OAUTH_CERTIFICATE_CONFIG_CHECKSUM);
+  assert.notEqual(first.OAUTH_CERTIFICATE_CONFIG_CHECKSUM, changed.OAUTH_CERTIFICATE_CONFIG_CHECKSUM);
+  assert.match(first.OAUTH_CERTIFICATE_CONFIG_CHECKSUM, /^[a-f0-9]{64}$/);
+});
+
 test("manifestForFilename() throws a clear error for an unknown filename (fail-fast, no silent partial applies)", () => {
   assert.throws(() => manifestForFilename([], "not-a-real-file.yaml"), /no FILE_RESOURCES entry/);
 });
@@ -372,7 +439,9 @@ test("manifestForFilename() throws when a resource is missing from the build (fa
 test("active deployment sources contain no retired MCP OAuth signing artifacts", () => {
   const retired = [
     ["mcp", "oauth", "signing", "key"].join("-"),
-    ["Auth", "OAuth"].join("__") + "__",
+    ["Auth", "OAuth", "SigningKey"].join("__"),
+    ["Auth", "OAuth", "Issuer"].join("__"),
+    ["Auth", "OAuth", "Audience"].join("__"),
     ["OAUTH", "ISSUER"].join("_"),
     ["OAUTH", "AUDIENCE"].join("_"),
     ["16", "provision", "oauth", "signing", "key"].join("-"),

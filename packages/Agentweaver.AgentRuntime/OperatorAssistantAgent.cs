@@ -31,8 +31,9 @@ public sealed record OperatorAssistantRequest(
     string? RunId,
     string? ModelId,
     string AgentDefinition,
-    string CallerBearerToken,
+    string McpBrokerToken,
     IReadOnlyList<ConsoleFacadeHistoryMessage> History,
+    Func<CancellationToken, Task<string>>? RenewMcpBrokerTokenAsync = null,
     string? PodHolderToken = null);
 
 public sealed record OperatorAssistantResponse(string Message, IReadOnlyList<string> ToolNamesInvoked);
@@ -81,6 +82,12 @@ public interface IOperatorAssistantTurnSink
     /// A null sink cannot gate, so gated tools run ungated only in the no-sink (non-projected) case.
     /// </summary>
     ValueTask<bool> OnApprovalRequiredAsync(string requestId, string toolName, string? argumentsJson, CancellationToken ct);
+
+    /// <summary>
+    /// Renews the server-held MCP broker credential immediately before a tool invocation. The token
+    /// itself never crosses this callback or the run event stream.
+    /// </summary>
+    ValueTask OnMcpBrokerTokenRefreshRequiredAsync(CancellationToken ct);
 }
 
 public interface IOperatorAssistantAgent
@@ -100,8 +107,8 @@ public interface IOperatorAssistantAgent
 ///   2. There is no regex pre-router: the LLM routes via MCP tool descriptions.
 ///
 /// The regex router and the existing facade are intentionally left untouched — this is an additive
-/// spike that proves the MCP tool-adapter path works end to end. Per-call caller bearer passthrough
-/// is preserved: the caller's token is forwarded to the MCP server on every tools/call.
+/// spike that proves the MCP tool-adapter path works end to end. The API-issued, short-lived broker
+/// token is forwarded to the MCP server on every tools/call.
 /// </summary>
 public sealed class OperatorAssistantAgent(
     GitHubCopilotClientFactory factory,
@@ -149,7 +156,7 @@ public sealed class OperatorAssistantAgent(
 
         // Connect to the real MCP server as the caller and adapt its tools to AIFunctions.
         await using var mcpSession = await mcpToolProvider
-            .ConnectAsync(request.CallerBearerToken, ct)
+            .ConnectAsync(request.McpBrokerToken, ct)
             .ConfigureAwait(false);
         var toolDeclarations = BuildToolDeclarations(mcpSession, sink, ct);
         logger.LogInformation(
@@ -291,11 +298,12 @@ public sealed class OperatorAssistantAgent(
             // stuck tool call can never wedge the whole turn. Consequential tools are additionally
             // wrapped in the human-approval gate; the deadline applies to the actual tool call, not to
             // the (separately time-boxed) approval wait.
-            AIFunction bounded = new DeadlineAIFunction(tool, ToolInvocationTimeout);
-            if (sink is not null && OperatorToolApprovalPolicy.RequiresApproval(tool.Name))
-                declarations.Add(new ApprovalGatingAIFunction(bounded, sink, ct));
-            else
-                declarations.Add(bounded);
+            declarations.Add(WrapTool(
+                tool,
+                sink,
+                OperatorToolApprovalPolicy.RequiresApproval(tool.Name),
+                ToolInvocationTimeout,
+                ct));
         }
         return declarations;
     }
@@ -305,6 +313,28 @@ public sealed class OperatorAssistantAgent(
     /// session. Not for production call sites.</summary>
     internal static AIFunction CreateDeadlineToolForTests(AIFunction inner, TimeSpan timeout) =>
         new DeadlineAIFunction(inner, timeout);
+
+    internal static AIFunction CreateRenewableToolForTests(
+        AIFunction inner,
+        IOperatorAssistantTurnSink sink,
+        bool requiresApproval,
+        CancellationToken ct) =>
+        WrapTool(inner, sink, requiresApproval, TimeSpan.FromMinutes(1), ct);
+
+    private static AIFunction WrapTool(
+        AIFunction tool,
+        IOperatorAssistantTurnSink? sink,
+        bool requiresApproval,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        AIFunction wrapped = new DeadlineAIFunction(tool, timeout);
+        if (sink is not null)
+            wrapped = new BrokerTokenRefreshingAIFunction(wrapped, sink, ct);
+        return sink is not null && requiresApproval
+            ? new ApprovalGatingAIFunction(wrapped, sink, ct)
+            : wrapped;
+    }
 
     /// <summary>
     /// Wraps an MCP <see cref="AIFunction"/> so its invocation is abandoned once
@@ -339,6 +369,33 @@ public sealed class OperatorAssistantAgent(
                        "aborted to keep the conversation responsive. It may still be taking effect in the background — " +
                        "do not assume it failed; tell the user it timed out and offer to check its status.";
             }
+        }
+    }
+
+    /// <summary>
+    /// Refreshes the short-lived MCP credential immediately before every call. For consequential
+    /// tools this wrapper sits inside the approval wrapper, so renewal happens after approval and
+    /// directly before the post-approval request.
+    /// </summary>
+    private sealed class BrokerTokenRefreshingAIFunction(
+        AIFunction inner,
+        IOperatorAssistantTurnSink sink,
+        CancellationToken turnCt) : AIFunction
+    {
+        public override string Name => inner.Name;
+        public override string Description => inner.Description;
+        public override IReadOnlyDictionary<string, object?> AdditionalProperties => inner.AdditionalProperties;
+        public override JsonElement JsonSchema => inner.JsonSchema;
+        public override JsonElement? ReturnJsonSchema => inner.ReturnJsonSchema;
+        public override MethodInfo? UnderlyingMethod => inner.UnderlyingMethod;
+        public override JsonSerializerOptions JsonSerializerOptions => inner.JsonSerializerOptions;
+
+        protected override async ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments, CancellationToken cancellationToken)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(turnCt, cancellationToken);
+            await sink.OnMcpBrokerTokenRefreshRequiredAsync(linked.Token).ConfigureAwait(false);
+            return await inner.InvokeAsync(arguments, linked.Token).ConfigureAwait(false);
         }
     }
 
@@ -500,7 +557,7 @@ public sealed class OperatorAssistantAgent(
             RunId: runId,
             ModelId: null,
             AgentDefinition: agentDefinition,
-            CallerBearerToken: "test",
+            McpBrokerToken: "test",
             History: []), mcpToolCount);
 
     private static string BuildSystemPrompt(OperatorAssistantRequest request, int mcpToolCount = 0)

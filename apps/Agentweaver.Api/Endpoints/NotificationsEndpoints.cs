@@ -1,4 +1,5 @@
 using Agentweaver.Api.Notifications;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 
 namespace Agentweaver.Api.Endpoints;
@@ -10,14 +11,14 @@ public static class NotificationsEndpoints
     /// across every project/run they own. Polled by the frontend notification provider (#247); see
     /// <see cref="NotificationsService"/> for the polling-vs-SSE delivery rationale and MVP scope.
     /// </summary>
-    public static void MapNotificationsEndpoints(this WebApplication app)
+    public static void MapNotificationsEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/notifications", async (
             HttpContext httpContext,
             NotificationsService notifications,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var result = await notifications.GetPendingAsync(caller, ct).ConfigureAwait(false);
             return Results.Ok(result);
         });
@@ -28,7 +29,7 @@ public static class NotificationsEndpoints
             NotificationsService notifications,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             await notifications.DismissAsync(caller, notificationId, ct).ConfigureAwait(false);
             return Results.NoContent();
         });

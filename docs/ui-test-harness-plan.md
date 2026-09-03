@@ -1,5 +1,11 @@
 # Agentweaver UI Test Harness Plan (Playwright)
 
+> **Superseded safety model (2026-09-02):** Hostname allowlists, production
+> confirmation flags, TLS bypasses, and authenticated cross-origin preview navigation
+> described below are historical only. The implementation is host-agnostic, requires
+> HTTPS except on loopback, and keeps requests/navigation same-origin except for the
+> explicit trusted identity-provider login flow.
+
 _Last updated: 2026-07-14_
 
 ## Goal
@@ -868,7 +874,7 @@ Flow:
    `AUTH_EXPIRED` result** telling the operator to re-run `login` — it never tries to
    re-auth programmatically and never treats an expired session as a product bug.
 5. **The `login` step is the only headful, human-gated part.** Everything after it
-   is unattended, matching how the API harness uses a `gh auth token` bearer without
+   is unattended, matching how the API harness uses an explicitly supplied bearer without
    re-minting it per run.
 
 This mirrors the API harness's bearer-token model (resolve once, reuse) at the

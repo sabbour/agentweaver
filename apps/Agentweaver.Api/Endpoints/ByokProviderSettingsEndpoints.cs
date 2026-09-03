@@ -12,7 +12,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class ByokProviderSettingsEndpoints
 {
-    public static void MapByokProviderSettingsEndpoints(this WebApplication app)
+    public static void MapByokProviderSettingsEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/admin/byok-providers", async (
             HttpContext httpContext,
@@ -20,7 +20,7 @@ public static class ByokProviderSettingsEndpoints
             ByokProviderConfigurationService settings,
             CancellationToken ct) =>
         {
-            if (!projectRoles.IsPlatformAdmin(ApiKeyAuthMiddleware.GetCaller(httpContext)))
+            if (!projectRoles.IsPlatformAdmin(httpContext.GetCaller()))
                 return Results.Forbid();
 
             var providers = await settings.ListAsync(ct).ConfigureAwait(false);
@@ -39,7 +39,7 @@ public static class ByokProviderSettingsEndpoints
             ByokProviderConfigurationService settings,
             CancellationToken ct) =>
         {
-            if (!projectRoles.IsPlatformAdmin(ApiKeyAuthMiddleware.GetCaller(httpContext)))
+            if (!projectRoles.IsPlatformAdmin(httpContext.GetCaller()))
                 return Results.Forbid();
 
             try
@@ -62,7 +62,7 @@ public static class ByokProviderSettingsEndpoints
             ByokProviderConfigurationService settings,
             CancellationToken ct) =>
         {
-            if (!projectRoles.IsPlatformAdmin(ApiKeyAuthMiddleware.GetCaller(httpContext)))
+            if (!projectRoles.IsPlatformAdmin(httpContext.GetCaller()))
                 return Results.Forbid();
 
             try
@@ -88,7 +88,7 @@ public static class ByokProviderSettingsEndpoints
             ByokProviderConfigurationService settings,
             CancellationToken ct) =>
         {
-            if (!projectRoles.IsPlatformAdmin(ApiKeyAuthMiddleware.GetCaller(httpContext)))
+            if (!projectRoles.IsPlatformAdmin(httpContext.GetCaller()))
                 return Results.Forbid();
 
             await settings.RemoveAsync(id, ct).ConfigureAwait(false);
@@ -102,7 +102,7 @@ public static class ByokProviderSettingsEndpoints
             ByokProviderConfigurationService settings,
             CancellationToken ct) =>
         {
-            if (!projectRoles.IsPlatformAdmin(ApiKeyAuthMiddleware.GetCaller(httpContext)))
+            if (!projectRoles.IsPlatformAdmin(httpContext.GetCaller()))
                 return Results.Forbid();
 
             try
@@ -124,7 +124,7 @@ public static class ByokProviderSettingsEndpoints
             ByokProviderConfigurationService settings,
             CancellationToken ct) =>
         {
-            if (!projectRoles.IsPlatformAdmin(ApiKeyAuthMiddleware.GetCaller(httpContext)))
+            if (!projectRoles.IsPlatformAdmin(httpContext.GetCaller()))
                 return Results.Forbid();
 
             await settings.SetActiveAsync(null, ct).ConfigureAwait(false);

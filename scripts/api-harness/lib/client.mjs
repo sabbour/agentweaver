@@ -3,9 +3,8 @@
 // Every persona scenario drives Agentweaver exclusively through these calls —
 // the same surface a human user's browser talks to. No browser automation.
 //
-// Auth: a bearer token is sent on every /api request, matching apps/Agentweaver.Api/API.md.
-// GitHubLegacy deployments accept a GitHub token from `gh auth token`; Entra deployments
-// require an Entra bearer token supplied through --token or AGENTWEAVER_TOKEN.
+// Auth: an explicitly supplied bearer token is sent on every /api request, matching
+// apps/Agentweaver.Api/API.md. The harness never borrows GitHub CLI credentials.
 
 /**
  * @typedef {Object} ApiCall
@@ -31,7 +30,8 @@
  *                              round-trip `ms`. null if the header is absent.
  */
 
-import { assertTargetAllowed } from '../../harness-shared/target-guard.mjs';
+import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
+import { redact } from '../../harness-shared/redaction.mjs';
 
 // Response headers, in priority order, that carry a backend correlation id we can
 // pin each turn to. traceparent (W3C) first — that's what App Insights ingests.
@@ -43,21 +43,17 @@ export class AgentweaverClient {
    * @param {string} opts.baseUrl   e.g. https://agentweaver.<zone>.westus2.staging.aksapp.io
    * @param {string} [opts.token]   bearer token
    * @param {{getAuthorization: () => Promise<string>}} [opts.authProvider] in-memory authorization provider
-   * @param {boolean} [opts.insecure] skip TLS verification (staging self-signed / SAN drift)
    */
-  constructor({ baseUrl, token, authProvider, insecure = false, allowProd = false, confirmProduction = false }) {
-    assertTargetAllowed(baseUrl, { allowProd, confirmProduction });
+  constructor({ baseUrl, token, authProvider }) {
+    const target = validateNetworkTarget(baseUrl);
     if (!authProvider && !token) throw new Error('An auth provider or bearer token is required.');
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.origin = target.origin;
+    this.baseUrl = target.href.replace(/\/+$/, '');
     this.authProvider = authProvider ?? {
       getAuthorization: async () => `Bearer ${token}`,
     };
     /** @type {ApiCall[]} */
     this.calls = [];
-    if (insecure) {
-      // Node's global fetch (undici) honours this env for TLS verification.
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-    }
   }
 
   /**
@@ -66,7 +62,17 @@ export class AgentweaverClient {
    * @returns {Promise<ApiCall>}
    */
   async call(method, path, body) {
-    const url = path.startsWith('http') ? path : `${this.baseUrl}${path}`;
+    let url;
+    try {
+      url = new URL(path, `${this.baseUrl}/`);
+      validateNetworkTarget(url);
+      if (url.origin !== this.origin) {
+        throw new Error(`refusing to send API credentials outside configured origin ${this.origin}`);
+      }
+    } catch (error) {
+      if (/refusing to send/.test(String(error?.message))) throw error;
+      throw new Error(`API path "${path}" is not a valid same-origin URL`);
+    }
     const started = Date.now();
     let status = 0;
     let responseBody = null;
@@ -89,6 +95,7 @@ export class AgentweaverClient {
         init.headers['Content-Type'] = 'application/json';
         init.body = JSON.stringify(body);
       }
+      init.redirect = 'error';
       const res = await fetch(url, init);
       status = res.status;
       for (const h of CORRELATION_HEADERS) {
@@ -115,13 +122,13 @@ export class AgentweaverClient {
 
     const record = {
       method,
-      path: path.replace(this.baseUrl, ''),
+      path: new URL(path, `${this.baseUrl}/`).pathname,
       status,
       ms: Date.now() - started,
-      requestBody: body ?? null,
-      responseBody,
+      requestBody: redact(body ?? null),
+      responseBody: redact(responseBody),
       ok: status >= 200 && status < 300,
-      traceId,
+      traceId: redact(traceId),
       upstreamMs,
     };
     this.calls.push(record);

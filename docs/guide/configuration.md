@@ -36,6 +36,53 @@ With the default `sqlite` provider, the database file is `memory.db` inside the 
 | `Auth:Entra:RedirectUri` | none | Exact Entra application callback URL |
 | `Auth:Entra:FrontendUrl` | none | Exact browser origin for Entra callback completion |
 
+#### MCP OAuth authorization server
+
+The API hosts an OpenIddict authorization server for Copilot CLI, GitHub Copilot
+desktop, and VS Code MCP connections. Microsoft Entra remains the upstream human
+identity. The clients receive only short-lived Agentweaver access tokens for the
+`mcp:invoke` scope; Entra tokens never leave the API.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Auth:OAuth:PublicOrigin` | `http://localhost:5000` in Development; required elsewhere | Canonical issuer origin used by both API and MCP. MCP derives the exact `<origin>/mcp` resource, discovery URL, and challenge from it. Production requires HTTPS. |
+| `Auth:OAuth:Certificates:SigningName` | none | Azure Key Vault certificate family for access-token signing; the newest two usable secret versions provide active/previous overlap |
+| `Auth:OAuth:Certificates:EncryptionName` | none | Azure Key Vault certificate family for protocol artifact encryption; the newest two usable secret versions provide active/previous overlap |
+| `Auth:OAuth:DynamicRegistration:PerSourcePerDay` | `20` | Database-backed daily RFC 7591 quota per source address |
+| `Auth:OAuth:DynamicRegistration:MaximumActive` | `1000` | Deployment-wide active dynamic-client quota |
+
+The MCP resource server has no direct-Entra, raw-GitHub, API-key, or shared-key fallback.
+It accepts only Agentweaver broker JWTs for `mcp:invoke`.
+| `Auth:OAuth:DynamicRegistration:LifetimeDays` | `30` | Active lifetime for anonymous dynamic registrations; maintenance disables the OpenIddict application and reclaims quota |
+| `Auth:OAuth:ForwardedHeaders:TrustedNetworks` | loopback in Development; required elsewhere | Comma-separated private CIDRs containing the TLS-terminating proxies. Forwarded scheme/host values from every other source are ignored. AKS deployment derives this from the cluster pod CIDRs. |
+| `Auth:OAuth:Clients` | empty | Statically known public native clients, each with `ClientId`, `DisplayName`, exact `RedirectUris`, and optional `Scopes` |
+
+The resource identifier is always the exact canonical origin plus `/mcp`; it
+cannot be configured independently or inferred from request headers. Production
+startup fails when either durable certificate is unavailable. The API loads the
+active and previous enabled Key Vault versions so a rotation overlap remains
+published. Development alone may use process-ephemeral certificates.
+
+Azure tooling exposes those names as `OAUTH_SIGNING_CERTIFICATE_NAME` and
+`OAUTH_ENCRYPTION_CERTIFICATE_NAME` in environment/params files and as matching
+`--oauth-*-certificate-name` provisioning flags. Routine rotation creates another
+certificate version under the same name; changing the name migrates to another
+certificate family. Certificate-family names are hashed into the API pod template, so
+changing either family triggers a rolling restart; unchanged names do not cause a
+certificate-config rollout. `azure:verify` checks the canonical public origin, runtime
+ConfigMap names, and the newest two versions using the same enabled/time-window,
+private-key, encoding, RSA algorithm, and 2048-bit minimum rules as runtime loading,
+without logging certificate material. It also verifies discovery metadata, resource,
+and JWKS.
+
+Anonymous dynamic registration accepts public native clients only. It permits
+tightly formed reverse-domain private-use callbacks and HTTP callbacks on literal
+`127.0.0.1` or `[::1]`; it never accepts HTTPS callbacks. HTTPS redirect
+registration is available only through the explicitly administered static-client
+configuration. Hostnames such as `localhost`, alternate numeric loopback forms,
+wildcards, prefix matching, fragments, userinfo, client secrets, and metadata URL
+fetching are rejected.
+
 #### Repo App user authorization
 
 Interactive repository access is authorized separately from product sign-in. An Entra-authenticated human starts
@@ -320,8 +367,11 @@ Grounded in `apps/Agentweaver.Api/appsettings.json` (`Logging:LogLevel`). Overri
 
 ## Web environment variables
 
-The web UI authenticates users through Microsoft Entra ID and sends the resulting session
-cookie automatically — it does not require a static API key.
+The web UI authenticates users through Microsoft Entra ID and sends the resulting Entra
+bearer token to the API. The opaque browser cookie is limited to OAuth consent and GitHub
+account-linking handoffs; it is not a general API credential. `Auth:ApiKey` is reserved for
+internal service calls. API endpoint metadata selects the applicable authentication scheme,
+and unclassified endpoints are denied by the fallback policy.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |

@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
@@ -386,11 +387,57 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             ct);
 
     /// <inheritdoc/>
+    public async Task RefreshAgentHostMcpBrokerTokenAsync(
+        string runId,
+        string mcpBrokerToken,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(mcpBrokerToken))
+            throw new ArgumentException("A non-empty MCP broker token is required.", nameof(mcpBrokerToken));
+        if (_httpClientFactory is null)
+            throw new InvalidOperationException("AgentHost MCP broker token renewal requires an HTTP client.");
+
+        var endpoint = _podRegistry?.TryGetAgentEndpoint(runId);
+        var turnToken = _turnTokenRegistry?.TryGetTurnToken(runId);
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri)
+            || string.IsNullOrWhiteSpace(turnToken))
+        {
+            throw new InvalidOperationException(
+                $"AgentHost MCP broker token renewal is unavailable for run '{runId}'.");
+        }
+
+        var refreshUrl = new Uri(
+            new Uri(endpointUri.GetLeftPart(UriPartial.Authority)),
+            "/configure/mcp-token");
+        using var client = _httpClientFactory.CreateClient(HttpAgentHostReadinessProbe.HttpClientName);
+        using var request = new HttpRequestMessage(HttpMethod.Post, refreshUrl)
+        {
+            Content = JsonContent.Create(new { mcpBrokerToken }),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", turnToken);
+        using var response = await client.SendAsync(request, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                $"AgentHost MCP broker token renewal failed for run '{runId}' " +
+                $"with HTTP {(int)response.StatusCode}: {detail}");
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task<string> LaunchAgentHostPodAsync(
         string runId,
         AgentHostLaunchContext launchContext,
         CancellationToken ct = default)
     {
+        var hasMcpBrokerToken = !string.IsNullOrWhiteSpace(launchContext.McpBrokerToken);
+        if ((launchContext.Purpose == AgentHostPurpose.OperatorAssistant) != hasMcpBrokerToken)
+        {
+            throw new InvalidOperationException(
+                "An MCP broker token is required exclusively for OperatorAssistant AgentHost launches.");
+        }
+
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
         var requestedWorkingDirectory = string.IsNullOrWhiteSpace(launchContext.SharedWorkingDirectory)
             ? null
@@ -473,8 +520,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 // OWN warm, already-configured pod from the previous message — reusing it is exactly
                 // the point, and skips the ~8s one-shot /configure plus the rest of the cold start.
                 // The stale-credential hazard that used to force a delete/recreate here is gone: the
-                // current platform bearer now rides on every turn's AgentSetupParams
-                // (AgentSetupParams.CallerBearerToken), which the pod applies before it turns.
+                // current short-lived MCP broker token is renewed over the authenticated control
+                // plane before every turn and immediately before every MCP tool call.
                 //
                 // The turn token is what makes "ours" decidable: it is per-replica in-memory state
                 // registered when THIS process configured the pod, and the A2A call is authenticated
@@ -504,7 +551,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 {
                     _logger.LogInformation(
                         "KubernetesSandboxExecutor: holding AgentHost claim {Claim} for operator run {RunId} across turns; " +
-                        "reusing the already-configured pod and refreshing its caller credential per turn.",
+                        "reusing the already-configured pod and refreshing its MCP broker token per turn.",
                         claimName, runId);
                 }
             }
@@ -1126,7 +1173,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             copilotCredential,
             byokProviderConfiguration,
             repositoryAccessToken,
-            callerBearerToken = launchContext.CallerBearerToken,
+            mcpBrokerToken = launchContext.McpBrokerToken,
             toolApprovalApiBaseUrl = _options.ToolApprovalApiBaseUrl,
             // Keep the legacy property during rolling upgrades; new AgentHosts prefer the explicit
             // sharedWorkingDirectory descriptor and create any local workspace inside the pod.

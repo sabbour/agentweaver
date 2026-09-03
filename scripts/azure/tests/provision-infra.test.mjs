@@ -18,6 +18,17 @@ test("parseArgs accepts the optional Entra enterprise app object ID flag", () =>
     paramsFile: undefined,
     help: false,
   });
+
+  test("parseArgs accepts OAuth Key Vault certificate family overrides", () => {
+    const parsed = parseArgs([
+      "--oauth-signing-certificate-name", "oauth-signing-next",
+      "--oauth-encryption-certificate-name=oauth-encryption-next",
+    ]);
+    assert.deepEqual(parsed.flags, {
+      OAUTH_SIGNING_CERTIFICATE_NAME: "oauth-signing-next",
+      OAUTH_ENCRYPTION_CERTIFICATE_NAME: "oauth-encryption-next",
+    });
+  });
 });
 
 test("runInteractiveInstaller allows the optional Entra enterprise app object ID prompt to be left blank", async () => {

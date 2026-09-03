@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Net.Http.Headers;
 
 // ── Executor sidecar entrypoints ───────────────────────────────────────────────
 // The same image serves three roles so the sandbox toolchain is byte-identical on both sides of the
@@ -122,7 +123,12 @@ builder.Services.AddSingleton<IAgentweaverMcpToolProvider>(sp =>
         throw new InvalidOperationException(
             "AgentHost:McpEndpoint must be configured (the in-cluster AgentweaverMCP /mcp URL) to run the operator assistant purpose.");
     var mcpOptions = new AgentweaverMcpConnectionOptions { Endpoint = new Uri(opts.McpEndpoint) };
-    return new AgentweaverMcpToolProvider(mcpOptions, sp.GetService<ILoggerFactory>());
+    var runtimeState = sp.GetRequiredService<AgentHostRuntimeState>();
+    return new AgentweaverMcpToolProvider(
+        mcpOptions,
+        sp.GetService<ILoggerFactory>(),
+        () => new HttpClient(new RotatingMcpBearerHandler(runtimeState)),
+        ownsHttpClient: true);
 });
 builder.Services.AddSingleton<IOperatorAssistantAgent, OperatorAssistantAgent>();
 builder.Services.AddSingleton<OperatorPodTurnRunner>();
@@ -196,6 +202,33 @@ app.Use(async (ctx, next) =>
     await next(ctx).ConfigureAwait(false);
 });
 
+app.MapPost("/configure/mcp-token", async (
+    HttpContext ctx,
+    AgentHostRuntimeState runtimeState) =>
+{
+    var expected = "Bearer " + runtimeState.TurnBearerToken;
+    if (string.IsNullOrWhiteSpace(runtimeState.TurnBearerToken)
+        || !string.Equals(ctx.Request.Headers.Authorization.ToString(), expected, StringComparison.Ordinal))
+    {
+        return Results.Unauthorized();
+    }
+
+    McpBrokerTokenRefreshRequest? body;
+    try
+    {
+        body = await ctx.Request.ReadFromJsonAsync<McpBrokerTokenRefreshRequest>(ctx.RequestAborted)
+            .ConfigureAwait(false);
+    }
+    catch (Exception)
+    {
+        return Results.BadRequest("Malformed MCP broker token refresh body");
+    }
+
+    return body is not null && runtimeState.TryRefreshMcpBrokerToken(body.McpBrokerToken ?? string.Empty)
+        ? Results.NoContent()
+        : Results.BadRequest("A configured operator assistant and non-empty MCP broker token are required");
+});
+
 // ── Warm-pool one-time /configure endpoint ─────────────────────────────────────
 // Injects the per-run RunId/UserId/TurnBearerToken and immutable capability credential into an already-warm
 // pod, then runs the deferred SetupAsync. Placed BEFORE the A2A bearer-auth middleware: it cannot be
@@ -224,6 +257,9 @@ app.MapPost("/configure", async (HttpContext ctx) =>
 
     if (body is null || string.IsNullOrWhiteSpace(body.RunId))
         return Results.BadRequest("runId is required");
+    var hasMcpBrokerToken = !string.IsNullOrWhiteSpace(body.McpBrokerToken);
+    if ((body.Purpose == AgentHostPurpose.OperatorAssistant) != hasMcpBrokerToken)
+        return Results.BadRequest("mcpBrokerToken is required exclusively for the operator assistant purpose");
     if (body.ByokProviderConfiguration is null && (body.CopilotCredential is null ||
         string.IsNullOrWhiteSpace(body.CopilotCredential.SnapshotReference) ||
         string.IsNullOrWhiteSpace(body.CopilotCredential.AccessToken) ||
@@ -538,11 +574,10 @@ internal sealed record ConfigureRequest
     public string? RepositoryAccessToken { get; init; }
 
     /// <summary>
-    /// Authenticated platform caller token used by the operator assistant's MCP connection. Kept
-    /// separate from <see cref="CopilotCredential"/> because Entra deployments use different
-    /// credentials for Agentweaver API authorization and the linked GitHub/Copilot account.
+    /// Short-lived Agentweaver broker token used only by the operator assistant's MCP connection.
+    /// It is separate from both the browser's Entra bearer and the linked GitHub/Copilot credential.
     /// </summary>
-    public string? CallerBearerToken { get; init; }
+    public string? McpBrokerToken { get; init; }
 
     /// <summary>
     /// Internal API endpoint used only for this run's durable tool-approval-policy lookups.
@@ -633,10 +668,39 @@ internal sealed record ConfigureRequest
         CommitAuthorEmail,
         ProjectId,
         AgentName,
-        CallerBearerToken,
+        McpBrokerToken,
         RepositoryAccessToken,
         ToolApprovalApiBaseUrl,
         ByokProviderConfiguration);
+}
+
+internal sealed record McpBrokerTokenRefreshRequest(string? McpBrokerToken);
+
+internal sealed class RotatingMcpBearerHandler : DelegatingHandler
+{
+    private readonly AgentHostRuntimeState _runtimeState;
+
+    public RotatingMcpBearerHandler(AgentHostRuntimeState runtimeState)
+        : this(runtimeState, new HttpClientHandler())
+    {
+    }
+
+    internal RotatingMcpBearerHandler(AgentHostRuntimeState runtimeState, HttpMessageHandler innerHandler)
+    {
+        _runtimeState = runtimeState;
+        InnerHandler = innerHandler;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        var token = _runtimeState.McpBrokerToken;
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException("The operator assistant MCP broker token is unavailable.");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return base.SendAsync(request, cancellationToken);
+    }
 }
 
 internal sealed record PreviewProcessStartRequest

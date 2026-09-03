@@ -81,7 +81,8 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
  * --image-mcp <ref>, --image-agent-host <ref> (or =value forms),
  * --params-file/--config <path>, --resource-group, --cluster-name,
  * --acr-name, --location, --monitoring-location, --node-vm-size, --keyvault-name, --postgres-server-name, --postgres-location, --postgres-ha-mode, --postgres-access-mode, --namespace,
- * --entra-client-id, --entra-tenant-id, --entra-enterprise-app-object-id, -h/--help.
+ * --entra-client-id, --entra-tenant-id, --entra-enterprise-app-object-id,
+ * --oauth-signing-certificate-name, --oauth-encryption-certificate-name, -h/--help.
  */
 export function parseArgs(argv = []) {
   const flags = {};
@@ -201,6 +202,14 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--entra-enterprise-app-object-id");
       flags.ENTRA_ENTERPRISE_APP_OBJECT_ID = value;
       i += consumed;
+    } else if (arg === "--oauth-signing-certificate-name" || arg.startsWith("--oauth-signing-certificate-name=")) {
+      const { value, consumed } = takeValue(i, "--oauth-signing-certificate-name");
+      flags.OAUTH_SIGNING_CERTIFICATE_NAME = value;
+      i += consumed;
+    } else if (arg === "--oauth-encryption-certificate-name" || arg.startsWith("--oauth-encryption-certificate-name=")) {
+      const { value, consumed } = takeValue(i, "--oauth-encryption-certificate-name");
+      flags.OAUTH_ENCRYPTION_CERTIFICATE_NAME = value;
+      i += consumed;
     } else {
       throw new Error(`Unknown argument: ${arg}. Run 'provision-infra --help' for usage.`);
     }
@@ -247,6 +256,10 @@ Flags:
   --entra-tenant-id <id>       Required Entra tenant (directory) ID.
   --entra-enterprise-app-object-id <id>
                                Optional Entra enterprise application (service principal) object ID.
+  --oauth-signing-certificate-name <name>
+                               Key Vault certificate name whose latest two usable versions sign tokens.
+  --oauth-encryption-certificate-name <name>
+                               Key Vault certificate name whose latest two usable versions encrypt protocol artifacts.
   -h, --help                  Show this help.
 
 Config precedence: flags > env > params-file > detected defaults > prompt.
@@ -507,6 +520,8 @@ function buildSchema({ prompt, az }) {
     ENTRA_CLIENT_ID: { required: true, prompt: () => prompt.text("Microsoft Entra application (client) ID") },
     ENTRA_TENANT_ID: { required: true, prompt: () => prompt.text("Microsoft Entra tenant (directory) ID") },
     ENTRA_ENTERPRISE_APP_OBJECT_ID: {},
+    OAUTH_SIGNING_CERTIFICATE_NAME: { default: DEFAULTS.OAUTH_SIGNING_CERTIFICATE_NAME },
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: { default: DEFAULTS.OAUTH_ENCRYPTION_CERTIFICATE_NAME },
   };
 }
 
@@ -714,6 +729,8 @@ export async function run(opts = {}) {
     }
   }
   log.field("Auth mode", config.AUTH_MODE);
+  log.field("OAuth signing certificate", config.OAUTH_SIGNING_CERTIFICATE_NAME);
+  log.field("OAuth encryption certificate", config.OAUTH_ENCRYPTION_CERTIFICATE_NAME);
   if (String(config.AUTH_MODE).toLowerCase() === "entra") {
     log.field("Entra client ID", config.ENTRA_CLIENT_ID);
     log.field("Entra tenant ID", config.ENTRA_TENANT_ID);
@@ -739,6 +756,8 @@ export async function run(opts = {}) {
     ENTRA_CLIENT_ID: config.ENTRA_CLIENT_ID,
     ENTRA_TENANT_ID: config.ENTRA_TENANT_ID,
     ENTRA_ENTERPRISE_APP_OBJECT_ID: config.ENTRA_ENTERPRISE_APP_OBJECT_ID,
+    OAUTH_SIGNING_CERTIFICATE_NAME: config.OAUTH_SIGNING_CERTIFICATE_NAME,
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: config.OAUTH_ENCRYPTION_CERTIFICATE_NAME,
     IMAGE_API: config.IMAGE_API,
     IMAGE_FRONTEND: config.IMAGE_FRONTEND,
     IMAGE_MCP: config.IMAGE_MCP,

@@ -26,8 +26,9 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class MemoryEndpoints
 {
-    public static void MapMemoryEndpoints(this WebApplication app)
+    public static void MapMemoryEndpoints(this IEndpointRouteBuilder app)
     {
+        var logger = app.ServiceProvider.GetRequiredService<ILogger<Program>>();
 // GET /api/projects/{id}/memory — cross-agent search across all memories for a project
 // (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects/{id}/memory", async (
@@ -319,7 +320,7 @@ app.MapPost("/api/projects/{id}/sessions", async (
     memoryDb.SessionContexts.Add(session);
     await memoryDb.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Created($"/api/projects/{id}/sessions/current", new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -358,7 +359,7 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
     if (request.SerializedState is not null) session.SerializedState = request.SerializedState;
     if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -451,7 +452,7 @@ app.MapMethods("/api/projects/{id}/sessions/{sessionId}", new[] { "PATCH" }, asy
     if (request.SerializedState is not null) session.SerializedState = request.SerializedState;
     if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -491,7 +492,7 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     }
     catch (Exception ex)
     {
-        app.Logger.LogWarning(ex, "Failed to export project memory for {ProjectId}.", id);
+        logger.LogWarning(ex, "Failed to export project memory for {ProjectId}.", id);
         return Results.Problem(
             title: "Memory export failed",
             detail: $"The team ledger could not be written to the project workspace: {ex.Message}",
@@ -535,7 +536,7 @@ app.MapPost("/api/projects/{id}/memory/import", async (
         }
     }
     await memoryDb.SaveChangesAsync(ct);
-    var mirrorExported = await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    var mirrorExported = await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new { imported = newCount, mirror_exported = mirrorExported });
 });
     }

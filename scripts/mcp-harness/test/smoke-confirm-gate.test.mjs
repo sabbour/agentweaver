@@ -22,6 +22,12 @@ test('returns break for archived status', () => {
   assert.equal(classifySmokeStatus({ status: 'archived' }, { terminal: TERMINAL }), 'break');
 });
 
+test('returns break for terminal coordinator assembly states even while run is in progress', () => {
+  for (const coordinator_status of ['assembly_blocked', 'assembly_failed', 'assembly_declined']) {
+    assert.equal(classifySmokeStatus({ status: 'in_progress', coordinator_status }, { terminal: TERMINAL }), 'break');
+  }
+});
+
 test('terminal check is case-insensitive', () => {
   assert.equal(classifySmokeStatus({ status: 'Completed' }, { terminal: TERMINAL }), 'break');
   assert.equal(classifySmokeStatus({ status: 'FAILED' }, { terminal: TERMINAL }), 'break');

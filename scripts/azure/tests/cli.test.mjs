@@ -63,6 +63,7 @@ test("run: routes 'deploy-from-local' by resolving variables first", async () =>
       },
     },
     variables: { resolveVariables: async () => fakeCfg },
+    config: { loadParamsFile: () => ({}) },
   };
   const result = await run(["deploy-from-local", "--allow-dirty"], { log: noopLog(), modules });
   assert.equal(result.ok, true);
@@ -221,6 +222,7 @@ test("run: 'verify' via importFn dynamically imports both steps/40-verify.mjs an
   const importFn = async (specifier) => {
     importedSpecifiers.push(specifier);
     if (specifier === "./variables.mjs") return { resolveVariables: async () => fakeCfg };
+    if (specifier === "./lib/config.mjs") return { loadParamsFile: () => ({}) };
     return { run: async (cfg) => ({ ok: true, cfgSeen: cfg }) };
   };
   const result = await run(["verify"], { log: noopLog(), importFn });
@@ -228,4 +230,59 @@ test("run: 'verify' via importFn dynamically imports both steps/40-verify.mjs an
   assert.deepEqual(result.cfgSeen, fakeCfg);
   assert.ok(importedSpecifiers.includes("./steps/40-verify.mjs"));
   assert.ok(importedSpecifiers.includes("./variables.mjs"));
+});
+
+test("run: standalone verify resolves an explicit params file before certificate validation", async () => {
+  let paramsPath;
+  let resolvedEnv;
+  const modules = {
+    verify: { run: async (cfg) => ({ ok: true, cfg }) },
+    config: {
+      loadParamsFile: (value) => {
+        paramsPath = value;
+        return {
+          KEYVAULT_NAME: "custom-kv",
+          OAUTH_SIGNING_CERTIFICATE_NAME: "custom-signing",
+          OAUTH_ENCRYPTION_CERTIFICATE_NAME: "custom-encryption",
+        };
+      },
+    },
+    variables: {
+      resolveVariables: async ({ env }) => {
+        resolvedEnv = env;
+        return env;
+      },
+    },
+  };
+  await run(["verify", "--params-file", "scripts/azure/custom.json"], { log: noopLog(), modules });
+  assert.equal(paramsPath, "scripts/azure/custom.json");
+  assert.equal(resolvedEnv.OAUTH_SIGNING_CERTIFICATE_NAME, "custom-signing");
+  assert.equal(resolvedEnv.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "custom-encryption");
+});
+
+test("run: standalone verify auto-discovers params through the deploy command path", async () => {
+  let paramsPath;
+  let resolvedEnv;
+  const modules = {
+    verify: { run: async () => ({ ok: true }) },
+    config: {
+      loadParamsFile: (value) => {
+        paramsPath = value;
+        return { OAUTH_SIGNING_CERTIFICATE_NAME: "auto-signing" };
+      },
+    },
+    variables: {
+      resolveVariables: async ({ env }) => {
+        resolvedEnv = env;
+        return env;
+      },
+    },
+  };
+  await run(["verify"], {
+    log: noopLog(),
+    modules,
+    findParamsFile: () => "scripts/azure/params.test-user.json",
+  });
+  assert.equal(paramsPath, "scripts/azure/params.test-user.json");
+  assert.equal(resolvedEnv.OAUTH_SIGNING_CERTIFICATE_NAME, "auto-signing");
 });

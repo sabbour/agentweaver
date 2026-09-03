@@ -331,6 +331,26 @@ export async function run(cfg, opts = {}) {
     const ZONE_SUFFIX = validateManagedDomain(DOMAIN);
     const HOST = `agentweaver.${ZONE_SUFFIX}`;
     kustomize.publicHttpsOrigin(HOST);
+    const { stdout: podCidrs } = await execCapture("az", [
+      "aks",
+      "show",
+      "--name",
+      cfg.CLUSTER_NAME,
+      "--resource-group",
+      cfg.RESOURCE_GROUP,
+      "--query",
+      "networkProfile.podCidrs || [networkProfile.podCidr]",
+      "--output",
+      "tsv",
+    ]);
+    const OAUTH_TRUSTED_PROXY_NETWORKS = String(podCidrs ?? "")
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .join(",");
+    if (!OAUTH_TRUSTED_PROXY_NETWORKS) {
+      throw new Error("AKS did not report a pod CIDR; refusing to trust unbounded forwarded headers.");
+    }
 
     log.info(`  Managed domain: ${DOMAIN}`);
     log.info(`  Ingress host:   ${HOST}`);
@@ -359,6 +379,7 @@ export async function run(cfg, opts = {}) {
       PREVIEW_TLS_SECRET,
       SANDBOX_PREVIEW_ENABLED,
       SANDBOX_PREVIEW_ZONE_SUFFIX,
+      OAUTH_TRUSTED_PROXY_NETWORKS,
     };
     const runtimeConfig = kustomize.buildRuntimeConfigLiterals(renderVars);
     const copilotCallbackUrl = assertCopilotAppCallbackUrl(runtimeConfig.COPILOT_APP_CALLBACK_URL);

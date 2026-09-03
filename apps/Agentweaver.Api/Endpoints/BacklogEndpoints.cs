@@ -13,11 +13,11 @@ namespace Agentweaver.Api.Endpoints;
 /// Project-scoped backlog + Kanban board endpoints (Feature 009). Every mutate handler verifies the
 /// task belongs to the route project by passing the route projectId into the project-scoped store
 /// method (a task can never be mutated through another project's route). Bearer auth via
-/// <see cref="ApiKeyAuthMiddleware.GetCaller"/>; snake_case DTOs.
+/// <see cref="ICallerContextAccessor"/>; snake_case DTOs.
 /// </summary>
 public static class BacklogEndpoints
 {
-    public static void MapBacklogEndpoints(this WebApplication app)
+    public static void MapBacklogEndpoints(this IEndpointRouteBuilder app)
     {
         // POST /api/projects/{projectId}/backlog/tasks — capture (FR-001/002/003/016)
         app.MapPost("/api/projects/{projectId}/backlog/tasks", async (
@@ -39,7 +39,7 @@ public static class BacklogEndpoints
             var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
             if (auth.Error is not null) return auth.Error;
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
 
             // Persist the actual signed-in GitHub login as who captured the task (not the API-key
             // Auth:User config value). Mirrors the signed-in guard in GET /api/auth/github: resolve the

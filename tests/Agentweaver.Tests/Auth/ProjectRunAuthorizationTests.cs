@@ -176,10 +176,10 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         {
             RequestServices = _factory.Services,
         };
-        context.Items[GitHubTokenAuthMiddleware.CallerItemKey] = new CallerContext
-        {
-            User = ProjectAuthorization.InternalServiceUser,
-        };
+        context.User = CallerContextClaimsAdapter.ToPrincipal(
+            new CallerContext { User = ProjectAuthorization.InternalServiceUser },
+            AgentweaverAuthenticationSchemes.InternalServiceKey,
+            isInternalService: true);
 
         var result = await EndpointHelpers.RequireRunAccessAsync(
             context,

@@ -63,12 +63,14 @@ public sealed class KubernetesSandboxExecutorClaimTests
         FakeKubeHandler handler, IRunSubmittingUserResolver submittingUserResolver,
         IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null,
         IPodNameRegistry? podRegistry = null,
+        IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
         IGitHubCopilotCapabilityCredentialProvider? copilotCredentials = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
         Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
-            podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
+            podRegistry: podRegistry, turnTokenRegistry: turnTokenRegistry, readinessProbe: null,
+            submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions,
             copilotCredentials: copilotCredentials ?? new FixedGitHubCopilotCapabilityCredentialProvider(),
             previewService: previewService,
@@ -109,12 +111,14 @@ public sealed class KubernetesSandboxExecutorClaimTests
         }
 
         public string? RequestUri { get; private set; }
+        public string? Authorization { get; private set; }
         public string? Body { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestUri = request.RequestUri?.ToString();
+            Authorization = request.Headers.Authorization?.ToString();
             Body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
@@ -552,7 +556,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
             runId,
             new AgentHostLaunchContext(
                 SharedWorkingDirectory: null,
-                Purpose: AgentHostPurpose.OperatorAssistant));
+                Purpose: AgentHostPurpose.OperatorAssistant,
+                McpBrokerToken: "platform-scoped-broker-token"));
 
         observedScopes.Should().NotBeEmpty().And.AllSatisfy(scope => scope.Should().BeNull(),
             "an Assistant session's incidental project id must never decide which provider serves it");
@@ -705,10 +710,10 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
-    public async Task LaunchAgentHostPod_operator_configure_carries_platform_caller_token_separately()
+    public async Task LaunchAgentHostPod_operator_configure_carries_mcp_broker_token_separately()
     {
         const string runId = "run-claim-operator-caller";
-        const string callerBearerToken = "entra-platform-bearer-token";
+        const string mcpBrokerToken = "agentweaver-broker-token";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         var handler = new FakeKubeHandler();
@@ -730,14 +735,37 @@ public sealed class KubernetesSandboxExecutorClaimTests
             new AgentHostLaunchContext(
                 SharedWorkingDirectory: null,
                 Purpose: AgentHostPurpose.OperatorAssistant,
-                CallerBearerToken: callerBearerToken));
+                McpBrokerToken: mcpBrokerToken));
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         var body = doc.RootElement;
-        body.GetProperty("callerBearerToken").GetString().Should().Be(callerBearerToken);
+        body.GetProperty("mcpBrokerToken").GetString().Should().Be(mcpBrokerToken);
         body.GetProperty("copilotCredential").GetProperty("snapshotReference").GetString().Should().Be("snapshot-test");
-        body.GetProperty("copilotCredential").GetProperty("accessToken").GetString().Should().NotBe(callerBearerToken,
-            "the Entra platform credential and Copilot capability have different trust purposes");
+        body.GetProperty("copilotCredential").GetProperty("accessToken").GetString().Should().NotBe(mcpBrokerToken,
+            "the MCP broker credential and Copilot capability have different trust purposes");
+    }
+
+    [Fact]
+    public async Task RefreshAgentHostMcpBrokerToken_UsesTurnAuthenticatedControlPlane()
+    {
+        const string runId = "run-claim-operator-renewal";
+        var registry = new PodNameRegistry();
+        registry.RegisterAgentEndpoint(runId, "http://10.0.0.7:8088/a2a/agent");
+        registry.RegisterTurnToken(runId, "turn-control-token");
+        var refreshHandler = new RecordingConfigureHandler(statusCode: HttpStatusCode.NoContent);
+        var executor = NewExecutor(
+            new FakeKubeHandler(),
+            new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(refreshHandler),
+            podRegistry: registry,
+            turnTokenRegistry: registry);
+
+        await executor.RefreshAgentHostMcpBrokerTokenAsync(runId, "renewed-broker-token");
+
+        refreshHandler.RequestUri.Should().Be("http://10.0.0.7:8088/configure/mcp-token");
+        refreshHandler.Authorization.Should().Be("Bearer turn-control-token");
+        using var body = JsonDocument.Parse(refreshHandler.Body!);
+        body.RootElement.GetProperty("mcpBrokerToken").GetString().Should().Be("renewed-broker-token");
     }
 
     [Fact]
@@ -771,7 +799,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
             new AgentHostLaunchContext(
                 SharedWorkingDirectory: null,
                 Purpose: AgentHostPurpose.OperatorAssistant,
-                CallerBearerToken: "current-entra-token"));
+                McpBrokerToken: "current-broker-token"));
 
         conflictFirst.ClaimCreateRequests.Should().Be(2,
             "a pre-existing claim this replica holds no turn token for is unreachable and un-reconfigurable, " +
@@ -779,7 +807,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         fake.Requests.Should().Contain(request =>
             request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
         using var doc = JsonDocument.Parse(configureHandler.Body!);
-        doc.RootElement.GetProperty("callerBearerToken").GetString().Should().Be("current-entra-token");
+        doc.RootElement.GetProperty("mcpBrokerToken").GetString().Should().Be("current-broker-token");
         turnTokens.TryGetTurnToken(runId).Should().NotBeNullOrEmpty();
     }
 
@@ -789,8 +817,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         // An operator conversation HOLDS its AgentHost pod between turns so the next message skips the
         // claim/configure cold start that produced 15-20s of per-turn silence. When this replica still
         // holds the pod's turn token the pod is ours and already configured, so a second turn must
-        // neither delete the claim nor replay the one-shot /configure — the current platform bearer
-        // rides on the per-turn AgentSetupParams instead.
+        // neither delete the claim nor replay the one-shot /configure — the current short-lived
+        // MCP broker token is renewed over the authenticated control plane instead.
         const string runId = "run-claim-operator-held";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
@@ -822,7 +850,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
             new AgentHostLaunchContext(
                 SharedWorkingDirectory: null,
                 Purpose: AgentHostPurpose.OperatorAssistant,
-                CallerBearerToken: "current-entra-token"));
+                McpBrokerToken: "current-broker-token"));
 
         endpoint.Should().Be("http://10.0.0.9:8088/a2a/agent");
         alwaysConflict.ClaimCreateRequests.Should().Be(1,
@@ -1285,6 +1313,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 new AgentHostLaunchContext(
                     SharedWorkingDirectory: null,
                     Purpose: AgentHostPurpose.OperatorAssistant,
+                    McpBrokerToken: "holder-stamp-broker-token",
                     HolderToken: "owner-token-abc"),
                 new CancellationTokenSource(TimeSpan.FromMilliseconds(50)).Token);
         }

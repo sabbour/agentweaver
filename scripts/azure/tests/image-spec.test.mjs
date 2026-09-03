@@ -4,6 +4,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { IMAGES, COMMON_DOTNET_PATHS, getImage, buildArgsFor } from "../image-spec.mjs";
 
 test("image-spec: exactly the 4 expected images, each with required fields", () => {
@@ -33,6 +35,20 @@ test("image-spec: dockerfiles/context point at real repo-relative paths", () => 
   for (const image of IMAGES) {
     assert.equal(image.context, ".", `${image.name} should build from repo root (Dockerfiles COPY from multiple subdirs)`);
   }
+});
+
+test("api image installs the pinned GitHub CLI from an immutable verified release artifact", () => {
+  const dockerfile = readFileSync(
+    fileURLToPath(new URL("../../../apps/Agentweaver.Api/Dockerfile", import.meta.url)),
+    "utf8",
+  );
+  assert.match(
+    dockerfile,
+    /github\.com\/cli\/cli\/releases\/download\/v\$\{GH_CLI_VERSION\}\/gh_\$\{GH_CLI_VERSION\}_linux_amd64\.deb/,
+  );
+  assert.match(dockerfile, /ARG GH_CLI_SHA256=[0-9a-f]{64}/);
+  assert.match(dockerfile, /echo "\$\{GH_CLI_SHA256\}  \/tmp\/gh\.deb" \| sha256sum -c -/);
+  assert.doesNotMatch(dockerfile, /apt-get install[^\n]*gh=\$\{GH_CLI_VERSION\}/);
 });
 
 test("image-spec: agent-host uses AGENTHOST_IMAGE_TAG; others use IMAGE_TAG", () => {

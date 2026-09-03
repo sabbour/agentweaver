@@ -2,7 +2,6 @@ namespace Agentweaver.Api.Security;
 
 using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
@@ -26,8 +25,7 @@ using Microsoft.Extensions.DependencyInjection;
 public static class ProjectAuthorization
 {
     /// <summary>
-    /// Principal attributed to callers that authenticate with the shared internal service key
-    /// (agent loopback calls). Kept in sync with <c>GitHubTokenAuthMiddleware</c>'s internal-key path.
+    /// Principal attributed to callers that authenticate with the shared internal service key.
     /// </summary>
     public const string InternalServiceUser = "agentweaver-internal";
 
@@ -35,23 +33,18 @@ public static class ProjectAuthorization
     /// True when <paramref name="caller"/> is the trusted internal service identity used by a run's own
     /// agents for loopback memory/decision/casting callbacks.
     /// </summary>
-    public static bool IsInternalServiceCaller(CallerContext caller, IConfiguration configuration)
-    {
-        if (string.Equals(caller.User, InternalServiceUser, StringComparison.Ordinal))
-            return true;
-
-        var serviceUser = configuration["Auth:User"];
-        return !string.IsNullOrEmpty(serviceUser)
-            && string.Equals(caller.User, serviceUser, StringComparison.Ordinal);
-    }
+    public static bool IsInternalServiceCaller(CallerContext caller) =>
+        caller.AuthenticationScheme is AgentweaverAuthenticationSchemes.InternalServiceKey
+        || (caller.AuthenticationScheme is AgentweaverAuthenticationSchemes.TestBypass
+            && caller.IsInternalService);
 
     /// <summary>
     /// True when <paramref name="caller"/> may operate on a project owned by <paramref name="ownerUser"/>:
     /// either the caller owns it (principal / signed-in GitHub login match) OR the caller is the trusted
     /// internal service identity.
     /// </summary>
-    public static bool CanAccess(CallerContext caller, string? ownerUser, IConfiguration configuration)
-        => caller.Owns(ownerUser) || IsInternalServiceCaller(caller, configuration);
+    public static bool CanAccess(CallerContext caller, string? ownerUser)
+        => caller.Owns(ownerUser) || IsInternalServiceCaller(caller);
 
     /// <summary>
     /// Authorization guard for a project that the caller has ALREADY loaded. Returns
@@ -69,11 +62,11 @@ public static class ProjectAuthorization
         CancellationToken ct,
         bool allowInternalService = true)
     {
-        var caller = GitHubTokenAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
         if (!allowInternalService && IsDedicatedInternalServiceCaller(httpContext, caller))
             return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-        if (allowInternalService && IsInternalServiceCaller(caller, configuration))
+        if (allowInternalService && IsInternalServiceCaller(caller))
             return null;
 
         var authorization = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
@@ -95,8 +88,13 @@ public static class ProjectAuthorization
     }
 
     private static bool IsDedicatedInternalServiceCaller(HttpContext httpContext, CallerContext caller) =>
-        string.Equals(caller.User, InternalServiceUser, StringComparison.Ordinal)
-        || httpContext.User.HasClaim("agentweaver_internal", "true");
+        string.Equals(
+            caller.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.InternalServiceKey,
+            StringComparison.Ordinal)
+        || httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.RunCapability);
 
     /// <summary>
     /// Parses the route project id, loads the project, and authorizes the caller in one step for
@@ -134,8 +132,8 @@ public static class ProjectAuthorization
 
     private static IResult? RequireOwnershipLegacy(HttpContext httpContext, Project project, IConfiguration configuration)
     {
-        var caller = GitHubTokenAuthMiddleware.GetCaller(httpContext);
-        return CanAccess(caller, project.Owner, configuration)
+        var caller = httpContext.GetCaller();
+        return CanAccess(caller, project.Owner)
             ? null
             : Results.StatusCode(StatusCodes.Status403Forbidden);
     }

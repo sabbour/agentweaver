@@ -90,7 +90,6 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
     private string? _apiBaseUrl;
     private string? _apiKey;
     private string? _userId;
-    private string? _callerBearerToken;
     private bool _preparedWritebackRequired;
     private bool _preparedWritebackEnvelopeSeen;
     private bool _preparedWritebackEnvelopeInvalid;
@@ -102,21 +101,6 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
     private HttpClient? _httpClient;
 
     internal string RemoteApiBaseUrl => _remoteApiBaseUrl;
-
-    /// <summary>
-    /// The CURRENT platform caller token to deliver with every turn's <see cref="AgentSetupParams"/>.
-    /// Only the operator-assistant path sets it (see
-    /// <see cref="AgentSetupParams.CallerBearerToken"/>): refreshing the pod's caller credential on
-    /// the per-turn setup part is what makes holding an AgentHost pod across a conversation's turns
-    /// safe, since the pod's <c>/configure</c> is one-shot and cannot re-deliver it. Not part of
-    /// <see cref="IWorkflowTurnAgent.SetupAsync"/> — that contract is shared with every workflow
-    /// agent, none of which has a caller token.
-    /// </summary>
-    public string? CallerBearerToken
-    {
-        get => _callerBearerToken;
-        set => _callerBearerToken = value;
-    }
 
     public RemoteAgentProxy(
         ISandboxAgentEndpointResolver endpointResolver,
@@ -248,7 +232,6 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
             ApiKey = _apiKey,
             UserId = _userId,
             IsRevision = isRevision,
-            CallerBearerToken = _callerBearerToken,
         };
 
         var setupJson = JsonSerializer.SerializeToUtf8Bytes(

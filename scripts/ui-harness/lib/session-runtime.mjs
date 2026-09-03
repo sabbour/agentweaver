@@ -1,9 +1,16 @@
-import { randomUUID } from 'node:crypto';
+import {
+  constants as cryptoConstants,
+  createCipheriv,
+  publicEncrypt,
+  randomBytes,
+  randomUUID,
+} from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { redact } from '../../harness-shared/redaction.mjs';
 import { assertSessionId } from './session-store.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -32,11 +39,44 @@ function responsesDirectory(runtime) {
   return path.join(runtime, 'responses');
 }
 
+function shutdownRetryPath(runtime) {
+  return path.join(runtime, 'shutdown-retry.json');
+}
+
 async function writeJsonAtomic(file, value) {
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
   await rename(temporary, file);
+}
+
+function persistedActionArgs(args) {
+  const safe = redact(args);
+  if (typeof safe.path === 'string') {
+    safe.path = new URL(safe.path, 'https://ui-evidence.invalid').pathname;
+  }
+  return safe;
+}
+
+function sealActionArgs(args, publicKey) {
+  if (typeof publicKey !== 'string' || publicKey.length === 0) {
+    throw new Error('UI session worker is missing its argument encryption key');
+  }
+  const key = randomBytes(32);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(args), 'utf8'), cipher.final()]);
+  return {
+    algorithm: 'rsa-oaep-sha256+aes-256-gcm',
+    encryptedKey: publicEncrypt({
+      key: publicKey,
+      oaepHash: 'sha256',
+      padding: cryptoConstants.RSA_PKCS1_OAEP_PADDING,
+    }, key).toString('base64'),
+    iv: iv.toString('base64'),
+    authTag: cipher.getAuthTag().toString('base64'),
+    ciphertext: ciphertext.toString('base64'),
+  };
 }
 
 async function readJson(file) {
@@ -46,6 +86,21 @@ async function readJson(file) {
     if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
     throw error;
   }
+}
+
+function shutdownErrorFromEvidence(evidence) {
+  const nested = Array.isArray(evidence?.errors)
+    ? evidence.errors.map((item) => {
+        const error = new Error(item?.message ?? 'browser resource close failed');
+        error.code = item?.code;
+        return error;
+      })
+    : [];
+  const error = nested.length > 0
+    ? new AggregateError(nested, evidence?.message ?? 'browser runtime close failed', { cause: nested[0] })
+    : new Error(evidence?.message ?? 'browser runtime close failed');
+  error.code = evidence?.code ?? 'BROWSER_CLOSE_FAILED';
+  return error;
 }
 
 export function isProcessAlive(pid) {
@@ -63,12 +118,20 @@ async function terminateProcess(pid) {
   try {
     process.kill(pid, 'SIGTERM');
   } catch {
+    if (isProcessAlive(pid)) {
+      throw new Error(`UI session worker process ${pid} could not be signaled`);
+    }
     return;
   }
   const deadline = Date.now() + 3_000;
   while (isProcessAlive(pid) && Date.now() < deadline) await sleep(50);
   if (isProcessAlive(pid)) {
     try { process.kill(pid, 'SIGKILL'); } catch { /* already stopped */ }
+  }
+  const killDeadline = Date.now() + 3_000;
+  while (isProcessAlive(pid) && Date.now() < killDeadline) await sleep(50);
+  if (isProcessAlive(pid)) {
+    throw new Error(`UI session worker process ${pid} could not be terminated`);
   }
 }
 
@@ -122,7 +185,7 @@ export async function withSessionLock(
 }
 
 async function runtimeIsReady(state) {
-  if (!state || state.status !== 'ready' || !isProcessAlive(state.pid)) return false;
+  if (!state || state.status !== 'ready' || !isProcessAlive(state.pid) || !state.argumentPublicKey) return false;
   const heartbeat = Date.parse(state.heartbeatAt ?? '');
   return Number.isFinite(heartbeat) && Date.now() - heartbeat <= HEARTBEAT_STALE_MS;
 }
@@ -147,6 +210,12 @@ export async function ensureSessionRuntime({
   await mkdir(runtime, { recursive: true });
 
   return withDirectoryLock(startLock, async () => {
+    const pendingShutdown = await readJson(shutdownRetryPath(runtime));
+    if (pendingShutdown) {
+      const error = new Error(pendingShutdown.retryAction ?? 'UI session cleanup must be retried before restart');
+      error.code = 'SESSION_SHUTDOWN_RETRY_REQUIRED';
+      throw error;
+    }
     const current = await readJson(statePath(runtime));
     if (await runtimeIsReady(current)) return current;
     if (current?.pid && isProcessAlive(current.pid)) await terminateProcess(current.pid);
@@ -159,8 +228,6 @@ export async function ensureSessionRuntime({
       '--sessions-dir', sessionsDirectory,
       '--launch-id', launchId,
     ];
-    if (guardOptions.allowProd) workerArgs.push('--allow-prod');
-    if (guardOptions.confirmProduction) workerArgs.push('--confirm-production');
     const logPath = path.join(runtime, 'worker.log');
     const logHandle = openSync(logPath, 'w', 0o600);
     let child;
@@ -252,9 +319,16 @@ export async function dispatchSessionCommand({
   timeout = COMMAND_TIMEOUT_MS,
 }) {
   const runtime = runtimeDirectory(sessionsDirectory, sessionId);
-  await ensureSessionRuntime({ sessionsDirectory, sessionId, guardOptions });
+  const state = await ensureSessionRuntime({ sessionsDirectory, sessionId, guardOptions });
   const requestId = randomUUID();
-  const envelope = { ...request, requestId, requestedAt: new Date().toISOString() };
+  const persistedRequest = request.kind === 'action'
+    ? {
+        ...request,
+        args: persistedActionArgs(request.args),
+        sealedArgs: sealActionArgs(request.args, state.argumentPublicKey),
+      }
+    : request;
+  const envelope = { ...persistedRequest, requestId, requestedAt: new Date().toISOString() };
   await writeJsonAtomic(path.join(requestsDirectory(runtime), `${requestId}.json`), envelope);
   try {
     const response = await waitForResponse(runtime, requestId, timeout);
@@ -284,20 +358,109 @@ export async function reconcileSessionResponses(sessionsDirectory, sessionId) {
 
 export async function stopSessionRuntime({ sessionsDirectory, sessionId, timeout = 15_000 }) {
   const runtime = runtimeDirectory(sessionsDirectory, sessionId);
-  const state = await readJson(statePath(runtime));
-  if (state?.pid && isProcessAlive(state.pid)) {
-    const requestId = randomUUID();
-    await writeJsonAtomic(path.join(requestsDirectory(runtime), `${requestId}.json`), {
-      kind: 'finish',
-      requestId,
-      requestedAt: new Date().toISOString(),
-    });
-    await waitForResponse(runtime, requestId, timeout);
-    const deadline = Date.now() + timeout;
-    while (isProcessAlive(state.pid) && Date.now() < deadline) await sleep(50);
-    if (isProcessAlive(state.pid)) await terminateProcess(state.pid);
+  const initialState = await readJson(statePath(runtime));
+  const priorRetry = await readJson(shutdownRetryPath(runtime));
+  if (!initialState && !priorRetry) {
+    await rm(runtime, { recursive: true, force: true });
+    return { browserClosed: true, browserClosureProven: true, workerTerminated: true };
   }
-  await rm(runtime, { recursive: true, force: true });
+
+  const pid = initialState?.pid ?? priorRetry?.pid;
+  let browserClosureProven = (
+    initialState?.termination?.browserClosed === true
+    && initialState?.termination?.browserClosureProven === true
+  ) || (
+    priorRetry?.browserClosed === true
+    && priorRetry?.browserClosureProven === true
+  );
+  let browserClosed = browserClosureProven;
+  const shutdownErrors = Array.isArray(priorRetry?.errors)
+    ? priorRetry.errors.map((item) => {
+        const error = new Error(item?.message ?? 'previous UI session shutdown failed');
+        error.code = item?.code ?? 'SESSION_SHUTDOWN_FAILED';
+        return error;
+      })
+    : [];
+  if (!priorRetry && initialState?.error) {
+    shutdownErrors.push(shutdownErrorFromEvidence(initialState.error));
+  }
+  if (pid && isProcessAlive(pid) && !priorRetry) {
+    try {
+      const requestId = randomUUID();
+      await writeJsonAtomic(path.join(requestsDirectory(runtime), `${requestId}.json`), {
+        kind: 'finish',
+        requestId,
+        requestedAt: new Date().toISOString(),
+      });
+      const response = await waitForResponse(runtime, requestId, timeout);
+      browserClosureProven ||= response?.termination?.browserClosed === true
+        && response?.termination?.browserClosureProven === true;
+      browserClosed = browserClosureProven;
+      if (!response?.ok) shutdownErrors.push(shutdownErrorFromEvidence(response?.error));
+      const deadline = Date.now() + timeout;
+      while (isProcessAlive(pid) && Date.now() < deadline) await sleep(50);
+    } catch (error) {
+      shutdownErrors.push(error);
+    } finally {
+      if (isProcessAlive(pid)) {
+        try {
+          await terminateProcess(pid);
+        } catch (error) {
+          shutdownErrors.push(error);
+        }
+      }
+    }
+  } else if (pid && isProcessAlive(pid)) {
+    try {
+      await terminateProcess(pid);
+    } catch (error) {
+      shutdownErrors.push(error);
+    }
+  }
+
+  const finalState = await readJson(statePath(runtime));
+  browserClosureProven ||= finalState?.termination?.browserClosed === true
+    && finalState?.termination?.browserClosureProven === true;
+  browserClosed = browserClosureProven;
+  const workerTerminated = !pid || !isProcessAlive(pid);
+  if (browserClosed && workerTerminated) {
+    await rm(runtime, { recursive: true, force: true });
+    return { browserClosed: true, browserClosureProven: true, workerTerminated: true };
+  }
+
+  for (const name of await readdir(runtime).catch(() => [])) {
+    if (name === 'action.lock' || name === 'start.lock') continue;
+    await rm(path.join(runtime, name), { recursive: true, force: true });
+  }
+  if (!browserClosed) {
+    shutdownErrors.push(Object.assign(new Error('browser runtime closure was not proven'), {
+      code: 'BROWSER_CLOSE_UNPROVEN',
+    }));
+  }
+  if (!workerTerminated && !shutdownErrors.some((error) => error?.code === 'WORKER_TERMINATION_UNPROVEN')) {
+    shutdownErrors.push(Object.assign(new Error(`UI session worker process ${pid} termination was not proven`), {
+      code: 'WORKER_TERMINATION_UNPROVEN',
+    }));
+  }
+  await writeJsonAtomic(shutdownRetryPath(runtime), redact({
+    pid: pid ?? null,
+    browserClosed,
+    browserClosureProven,
+    workerTerminated,
+    retryAction: browserClosed
+      ? 'Retry cleanup after confirming worker termination.'
+      : 'Browser closure is unproven; verify worker/browser termination before removing retained session metadata.',
+    errors: shutdownErrors.flatMap((error) => {
+      const errors = error instanceof AggregateError ? error.errors : [error];
+      return errors.map((item) => ({
+        code: item?.code ?? error?.code ?? 'SESSION_SHUTDOWN_FAILED',
+        message: String(item?.message ?? item),
+      }));
+    }),
+    updatedAt: new Date().toISOString(),
+  }));
+  if (shutdownErrors.length === 1) throw shutdownErrors[0];
+  throw new AggregateError(shutdownErrors, 'UI session shutdown was not proven', { cause: shutdownErrors[0] });
 }
 
 export async function readRuntimeState(sessionsDirectory, sessionId) {

@@ -38,7 +38,18 @@ export async function loadStorageState(statePath = DEFAULT_STORAGE_STATE) {
   if (parsed.cookies.length === 0 && parsed.origins.length === 0) {
     throw authExpired('stored browser session is empty; run the login command');
   }
-  return statePath;
+  return parsed;
+}
+
+export async function loadStorageStateForOrigin(statePath, origin) {
+  const parsed = await loadStorageState(statePath);
+  const target = new URL(origin);
+  const hostname = target.hostname.toLowerCase();
+  return {
+    cookies: parsed.cookies.filter((cookie) =>
+      String(cookie.domain ?? '').toLowerCase().replace(/^\./, '') === hostname),
+    origins: parsed.origins.filter((item) => item.origin === target.origin),
+  };
 }
 
 export async function ensureAuthDirectory() {

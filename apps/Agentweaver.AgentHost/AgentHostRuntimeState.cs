@@ -28,6 +28,11 @@ internal sealed class AgentHostRuntimeState
 {
     // 0 = unconfigured, 1 = configured. One-time CompareExchange guards /configure.
     private int _configured;
+    private readonly object _mcpTokenChangeLock = new();
+    private TaskCompletionSource<long> _mcpTokenChanged =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private string? _mcpBrokerToken;
+    private long _mcpBrokerTokenVersion;
 
     public bool IsConfigured => Volatile.Read(ref _configured) == 1;
 
@@ -89,11 +94,11 @@ internal sealed class AgentHostRuntimeState
     public string? RepositoryAccessToken { get; private set; }
 
     /// <summary>
-    /// The authenticated platform caller token forwarded only for operator-assistant MCP requests.
-    /// This is distinct from <see cref="GitHubAccessToken"/>: in Entra deployments the former is the
-    /// Entra API access token while the latter is the linked GitHub token used by Copilot.
+    /// The short-lived Agentweaver broker token forwarded only for operator-assistant MCP requests.
+    /// It is never the browser's Entra bearer or the linked GitHub token used by Copilot.
     /// </summary>
-    public string? CallerBearerToken { get; private set; }
+    public string? McpBrokerToken => Volatile.Read(ref _mcpBrokerToken);
+    public long McpBrokerTokenVersion => Interlocked.Read(ref _mcpBrokerTokenVersion);
 
     /// <summary>
     /// API address and credential used only by the internal approval-policy reader. The run
@@ -117,7 +122,7 @@ internal sealed class AgentHostRuntimeState
         CopilotCredential = null; // env-var launches cannot bypass run snapshot redemption
         ByokProviderConfiguration = null;
         RepositoryAccessToken = null;
-        CallerBearerToken = null; // operator-assistant-only warm-pod input
+        Volatile.Write(ref _mcpBrokerToken, null); // operator-assistant-only warm-pod input
         SetToolApprovalApiAccess(options.ApiBaseUrl, options.ApiKey);
         Purpose = AgentHostPurpose.Default;
         WorkspaceMode = ExecutionWorkspaceMode.Shared;
@@ -165,9 +170,10 @@ internal sealed class AgentHostRuntimeState
         RepositoryAccessToken = string.IsNullOrWhiteSpace(configuration.RepositoryAccessToken)
             ? null
             : configuration.RepositoryAccessToken;
-        CallerBearerToken = string.IsNullOrWhiteSpace(configuration.CallerBearerToken)
-            ? null
-            : configuration.CallerBearerToken;
+        Volatile.Write(
+            ref _mcpBrokerToken,
+            string.IsNullOrWhiteSpace(configuration.McpBrokerToken) ? null : configuration.McpBrokerToken);
+        Interlocked.Exchange(ref _mcpBrokerTokenVersion, McpBrokerToken is null ? 0 : 1);
         Purpose = configuration.Purpose;
         WorkspaceMode = configuration.WorkspaceMode;
         SharedWorkingDirectory = configuration.SharedWorkingDirectory;
@@ -185,30 +191,45 @@ internal sealed class AgentHostRuntimeState
         return true;
     }
 
-    /// <summary>
-    /// Replaces the platform caller token an already-configured operator-assistant pod uses for its
-    /// MCP calls. <c>/configure</c> is deliberately one-shot, so without this a pod HELD across a
-    /// conversation's turns would keep serving with turn 1's bearer until it expired; the worker
-    /// delivers the current token on every turn's <c>AgentSetupParams</c> instead. Blank values are
-    /// ignored so a non-operator turn (which carries no caller token) can never blank out a
-    /// configured one.
-    /// </summary>
-    public void RefreshCallerBearerToken(string? callerBearerToken)
+    public bool TryRefreshMcpBrokerToken(string token)
     {
-        if (string.IsNullOrWhiteSpace(callerBearerToken))
-            return;
-        CallerBearerToken = callerBearerToken;
+        if (!IsConfigured || Purpose != AgentHostPurpose.OperatorAssistant || string.IsNullOrWhiteSpace(token))
+            return false;
+
+        Volatile.Write(ref _mcpBrokerToken, token);
+        var version = Interlocked.Increment(ref _mcpBrokerTokenVersion);
+        TaskCompletionSource<long> changed;
+        lock (_mcpTokenChangeLock)
+        {
+            changed = _mcpTokenChanged;
+            _mcpTokenChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        changed.TrySetResult(version);
+        return true;
     }
 
-    public void SetToolApprovalApiAccess(string? apiBaseUrl, string? apiKey)    {
-        var bearerToken = string.IsNullOrWhiteSpace(apiKey)
-            ? CallerBearerToken
-            : apiKey;
+    public async Task WaitForMcpBrokerTokenRefreshAsync(long observedVersion, CancellationToken ct)
+    {
+        while (McpBrokerTokenVersion <= observedVersion)
+        {
+            Task<long> changed;
+            lock (_mcpTokenChangeLock)
+            {
+                if (McpBrokerTokenVersion > observedVersion)
+                    return;
+                changed = _mcpTokenChanged.Task;
+            }
+            await changed.WaitAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    public void SetToolApprovalApiAccess(string? apiBaseUrl, string? apiKey)
+    {
         Volatile.Write(
             ref _toolApprovalApiAccess,
-            string.IsNullOrWhiteSpace(apiBaseUrl) || string.IsNullOrWhiteSpace(bearerToken)
+            string.IsNullOrWhiteSpace(apiBaseUrl) || string.IsNullOrWhiteSpace(apiKey)
                 ? null
-                : new ToolApprovalApiAccess(apiBaseUrl, bearerToken));
+                : new ToolApprovalApiAccess(apiBaseUrl, apiKey));
     }
 
     public void SetEffectiveWorkingDirectory(string workingDirectory) =>
@@ -248,7 +269,7 @@ internal sealed record AgentHostRunConfiguration(
     string? CommitAuthorEmail = null,
     string? ProjectId = null,
     string? AgentName = null,
-    string? CallerBearerToken = null,
+    string? McpBrokerToken = null,
     string? RepositoryAccessToken = null,
     string? ToolApprovalApiBaseUrl = null,
     ByokProviderConfiguration? ByokProviderConfiguration = null);

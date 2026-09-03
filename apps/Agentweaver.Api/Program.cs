@@ -4,16 +4,19 @@ using Azure.Security.KeyVault.Secrets;
 using k8s;
 using LibGit2Sharp;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Agentweaver.Api;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.SandboxExec;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.RateLimiting;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Memory;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
@@ -193,16 +196,17 @@ builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.IPreviewCommandMod
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
-// Operator assistant (#346, narrow AgentHost cutover #347): MCP-driven chat modeled as a lightweight
-// "operator run". Model/SDK/MCP execution now runs on a sandbox AgentHost pod, dispatched through the
-// SAME warm-pool claim + /configure + A2A streaming mechanism Coordinator subtasks use
-// (RemoteOperatorAssistantAgent) — the in-API Copilot/MCP loop (OperatorAssistantAgent) and its MCP
-// tool-provider registration are no longer wired here; that class now runs ONLY inside the AgentHost
-// pod under AgentHostPurpose.OperatorAssistant. AssistantRunService persists the conversation as a run
-// and streams turns onto the existing run event stream, unchanged.
-builder.Services.AddSingleton<IOperatorAssistantAgent, Agentweaver.Api.Assistant.RemoteOperatorAssistantAgent>();
-builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(builder.Configuration.GetSection("Assistant"));
-builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Agentweaver.Api.Assistant.AssistantRunService>();
+if (!isWorker)
+{
+    // Operator assistant is a web/API surface. Keeping the complete issuance and execution graph out
+    // of worker hosts also keeps its OpenIddict/OAuth dependencies role-coherent.
+    builder.Services.AddSingleton<IOperatorAssistantAgent, Agentweaver.Api.Assistant.RemoteOperatorAssistantAgent>();
+    builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(
+        builder.Configuration.GetSection("Assistant"));
+    builder.Services.AddSingleton<IOperatorAssistantBrokerTokenIssuer, OperatorAssistantBrokerTokenIssuer>();
+    builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService,
+        Agentweaver.Api.Assistant.AssistantRunService>();
+}
 
 // GitHub Repo App / Copilot App connection credentials live in the server-side secret store.
 // The legacy per-user token store is deliberately absent: all GitHub authority is now pinned
@@ -211,10 +215,12 @@ builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Ag
 // credentials written on one pod replica are invisible to every other replica (and are lost on
 // restart), which manifests as "github_binding_unavailable" / "github_copilot_auth_required"
 // errors that look like transient auth bugs. Log loudly if that happens outside Development.
+SecretClient? keyVaultSecretClient = null;
 var kvUri = builder.Configuration["Auth:KeyVault:Uri"];
 if (!string.IsNullOrWhiteSpace(kvUri))
 {
     var secretClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
+    keyVaultSecretClient = secretClient;
     var kvSecretStore = new KeyVaultSecretStore(secretClient);
     builder.Services.AddSingleton<ISecretStore>(kvSecretStore);
     builder.Services.AddSingleton(secretClient);
@@ -246,12 +252,76 @@ builder.Services.AddSingleton<Agentweaver.Domain.IGitHubAccessTokenProvider>(
 builder.Services.AddSingleton<CopilotAppRegistrationService>();
 builder.Services.AddHostedService<CopilotAppRegistrationStartupService>();
 builder.Services.AddSingleton<EntraAccessTokenValidator>();
-builder.Services.AddAuthorization(options =>
+if (!isWorker)
 {
-    options.AddPolicy("PlatformAccess", policy =>
-        policy.Requirements.Add(new PlatformRoleRequirement()));
-});
-builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHandler>();
+    builder.Services.AddAuthentication(options =>
+        {
+            options.DefaultAuthenticateScheme = AgentweaverAuthenticationSchemes.Composite;
+            options.DefaultChallengeScheme = AgentweaverAuthenticationSchemes.Composite;
+            options.DefaultForbidScheme = AgentweaverAuthenticationSchemes.Composite;
+        })
+        .AddPolicyScheme(
+            AgentweaverAuthenticationSchemes.Composite,
+            displayName: null,
+            options => options.ForwardDefaultSelector = AgentweaverAuthentication.SelectScheme)
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, EntraAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.Entra, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, BrowserSessionAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.BrowserSession, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, BrokerBearerAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.BrokerBearer, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, InternalServiceAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.InternalServiceKey, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, RunCapabilityAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.RunCapability, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TestAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.TestBypass, _ => { });
+}
+if (builder.Environment.IsDevelopment()
+    && builder.Configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth"))
+{
+    Console.Error.WriteLine("CRITICAL: Development test authentication bypass is active.");
+}
+else if (builder.Configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth"))
+{
+    Console.Error.WriteLine("CRITICAL: Testing:BypassGitHubTokenAuth is ignored outside Development.");
+}
+
+if (!isWorker)
+{
+    builder.Services.AddAuthorization(options =>
+    {
+        static Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder Authenticated() =>
+            new(AgentweaverAuthenticationSchemes.Composite);
+
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.AuthenticatedSelf,
+            Authenticated().RequireAuthenticatedUser().Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.AuthenticatedPlatform,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformRoleRequirement()).Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.PlatformOrMcp,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrBrokerRequirement()).Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.InternalService,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new InternalServiceRequirement()).Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.RunCapability,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrRunCapabilityRequirement()).Build());
+
+        options.FallbackPolicy = Authenticated()
+            .RequireAuthenticatedUser()
+            .RequireAssertion(_ => false)
+            .Build();
+    });
+    builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHandler>();
+    builder.Services.AddSingleton<IAuthorizationHandler, EndpointSchemeAuthorizationHandler>();
+    builder.Services.AddSingleton<
+        Microsoft.AspNetCore.Authorization.IAuthorizationMiddlewareResultHandler,
+        AgentweaverAuthorizationResultHandler>();
+}
+builder.Services.AddScoped<ICallerContextAccessor, ClaimsCallerContextAccessor>();
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
@@ -794,6 +864,108 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
                     b => b.MigrationsAssembly("Agentweaver.Api"));
                 break;
         }
+        opts.UseOpenIddict();
+    }
+
+    if (!isWorker)
+    {
+        var oauthConfiguration = OAuthServerConfiguration.Resolve(builder.Configuration, builder.Environment);
+        var oauthCertificates = await OAuthCertificateLoader.LoadAsync(
+            builder.Configuration, builder.Environment, keyVaultSecretClient);
+        builder.Services.AddSingleton(oauthConfiguration);
+        builder.Services.AddSingleton(oauthCertificates);
+        builder.Services.AddScoped<OAuthDynamicClientRegistrationService>();
+        builder.Services.AddScoped<OAuthRefreshTokenFamilyRevoker>();
+        builder.Services.AddScoped<OAuthBrokerTransactionService>();
+        builder.Services.AddHostedService<OAuthStaticClientReconciler>();
+        builder.Services.AddHostedService<OAuthMaintenanceService>();
+        builder.Services.Configure<ForwardedHeadersOptions>(
+            options => OAuthForwardedHeaders.Configure(options, oauthConfiguration));
+        builder.Services.AddRateLimiter(options =>
+        {
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.AddPolicy("oauth-registration", context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = builder.Configuration.GetValue(
+                            "Auth:OAuth:DynamicRegistration:RequestsPerMinute", 10),
+                        Window = TimeSpan.FromMinutes(1),
+                        QueueLimit = 0,
+                        AutoReplenishment = true,
+                    }));
+        });
+
+        builder.Services.AddOpenIddict()
+            .AddCore(options => options.UseEntityFrameworkCore().UseDbContext<MemoryDbContext>())
+            .AddServer(options =>
+            {
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateAuthorizationRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthDynamicClientExpirationHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Authentication.ValidateAuthentication.Descriptor.Order - 500));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthExactResourceTokenRequestHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Exchange.ValidateAuthentication.Descriptor.Order - 1_000));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthDynamicClientExpirationHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Exchange.ValidateAuthentication.Descriptor.Order - 750));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthRefreshReplayHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Exchange.ValidateAuthentication.Descriptor.Order - 500));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ProcessSignInContext>(
+                    handler => handler.UseScopedHandler<OAuthAtomicRefreshTokenRedemptionHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.RedeemTokenEntry.Descriptor.Order - 500));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleConfigurationRequestContext>(
+                    handler => handler.UseInlineHandler(context =>
+                        {
+                            context.Metadata["registration_endpoint"] =
+                                new Uri(oauthConfiguration.PublicOrigin, "/oauth/register").AbsoluteUri;
+                            return default;
+                        })
+                        .SetOrder(int.MaxValue - 100_000));
+                options.SetIssuer(oauthConfiguration.PublicOrigin)
+                    .SetAuthorizationEndpointUris(new Uri(oauthConfiguration.PublicOrigin, "/oauth/authorize"))
+                    .SetTokenEndpointUris(new Uri(oauthConfiguration.PublicOrigin, "/oauth/token"))
+                    .SetRevocationEndpointUris(new Uri(oauthConfiguration.PublicOrigin, "/oauth/revoke"))
+                    .SetJsonWebKeySetEndpointUris(new Uri(oauthConfiguration.PublicOrigin, "/oauth/jwks"))
+                    .AllowAuthorizationCodeFlow()
+                    .AllowRefreshTokenFlow()
+                    .RequireProofKeyForCodeExchange()
+                    .UseReferenceRefreshTokens()
+                    .DisableAccessTokenEncryption()
+                    .RegisterScopes(OAuthServerConfiguration.McpScope)
+                    .RegisterResources(oauthConfiguration.Resource.AbsoluteUri)
+                    .SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(1))
+                    .SetAccessTokenLifetime(TimeSpan.FromMinutes(10))
+                    .SetRefreshTokenLifetime(OAuthServerConfiguration.RefreshTokenFamilyLifetime)
+                    .DisableSlidingRefreshTokenExpiration();
+
+                foreach (var key in oauthCertificates.SigningKeys)
+                    options.AddSigningKey(key);
+                foreach (var key in oauthCertificates.EncryptionKeys)
+                    options.AddEncryptionKey(key);
+
+                options.UseAspNetCore()
+                    .EnableAuthorizationEndpointPassthrough()
+                    .EnableTokenEndpointPassthrough();
+                if (builder.Environment.IsDevelopment())
+                    options.UseAspNetCore().DisableTransportSecurityRequirement();
+            })
+            .AddValidation(options =>
+            {
+                options.UseLocalServer();
+                options.UseAspNetCore();
+            });
+        builder.Services.Configure<OpenIddict.Server.OpenIddictServerOptions>(options =>
+        {
+            options.CodeChallengeMethods.Clear();
+            options.CodeChallengeMethods.Add(
+                OpenIddict.Abstractions.OpenIddictConstants.CodeChallengeMethods.Sha256);
+            options.ClientAuthenticationMethods.Clear();
+            options.ClientAuthenticationMethods.Add(
+                OpenIddict.Abstractions.OpenIddictConstants.ClientAuthenticationMethods.None);
+        });
     }
 
     if (_isPostgres)
@@ -1027,11 +1199,16 @@ if (recoveryLeader.IsLeader)
 
 if (isWorker)
 {
-    app.MapGet("/healthz", () => Results.Ok(new { status = "ok", role = AppRole.Worker }));
-    app.MapGet("/readyz", () => Results.Ok(new { status = "ready", role = AppRole.Worker }));
+    app.MapGet("/healthz", () => Results.Ok(new { status = "ok", role = AppRole.Worker }))
+        .AsApplicationEndpoint()
+        .OperationalAnonymous();
+    app.MapGet("/readyz", () => Results.Ok(new { status = "ready", role = AppRole.Worker }))
+        .AsApplicationEndpoint()
+        .OperationalAnonymous();
 }
 else
 {
+    app.UseForwardedHeaders();
     app.UseExceptionHandler(err => err.Run(async context =>
     {
         context.Response.StatusCode = 500;
@@ -1039,44 +1216,56 @@ else
         await context.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred." });
     }));
 
+    app.UseRouting();
     app.UseCors();
+    app.UseRateLimiter();
+    app.UseMiddleware<EndpointAuthorizationIntegrityMiddleware>();
     app.Logger.LogInformation("Running with Microsoft Entra authentication.");
-    app.UseMiddleware<GitHubTokenAuthMiddleware>();
-    app.UseMiddleware<PlatformRoleAuthorizationMiddleware>();
+    app.UseAuthentication();
+    app.UseMiddleware<UnmatchedEndpointMiddleware>();
+    app.UseAuthorization();
 
     // spec-006 (api-harness): serves the OpenAPI document at /openapi/v1.json describing every
     // minimal-API route mapped below (request/response shapes included), so the LLM-driven curl
     // harness can discover the contract instead of relying on hand-wrapped SDK-style subcommands.
-    app.MapOpenApi();
-    app.MapOpenApi("/openapi/{documentName}.yaml");
+    app.MapOpenApi()
+        .AsApplicationEndpoint()
+        .OperationalAnonymous();
+    app.MapOpenApi("/openapi/{documentName}.yaml")
+        .AsApplicationEndpoint()
+        .OperationalAnonymous();
 
-    app.MapRunEndpoints();
-    app.MapProjectEndpoints();
-    app.MapProjectWorkspaceEndpoints();
-    app.MapSkillEndpoints();
-    app.MapBacklogEndpoints();
-    app.MapBacklogDecomposeEndpoints();
-    app.MapAssistantEndpoints();
-    app.MapCoordinatorEndpoints();
-    app.MapCastingEndpoints();
-    app.MapBlueprintEndpoints();
-    app.MapTeamEndpoints();
-    app.MapAuthEndpoints();
-    app.MapByokProviderSettingsEndpoints();
-    app.MapPlatformDefaultCopilotBindingEndpoints();
-    app.MapGitHubRepositorySelectionEndpoints();
-    app.MapDecisionsEndpoints();
-    app.MapMemoryEndpoints();
-    app.MapWorkflowDefinitionEndpoints();
-    app.MapWorkflowTriggerEndpoints();
-    app.MapAutomationActivationEndpoints();
-    app.MapGitHubWebhookEndpoints();
-    app.MapDiagnosticsEndpoints();
-    app.MapMetricsEndpoints();
-    app.MapNotificationsEndpoints();
-    app.MapSandboxEndpoints();
-    app.MapSystemEndpoints();
-    app.MapVersionEndpoints();
+    var applicationEndpoints = app.MapGroup(string.Empty)
+        .AsApplicationEndpoint()
+        .PlatformOrMcp();
+    applicationEndpoints.MapRunEndpoints();
+    applicationEndpoints.MapProjectEndpoints();
+    applicationEndpoints.MapProjectWorkspaceEndpoints();
+    applicationEndpoints.MapSkillEndpoints();
+    applicationEndpoints.MapBacklogEndpoints();
+    applicationEndpoints.MapBacklogDecomposeEndpoints();
+    applicationEndpoints.MapAssistantEndpoints();
+    applicationEndpoints.MapCoordinatorEndpoints();
+    applicationEndpoints.MapCastingEndpoints();
+    applicationEndpoints.MapBlueprintEndpoints();
+    applicationEndpoints.MapTeamEndpoints();
+    applicationEndpoints.MapAuthEndpoints();
+    applicationEndpoints.MapByokProviderSettingsEndpoints();
+    applicationEndpoints.MapPlatformDefaultCopilotBindingEndpoints();
+    applicationEndpoints.MapGitHubRepositorySelectionEndpoints();
+    applicationEndpoints.MapDecisionsEndpoints();
+    applicationEndpoints.MapMemoryEndpoints();
+    applicationEndpoints.MapWorkflowDefinitionEndpoints();
+    applicationEndpoints.MapWorkflowTriggerEndpoints();
+    applicationEndpoints.MapAutomationActivationEndpoints();
+    applicationEndpoints.MapGitHubWebhookEndpoints();
+    applicationEndpoints.MapDiagnosticsEndpoints();
+    applicationEndpoints.MapMetricsEndpoints();
+    applicationEndpoints.MapNotificationsEndpoints();
+    applicationEndpoints.MapSandboxEndpoints();
+    applicationEndpoints.MapSystemEndpoints();
+    applicationEndpoints.MapVersionEndpoints();
+    applicationEndpoints.MapOAuthAuthorizationServerEndpoints();
 }
 
 app.Run();

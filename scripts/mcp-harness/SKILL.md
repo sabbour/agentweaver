@@ -26,17 +26,16 @@ There are **two** entry points, for two different jobs:
 Both transports work the same for either entry point:
 
 - **stdio** (`--target stdio`) spawns a **local subprocess** via
-  `--server-command`/`--server-args`. There is no network target, so the
-  `target-guard.mjs` host allowlist and the `--allow-prod`/`--i-understand-prod`
-  requirement do **not** apply — `stdio` is only a transport selector, never a URL.
+  `--server-command`/`--server-args`. There is no network target validation —
+  `stdio` is only a transport selector, never a URL.
 - **http** (`--target <url>`) requires a real base URL that **must include the
-  `/mcp` path suffix** (e.g. `https://<host>/mcp`; the bare origin is not the
-  endpoint). The host allowlist (`localhost`, `127.0.0.1`, `::1`, `*.staging.*`)
-  applies; production hosts require both `--allow-prod` and `--i-understand-prod`.
-  http transport also requires **OAuth**: `--token`/`AGENTWEAVER_TOKEN` must be a
-  valid OAuth-derived bearer token (from the app's own sign-in flow, or
-  `gh auth token` where that identity is trusted), not an arbitrary string. Stdio
-  transport has no such requirement.
+  exact `/mcp` pathname** (e.g. `https://<host>/mcp`; the bare origin and
+  `/mcp/` are not the endpoint). Any HTTPS host is accepted; HTTP is loopback-only.
+  URL credentials/fragments and TLS bypasses are rejected.
+  http transport also requires **OAuth**: transient `AGENTWEAVER_TOKEN` must be an
+  Agentweaver broker token for the exact `/mcp` resource with `mcp:invoke`, obtained
+  through the app's OAuth flow. Raw Entra and GitHub tokens are rejected. Stdio
+  transport still uses `AGENTWEAVER_TOKEN` for downstream API calls.
 
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts)
 
@@ -62,13 +61,12 @@ around that dynamic drive, in two phases the Harness agent runs in order:
 node scripts/mcp-harness/run-persona.mjs `
   --scenario priya `
   --target http://localhost:5000/mcp `
-  --token $env:AGENTWEAVER_TOKEN `
   --project-id <disposable-project-id> `
   --batch-id mcp-validation-001 `
   --seed priya
 ```
 
-This resolves the persona core + `<id>.mcp.md` adapter, applies the target guard
+This resolves the persona core + `<id>.mcp.md` adapter, applies transport validation
 (http only; stdio exempt), resolves the token, constructs the transcript path, and
 writes the exact sub-agent dispatch prompt under `scripts/mcp-harness/dispatch/`.
 It prints a `DISPATCH-REQUIRED` banner with the charter path, the dispatch-prompt
@@ -78,6 +76,10 @@ verdict exists yet — never a pass). It **never fabricates a transcript**.
 The Harness agent then dispatches a fresh sub-agent under
 `scripts/mcp-harness/agent-driver/AGENT.md` (via the `task` tool) with that prompt.
 The sub-agent drives the server live and appends the JSONL transcript itself.
+It must use `appendRedactedJsonLine` from `scripts/harness-shared/safe-jsonl.mjs`;
+that serializer
+recursively removes bearer values, sensitive headers/keys, URL
+userinfo/query/fragment data, and secret canaries before persistence.
 
 ### 2) finalize — export MCP-adapted evidence, then judge natively (recommended)
 
@@ -85,7 +87,6 @@ The sub-agent drives the server live and appends the JSONL transcript itself.
 node scripts/mcp-harness/run-persona.mjs `
   --scenario priya `
   --target http://localhost:5000/mcp `
-  --token $env:AGENTWEAVER_TOKEN `
   --transcript scripts/mcp-harness/transcripts/priya-live-<timestamp>.jsonl `
   --dump-evidence scripts/mcp-harness/verdicts/priya-evidence.json `
   --prompt-out scripts/mcp-harness/verdicts/priya-judge-prompt.txt
@@ -135,15 +136,18 @@ npm --prefix scripts/mcp-harness run smoke -- `
   --target stdio `
   --server-command dotnet `
   --server-args '["run","--project","apps/Agentweaver.Mcp","--","--stdio"]' `
-  --project-id <disposable-project-id>
+  --project-id <disposable-project-id> `
+  --project-is-disposable
 ```
 
-The smoke command supports `--target stdio|http`, `--token`, `--project-id`,
-`--goal`, `--timeout-ms`, `--poll-ms`, `--allow-prod`, `--i-understand-prod`, and
+The smoke command supports `--target stdio|http`, `--project-id`,
+`--project-is-disposable`, `--goal`, `--timeout-ms`, `--poll-ms`, and
 `--list` (a no-connect print of the reviewed persona IDs with MCP adapters). On
 success it emits JSON headed by `DRIVE+CAPTURE OK`, including the run ID, terminal
 status, artifact count, and compatibility report. A non-zero exit means the driver
 or its capability contract failed; preserve its output when reporting the failure.
+Bearer material is never accepted in argv; set `AGENTWEAVER_TOKEN` only in the
+transient environment of the harness process.
 
 ## Discovery and contract rules
 
@@ -159,11 +163,15 @@ a reason to bypass discovery or call a guessed tool.
 
 ## Options and safety
 
-- Targets are limited to localhost or staging by default (http transport only).
-  Production requires both `--allow-prod` and `--i-understand-prod`. Do not weaken
-  these guards.
-- Only provide a project ID for a safe, disposable test project. Both paths submit
-  a task and attempt cleanup against it.
+- Network targets use the host-agnostic transport rules above; stdio is exempt.
+- `--project-id` requires `--project-is-disposable`. The run is archived, but a
+  caller-supplied project is never deleted.
+- Without `--project-id`, local stdio smoke defaults `working_directory` to `.`.
+  Remote smoke requires `--working-directory` or
+  `AGENTWEAVER_SMOKE_WORKING_DIRECTORY` naming a directory valid in the deployed
+  provider workspace; it never sends a local workstation path to AKS. Creation
+  always sends `origin: "blank"` and the software-development blueprint. It deletes
+  only that owned project after archiving the run, on success or failure.
 
 Exit codes for `run-persona.mjs`: `0` means the phase completed (finalize produced
 a verdict from real evidence with a passing capability contract, or prepare emitted

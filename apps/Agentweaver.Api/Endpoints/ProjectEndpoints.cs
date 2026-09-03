@@ -33,7 +33,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class ProjectEndpoints
 {
-    public static void MapProjectEndpoints(this WebApplication app)
+    public static void MapProjectEndpoints(this IEndpointRouteBuilder app)
     {
 // POST /api/projects/{id}/github/copilot/authorizations — begin a project-pinned Copilot App bind.
 app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
@@ -58,7 +58,7 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations", async (
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
         persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.BeginAsync(
-        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, request?.ReturnRouteKey, ct).ConfigureAwait(false);
+        httpContext.GetCaller(), httpContext.User, projectId, request?.ReturnRouteKey, ct).ConfigureAwait(false);
     if (result.Outcome != CopilotBindingOutcome.Success)
         return CopilotBindingFailure(result.Outcome);
 
@@ -100,7 +100,7 @@ app.MapPost("/api/projects/{id}/github/copilot/authorizations/handoff", async (
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
         persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.BeginMcpHandoffAsync(
-        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+        httpContext.GetCaller(), httpContext.User, projectId, ct).ConfigureAwait(false);
     return result.Outcome == CopilotBindingOutcome.Success
         ? Results.Ok(new
         {
@@ -141,7 +141,7 @@ app.MapGet("/auth/github/copilot-app/handoff/{transactionId}", async (
 
     ProjectCopilotBindingService.SetCallbackCookie(httpContext, handoff.Value.CallbackCookie);
     return Results.Redirect(handoff.Value.AuthorizationUrl);
-}).AllowAnonymous();
+}).ProtocolManaged();
 
 // Shared callback for both project-scoped and platform-default Copilot OAuth flows. It uses only
 // the one-time cookie issued at the authenticated begin endpoint and dispatches by persisted state;
@@ -225,7 +225,7 @@ app.MapGet("/auth/github/copilot-app/callback", async (
         projectCookie,
         ct).ConfigureAwait(false);
     return Results.Redirect(await projectServiceFallback.GetCallbackRedirectAsync(projectOutcomeFallback, state, ct).ConfigureAwait(false));
-}).AllowAnonymous();
+}).ProtocolManaged();
 
 // GET /api/projects/{id}/github/copilot/authorizations/{transactionId} — initiating-human-only poll.
 app.MapGet("/api/projects/{id}/github/copilot/authorizations/{transactionId}", async (
@@ -246,7 +246,7 @@ app.MapGet("/api/projects/{id}/github/copilot/authorizations/{transactionId}", a
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
         persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.PollAsync(
-        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, transactionId, ct).ConfigureAwait(false);
+        httpContext.GetCaller(), httpContext.User, projectId, transactionId, ct).ConfigureAwait(false);
     return result.Outcome == CopilotBindingOutcome.Success
         ? Results.Ok(new { status = result.Status })
         : CopilotBindingFailure(result.Outcome);
@@ -277,7 +277,7 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
         persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.GetConnectionAsync(
-        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+        httpContext.GetCaller(), httpContext.User, projectId, ct).ConfigureAwait(false);
     if (result.Outcome is not (CopilotBindingOutcome.Success or CopilotBindingOutcome.GitHubBindingUnavailable))
         return CopilotBindingFailure(result.Outcome);
 
@@ -335,7 +335,7 @@ app.MapDelete("/api/projects/{id}/github/copilot/binding", async (
         httpContext.RequestServices.GetRequiredService<IConfiguration>(),
         persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var outcome = await service.DisconnectAsync(
-        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+        httpContext.GetCaller(), httpContext.User, projectId, ct).ConfigureAwait(false);
     return outcome == CopilotBindingOutcome.Success
         ? Results.NoContent()
         : CopilotBindingFailure(outcome);
@@ -416,7 +416,7 @@ app.MapPost("/api/projects/{id}/github/repo-app-installation/authorizations", as
     var service = new RepoAppInstallationAuthorizationService(
         configuration, persistence, projectStore, roleAssignments, tokenService, db, logger);
     var result = await service.BeginAsync(
-        ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, projectId, ct).ConfigureAwait(false);
+        httpContext.GetCaller(), httpContext.User, projectId, ct).ConfigureAwait(false);
     if (result.Outcome != RepoAppInstallationAuthorizationOutcome.Success)
         return Results.Conflict(new { error = RepoAppInstallationAuthorizationService.ToStateCode(result.Outcome) });
 
@@ -471,7 +471,7 @@ app.MapGet("/auth/github/repo-app/installation/callback", async (
         callbackCookie,
         ct).ConfigureAwait(false);
     return Results.Redirect(service.GetCallbackRedirect(result.Outcome, result.ProjectId));
-}).AllowAnonymous();
+}).ProtocolManaged();
 
 // POST /api/projects — create blank or from GitHub
 app.MapPost("/api/projects", CreateProjectAsync)
@@ -496,7 +496,7 @@ app.MapGet("/api/server/info", (IProjectWorkspaceProvider workspaceProvider, ICo
         auth_mode_recommended   = true,
         repo_app_install_url    = BuildGitHubAppInstallUrl(configuration["Auth:RepoApp:Slug"], configuration["Auth:RepoApp:BaseUrl"]),
     });
-}).AllowAnonymous();
+}).OperationalAnonymous();
 
 // GET /api/projects — list all projects (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects", ListProjectsAsync)
@@ -534,7 +534,7 @@ app.MapGet("/api/projects/{id}/access", async (
     if (project is null) return Results.NotFound();
     if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Viewer, ct) is { } forbid) return forbid;
 
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var caller = httpContext.GetCaller();
     var effectiveRole = await authorization.GetEffectiveRoleAsync(caller, projectId, ct).ConfigureAwait(false);
     var assignments = await roleAssignments.ListAsync(projectId, ct).ConfigureAwait(false);
     var canManage = effectiveRole is { } role && role.Satisfies(ProjectRole.Owner);
@@ -617,7 +617,7 @@ app.MapPost("/api/projects/{id}/role-assignments", async (
     if (project is null) return Results.NotFound();
     if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Owner, ct) is { } forbid) return forbid;
 
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var caller = httpContext.GetCaller();
     var result = await roleAssignments.UpsertAsync(
         projectId,
         request.PrincipalId.Trim(),
@@ -780,7 +780,7 @@ app.MapGet("/api/projects/{id}/github/repository-owners", async (
         return forbidden;
 
     var owners = await credentials.TryUseCredentialAsync(
-        ApiKeyAuthMiddleware.GetCaller(httpContext),
+        httpContext.GetCaller(),
         token => repositories.ListOwnersAsync(token, ct),
         ct).ConfigureAwait(false);
     return owners.Outcome switch
@@ -817,7 +817,7 @@ app.MapPost("/api/projects/{id}/github/repository", async (
     if (view.Project.Origin.Kind != ProjectOriginKind.Blank)
         return Results.Conflict(new { error = "project_repository_already_connected" });
 
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var caller = httpContext.GetCaller();
     var connected = await credentials.TryUseCredentialAsync(
         caller,
         async token =>
@@ -871,7 +871,7 @@ app.MapPost("/api/projects/{id}/github/repository/connection", async (
 
     var resolved = await repositorySelections.TryConsumeAndResolveAsync(
         request.RepositorySelectionCode.Trim(),
-        ApiKeyAuthMiddleware.GetCaller(httpContext),
+        httpContext.GetCaller(),
         ct).ConfigureAwait(false);
     if (resolved is null)
         return Results.Conflict(new { error = "github_repository_selection_unavailable" });
@@ -1048,7 +1048,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         ILogger<Program> logger,
         CancellationToken ct)
     {
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
 
         if (string.IsNullOrWhiteSpace(request.Name))
             return Results.BadRequest(new { error = "name is required." });
@@ -1265,7 +1265,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         var views = await projectService.ListViewsAsync(ct);
         List<ProjectResponse> projects;
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             if (projectRoles.IsPlatformAdmin(caller))
             {
                 projects = views
@@ -1341,7 +1341,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         if (!TryParseCoordinatorStartMode(request.StartMode ?? request.Mode, out var startMode))
             return Results.BadRequest(new { error = "start_mode must be 'defineOutcome' or 'direct'." });
 
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
 
         var project = await projectStore.GetAsync(projectId, ct);
         if (project is null) return Results.NotFound();
@@ -1448,7 +1448,7 @@ private static readonly Regex AllowedModelRegex = new("^(gpt|claude|o)[a-z0-9._-
 
 private static async Task<ProjectResponse> MapProjectAsync(HttpContext httpContext, Project project, bool available, CancellationToken ct)
 {
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var caller = httpContext.GetCaller();
     var roles = httpContext.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
     var effectiveRole = await roles.GetEffectiveRoleAsync(caller, project.Id, ct).ConfigureAwait(false);
     return MapProject(project, available, effectiveRole);

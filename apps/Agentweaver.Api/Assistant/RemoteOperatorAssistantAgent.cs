@@ -41,10 +41,9 @@ namespace Agentweaver.Api.Assistant;
 /// paid that entire cold start again on EVERY message (measured live at 15-20s of silence per turn).
 /// The pod is therefore released only when the turn FAILS; a successful turn leaves the claim in
 /// place so the next message re-binds the very same, already-configured pod. Because <c>/configure</c>
-/// is one-shot and cannot re-deliver the caller's platform bearer, the current token is instead
-/// delivered on every turn through <see cref="RemoteAgentProxy.CallerBearerToken"/> (the per-turn
-/// <c>AgentSetupParams</c> the pod already applies before each turn), so a held pod never serves MCP
-/// calls with a stale credential.
+/// is one-shot, the current short-lived MCP broker token is renewed over the authenticated
+/// API-to-pod control plane before every turn and again immediately before every MCP tool call, so
+/// a held pod never serves MCP calls with a stale credential.
 /// </para>
 ///
 /// <para>
@@ -75,6 +74,12 @@ public sealed class RemoteOperatorAssistantAgent(
     {
         ArgumentNullException.ThrowIfNull(request);
         var runId = request.ConversationId;
+        if (string.IsNullOrWhiteSpace(request.McpBrokerToken))
+            throw new InvalidOperationException(
+                "The operator assistant AgentHost requires a per-turn MCP broker token.");
+        if (request.RenewMcpBrokerTokenAsync is null)
+            throw new InvalidOperationException(
+                "The operator assistant AgentHost requires a server-side MCP broker token renewal callback.");
 
         // IAgentHostPodLifecycle is only registered in-cluster (mirrors every other pod-per-run
         // consumer, e.g. KubernetesPodAgentEndpointResolver's optional podLifecycle) so DI validation
@@ -99,9 +104,10 @@ public sealed class RemoteOperatorAssistantAgent(
                 new AgentHostLaunchContext(
                     SharedWorkingDirectory: null,
                     Purpose: AgentHostPurpose.OperatorAssistant,
-                    CallerBearerToken: request.CallerBearerToken,
+                    McpBrokerToken: request.McpBrokerToken,
                     HolderToken: request.PodHolderToken),
                 ct).ConfigureAwait(false);
+            await RefreshMcpBrokerTokenAsync(request, podLifecycle, ct).ConfigureAwait(false);
         }
         catch (ModelProviderConnectionRequiredException)
         {
@@ -118,12 +124,7 @@ public sealed class RemoteOperatorAssistantAgent(
             loggerFactory,
             RemoteWorkflowAgentFactory.ResolveRemoteApiBaseUrl(configuration),
             turnTokenRegistry,
-            proxyOptions.Value)
-        {
-            // Refresh the held pod's caller credential for THIS turn (see the class remarks): the
-            // one-shot /configure that originally delivered it cannot be replayed.
-            CallerBearerToken = request.CallerBearerToken,
-        };
+            proxyOptions.Value);
 
         var channel = Channel.CreateUnbounded<RunEvent>(new UnboundedChannelOptions
         {
@@ -157,12 +158,23 @@ public sealed class RemoteOperatorAssistantAgent(
                 ct: ct,
                 userId: request.CallerUser).ConfigureAwait(false);
 
-            var drainTask = DrainAsync(runId, channel.Reader, sink, invokedTools, ct);
+            using var turnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var drainTask = DrainAsync(
+                runId, channel.Reader, sink, invokedTools, request, podLifecycle, turnCts.Token);
 
             string text;
             try
             {
-                text = await proxy.RunTurnAsync(taskJson, isRevision: false, ct).ConfigureAwait(false);
+                var turnTask = proxy.RunTurnAsync(taskJson, isRevision: false, turnCts.Token);
+                var completed = await Task.WhenAny(turnTask, drainTask).ConfigureAwait(false);
+                if (completed == drainTask)
+                {
+                    turnCts.Cancel();
+                    await drainTask.ConfigureAwait(false);
+                    throw new InvalidOperationException(
+                        "The operator assistant AgentHost event stream ended before the model turn completed.");
+                }
+                text = await turnTask.ConfigureAwait(false);
             }
             finally
             {
@@ -257,6 +269,8 @@ public sealed class RemoteOperatorAssistantAgent(
         ChannelReader<RunEvent> reader,
         IOperatorAssistantTurnSink? sink,
         List<string> invokedTools,
+        OperatorAssistantRequest request,
+        IAgentHostPodLifecycle podLifecycle,
         CancellationToken ct)
     {
         await foreach (var runEvent in reader.ReadAllAsync(ct).ConfigureAwait(false))
@@ -288,8 +302,26 @@ public sealed class RemoteOperatorAssistantAgent(
                 case EventTypes.ToolApprovalResolved:
                     await eventStream.AppendAsync(runId, runEvent, ct).ConfigureAwait(false);
                     break;
+
+                case EventTypes.McpBrokerTokenRefreshRequired:
+                    await RefreshMcpBrokerTokenAsync(request, podLifecycle, ct).ConfigureAwait(false);
+                    break;
             }
         }
+    }
+
+    private static async Task RefreshMcpBrokerTokenAsync(
+        OperatorAssistantRequest request,
+        IAgentHostPodLifecycle podLifecycle,
+        CancellationToken ct)
+    {
+        var issuer = request.RenewMcpBrokerTokenAsync
+            ?? throw new InvalidOperationException("The MCP broker token renewal callback is unavailable.");
+        var token = await issuer(ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException("MCP broker token renewal returned an empty credential.");
+        await podLifecycle.RefreshAgentHostMcpBrokerTokenAsync(request.ConversationId, token, ct)
+            .ConfigureAwait(false);
     }
 
     private static bool TryGetString(JsonElement payload, string propertyName, out string value)

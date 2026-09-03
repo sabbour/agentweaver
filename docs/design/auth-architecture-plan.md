@@ -1,11 +1,17 @@
 # Auth architecture plan: retiring the hand-rolled auth middleware
 
-- **Status:** Proposal (design/research only — no code changes in this task)
+- **Status:** Layer 3 implemented (scheme-based API cutover); MCP process cutover remains layer 4
 - **Author:** Tank (Squad)
 - **Date:** 2026-08-02
 - **Revised:** 2026-08-02, after rubber-duck review — see [A.8](#a8-review-log) for what changed
 - **Scope:** `apps/Agentweaver.Api` request authentication, the AKS ingress/mesh boundary,
   and an evaluation of [oauth2-proxy](https://github.com/oauth2-proxy/oauth2-proxy).
+
+> **Implementation note (2026-09-02).** The approved layered implementation removed the
+> temporary dual-pipeline flag before landing. The API now uses named ASP.NET authentication
+> schemes and endpoint-bound authorization policies directly. Historical sections below
+> describe the pre-cutover system and the earlier migration proposal. The MCP process keeps
+> its existing validation until layer 4.
 
 > **Read this first — a premise correction.** The brief for this work assumed Agentweaver
 > runs on the **AKS Istio service mesh add-on** with sidecars and `istiod`. It does not.
@@ -220,6 +226,46 @@ Kubernetes liveness/readiness probe targets (`k8s/base/api-deployment.yaml`); if
 default-deny fallback policy 401s them, pods fail their probes and the deployment enters a
 crash/restart loop. That is a **self-inflicted outage triggered by a config flip**, and it
 would not be caught by any test that only exercises `/api/**` business routes.
+
+### 2.3.2 Layer 1 endpoint contract
+
+The behavior-neutral preparation layer replaces path inference with
+`EndpointAuthorizationMetadata`. Application routes are mapped through one classified route
+group, and focused endpoint extensions replace that default where the current contract is more
+specific:
+
+| Classification | Current contract |
+|---|---|
+| `OperationalAnonymous` | Health, version, server-info, and other intentionally public operational reads |
+| `ProtocolManaged` | Browser/OAuth handoffs whose state, one-time code, or protocol processing supplies the boundary |
+| `WebhookHmac` | GitHub delivery endpoints authenticated by request-body HMAC |
+| `AuthenticatedSelf` | A valid principal operating on its own session; no platform role required |
+| `AuthenticatedPlatform` | A valid Entra platform principal and platform role; not a general MCP API operation |
+| `PlatformOrMcp` | The normal protected API surface, including calls forwarded by the MCP server |
+| `InternalService` | Reserved for endpoints dedicated to the internal service-key caller |
+| `RunCapability` | A run-bound capability validated with the run identity headers |
+
+`AuthenticatedSelf` and `AuthenticatedPlatform` remain separate because the current middleware
+deliberately lets a role-less caller inspect or end its own session while platform operations
+still require a recognized role. Combining them would change authorization behavior.
+
+Both current auth middlewares and the OpenAPI security transformer consume this metadata. The
+endpoint inventory golden file pins every application route to exactly one classification and
+rejects bare `AllowAnonymous` metadata; framework-owned OpenAPI document routes are the only
+deliberate exclusion. This layer does not add authentication handlers, OpenIddict, a rollout
+flag, or a new middleware pipeline.
+
+### 2.3.3 Layer 2 authorization server
+
+Layer 2 restores the MCP issuer as an Agentweaver-hosted OpenIddict server rather
+than resurrecting the retired custom OAuth tables. Its issuer is the configured
+public origin and its only resource is that origin plus `/mcp`. OpenIddict owns
+applications, authorizations, scopes, and tokens in `MemoryDbContext` on SQLite
+and PostgreSQL. Entra supplies upstream human identity through a database-backed,
+single-use return handle; consent, static-client reconciliation, constrained
+dynamic registration, refresh-family revocation, certificate overlap, and leased
+pruning remain server-side. The existing MCP validation boundary is intentionally
+unchanged until the resource-server cutover layer.
 
 ### 2.4 Issue tracking
 

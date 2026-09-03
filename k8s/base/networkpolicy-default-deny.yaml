@@ -147,12 +147,7 @@ spec:
         - protocol: TCP
           port: 8080
 ---
-# Allow the MCP pod to reach the API on 8080 for OAuth JWKS validation.
-# The MCP resource server validates AS-issued JWTs by fetching the API's
-# JWKS (Auth__Mcp__JwksUri=http://agentweaver-api:8080/oauth/jwks). The
-# gateway-only ingress rule above does not cover this east-west call, so
-# without this rule the JWKS request is dropped at the API ingress and the
-# MCP `initialize` handshake hangs until the client times out.
+# Allow the MCP pod to reach the API on 8080 for tool calls and internal routing.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
