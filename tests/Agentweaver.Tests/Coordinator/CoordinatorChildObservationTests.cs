@@ -53,6 +53,10 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
+        // Dispatching a child run now resolves the effective model provider through the shared
+        // resolver, so the scope this fixture hands the dispatch service must be able to supply one.
+        services.AddScoped(sp => AutomationTestServices.CreateModelProviderResolver(
+            sp.GetRequiredService<MemoryDbContext>()));
         _provider = services.BuildServiceProvider();
         using (var scope = _provider.CreateScope())
             scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
