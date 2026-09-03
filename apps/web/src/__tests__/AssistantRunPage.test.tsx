@@ -268,6 +268,29 @@ describe('AssistantRunPage', () => {
     await waitFor(() => expect(screen.queryByTestId('assistant-empty-state')).toBeNull());
   });
 
+  it('scrolls a newly sent pending message into view immediately', async () => {
+    const createRequest = deferred<typeof REAL_CREATE_RESPONSE>();
+    vi.mocked(apiClient.createAssistantRun).mockReturnValueOnce(createRequest.promise);
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      render(<Wrapper><AssistantRunPage /></Wrapper>);
+      typeAndSend('what projects exist?');
+
+      await waitFor(() => {
+        expect(screen.getByTestId('assistant-pending-message')).toBeTruthy();
+      });
+      await waitFor(() => {
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'end', behavior: 'smooth' });
+      });
+    } finally {
+      createRequest.resolve(REAL_CREATE_RESPONSE);
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
   it('sends subsequent messages via real send-message endpoint once a run exists', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
 
@@ -551,4 +574,3 @@ describe('AssistantRunPage', () => {
     );
   });
 });
-
