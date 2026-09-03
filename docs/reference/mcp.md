@@ -256,8 +256,8 @@ Legacy compatibility alias that starts a coordinator run directly in `direct` mo
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
 | `task` | string | yes | Task description for the agent |
-| `agent_name` | string | no | Target team member name (e.g., `"ripley"`) |
-| `base_branch` | string | no | Branch to base the run on (defaults to current) |
+| `agent_name` | string | no | Legacy field. A value returns a tool error. |
+| `base_branch` | string | no | Legacy field. A value returns a tool error. |
 | `model_source` | string | no | Model provider override |
 
 **Returns**: `{ run_id, status, start_mode }`.
@@ -483,10 +483,10 @@ Steer a coordinator run's subagents. Proxies `POST /api/runs/{id}/steer`.
 |-----------|------|----------|-------------|
 | `run_id` | string | yes | Coordinator run ID |
 | `kind` | string | yes | `stop`, `redirect`, or `amend` |
-| `instruction` | string | yes | Direction relayed to the targeted subagent(s) |
+| `instruction` | string | conditional | Required for `redirect` and `amend`. Optional for `stop` and recovery verbs. |
 | `target_child_run_id` | string | no | Target child run ID; omit to broadcast to every active child |
 
-A `stop` cancels the targeted child run's in-flight turn immediately. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary, without restarting the run. Pause is not supported in Phase 2.
+A `stop` cancels active subagents immediately. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary. Recovery verbs, such as `recover`, reset blocked, failed, or parked subtasks and resume dispatch. Omit `target_child_run_id` to target every active child. Pause is not supported.
 
 **Returns**: The created steering directive with `directiveId`, `kind`, `targetChildRunId`, `status` (`pending`), and `instruction`.
 

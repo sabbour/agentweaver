@@ -276,13 +276,13 @@ In AKS, Agentweaver separates public services, persistent state, secrets, and sa
 ### Why the topology looks this way
 
 - **Gateway routing** gives one public HTTPS entry point while keeping API, MCP, and frontend as independently deployable services.
-- **A single API writer** matches the default SQLite persistence model. Horizontal API scaling would require a database and locking strategy designed for multiple writers.
+- **PostgreSQL and durable leasing** let API and worker replicas scale without double-dispatching a run.
 - **Separate data and workspace volumes** distinguish application state from repository working files. They have different access patterns and backup concerns.
 - **Key Vault CSI** keeps secrets out of images and manifests while making them available to pods at runtime.
 - **Warm sandbox capacity** reduces run startup latency while preserving per-run isolation.
 - **Network policy** should start from deny-by-default and then open only DNS, ingress, app-internal, GitHub/provider, and MCP-to-API paths required for operation.
 
-This deployment is optimized for correctness and isolation before scale-out. The most obvious scaling pressure points are API single-writer persistence, workspace PVC throughput, sandbox pool capacity, and model-provider rate limits.
+The production deployment uses PostgreSQL, two rolling API replicas, and two worker replicas. Worker autoscaling ranges from two to three replicas. Workspace PVC throughput, sandbox pool capacity, and model-provider rate limits remain the main scaling pressure points.
 
 Where this lives: `k8s`, `scripts/azure`, `apps/Agentweaver.AgentHost`.
 
@@ -293,14 +293,14 @@ Where this lives: `k8s`, `scripts/azure`, `apps/Agentweaver.AgentHost`.
 | Backend services | .NET / ASP.NET Core | Strong fit for long-lived services, dependency injection, streaming endpoints, hosted recovery jobs, and typed domain models. |
 | Workflow runtime | Microsoft Agents / MAF-style workflows | Provides a resumable graph model for agent turns, request ports, gates, and streaming execution. |
 | Model providers | GitHub Copilot SDK | Supports GitHub-native agent work and custom-provider configuration through one governed runtime. |
-| Persistence | SQLite plus EF Core-backed memory store options | SQLite keeps self-hosted/local deployment simple; the memory layer is structured enough to evolve toward server databases. |
+| Persistence | PostgreSQL and provider-aware EF Core stores | Production uses PostgreSQL for durable, replica-safe state. SQLite remains available for local development. |
 | Git operations | LibGit2Sharp-style repository APIs | Enables programmatic worktree, branch, diff, and merge operations without shelling out for every repository action. |
 | Web UI | React, TypeScript, Vite, Fluent UI | Good fit for a live operational UI with review forms, timelines, project screens, and reusable Microsoft-style components. |
 | MCP | Model Context Protocol over stdio/HTTP | Lets external assistants use Agentweaver as a tool surface while reusing API authorization and orchestration. |
 | Sandbox governance | Agent Governance Toolkit plus custom policy backend | Combines a default-deny policy engine with Agentweaver-specific file and command semantics. |
 | Sandbox execution | Local executors and Kubernetes sandbox claims | Supports developer machines and production AKS without changing the conceptual run contract. |
 | AKS ingress and secrets | Gateway API, workload identity, Key Vault CSI | Uses cloud-native primitives for routing and secret delivery rather than embedding deployment-specific secrets in code. |
-| Observability | Durable events, diagnostics endpoints, OTLP | Makes the run timeline both user-visible and operator-debuggable. |
+| Observability | Durable events, diagnostics endpoints, Azure Monitor | Makes the run timeline both user-visible and operator-debuggable. |
 
 The common theme is pragmatic layering. Agentweaver uses simple local-first primitives where they reduce setup cost, then wraps them in boundaries that can be replaced when scale or deployment requirements grow.
 

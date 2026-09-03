@@ -71,12 +71,12 @@ unparseable timestamp receives no grace and remains eligible for cleanup.
 
 A pod-per-run sandbox receives only capability credentials tied to the run's immutable snapshots. `RunGitHubCapabilitySnapshotLifecycle` captures snapshots before launch and gives retries/resumes fresh references to the inherited capability. The API's `GitHubCapabilityBroker` fences the selected `UnattendedCopilot` or `UnattendedRepository` snapshot before and after redemption, then bounds the credential expiry.
 
-`KubernetesSandboxExecutor` refuses to launch an AgentHost pod without a live Copilot credential for the exact run. It transfers that credential in-memory through the one-time `/configure` call. `AgentHostGitHubCapabilityCredentialProvider` rejects credentials for a different run or past expiry. AgentHost does not read Key Vault, CSI mounts, shared filesystem tokens, user token stores, or configuration credentials.
+In GitHub Copilot mode, `KubernetesSandboxExecutor` requires a live Copilot credential for the exact run. It transfers that credential in-memory through the one-time `/configure` call. In BYOK mode, the sandbox resolves its configured provider separately and does not require or use `copilotCredential`. `AgentHostGitHubCapabilityCredentialProvider` rejects credentials for a different run or past expiry. AgentHost does not read Key Vault, CSI mounts, shared filesystem tokens, user token stores, or configuration credentials.
 
 | `/configure` field | Required | Meaning |
 |---|---|---|
 | `runId` | Yes | Configured run identity. |
-| `copilotCredential` | Yes | Opaque snapshot reference, credential, and bounded expiry for that run's unattended Copilot capability. |
+| `copilotCredential` | GitHub Copilot mode only | Opaque snapshot reference, credential, and bounded expiry for that run's unattended Copilot capability. BYOK mode does not use this field. |
 | `repositoryAccessToken` | No | Separately redeemed repository capability for narrowly-scoped Git/GitHub operations. |
 | `turnBearerToken` | No | A2A turn authorization token, distinct from the GitHub capability. |
 
@@ -192,7 +192,7 @@ caller owns it (`403`/`404` otherwise).
 
 | Method & path | Body | Returns | Effect |
 |---|---|---|---|
-| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <1..65535> }` | `PortForwardSessionDto` | Starts a `kubectl port-forward` from the run's pod's `target_port` to a loopback port on the API, and returns the new session. `429` when a session cap is hit; `409` when the run has no active sandbox pod. |
+| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "targetPort": <1..65535> }` | `PortForwardSessionDto` | Starts a `kubectl port-forward` from the run's target port to a loopback port on the API, and returns the new session. `429` when a session cap is hit; `409` when the run has no active sandbox pod. |
 | `GET /api/runs/{runId}/sandbox/port-forward` | — | `PortForwardSessionDto[]` | Lists the active preview sessions for the run. |
 | `DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}` | — | `{ session_id, stopped: true }` | Stops the identified session and tears down its tunnel. |
 
@@ -209,7 +209,7 @@ caller owns it (`403`/`404` otherwise).
 
 ### Behavior
 
-- **Per-port, explicit.** A session forwards one `target_port`; opening another preview is a second
+- **Per-port, explicit.** A session forwards one target port; opening another preview is a second
   `POST`. Sessions are listed and stopped individually.
 - **Scoped to the run's pod.** A session can only reach *that* run's sandbox pod — the run id resolves to a
   single bound pod, so a preview never crosses into another run's pod.
@@ -236,9 +236,9 @@ sequenceDiagram
     participant Reg as PodNameRegistry
     participant K as kubectl
     participant Pod as Sandbox pod (run-bound)
-    User->>API: POST /api/runs/{runId}/sandbox/port-forward { target_port }
+    User->>API: POST /api/runs/{runId}/sandbox/port-forward { targetPort }
     API->>API: validate port, run exists, caller owns run
-    API->>PF: StartAsync(runId, target_port)
+    API->>PF: StartAsync(runId, targetPort)
     PF->>Reg: TryGet(runId) → pod_name
     alt no pod registered
         Reg-->>PF: null

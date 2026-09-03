@@ -1,6 +1,6 @@
 # Agentweaver experience overview
 
-Agentweaver has two product surfaces: the web UI for humans who want a visual, real-time control room, and the MCP server for AI assistants and agent clients that drive the same work through tools. This overview explains how those surfaces fit together, how users move through projects, runs, review, teams, memory, workflows, backlog, and operations, and how to choose the right surface for a task.
+Agentweaver has two product surfaces: the web UI for people who need a visual, real-time control room and the MCP server for AI clients. This overview explains how the surfaces work together.
 
 Scope note: this is an orientation document for using Agentweaver. It describes what the user sees and does; implementation details live in the architecture deep dives.
 
@@ -9,8 +9,7 @@ Scope note: this is an orientation document for using Agentweaver. It describes 
 Agentweaver exposes one product through two front doors:
 
 - **The web UI** is for humans. It is visual, navigable, and real-time. A user signs in, chooses a project, watches boards and timelines update, opens files, reviews output, steers coordinators, and changes project settings.
-- **The browser console** is a web UI mode for keyboard-first operation. It opens from the top-bar **Console** slide-in, persists across route changes, accepts prose for the real coordinator, and exposes slash commands for common MCP-backed controls.
-- **The MCP server** is for MCP clients such as Claude, Copilot, or other AI assistants. A client connects to Agentweaver, authenticates, and invokes tools like `project_create`, `run_submit`, `run_watch`, `coordinator_start`, `team_cast`, or `memory_search`.
+- **The MCP server** is for MCP clients such as Claude, Copilot, or other AI assistants. A client connects, authenticates, and invokes tools such as `project_create`, `coordinator_start`, `run_watch`, `team_cast`, and `memory_search`.
 
 They are two front-ends over the same backend and data model. Projects, runs, coordinator orchestration, team rosters, memory, workflows, backlog items, sandbox policy, diagnostics, and workspace files are authoritative on the backend. The web UI renders those facts as pages, cards, graphs, timelines, and forms. The MCP server exposes the same facts and mutations as tools. Most actions a person performs in the web UI have a corresponding MCP tool an assistant can call.
 
@@ -26,7 +25,6 @@ The web UI and MCP server differ in interaction style, not in product intent:
 | Surface | Best user | Interaction style | What it is best at |
 |---|---|---|---|
 | Web UI | Human operators, reviewers, project owners | Click, inspect, compare, approve, steer | Seeing state, understanding context, making judgment calls, watching live work |
-| Browser console | Keyboard-first operators | Prose plus slash commands | Starting, monitoring, and steering coordinator runs without leaving a terminal-style app-level panel |
 | MCP server | AI assistants, automation agents, scripted clients | Connect, authenticate, call tools | Creating and updating work programmatically, chaining operations, asking an assistant to operate Agentweaver for you |
 
 ## Shared experience model
@@ -34,7 +32,7 @@ The web UI and MCP server differ in interaction style, not in product intent:
 The core loop is the same from either surface:
 
 1. **Choose or create a project.** A project binds Agentweaver to a working directory or GitHub repository and records project-level settings.
-2. **Define work.** Work can start as a backlog task, a direct run request, or a coordinator goal.
+2. **Define work.** Capture a backlog task or start a coordinator goal.
 3. **Run agents.** A run executes through a workflow pipeline and emits events as it moves through agent work, RAI, review, merge, and scribe steps.
 4. **Watch progress.** The UI shows live timelines and graphs; MCP clients call status and watch tools.
 5. **Review and decide.** Humans approve or reject work, steer agents, merge memory decisions, or change settings.
@@ -68,14 +66,14 @@ The web UI is a signed-in, project-aware control room. It uses a persistent app 
 ![Agentweaver signed-in app shell with left navigation rail, top bar, and main content](/screenshots/app-shell.png)
 
 > 📸 **Screenshot — `app-shell.png`**
-> *Shows:* the signed-in shell with the left navigation rail (`aria-label="Primary navigation"`) listing **Overview**, **Projects**, then the project-scoped **Dashboard**, **Board**, **Flow**, **Orchestrations**, **Workspace**, **Agents**, **Memories**, **Workflows**, **Settings**, **Diagnostics**, **Heartbeat**; the top bar with the project switcher, the `Alpha` badge, the API status dot, and GitHub sign-in; and the Overview page in the main content area.
+> *Shows:* the signed-in shell with the left navigation rail (`aria-label="Primary navigation"`) listing **Overview**, **Projects**, **Sessions**, and project destinations. The top bar has the project switcher, `Alpha` badge, and API status dot.
 > *Path:* Sign in → land on `/overview`.
 
 The shell has three persistent areas:
 
 - **Left navigation rail** — global destinations always appear at the top; project-scoped sections appear when Agentweaver has a project context. The rail can collapse to icon-only mode.
-- **Top bar** — contains the project switcher, API reachability status, and GitHub sign-in/sign-out state.
-- **Main content area** — renders the current page: Overview, Projects, Dashboard, Board, Flow, Orchestrations, Workspace, Agents, Memories, Workflows, Settings, Diagnostics, Heartbeat, or an orchestration detail page.
+- **Top bar** — contains the project switcher and API reachability status.
+- **Main content area** — renders the selected page.
 
 The project switcher lists existing projects, groups recent projects, and preserves the current page category when switching projects where possible. For example, switching projects from Settings lands on the target project's Settings page; switching from an orchestration detail lands on the target project's Orchestrations page.
 
@@ -91,6 +89,7 @@ Agentweaver's web UI is organized into global destinations plus four project-sco
 |---|---|---|
 | **Overview** | `/` and `/overview` | See fleet activity at a glance: in-flight work, queued work, done-today counts, health, active projects, and recent activity. |
 | **Projects** | `/projects` | Browse projects, create a blank project, create a project from GitHub, choose a blueprint, and open a project. |
+| **Sessions** | `/sessions` | Start or open Assistant conversations across projects. |
 
 #### WORK
 
@@ -115,7 +114,6 @@ Agentweaver's web UI is organized into global destinations plus four project-sco
 | Destination | Route shape | What you do here |
 |---|---|---|
 | **Workflows** | `/projects/:projectId/workflows` | View reusable pipeline definitions, validate discovered workflows, sync from disk, generate a workflow, create a workflow, edit YAML, use the visual editor, and choose a project default. |
-| **Settings** | `/projects/:projectId/settings` | Configure the project: name, repository link, default model provider, sandbox policy, review policy, and danger-zone actions. |
 
 #### SYSTEM
 
@@ -127,7 +125,7 @@ Agentweaver's web UI is organized into global destinations plus four project-sco
 
 ### Deep project destinations
 
-Standalone workflow/execution run pages are no longer part of the web UI. Run details are inspected inside the coordinator orchestration page's embedded graph, session panel, artifact browser, and approval/question affordances.
+Standalone workflow and execution pages are not part of the web UI. Run details appear in the coordinator orchestration page.
 
 | Destination | Route shape | What you do here |
 |---|---|---|
@@ -183,7 +181,7 @@ The tool catalog is broad because it mirrors the product model. It contains 79 t
 | **GitHub capability** | Connect or remove a caller's Repo App and an Owner-authorized project's Copilot App capabilities. | `github_repo_app_connect`, `github_repo_app_authorization_status`, `github_repo_app_disconnect`, `project_copilot_app_connect`, `project_copilot_app_authorization_status`, `project_copilot_app_disconnect`, `project_github_capability_status` |
 | **Memory** | Capture and govern decisions, inbox entries, agent memory, session context, and file import/export. | `decision_inbox_submit`, `decision_inbox_merge`, `decision_list`, `memory_record`, `memory_search`, `session_start`, `memory_export` |
 | **Project** | List, create, inspect, configure, rename, delete projects, and list project runs. | `project_list`, `project_create`, `project_get`, `project_configure`, `project_list_runs` |
-| **Run** | Submit, watch, review, inspect artifacts, retry, and archive runs. | `run_submit`, `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_get_file`, `run_retry` |
+| **Run** | Watch, review, inspect artifacts, retry, and archive runs. | `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_get_file`, `run_retry` |
 | **SandboxPolicy** | Read or change the sandbox policy for a repository. | `sandbox_policy_get`, `sandbox_policy_set` |
 | **Team** | Cast a team, inspect roster, add or retire members, and fetch charters. | `team_get`, `team_cast`, `team_member_add`, `team_member_retire`, `team_member_get_charter` |
 | **Workflow** | List, inspect, sync, generate, and save reusable workflow definitions. | `workflows_list`, `workflow_get`, `workflows_sync`, `workflow_generate`, `workflow_save` |
@@ -207,7 +205,7 @@ sequenceDiagram
     API-->>MCP: Project result
     MCP-->>Client: Tool result
 
-    Client->>MCP: coordinator_start or run_submit
+    Client->>MCP: coordinator_start
     MCP->>API: Start work
     API-->>MCP: Run id and status
     MCP-->>Client: Tool result
@@ -237,7 +235,7 @@ The table below maps major user goals to where a person goes in the web UI and w
 | **Configure a project** | **Settings** → General for name and default model. | `project_configure`, `project_rename`, `project_delete`. |
 | **Set sandbox behavior** | **Settings** → Sandbox policy. | `sandbox_policy_get`, `sandbox_policy_set`. |
 | **Set review gates** | **Settings** → Review policy. | `workflows_list`, `workflow_get`, and `workflow_save` for workflow-level gates; `run_review` for execution-time review decisions. The current MCP catalog does not expose a dedicated review-policy settings tool. |
-| **Submit a direct run** | **Board** → start work and open the run's **Workflow** page. | `run_submit`. |
+| **Start coordinator work** | **Board** → **Start task** and open the coordinator run. | `coordinator_start`. |
 | **Watch a run** | **Workflow run** or **Execution** page with graph, timeline, files, approvals, and status. | `run_status`, `run_watch`. |
 | **Review or approve a run** | **Workflow run** → human review card and approval banner. | `run_review`. |
 | **Inspect run artifacts** | **Workflow run** → files/artifacts browser and diff/content panels. | `run_show_artifacts`, `run_get_file`. |

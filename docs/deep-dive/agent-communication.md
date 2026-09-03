@@ -175,9 +175,11 @@ request is **re-emitted on the coordinator's stream**; the human (or, under
 Autopilot, the coordinator) answers, and the answer is routed back to the
 requesting child. The coordinator's view is the inbox; the child remains the owner
 of its own request. Information flows **up to the coordinator and back down to the
-originating child** — never laterally between siblings. **Steering** works the
-same way: an operator steers through the coordinator (`stop`, `redirect`,
-`amend`), which relays direction to the targeted child at its next turn boundary.
+originating child** — never laterally between siblings. **Steering** works through
+the coordinator. It supports `stop`, `redirect`, `amend`, and recovery verbs such
+as `recover`. `redirect` and `amend` require an instruction. Other verbs can omit
+it. Omitting the child run ID broadcasts the directive to active children. Pause is
+not supported.
 The full handoff and steering model is in the
 [Coordinator Internals deep dive](./coordinator-internals.md).
 
@@ -196,8 +198,9 @@ resume logic — in process. Only the **leaf agent turn** is sent over A2A to an
 its tools, then streams the turn's output back. On the worker side the leaf is a
 `RemoteAgentProxy` (an `A2AAgent` over the A2A **HTTP+JSON** transport); the pod
 hosts an `A2ATurnBridgeAgent` (MAF name `agentweaver-pod`) wrapping its singleton
-`CopilotAIAgent`. `RemoteWorkflowAgentFactory` remotes **all four** workflow roles
-this way. The orchestration graph never crosses the boundary; A2A carries one
+`CopilotAIAgent`. `RemoteWorkflowAgentFactory` remotes five workflow agents this
+way: worker, RAI, Rubberduck, Build/Test, and Scribe. The Operator Assistant also
+uses `RemoteAgentProxy` outside that factory. The orchestration graph never crosses the boundary; A2A carries one
 turn's chat/output stream and nothing more. A2A is the sole worker→AgentHost wire
 transport for that seam.
 

@@ -1,60 +1,48 @@
-# AgentHost capability credential delivery — Deep Dive
+# AgentHost capability credential delivery
 
-AgentHost pods consume only short-lived, immutable credentials redeemed from capability snapshots captured for a run. They do not read GitHub user-token stores, mounted token files, Key Vault, or host configuration.
+AgentHost pods receive only short-lived credentials that are bound to a run and its execution purpose. They do not read user-token stores, mounted token files, Key Vault, or host configuration.
 
-The A2A turn endpoint has a separate per-run bearer token. `KubernetesSandboxExecutor` sends it in `POST /configure`, `RemoteAgentProxy` uses it as `Authorization: Bearer …` on `message:stream`, and AgentHost rejects turns without the configured token.
+The A2A turn endpoint uses a separate per-run bearer token. `KubernetesSandboxExecutor` sends it during `POST /configure`. `RemoteAgentProxy` sends it with each turn. AgentHost rejects a turn without its configured token.
 
-## Delivery model
+## Provider delivery
 
-`RunGitHubCapabilitySnapshotLifecycle` captures purpose-bound snapshots before launch and inherits fresh opaque snapshot references on retry and resume. At AgentHost launch, `RunGitHubCapabilityCredentialProvider` fences the run's `UnattendedCopilot` snapshot before and after the vault read, bounds its expiry, and supplies the resulting `GitHubCapabilitySnapshotCredential` only to the selected pod's one-time `/configure` request.
+`RunGitHubCapabilitySnapshotLifecycle` captures immutable, purpose-bound snapshots before launch. In GitHub Copilot mode, the API redeems a live `UnattendedCopilot` capability and passes the bounded credential to the selected pod.
 
-The warm AgentHost pool starts with no run identity or GitHub credential. The executor claims a pod, requires a live credential for that exact run, and sends the opaque snapshot reference, token, and expiry in memory. `AgentHostGitHubCapabilityCredentialProvider` permits the runtime to use that value only if its run ID matches the configured run and it remains unexpired. Missing, revoked, mismatched, and expired credentials fail closed. Credentials must never be logged or persisted.
+BYOK is the alternative. When `byokProviderConfiguration` is supplied, AgentHost uses it instead of `copilotCredential`. A live Copilot credential is required only when the BYOK configuration is absent.
 
-## Classifier capability requirement
-
-Copilot-backed classifiers use the same explicit run-bound Copilot capability. A connected GitHub
-identity or installation scope is not classifier authorization. A non-run classifier that needs model
-classification but lacks an explicitly issued capability does not create an `unbound` run, consult
-ambient credentials, call a model, choose a default, or silently degrade. It returns a clear
-connect-GitHub requirement instead. Marketplace auto-browse can still list a repository's directly
-discoverable `SKILL.md` files; when it requires model classification, it asks the user to connect a
-project's GitHub Copilot App. Every surface uses the same redacted
-`model_provider_connection_required` contract and its `configure_project_model_provider` action, which starts
-the existing Entra-authenticated, project-bound Copilot App browser handoff. The contract never contains
-a credential, OAuth URL, transaction ID, callback state, repository, or installation data.
+Missing, revoked, mismatched, and expired credentials fail closed. Credentials must not be logged or persisted.
 
 ## `/configure` request body
 
 | Field | Required | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `runId` | Yes | The Agentweaver run this pod executes. |
-| `copilotCredential` | Yes | Immutable, run-bound, unexpired Copilot snapshot credential. |
-| `turnBearerToken` | No | Per-run bearer token required by `POST /a2a/agent/v1/message:stream`. |
-| `repositoryAccessToken` | No | Repository capability credential supplied separately for narrowly-scoped Git/GitHub operations. |
+| `copilotCredential` | When no BYOK configuration is supplied | Immutable, run-bound Copilot capability credential. |
+| `byokProviderConfiguration` | When `copilotCredential` is absent | Run-scoped configuration for the active BYOK provider. |
+| `turnBearerToken` | No | Per-run bearer token for `POST /a2a/agent/v1/message:stream`. |
+| `repositoryAccessToken` | No | Repository capability credential for scoped Git operations. |
 | `sharedWorkingDirectory` | No | API-visible run worktree. |
-| `previewRunnerCredential` | No | Fresh per-run bearer for authenticated pod-root control calls. |
+| `previewRunnerCredential` | No | Per-run bearer for pod-root control calls. |
+| `mcpBrokerToken` | No | Broker token for MCP operations that require it. |
 
 ## Security properties
 
 | Property | Detail |
-|---|---|
-| Purpose binding | Copilot and repository snapshots are distinct and cannot be redeemed for the other operation. |
-| Run binding | A Host credential provider rejects another run ID. |
-| Snapshot fencing | The broker validates snapshot liveness before and after credential redemption. |
-| Bounded lifetime | The credential expiry is capped by the broker and enforced by Host and Runtime. |
-| One-time delivery | `/configure` accepts exactly one configuration per warm pod. |
+| --- | --- |
+| Purpose binding | Provider and repository capabilities have separate purposes. |
+| Run binding | A credential provider rejects a different run ID. |
+| Bounded lifetime | The runtime enforces credential expiry. |
+| One-time delivery | `/configure` accepts one configuration per warm pod. |
 | No ambient fallback | AgentHost has no Key Vault, CSI, shared-filesystem, environment-token, or user-token-store path. |
 
 ## Source
 
-| Concern | File |
-|---|---|
-| Snapshot lifecycle and broker | `apps/Agentweaver.Api/Auth/RunGitHubCapabilitySnapshotLifecycle.cs`, `GitHubCapabilityBroker.cs` |
-| API credential provider and configure delivery | `apps/Agentweaver.Api/Sandbox/RunGitHubCapabilityCredentialProvider.cs`, `KubernetesSandboxExecutor.cs` |
-| Host credential provider and state | `apps/Agentweaver.AgentHost/AgentHostGitHubCapabilityCredentialProvider.cs`, `AgentHostRuntimeState.cs` |
+- `apps/Agentweaver.Api/Sandbox/KubernetesSandboxExecutor.cs`
+- `apps/Agentweaver.AgentHost/Program.cs`
+- `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs`
 
 ## Related reading
 
-- [Auth & Security](./auth-security.md)
+- [Auth and security](./auth-security.md)
 - [Sandbox pod execution](./sandbox-pod-execution.md)
 - [Sandbox pods reference](../reference/sandbox-pods.md)

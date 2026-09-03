@@ -432,7 +432,7 @@ they are waiting for `/configure`. This lets
 and Copilot SDK host are already warm, but no run context is required until a claim binds. With the
 Worker now in `pod-per-run`, those two standby pods are the hot path for coordinator child turns.
 
-At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, requires a live immutable Copilot capability credential redeemed from the run's `UnattendedCopilot` snapshot, resolves the run's shared orchestration worktree path, reads the run's `AutoApproveTools` option from the API-side `IRunOptionsStore`, and calls `POST {scheme}://{podIP}:8088/configure` with `runId`, `turnBearerToken`, `copilotCredential`, `sharedWorkingDirectory`, and `autoApproveTools`. The API broker fences the snapshot before and after redemption; AgentHost rejects missing, expired, or run-mismatched credentials and has no ambient-token fallback. The legacy `workingDirectory` property is sent as a rolling-upgrade alias and always carries the same API-visible shared path. Coordinator sub-run ids such as `-coordinator-decompose` resolve back to the parent run so child stages inherit the same shared worktree. `autoApproveTools` propagates the per-run auto-approve flag so the warm pod — which boots a fresh `IRunOptionsStore` defaulting to `false` — honors run-level auto-approve at its HITL gate; without it, every `web_fetch` in a `pod-per-run` autopilot run would stall the 5-minute approval gate and auto-deny (issue #221). `/configure` is one-time (`409` after the first successful call), returns `400` when `runId` or the live capability credential is missing, is excluded from the readiness gate, and is intentionally not protected by the turn token because it delivers that token. NetworkPolicy limiting AgentHost ingress to API/worker pods is the guard.
+At run launch, `KubernetesSandboxExecutor` generates a 256-bit turn bearer token, resolves the shared orchestration worktree, and reads `AutoApproveTools` from `IRunOptionsStore`. It calls `POST {scheme}://{podIP}:8088/configure` with run identity, workspace descriptors, approval settings, and provider data. The provider data is `copilotCredential` or `byokProviderConfiguration`; `copilotCredential` is required only without BYOK. Repository, preview, and MCP broker credentials are optional and purpose-scoped. `/configure` is one-time, excluded from the readiness gate, and not protected by the turn token because it delivers that token. The NetworkPolicy limiting AgentHost ingress to API and worker pods is the guard.
 
 After `/configure`, `AgentHostStartupService.ConfigureAsync` runs `SetupAsync` with that per-run working directory overriding the static `AgentHost__WorkingDirectory` env default; only then does `/healthz` return `200` and the executor registers the A2A endpoint. This establishes the invariant `SetupAsync` working directory == `Run.WorktreePath` == the path named in the run's system prompt, so files written by one sibling agent are visible to later synthesis or assembly stages. If working-directory resolution fails, launch continues and the pod falls back to the env default. The wait is bounded (default `90 s`, `1 s` interval, `5 s` per-attempt timeout) and honors the launch cancellation token. The `a2a-sandbox-pod` client still carries the connection-refused retry handler as defense-in-depth, but the normal path is: **claim warm pod → configure → health ready → first turn**.
 
@@ -647,34 +647,18 @@ the suspended external request. Two facts make rehydration cheap and safe:
 
 - the **worktree is already durable** on the shared workspace volume, so no file state needs to travel in
   the checkpoint; and
-- the **run-scoped context is re-delivered at re-claim via `/configure`**, so a resumed pod gets a fresh turn token and configured Key Vault secret name rather than inheriting stale state (see the credential model below).
+- the **run-scoped context is re-delivered at re-claim via `/configure`**, so a resumed pod gets fresh credentials and a turn token rather than inheriting stale state (see the credential model below).
 
 A tuning sub-flag, `Sandbox:ReleasePodOnSuspend` (default **true**), disables the release for
 low-latency-resume or debugging — the pod then stays warm across a suspension at the cost of holding
 capacity. The release is **internal behavior of `pod-per-run`**; it does not change the execution-mode
 flag value.
 
-## Credential model — without a broker
+## Credential model
 
-A persistent design question was how a sandboxed agent gets the credentials it needs (to call the model,
-to clone/push the run's repository) without a central capability-token broker minting and validating
-tokens for every pod. The resolved answer is: **there is no broker.** The pod legitimately holds a
-**run-scoped credential**, by one of two mechanisms:
+The API brokers purpose-bound capability data to each pod through `/configure`. The model-provider payload is `copilotCredential` or `byokProviderConfiguration`. Repository, preview, and MCP broker credentials are separate optional fields. Each value is run-scoped and is never baked into the image.
 
-- **Preferred — workload identity.** The sandbox pod's service account is federated, so the pod obtains a
-  short-lived model token from the OIDC-federated identity at runtime. Nothing is baked into the image,
-  and no long-lived secret sits in the pod. This is consistent with the cluster's passwordless posture.
-- **Alternative — run-scoped token at claim time.** When the worker claims the pod, it injects a
-  **short-lived, run-scoped** token (e.g. a projected secret) consumed by AgentHost at startup. The
-  token's lifetime is bounded by the claim/run.
-
-Either way, the credential is **scoped to the single run** and **never baked into the image**. The
-dropped pieces are explicit: there is **no `CapabilityTokenService`**, no coordinator-as-pod recursion,
-and no bespoke duplex sandbox-agent protocol. The previous "pods hold no secrets" rule was a
-*recommendation*, not a requirement; relaxing it to "pods hold only a run-scoped, short-lived credential"
-is what lets the broker disappear.
-
-The same principle drives **GitHub access**: the run acts *as its signed-in user*, so the pod receives only the run owner's Key Vault secret name in `/configure`. `KeyVaultUserTokenProvider` fetches that one user's stored GitHub token with workload identity and caches it in memory for the pod lifetime. The old infrastructure-layer CSI projection has been replaced by application-layer isolation inside AgentHost; the trade-off and mechanics are in [Agent-host token delivery](./agent-token-delivery.md). The security principle is that the pod serves only the configured user's scope — never another user's scope and never a shared workspace token mirror.
+The sandbox identity cannot retrieve Key Vault secrets or ambient user credentials. There is no per-user token CSI mount or shared token store. See [AgentHost capability credential delivery](./agent-token-delivery.md).
 
 The A2A turn path has its own run-scoped secret. At AgentHost launch, `KubernetesSandboxExecutor`
 generates a 256-bit bearer token, sends it in `POST /configure`, and registers it in
@@ -1168,7 +1152,7 @@ redeployment of the Linux executor will ever change it.
   compromised pod cannot rewrite *what happens next*.
 - Each run's heavy execution is confined to its **own Kata-isolated pod** with a **default-deny egress
   allowlist**; the pod cannot reach the database or arbitrary in-cluster services.
-- The pod holds **only the configured run owner's credential in memory** after `/configure` — never a broker key, never another run's or user's scope.
+- The pod holds only run-scoped provider and repository credentials received through `/configure`. It cannot retrieve ambient user credentials.
 - The A2A turn endpoint is application-layer authenticated with a per-run bearer token; a token from one
   pod is not valid against any other pod.
 - The pod is **disposable and re-creatable**: durable state lives in the shared workspace volume and the
@@ -1177,8 +1161,9 @@ redeployment of the Linux executor will ever change it.
 - A run that installs system packages does so into a **per-run, RAM-backed, disposable** system
   root; the pod's privilege envelope is unchanged, and nothing installed is visible to another run,
   to the AgentHost container, or to the node.
-- Container image builds are **never** performed inside the sandbox pod, because the privileges
-  BuildKit needs would let the builder cross the run boundary inside the shared Kata VM.
+- `image_build` requires an external service by default. The optional
+  `k8s/optional/sandbox-buildkit-sidecar.yaml` enables an opt-in BuildKit sidecar
+  with its required elevated container capability.
 
 ## Orphaned-pod reaper and Kubernetes-owned admission
 

@@ -56,7 +56,7 @@ A **Blueprint** is a reusable team definition: roles, workflows, review policy, 
 |---|---|
 | `software-delivery` | Code changes, features, refactors |
 | `bug-fix` | Targeted bug investigations and fixes |
-| `code-review` | Automated review of a diff or branch |
+| `infra-ops` | Infrastructure, CI/CD, monitoring, and alerting work |
 | `content-authoring` | Drafting docs, blog posts, articles |
 | `pm-discovery` | Product discovery, research, specs |
 | `incident-response` | Live incidents and postmortems |

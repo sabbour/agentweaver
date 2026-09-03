@@ -12,7 +12,7 @@ Agentweaver separates **work intake** from **run execution**.
 - A **run** is active execution. It has a run id, status, event stream, timeline, artifacts, review state, and lifecycle history.
 - The **board** is the shared operational view. It shows tasks that have not started and run cards that are moving through execution, review, and completion.
 - The **watch page** is the live run view. It shows the event stream as turn groups, agent messages, tool calls, lifecycle cards, approvals, and terminal status.
-- **MCP tools** provide parity for assistants and automations: submit with `run_submit`, inspect with `run_status`, stream with `run_watch`, manage intake with `backlog_*`, and clean up with `run_archive` or `backlog_archive_task`.
+- **MCP tools** provide parity for assistants and automations: start with `coordinator_start`, inspect with `run_status`, stream with `run_watch`, manage intake with `backlog_*`, and clean up with `run_archive` or `backlog_archive_task`.
 
 The product shape is intentionally simple: capture work, rank it, let the coordinator claim Ready work, watch live execution, review the result, then archive what no longer needs attention.
 
@@ -27,32 +27,9 @@ The product shape is intentionally simple: capture work, rank it, let the coordi
 
 Submitting work answers one question: **what outcome should Agentweaver produce, and where should it work?**
 
-There are two web entry points:
+All web-started work creates a coordinator orchestration. On the project **Board**, select **Start task**. Enter a **Goal** and, if needed, select a **Workflow**.
 
-1. a direct run submission form for a single run, and
-2. the project board intake path, where you capture tasks into Backlog or Ready and let the coordinator heartbeat pick them up.
-
-MCP mirrors both patterns. Use `run_submit` when you want a run now. Use `backlog_capture_task`, `backlog_move_to_ready`, and related board tools when you want queue discipline.
-
-### Direct web submission
-
-The direct submission form presents three required fields:
-
-| Field | What the user provides | Why it matters |
-| --- | --- | --- |
-| **Repository path** | The local path to the repository where the agent should work. | This anchors the run workspace and tells Agentweaver which checkout to isolate. |
-| **Originating branch** | The branch to base the run on, such as `main`. | This is the source branch for the run worktree and later review or merge context. |
-| **Task description** | A natural-language prompt describing the work. | This becomes the agent's task. Clear outcomes create better execution and review artifacts. |
-
-The **Submit** button stays unavailable until all required fields have content. When submission starts, the button reads **Submitting**. If the API rejects the request, the form shows an error message in place so the user can correct the path, branch, or task and submit again.
-
-After a successful submission, the UI navigates to the watch route for the new run. The user's next screen is not a static confirmation page; it is the live execution surface.
-
-Write the task as an outcome, not a command transcript:
-
-> Add a settings page for project heartbeat limits, persist the setting, and include focused tests for the validation behavior.
-
-That gives the run enough context to make decisions while leaving room for the agent to choose the implementation path.
+Select **Define Outcome** to review an OutcomeSpec before child work starts. Select **Direct** to start a coordinator run from the goal without that confirmation step.
 
 ### Project-board submission
 
@@ -68,27 +45,9 @@ The board also supports quick add from each intake column:
 
 Use Backlog when work is still being shaped. Use Ready when the item is committed enough for the coordinator to claim.
 
-### MCP submission with `run_submit`
+### MCP submission
 
-`run_submit` submits a new agent run for a project. Its inputs are:
-
-| Argument | Meaning |
-| --- | --- |
-| `project_id` | The Agentweaver project to run in. MCP uses the project id rather than a raw repository path. |
-| `task` | The task description for the agent. This is the MCP equivalent of **Task description**. |
-| `agent_name` | Optional agent selection. Omit it when the project default or coordinator selection should decide. |
-| `base_branch` | Optional branch override. This corresponds to the branch context used for the run. |
-| `model_source` | Optional model source override. |
-
-Use `run_submit` for immediate work. Use the backlog tools for queued work. The practical distinction is the same as the UI distinction: direct submission starts a run, while backlog capture creates a board item that can be ranked before execution.
-
-Example MCP-oriented flow:
-
-1. call `run_submit` with the project id and task,
-2. read the returned run id,
-3. call `run_watch` to stream it to completion,
-4. call `run_status` for a final snapshot,
-5. if the run awaits review, hand off to [Review, workspace & merge](./review-workspace-merge.md).
+MCP starts the supported run flow with `coordinator_start`. Use backlog tools when work must wait in the queue.
 
 ## The board experience
 

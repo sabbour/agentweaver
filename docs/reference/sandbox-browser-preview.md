@@ -16,7 +16,7 @@ exists and the caller owns it (`404`/`403`). Source:
 
 | Method & path | Body | Returns | Notes |
 |---|---|---|---|
-| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | Starts a preview. Preview path provisions Service + HTTPRoute and returns `preview_url` + `keepalive_url`; it does not API-probe `podIP:{target_port}`. `target_port` must be within `AllowedPortMin..AllowedPortMax`. **Human/operator-initiated** (owner-only). |
+| `POST /api/runs/{runId}/sandbox/port-forward` | `{ "targetPort": <3000..9000> }` | `PortForwardSessionDto` | Starts a preview. Preview path provisions Service + HTTPRoute and returns `preview_url` + `keepalive_url`; it does not API-probe `podIP:{target_port}`. `targetPort` must be within `AllowedPortMin..AllowedPortMax`. **Human/operator-initiated** (owner-only). |
 | `POST /api/runs/{runId}/sandbox/preview` | `{ "target_port": <3000..9000> }` | `PortForwardSessionDto` | **Agent-initiated** variant of the start route. Two caller surfaces hit it: the in-sandbox `start_preview(port)` agent tool and the `start_preview(run_id, port)` MCP tool on `agentweaver-mcp` ([`RunTools.cs`](#source)). Routes through a human-in-the-loop approval gate ([`AgentPreviewGate`](#source)) before running the *same* preview-start path. Authorized for the run's **owner OR its own agent callback** ([`SandboxEndpoints.cs:60`](#source)). |
 | `POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry` | — | `202 Accepted` with fresh `request_id`, `retry_of_request_id`, and `expires_at` | Owner-only retry for the latest **expired** preview approval on a non-terminal run. Reuses the retained PreviewRunner process; it does not rerun the preview command or restart the run. |
 | `POST /api/runs/{runId}/sandbox/preview/{token}/keepalive` | — | `{ token, kept_alive: true }` | Bumps the preview's idle expiry to now + `IdleTimeoutMinutes`. Preview path only. Verifies the token's HTTPRoute carries the matching run before bumping. |
@@ -92,7 +92,7 @@ end-to-end unattended; leave it `false` in production.
 The approval wait window is stored on the run's project and defaults migration-safely to 30 minutes.
 Project owners configure 1–1440 minutes in **Project settings → Sandbox policy** or via
 `PUT /api/projects/{projectId}/preview-settings` with
-`{ "preview_approval_timeout_minutes": 30 }`. `Sandbox:Preview:ApprovalTimeoutMinutes` and
+`{ "approval_timeout_minutes": 30 }`. `Sandbox:Preview:ApprovalTimeoutMinutes` and
 `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES` remain a 30-minute-default fallback only for legacy/non-project
 runs.
 
@@ -133,7 +133,7 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 | `Sandbox:Preview:KeepAfterRun` | `true` | Retain the preview after the run completes / pod is released; only the reaper or an explicit stop removes it. |
 | `Sandbox:Preview:AllowedPortMin` | `3000` | Lowest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
 | `Sandbox:Preview:AllowedPortMax` | `9000` | Highest `target_port` a preview may expose (inclusive). Mirrors the NetworkPolicy range and the AgentHost forwarder public-port scan. |
-| Project `preview_approval_timeout_minutes` | `30` | Human approval window for agent-initiated preview, configurable by a project owner from 1–1440 minutes. Existing projects receive 30 through storage defaults/migrations. |
+| Project `approval_timeout_minutes` | `30` | Human approval window for agent-initiated preview, configurable by a project owner from 1–1440 minutes. Existing projects receive 30 through storage defaults/migrations. |
 | `Sandbox:Preview:ApprovalTimeoutMinutes` (env `SANDBOX_PREVIEW_APPROVAL_TIMEOUT_MINUTES`) | `30` | Fallback for legacy/non-project runs. Values clamp to 1–1440 minutes. Project-backed runs use the project setting. |
 | `Sandbox:Preview:AutoApprove` (env `SANDBOX_PREVIEW_AUTO_APPROVE`) | `false` | When `true`, the agent-initiated `start_preview` approval gate auto-grants without an operator. Read in [`AgentPreviewGate.cs:176`](#source). Keep `false` in production. |
 
@@ -162,7 +162,7 @@ the allowed `3000-9000` range). See [Decoupled live-preview provisioning — Ref
 POST /api/runs/run_01HXYZ/sandbox/port-forward
 Content-Type: application/json
 
-{ "target_port": 3000 }
+{ "targetPort": 3000 }
 ```
 
 ```json

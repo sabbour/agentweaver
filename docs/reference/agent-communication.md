@@ -159,12 +159,14 @@ other.
 
 | MCP tool | API endpoint | Purpose |
 | --- | --- | --- |
-| `coordinator_steer` | `POST /api/runs/{id}/steer` | `stop` / `redirect` / `amend` a child; omit `target_child_run_id` to broadcast to all active children |
+| `coordinator_steer` | `POST /api/runs/{id}/steer` | Send `stop`, `redirect`, `amend`, or a recovery directive. Omit `target_child_run_id` to broadcast. |
 
-`coordinator_steer` parameters: `run_id`, `kind` (`stop` · `redirect` ·
-`amend`), `instruction`, optional `target_child_run_id`. A `stop` cancels the
-targeted turn immediately; `redirect` / `amend` apply at the child's next turn
-boundary. Directive progress streams as `coordinator.steering`
+`coordinator_steer` accepts `run_id`, `kind`, `instruction`, and optional
+`target_child_run_id`. `kind` is `stop`, `redirect`, `amend`, or a recovery verb
+such as `recover`. `instruction` is required for `redirect` and `amend`. It is
+optional for `stop` and recovery directives. A `stop` cancels the targeted turn
+immediately. Other directives apply at the next turn boundary. Pause is not
+supported. Directive progress streams as `coordinator.steering`
 (`pending → queued → relayed → applied`).
 
 ### Observing the topology

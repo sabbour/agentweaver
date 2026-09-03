@@ -51,7 +51,6 @@ username-based administrative override.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/` | Health banner (`Agentweaver API`) |
-| `POST` | `/api/runs` | Submit a task and start a run |
 | `GET` | `/api/runs/{id}` | Get current run state |
 | `POST` | `/api/runs/{id}/archive` | Archive a run |
 | `DELETE` | `/api/runs/{id}` | Cancel (if active) and delete a run record |
@@ -461,10 +460,8 @@ boolean match outcome to the rest of the workflow-firing pipeline.
 | `GET` | `/api/projects/{id}/dashboard` | Get project dashboard summary plus compatibility throughput / leaderboard fields |
 | `GET` | `/api/projects/{id}/metrics` | Get App Insights-backed throughput and leaderboard widgets |
 | `GET` | `/api/overview` | Get global overview metrics |
-| `GET` | `/api/runs/{id}/usage` | Get token usage summary for a run |
-| `GET` | `/api/workflow-runs/{id}/usage` | Get token usage summary for a workflow-run envelope |
-| `GET` | `/api/projects/{id}/usage` | Get project token usage, time-ranged (default: last 30 days) |
-| `GET` | `/api/usage` | Get app-wide token usage, admin only (default: last 30 days) |
+| `GET` | `/api/runs/{id}/token-breakdown` | Get per-agent token and AI-credit data for a run |
+| `GET` | `/api/metrics/runs/{runId}/traces` | Get Application Insights agent and LLM spans for a run |
 
 ### GET /api/diagnostics/cluster
 
@@ -484,16 +481,10 @@ Response `200 OK` — a `ClusterDiagnosticsDto`:
 
 ```json
 {
-  "component_health": [
+  "checks": [
     { "name": "postgresql", "status": "pass", "detail": null, "duration_ms": 12 },
     { "name": "agent_pod_quota", "status": "warn", "detail": "4 additional agent pod starts available before quota exhaustion (limited by pods; pods 196/200, sandboxclaims 188/200 used)", "duration_ms": 45 }
   ],
-  "namespace_quota": {
-    "cpu_used": 3.8,
-    "cpu_total": 5.0,
-    "memory_used_gi": 6.4,
-    "memory_total_gi": 10.0
-  },
   "active_agent_pods": [
     { "pod_name": "agent-host-abc123", "run_id": "f36800fd-...", "node": "katapool-vm-1", "started_at": "2026-06-27T17:55:00Z" }
   ],
@@ -506,8 +497,7 @@ Response `200 OK` — a `ClusterDiagnosticsDto`:
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `component_health` | `ComponentHealthDto[]` | One entry per check; `status` is `pass`, `warn`, or `fail`. |
-| `namespace_quota` | object | Namespace CPU/memory usage. Since #217 removed the `ResourceQuota` CPU/memory caps there is no limit to report against; object-count quotas (pods, sandbox claims, PVCs, storage) are the enforced bounds. |
+| `checks` | `DetailedHealthCheckDto[]` | One entry per check. Its status is `healthy`, `warning`, `critical`, or `unknown`. |
 | `active_agent_pods` | `AgentPodInfoDto[]` | Pods currently running with a matching active run. |
 | `orphaned_agent_pods` | `AgentPodInfoDto[]` | Pods running with no matching active run (candidates for next reaper sweep). |
 | `pending_capacity_runs` | `PendingCapacityRunDto[]` | **Legacy / back-compat.** Subtasks recorded in the historical `PendingCapacity` status; empty for new runs (Kubernetes now owns scheduling, issue #217). |
@@ -537,37 +527,6 @@ The Heartbeat page **Recent Activity** table shows this as the first column (**A
 ### GET /
 
 Returns the plain text banner `Agentweaver API`.
-
-### POST /api/runs
-
-Submits a task and starts a run. The API creates a dedicated branch (`agentweaver/{runId}`), provisions a git worktree from the originating branch, and starts the agent loop in the background.
-
-Request:
-
-```json
-{
-  "repository_path": "C:/path/to/repo",
-  "originating_branch": "main",
-  "task": "add a license header to every source file",
-  "model_source": "github-copilot"
-}
-```
-
-`model_source` must be `github-copilot`. Any other value returns `400 Bad Request`. The submitting user comes from the bearer key, not the request body.
-
-An optional `"auto_approve_tools": true` may be set to launch the run with the auto-approve-tools option ON (see `POST /api/runs/{id}/auto-approve`). It defaults to `false`.
-
-`repository_path` must be an absolute local filesystem path. The server canonicalizes it with `Path.GetFullPath` before storing it on the run record. UNC paths (`\\server\share`, `//server/share`), device paths (`\\?\`, `\\.\`), drive-relative paths (`C:foo`), relative paths, and NTFS Alternate Data Streams are rejected with `400`.
-
-When `Runs:AllowedRepositoryRoots` is configured (non-empty string array), the server resolves the canonical path through symlinks and junctions with the `Agentweaver.SandboxFs.RealPath` package API and verifies that the resolved location is inside one of the allowed roots. Paths outside the allowlist return `400`. By default no allowlist is configured and any valid local absolute path is accepted. Shared, exposed, or multi-tenant deployments MUST set an allowlist to prevent users from targeting arbitrary repositories on the server filesystem.
-
-Response `202 Accepted`:
-
-```json
-{ "run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6", "workflow_run_id": "f36800fd-f2f8-418c-958e-aae3e4921ba6", "status": "in_progress" }
-```
-
-Validation failures return `400 Bad Request`. If `repository_path` is not a valid git repository or `originating_branch` does not exist in that repository, the response is `400` with an `error` field describing the problem. Invalid repositories or branches are recorded as failed runs so they do not stay stranded.
 
 ### GET /api/runs/{id}
 
@@ -928,7 +887,7 @@ Errors: `400` invalid run id / missing `answer`; `404` run not found; `409` no p
 
 ### POST /api/runs/{id}/auto-approve
 
-Toggles the per-run **auto-approve-tools** option. When enabled, an allow-with-approval tool request (e.g. `web_fetch`) is auto-granted at the human-in-the-loop gate instead of stalling for an operator. Every auto-grant is logged on the timeline as a `tool.auto_approved` event. This NEVER overrides a policy deny: dangerous tools are rejected upstream by sandbox governance before the gate is reached. The flag is settable at launch (`auto_approve_tools` on `POST /api/runs`; `autoApproveTools` on `POST /api/projects/{id}/orchestrations`) and cascades from a coordinator run to its dispatched children. Defaults to OFF.
+Toggles the per-run **auto-approve-tools** option. When enabled, an allow-with-approval tool request (e.g. `web_fetch`) is auto-granted at the human-in-the-loop gate instead of stalling for an operator. Every auto-grant is logged on the timeline as a `tool.auto_approved` event. This NEVER overrides a policy deny: dangerous tools are rejected upstream by sandbox governance before the gate is reached. Set the flag at coordinator launch with `autoApproveTools` on `POST /api/projects/{id}/orchestrations`. It cascades from a coordinator run to its dispatched children. Defaults to OFF.
 
 Request:
 
@@ -1040,7 +999,7 @@ Starts a port-forward session from a random local port to the sandbox pod's targ
 Request:
 
 ```json
-{ "target_port": 3000 }
+{ "targetPort": 3000 }
 ```
 
 Response `200 OK`:
@@ -1055,7 +1014,7 @@ Response `200 OK`:
 }
 ```
 
-`target_port` must be between 1 and 65535. Start failures return `409 Conflict` with an `error` message.
+`targetPort` must be between 1 and 65535. Start failures return `409 Conflict` with an `error` message.
 
 ### GET /api/runs/{runId}/sandbox/port-forward
 
@@ -1501,7 +1460,7 @@ The Coordinator agent can either start directly from a goal or draft a confirmab
 
 ### POST /api/projects/{id}/orchestrations
 
-Starts a coordinator run for the project. The project's working directory, default branch, and the authenticated caller are used as the run's repository path, originating branch, and submitting user. The provider is fixed to GitHub Copilot.
+Starts a coordinator run for the project. The project's working directory, default branch, and authenticated caller are used as the run's repository path, originating branch, and submitting user. A deployment-wide BYOK provider is used when active. Otherwise, the run uses GitHub Copilot.
 
 The project must have at least one **dispatchable** cast team member before an orchestration can start. The start path calls `CoordinatorRosterGuard.EnsureDispatchableTeam` before inserting the run (`apps/Agentweaver.Api/Coordinator/CoordinatorRunService.cs:111`, `:125`). A dispatchable member is active, has a role, and is not one of the platform-owned Scribe/Ralph/RAI/Build & Test roles (`apps/Agentweaver.Api/Coordinator/CoordinatorRosterGuard.cs:54`, `apps/Agentweaver.Api/Coordinator/CoordinatorOrchestratorExecutor.cs:687`, `:750`).
 
