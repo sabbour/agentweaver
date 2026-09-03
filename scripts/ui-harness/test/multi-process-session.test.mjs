@@ -20,6 +20,7 @@ const ROOT = path.join(HERE, '..');
 const TOOLS = path.join(ROOT, 'agent-driver-ui', 'tools.mjs');
 const SESSIONS = path.join(ROOT, 'sessions');
 const TRANSCRIPTS = path.join(ROOT, 'transcripts-ui');
+const CLOSE_FAILURE_WORKER = path.join(HERE, 'fixtures', 'session-worker-close-failure.mjs');
 const FIXTURE_TEXT = 'Review https://docs.example.test/guide?token=secret-canary#section unchanged';
 
 function fixtureHtml() {
@@ -263,7 +264,7 @@ test('an abandoned lock owned by a dead process is recovered', async () => {
   }
 });
 
-test('runtime shutdown force-terminates an unresponsive worker and removes its resources', { timeout: 15_000 }, async () => {
+test('runtime shutdown force-terminates an unresponsive worker and retains retry proof', { timeout: 15_000 }, async () => {
   const sessionsDirectory = path.join(HERE, `.sessions-${randomUUID()}`);
   const sessionId = randomUUID();
   const runtime = runtimeDirectory(sessionsDirectory, sessionId);
@@ -285,11 +286,94 @@ test('runtime shutdown force-terminates an unresponsive worker and removes its r
   }), 'utf8');
 
   try {
-    await stopSessionRuntime({ sessionsDirectory, sessionId, timeout: 100 });
+    await assert.rejects(
+      stopSessionRuntime({ sessionsDirectory, sessionId, timeout: 100 }),
+      (error) => {
+        assert(error instanceof AggregateError);
+        assert.equal(error.errors.some((item) => item.code === 'BROWSER_CLOSE_UNPROVEN'), true);
+        return true;
+      },
+    );
     await waitForExit(child.pid);
-    assert.equal(existsSync(runtime), false);
+    assert.equal(existsSync(runtime), true);
+    const retry = JSON.parse(await readFile(path.join(runtime, 'shutdown-retry.json'), 'utf8'));
+    assert.equal(retry.browserClosed, false);
+    assert.equal(retry.workerTerminated, true);
   } finally {
     if (isProcessAlive(child.pid)) process.kill(child.pid, 'SIGKILL');
     await rm(sessionsDirectory, { recursive: true, force: true });
   }
 });
+
+for (const failure of ['context', 'browser']) {
+  test(`worker propagates ${failure}.close failure, terminates, and retains sanitized retry state`, { timeout: 15_000 }, async () => {
+    const sessionsDirectory = path.join(HERE, `.sessions-${randomUUID()}`);
+    const sessionId = randomUUID();
+    const runtime = runtimeDirectory(sessionsDirectory, sessionId);
+    const marker = path.join(sessionsDirectory, `${failure}.marker`);
+    const secret = `secret-${randomUUID()}`;
+    await mkdir(sessionsDirectory, { recursive: true });
+    await writeFile(path.join(sessionsDirectory, `${sessionId}.json`), JSON.stringify({
+      id: sessionId,
+      baseUrl: 'https://agentweaver.example.staging/',
+      storageState: 'unused.storageState.json',
+    }), 'utf8');
+    const child = spawn(process.execPath, [
+      CLOSE_FAILURE_WORKER,
+      '--session', sessionId,
+      '--sessions-dir', sessionsDirectory,
+      '--launch-id', randomUUID(),
+    ], {
+      env: {
+        ...process.env,
+        AGENTWEAVER_CLOSE_FAILURE: failure,
+        AGENTWEAVER_CLOSE_MARKER: marker,
+      },
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+
+    try {
+      const readyDeadline = Date.now() + 5_000;
+      let state;
+      while (Date.now() < readyDeadline) {
+        state = await readRuntimeState(sessionsDirectory, sessionId);
+        if (state?.status === 'ready') break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.equal(state?.status, 'ready');
+      await writeFile(path.join(runtime, 'recovery.json'), JSON.stringify({ token: secret }), 'utf8');
+      await writeFile(path.join(runtime, 'recovery.storageState.json'), JSON.stringify({ token: secret }), 'utf8');
+
+      await assert.rejects(
+        stopSessionRuntime({ sessionsDirectory, sessionId, timeout: 2_000 }),
+        (error) => {
+          assert(error instanceof AggregateError);
+          const closure = error.errors.find((item) => item instanceof AggregateError);
+          assert.equal(
+            closure?.errors.some((item) => item.message === `fixture ${failure} close failed`),
+            true,
+          );
+          assert.equal(error.errors.some((item) => item.code === 'BROWSER_CLOSE_UNPROVEN'), true);
+          return true;
+        },
+      );
+      await waitForExit(child.pid);
+      assert.equal(existsSync(path.join(sessionsDirectory, `${sessionId}.json`)), true);
+      assert.deepEqual((await readFile(marker, 'utf8')).trim().split(/\r?\n/), ['context', 'browser']);
+      const retry = JSON.parse(await readFile(path.join(runtime, 'shutdown-retry.json'), 'utf8'));
+      assert.equal(retry.browserClosed, false);
+      assert.equal(retry.workerTerminated, true);
+      assert.equal(retry.errors.some((item) => item.message === `fixture ${failure} close failed`), true);
+      assert.equal(await directoryContains(runtime, secret), false);
+      assert.deepEqual((await readdir(runtime)).sort(), ['shutdown-retry.json']);
+    } finally {
+      if (isProcessAlive(child.pid)) process.kill(child.pid, 'SIGKILL');
+      await rm(sessionsDirectory, { recursive: true, force: true });
+    }
+  });
+}

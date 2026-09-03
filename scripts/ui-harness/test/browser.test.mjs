@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { guardedUrl } from '../lib/browser.mjs';
+import { closeBrowserResources, guardedUrl } from '../lib/browser.mjs';
 
 test('browser target boundary accepts arbitrary HTTPS hosts', () => {
   assert.equal(guardedUrl('https://agentweaver.foo.staging.example.com', '/projects', {}).pathname, '/projects');
@@ -141,4 +141,23 @@ test('browser target boundary rejects generated previews because authenticated a
   const previewUrl = 'https://swift-falcon-amber-abcdefghijklmnopqrstuvwxyz-preview.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io';
 
   assert.throws(() => guardedUrl(baseUrl, previewUrl, {}), /cross-origin/);
+});
+
+test('browser close attempts context and browser independently and preserves both failures', async () => {
+  const calls = [];
+  const contextError = new Error('context close failed');
+  const browserError = new Error('browser close failed');
+  await assert.rejects(
+    closeBrowserResources(
+      { close: async () => { calls.push('context'); throw contextError; } },
+      { close: async () => { calls.push('browser'); throw browserError; } },
+    ),
+    (error) => {
+      assert(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [contextError, browserError]);
+      assert.equal(error.cause, contextError);
+      return true;
+    },
+  );
+  assert.deepEqual(calls, ['context', 'browser']);
 });

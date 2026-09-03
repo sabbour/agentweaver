@@ -39,6 +39,10 @@ function responsesDirectory(runtime) {
   return path.join(runtime, 'responses');
 }
 
+function shutdownRetryPath(runtime) {
+  return path.join(runtime, 'shutdown-retry.json');
+}
+
 async function writeJsonAtomic(file, value) {
   await mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
@@ -82,6 +86,21 @@ async function readJson(file) {
     if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
     throw error;
   }
+}
+
+function shutdownErrorFromEvidence(evidence) {
+  const nested = Array.isArray(evidence?.errors)
+    ? evidence.errors.map((item) => {
+        const error = new Error(item?.message ?? 'browser resource close failed');
+        error.code = item?.code;
+        return error;
+      })
+    : [];
+  const error = nested.length > 0
+    ? new AggregateError(nested, evidence?.message ?? 'browser runtime close failed', { cause: nested[0] })
+    : new Error(evidence?.message ?? 'browser runtime close failed');
+  error.code = evidence?.code ?? 'BROWSER_CLOSE_FAILED';
+  return error;
 }
 
 export function isProcessAlive(pid) {
@@ -191,6 +210,12 @@ export async function ensureSessionRuntime({
   await mkdir(runtime, { recursive: true });
 
   return withDirectoryLock(startLock, async () => {
+    const pendingShutdown = await readJson(shutdownRetryPath(runtime));
+    if (pendingShutdown) {
+      const error = new Error(pendingShutdown.retryAction ?? 'UI session cleanup must be retried before restart');
+      error.code = 'SESSION_SHUTDOWN_RETRY_REQUIRED';
+      throw error;
+    }
     const current = await readJson(statePath(runtime));
     if (await runtimeIsReady(current)) return current;
     if (current?.pid && isProcessAlive(current.pid)) await terminateProcess(current.pid);
@@ -333,9 +358,24 @@ export async function reconcileSessionResponses(sessionsDirectory, sessionId) {
 
 export async function stopSessionRuntime({ sessionsDirectory, sessionId, timeout = 15_000 }) {
   const runtime = runtimeDirectory(sessionsDirectory, sessionId);
-  const state = await readJson(statePath(runtime));
-  const pid = state?.pid;
-  if (pid && isProcessAlive(pid)) {
+  const initialState = await readJson(statePath(runtime));
+  const priorRetry = await readJson(shutdownRetryPath(runtime));
+  if (!initialState && !priorRetry) {
+    await rm(runtime, { recursive: true, force: true });
+    return { browserClosed: true, workerTerminated: true };
+  }
+
+  const pid = initialState?.pid ?? priorRetry?.pid;
+  let browserClosed = initialState?.termination?.browserClosed === true
+    || priorRetry?.browserClosed === true;
+  const shutdownErrors = Array.isArray(priorRetry?.errors)
+    ? priorRetry.errors.map((item) => {
+        const error = new Error(item?.message ?? 'previous UI session shutdown failed');
+        error.code = item?.code ?? 'SESSION_SHUTDOWN_FAILED';
+        return error;
+      })
+    : [];
+  if (pid && isProcessAlive(pid) && !priorRetry) {
     try {
       const requestId = randomUUID();
       await writeJsonAtomic(path.join(requestsDirectory(runtime), `${requestId}.json`), {
@@ -343,16 +383,70 @@ export async function stopSessionRuntime({ sessionsDirectory, sessionId, timeout
         requestId,
         requestedAt: new Date().toISOString(),
       });
-      await waitForResponse(runtime, requestId, timeout);
+      const response = await waitForResponse(runtime, requestId, timeout);
+      browserClosed ||= response?.termination?.browserClosed === true;
+      if (!response?.ok) shutdownErrors.push(shutdownErrorFromEvidence(response?.error));
       const deadline = Date.now() + timeout;
       while (isProcessAlive(pid) && Date.now() < deadline) await sleep(50);
-    } catch {
-      // A failed graceful handshake still falls through to forced termination.
+    } catch (error) {
+      shutdownErrors.push(error);
     } finally {
-      if (isProcessAlive(pid)) await terminateProcess(pid);
+      if (isProcessAlive(pid)) {
+        try {
+          await terminateProcess(pid);
+        } catch (error) {
+          shutdownErrors.push(error);
+        }
+      }
+    }
+  } else if (pid && isProcessAlive(pid)) {
+    try {
+      await terminateProcess(pid);
+    } catch (error) {
+      shutdownErrors.push(error);
     }
   }
-  await rm(runtime, { recursive: true, force: true });
+
+  const finalState = await readJson(statePath(runtime));
+  browserClosed ||= finalState?.termination?.browserClosed === true;
+  const workerTerminated = !pid || !isProcessAlive(pid);
+  if (browserClosed && workerTerminated) {
+    await rm(runtime, { recursive: true, force: true });
+    return { browserClosed: true, workerTerminated: true };
+  }
+
+  for (const name of await readdir(runtime).catch(() => [])) {
+    if (name === 'action.lock' || name === 'start.lock') continue;
+    await rm(path.join(runtime, name), { recursive: true, force: true });
+  }
+  await writeJsonAtomic(shutdownRetryPath(runtime), redact({
+    pid: pid ?? null,
+    browserClosed,
+    workerTerminated,
+    retryAction: browserClosed
+      ? 'Retry cleanup after confirming worker termination.'
+      : 'Browser closure is unproven; verify worker/browser termination before removing retained session metadata.',
+    errors: shutdownErrors.flatMap((error) => {
+      const errors = error instanceof AggregateError ? error.errors : [error];
+      return errors.map((item) => ({
+        code: item?.code ?? error?.code ?? 'SESSION_SHUTDOWN_FAILED',
+        message: String(item?.message ?? item),
+      }));
+    }),
+    updatedAt: new Date().toISOString(),
+  }));
+  if (!browserClosed) {
+    shutdownErrors.push(Object.assign(new Error('browser runtime closure was not proven'), {
+      code: 'BROWSER_CLOSE_UNPROVEN',
+    }));
+  }
+  if (!workerTerminated && !shutdownErrors.some((error) => error?.code === 'WORKER_TERMINATION_UNPROVEN')) {
+    shutdownErrors.push(Object.assign(new Error(`UI session worker process ${pid} termination was not proven`), {
+      code: 'WORKER_TERMINATION_UNPROVEN',
+    }));
+  }
+  if (shutdownErrors.length === 1) throw shutdownErrors[0];
+  throw new AggregateError(shutdownErrors, 'UI session shutdown was not proven', { cause: shutdownErrors[0] });
 }
 
 export async function readRuntimeState(sessionsDirectory, sessionId) {

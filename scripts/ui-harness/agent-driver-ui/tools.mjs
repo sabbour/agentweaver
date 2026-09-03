@@ -269,7 +269,10 @@ export async function finish(args, {
     } finally {
       let runtimeStopped = false;
       try {
-        await stopRuntime({ sessionsDirectory: SESSIONS, sessionId: session.id });
+        const termination = await stopRuntime({ sessionsDirectory: SESSIONS, sessionId: session.id });
+        if (termination?.browserClosed !== true || termination?.workerTerminated !== true) {
+          throw new Error('browser closure and worker termination were not proven');
+        }
         runtimeStopped = true;
       } catch (error) {
         cleanupErrors.push(`browser/runtime cleanup failed: ${redact(String(error?.message ?? error))}`);

@@ -269,6 +269,7 @@ test('finish cleans runtime and session before surfacing evidence write failure'
         write: () => {},
         stopRuntime: async () => {
           runtimeStopped = true;
+          return { browserClosed: true, workerTerminated: true };
         },
         removeStoredSession: async () => { sessionRemoved = true; },
         mkdirImpl: async () => {},

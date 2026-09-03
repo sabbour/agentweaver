@@ -9,6 +9,7 @@ import {
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { attachPageCapture } from '../lib/evidence.mjs';
 import { openBrowserSession } from '../lib/browser.mjs';
 import { executeUiAction } from '../lib/ui-actions.mjs';
@@ -56,6 +57,32 @@ function openActionArgs(sealed, privateKey) {
   ]).toString('utf8'));
 }
 
+function flattenErrors(error) {
+  return error instanceof AggregateError
+    ? error.errors.flatMap((item) => flattenErrors(item))
+    : [error];
+}
+
+function combineErrors(errors, message) {
+  const present = errors.filter(Boolean);
+  if (present.length === 0) return null;
+  if (present.length === 1) return present[0];
+  return new AggregateError(present, message, { cause: present[0] });
+}
+
+function errorEvidence(error, fallbackCode) {
+  return redact({
+    code: error?.code ?? fallbackCode,
+    message: String(error?.message ?? error),
+    errors: error instanceof AggregateError
+      ? flattenErrors(error).map((item) => ({
+          code: item?.code ?? fallbackCode,
+          message: String(item?.message ?? item),
+        }))
+      : undefined,
+  });
+}
+
 async function loadRecovery(runtime) {
   const file = path.join(runtime, 'recovery.json');
   if (!existsSync(file)) return null;
@@ -93,8 +120,12 @@ async function nextRequest(requests) {
   }
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+export async function runSessionWorker({
+  argv = process.argv.slice(2),
+  openBrowserSessionImpl = openBrowserSession,
+  processImpl = process,
+} = {}) {
+  const args = parseArgs(argv);
   const sessionId = args.session;
   const sessionsDirectory = path.resolve(args['sessions-dir']);
   const runtime = runtimeDirectory(sessionsDirectory, sessionId);
@@ -105,6 +136,8 @@ async function main() {
   let browserRuntime;
   let heartbeat;
   let stopping = false;
+  let finishRequest;
+  let workerError;
   let lastActivity = Date.now();
   let stateWrite = Promise.resolve();
   const { publicKey, privateKey } = generateKeyPairSync('rsa', {
@@ -116,7 +149,7 @@ async function main() {
   const writeState = (status, extra = {}) => {
     const state = {
       launchId,
-      pid: process.pid,
+      pid: processImpl.pid,
       status,
       heartbeatAt: new Date().toISOString(),
       argumentPublicKey: publicKey,
@@ -131,8 +164,8 @@ async function main() {
   };
 
   const requestStop = () => { stopping = true; };
-  process.on('SIGINT', requestStop);
-  process.on('SIGTERM', requestStop);
+  processImpl.on('SIGINT', requestStop);
+  processImpl.on('SIGTERM', requestStop);
 
   try {
     await mkdir(requests, { recursive: true });
@@ -141,7 +174,7 @@ async function main() {
     const session = await loadSession(sessionsDirectory, sessionId);
     const recovery = await loadRecovery(runtime);
     const recoveredStorageState = path.join(runtime, 'recovery.storageState.json');
-    browserRuntime = await openBrowserSession({
+    browserRuntime = await openBrowserSessionImpl({
       baseUrl: session.baseUrl,
       storageState: existsSync(recoveredStorageState) ? recoveredStorageState : session.storageState,
       sessionStorageSeed: recovery?.sessionStorageSeed ?? null,
@@ -167,12 +200,7 @@ async function main() {
       }
       lastActivity = Date.now();
       if (request.kind === 'finish') {
-        await writeJsonAtomic(path.join(responses, `${request.requestId}.json`), {
-          kind: 'finish',
-          requestId: request.requestId,
-          ok: true,
-          completedAt: new Date().toISOString(),
-        });
+        finishRequest = request;
         stopping = true;
         continue;
       }
@@ -215,18 +243,72 @@ async function main() {
       }
     }
   } catch (error) {
-    await writeState('failed', {
-      error: redact({ code: error.code ?? 'SESSION_WORKER_FAILED', message: String(error.message ?? error) }),
-    }).catch(() => {});
-    process.exitCode = 2;
+    workerError = error;
+    processImpl.exitCode = 2;
   } finally {
     if (heartbeat) clearInterval(heartbeat);
-    if (browserRuntime) await browserRuntime.close().catch(() => {});
-    if (!process.exitCode) await writeState('stopped').catch(() => {});
+    processImpl.off('SIGINT', requestStop);
+    processImpl.off('SIGTERM', requestStop);
+
+    let closeError;
+    if (browserRuntime) {
+      try {
+        await browserRuntime.close();
+      } catch (error) {
+        closeError = error;
+        processImpl.exitCode = 2;
+      }
+    }
+
+    const shutdownError = combineErrors([workerError, closeError], 'UI session worker shutdown failed');
+    const termination = {
+      browserCloseAttempted: Boolean(browserRuntime),
+      browserClosed: !closeError,
+      workerExitExpected: true,
+      workerTerminated: false,
+    };
+    let responseError;
+    if (finishRequest) {
+      try {
+        await writeJsonAtomic(path.join(responses, `${finishRequest.requestId}.json`), {
+          kind: 'finish',
+          requestId: finishRequest.requestId,
+          ok: !shutdownError,
+          termination,
+          error: shutdownError ? errorEvidence(
+            shutdownError,
+            closeError ? 'BROWSER_CLOSE_FAILED' : 'SESSION_WORKER_FAILED',
+          ) : undefined,
+          completedAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        responseError = error;
+        processImpl.exitCode = 2;
+      }
+    }
+
+    const reportedError = combineErrors([shutdownError, responseError], 'UI session worker shutdown reporting failed');
+    let stateError;
+    try {
+      await writeState(reportedError ? 'failed' : 'exiting', {
+        termination,
+        ...(reportedError
+          ? { error: errorEvidence(reportedError, closeError ? 'BROWSER_CLOSE_FAILED' : 'SESSION_WORKER_FAILED') }
+          : {}),
+      });
+    } catch (error) {
+      stateError = error;
+      processImpl.exitCode = 2;
+    }
+
+    const finalError = combineErrors([reportedError, stateError], 'UI session worker shutdown failed');
+    if (finalError) throw finalError;
   }
 }
 
-main().catch((error) => {
-  console.error(redact(String(error?.message ?? error)));
-  process.exitCode = 2;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  runSessionWorker().catch((error) => {
+    console.error(redact(String(error?.message ?? error)));
+    process.exitCode = 2;
+  });
+}

@@ -53,6 +53,23 @@ async function playwrightChromium() {
   return chromium;
 }
 
+export async function closeBrowserResources(context, browser) {
+  const errors = [];
+  try {
+    await context.close();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await browser.close();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'failed to close browser runtime', { cause: errors[0] });
+  }
+}
+
 /** Construct the browser boundary only after shared transport validation approves it. */
 export async function openBrowserSession(opts) {
   const base = guardedUrl(opts.baseUrl, '/', opts);
@@ -88,7 +105,7 @@ export async function openBrowserSession(opts) {
     baseUrl: base.toString(),
     browser, context, page,
     goto: (destination = '/') => page.goto(guardedUrl(base, destination, opts).toString(), { waitUntil: 'domcontentloaded' }),
-    close: async () => { await context.close(); await browser.close(); },
+    close: () => closeBrowserResources(context, browser),
   };
 }
 
