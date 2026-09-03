@@ -53,34 +53,37 @@ export default withMermaid({
     sidebar: {
       '/guide/': [
         {
+          text: 'Getting Started',
+          items: [
+            { text: 'Getting started', link: '/guide/getting-started' },
+            { text: 'Example walkthroughs', link: '/guide/example-scenarios' },
+          ],
+        },
+        {
           text: 'Concepts',
           items: [
             { text: 'What is Agentweaver?', link: '/guide/' },
             { text: 'Authentication', link: '/guide/authentication' },
             { text: 'Projects', link: '/guide/projects' },
             { text: 'Agent Teams & Blueprints', link: '/guide/teams' },
+            { text: 'Blueprints', link: '/guide/blueprints' },
             { text: 'Workflows', link: '/guide/workflows' },
             { text: 'Board and Backlog', link: '/guide/board' },
             { text: 'Runs', link: '/guide/runs' },
             { text: 'Review & Merge', link: '/guide/review' },
             { text: 'The Assistant and Sessions', link: '/guide/assistant' },
+            { text: 'MCP CLI', link: '/guide/mcp-cli' },
           ],
         },
         {
           text: 'Setup',
           items: [
             { text: 'Configuration', link: '/guide/configuration' },
+            { text: 'Operations Guide', link: '/guide/operations' },
             { text: 'Validation workflow', link: '/guide/validation' },
             { text: 'GitHub connections cutover validation', link: '/guide/fleet-cutover-validation' },
             { text: 'Deploy to AKS', link: '/guide/deployment-aks' },
             { text: 'AKS Architecture', link: '/guide/architecture-aks' },
-          ],
-        },
-        {
-          text: 'Getting Started',
-          items: [
-            { text: 'Getting started', link: '/guide/getting-started' },
-            { text: 'Example walkthroughs', link: '/guide/example-scenarios' },
           ],
         },
       ],
@@ -96,7 +99,6 @@ export default withMermaid({
             { text: 'Coordinator', link: '/reference/coordinator' },
             { text: 'Unified steering', link: '/reference/unified-steering' },
             { text: 'Resilient assembly-review loop', link: '/reference/resilient-assembly-review' },
-            { text: 'Browser console', link: '/reference/browser-console' },
             { text: 'Memory', link: '/reference/memory' },
             { text: 'Agent communication', link: '/reference/agent-communication' },
             { text: 'Sandbox pods', link: '/reference/sandbox-pods' },
@@ -125,7 +127,6 @@ export default withMermaid({
             { text: 'Project generation model settings', link: '/experience/project-generation-model-settings' },
             { text: 'Agent definition', link: '/experience/agent-definition' },
             { text: 'Project skills', link: '/experience/project-skills' },
-            { text: 'Browser console', link: '/experience/browser-console' },
             { text: 'Runs board & watch', link: '/experience/runs-board-watch' },
             { text: 'Sessions & the Assistant', link: '/experience/assistant-sessions' },
             { text: 'Coordinator & orchestration', link: '/experience/coordinator-orchestration' },
@@ -175,7 +176,6 @@ export default withMermaid({
             { text: 'Team & casting', link: '/deep-dive/team-casting' },
             { text: 'Agent runtime', link: '/deep-dive/agent-runtime' },
             { text: 'Assistant runtime', link: '/deep-dive/assistant-runtime' },
-            { text: 'Browser console', link: '/deep-dive/browser-console' },
             { text: 'Agent communication', link: '/deep-dive/agent-communication' },
             { text: 'Review & merge', link: '/deep-dive/review-merge' },
           ],

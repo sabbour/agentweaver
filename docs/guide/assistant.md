@@ -10,7 +10,7 @@ A **Session** is one Assistant conversation. Sessions live at the top level of t
 
 ## Why chat instead of forms?
 
-Most of Agentweaver's surface area — submitting runs, managing the backlog, reviewing a coordinator's work plan, checking cluster health — is also exposed as MCP tools (see [MCP CLI & tools](./mcp-cli)). The Assistant is what happens when you point that same tool surface at a chat model running *inside* Agentweaver: ask "what's blocked on the board right now?" or "kick off a run to fix the flaky auth test and let me know when it needs review," and the assistant calls `backlog_*` / `run_submit` / `run_status` on your behalf and reports back.
+Most of Agentweaver's surface area is also exposed as MCP tools. This includes backlog management, coordinator work plans, and cluster health. See [MCP CLI & tools](./mcp-cli). The Assistant calls `backlog_*`, `coordinator_start`, and `run_status` for you.
 
 ::: tip Same tools, no separate MCP client needed
 Anything the Assistant does is something an external MCP client (Claude Desktop, VS Code, your own script) could also do against the same server. The Assistant just gives you that capability without leaving the browser.

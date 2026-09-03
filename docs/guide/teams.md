@@ -23,7 +23,7 @@ Agentweaver ships five predefined Blueprints. Pick the one that most closely mat
 
 ### Software Development
 
-A team for software engineering tasks — coding, testing, debugging, code review, and architecture. Roles cover engineering, quality assurance, and technical direction. The default workflow is `software-delivery` with `bug-fix` and `code-review` also available.
+A team for software engineering tasks: coding, testing, debugging, review, and architecture. Roles cover engineering, quality assurance, and technical direction. The default workflow is `software-delivery`. The catalog also includes `bug-fix` and `infra-ops`.
 
 **Best for:** Software engineers and tech leads shipping code changes, features, and refactors.
 
