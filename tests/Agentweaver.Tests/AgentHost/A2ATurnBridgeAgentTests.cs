@@ -230,6 +230,42 @@ public sealed class A2ATurnBridgeAgentTests
     }
 
     [Fact]
+    public async Task StreamTurnAsync_TurnAbortsAfterCopilotAuthFailure_PreservesSpecificRunFailed()
+    {
+        var runner = new ThrowingTurnRunner
+        {
+            PreFailureEvent = new RunEvent(1, EventTypes.RunFailed, new
+            {
+                message = "GitHub Copilot is not authorized for this user. Sign in with a Copilot-entitled GitHub account and retry.",
+                category = "Authorization",
+                errorCode = "github_copilot_auth_required",
+                retryable = false,
+            }),
+            Failure = new InvalidOperationException("session.create failed"),
+        };
+        var bridge = CreateBridge(runner);
+
+        var updates = new List<AgentResponseUpdate>();
+        Func<Task> act = async () =>
+        {
+            await foreach (var update in bridge.StreamTurnAsync(BuildTurnMessage("go", isRevision: false), default))
+            {
+                updates.Add(update);
+            }
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        var runFailed = DecodeRunFailedEvents(updates);
+        runFailed.Should().ContainSingle(
+            "the upstream structured auth failure must suppress the generic synthetic fallback");
+        var payload = JsonSerializer.Serialize(runFailed[0].Payload);
+        payload.Should().Contain("github_copilot_auth_required");
+        payload.Should().Contain("Authorization");
+        payload.Should().NotContain("agent_turn_internal_error");
+    }
+
+    [Fact]
     public async Task StreamTurnAsync_TurnAbortsAfterUnstructuredFailure_NormalizesWithoutDuplicate()
     {
         var runner = new ThrowingTurnRunner
