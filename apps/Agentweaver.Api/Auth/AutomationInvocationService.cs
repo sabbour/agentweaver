@@ -86,7 +86,8 @@ public interface IAutomationInvocationService
 /// </summary>
 public sealed class AutomationInvocationService(
     MemoryDbContext db,
-    GitHubConnectionsPersistenceStore persistence) : IAutomationInvocationService
+    GitHubConnectionsPersistenceStore persistence,
+    EffectiveModelProviderResolver modelProviderResolver) : IAutomationInvocationService
 {
     /// <summary>
     /// Claims an invocation only from the sole active activation for the project. Trigger producers
@@ -156,8 +157,7 @@ public sealed class AutomationInvocationService(
         if (invocation is null)
             return null;
 
-        var fencedActivation = await persistence.TryFenceAutomationActivationAsync(activation.Id, ct)
-            .ConfigureAwait(false);
+        var fencedActivation = await TryFenceAsync(activation.Id, projectId, ct).ConfigureAwait(false);
         return fencedActivation is null ||
                fencedActivation.ProjectId != invocation.ProjectId ||
                fencedActivation.ProjectId != projectId.ToString() ||
@@ -346,12 +346,14 @@ public sealed class AutomationInvocationService(
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(activationId) ||
-            string.IsNullOrWhiteSpace(occurrenceKey) ||
-            !installationId.HasValue ||
-            !repositoryId.HasValue)
+            string.IsNullOrWhiteSpace(occurrenceKey))
             return false;
 
-        var activation = await persistence.TryFenceAutomationActivationAsync(activationId, ct).ConfigureAwait(false);
+        var activationProjectId = await persistence.GetAutomationActivationProjectIdAsync(activationId, ct)
+            .ConfigureAwait(false);
+        if (!ProjectId.TryParse(activationProjectId, out var projectId))
+            return false;
+        var activation = await TryFenceAsync(activationId, projectId, ct).ConfigureAwait(false);
         if (activation is null ||
             activation.InstallationId != installationId ||
             activation.RepositoryId != repositoryId)
@@ -392,7 +394,7 @@ public sealed class AutomationInvocationService(
         if (invocation is null)
             return false;
 
-        var activation = await persistence.TryFenceAutomationActivationAsync(invocation.ActivationId, ct).ConfigureAwait(false);
+        var activation = await TryFenceAsync(invocation.ActivationId, expectedProjectId, ct).ConfigureAwait(false);
         if (activation is null ||
             activation.ProjectId != expectedProjectId.ToString() ||
             activation.ProjectId != invocation.ProjectId ||
@@ -434,17 +436,16 @@ public sealed class AutomationInvocationService(
                 return MatchesActivation(existing, activation, binding);
             }
 
-            var snapshots = new List<RunGitHubCapabilitySnapshotRecord>
-            {
-                new()
-                {
-                    SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
-                    Purpose = GitHubCapabilityPurpose.UnattendedRepository, AppKind = GitHubAppKind.Repo,
-                    SourceKind = GitHubCapabilitySnapshotSourceKind.RepositoryGrant, ProjectId = activation.ProjectId,
-                    InstallationId = activation.InstallationId, RepositoryId = activation.RepositoryId,
-                    GrantDigest = activation.RepositoryGrantDigest, CapturedAt = DateTimeOffset.UtcNow,
-                },
-            };
+                var snapshots = new List<RunGitHubCapabilitySnapshotRecord>();
+                if (activation.InstallationId.HasValue)
+                    snapshots.Add(new()
+                    {
+                        SnapshotRef = SnapshotRef.Create().Value, RunId = runId,
+                        Purpose = GitHubCapabilityPurpose.UnattendedRepository, AppKind = GitHubAppKind.Repo,
+                        SourceKind = GitHubCapabilitySnapshotSourceKind.RepositoryGrant, ProjectId = activation.ProjectId,
+                        InstallationId = activation.InstallationId, RepositoryId = activation.RepositoryId,
+                        GrantDigest = activation.RepositoryGrantDigest!, CapturedAt = DateTimeOffset.UtcNow,
+                    });
             if (binding is not null)
                 snapshots.Add(new RunGitHubCapabilitySnapshotRecord
                 {
@@ -474,7 +475,9 @@ public sealed class AutomationInvocationService(
         FencedAutomationActivation activation,
         CopilotBindingSnapshotSource? binding)
     {
-        var hasRepositoryGrantSnapshot = snapshots.Any(x =>
+        var hasRepositoryGrantSnapshot = activation.InstallationId is null
+            ? snapshots.All(x => x.Purpose != GitHubCapabilityPurpose.UnattendedRepository)
+            : snapshots.Any(x =>
             x.Purpose == GitHubCapabilityPurpose.UnattendedRepository &&
             x.AppKind == GitHubAppKind.Repo &&
             x.SourceKind == GitHubCapabilitySnapshotSourceKind.RepositoryGrant &&
@@ -483,8 +486,9 @@ public sealed class AutomationInvocationService(
             x.RepositoryId == activation.RepositoryId &&
             x.GrantDigest == activation.RepositoryGrantDigest);
 
+        var expectedSnapshotCount = (activation.InstallationId.HasValue ? 1 : 0) + (binding is null ? 0 : 1);
         if (binding is null)
-            return snapshots.Count == 1 && hasRepositoryGrantSnapshot;
+            return snapshots.Count == expectedSnapshotCount && hasRepositoryGrantSnapshot;
 
         var hasCopilotBindingSnapshot = snapshots.Any(x =>
             x.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
@@ -496,6 +500,16 @@ public sealed class AutomationInvocationService(
             x.CredentialVersion == binding.CredentialVersion &&
             x.GrantDigest == activation.CopilotBindingGrantDigest);
 
-        return snapshots.Count == 2 && hasRepositoryGrantSnapshot && hasCopilotBindingSnapshot;
+        return snapshots.Count == expectedSnapshotCount && hasRepositoryGrantSnapshot && hasCopilotBindingSnapshot;
+    }
+
+    private async Task<FencedAutomationActivation?> TryFenceAsync(
+        string activationId,
+        ProjectId projectId,
+        CancellationToken ct)
+    {
+        var selectedProvider = await modelProviderResolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+        return await persistence.TryFenceAutomationActivationAsync(activationId, selectedProvider, ct)
+            .ConfigureAwait(false);
     }
 }

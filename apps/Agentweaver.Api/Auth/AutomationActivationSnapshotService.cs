@@ -42,7 +42,8 @@ public sealed record AutomationActivationStatusView(
 /// </summary>
 public sealed class AutomationActivationSnapshotService(
     GitHubConnectionsPersistenceStore persistence,
-    IProjectRoleAssignmentStore roleAssignments)
+    IProjectRoleAssignmentStore roleAssignments,
+    EffectiveModelProviderResolver modelProviderResolver)
 {
     public async Task<(AutomationActivationOutcome Outcome, FencedAutomationActivation? Activation)> ActivateAsync(
         CallerContext caller,
@@ -58,7 +59,8 @@ public sealed class AutomationActivationSnapshotService(
                 : AutomationActivationOutcome.ProjectOwnerRequired, null);
 
         var created = await persistence.TryCreateAutomationActivationSnapshotAsync(
-            projectId.ToString(), caller.EntraObjectId, GitHubAuditActorKind.HumanEntraSubject, ct).ConfigureAwait(false);
+            projectId.ToString(), caller.EntraObjectId, GitHubAuditActorKind.HumanEntraSubject,
+            token => modelProviderResolver.ResolveAsync(projectId, token), ct).ConfigureAwait(false);
         return (ToOutcome(created.Result), created.Activation is null ? null : new(
             created.Activation.Id,
             created.Activation.ProjectId,
@@ -108,10 +110,18 @@ public sealed class AutomationActivationSnapshotService(
             ActivatedAt: summary.ActivatedAt);
     }
 
-    public Task<FencedAutomationActivation?> TryFenceAsync(
+    public async Task<FencedAutomationActivation?> TryFenceAsync(
         string activationId,
-        CancellationToken ct = default) =>
-        persistence.TryFenceAutomationActivationAsync(activationId, ct);
+        CancellationToken ct = default)
+    {
+        var projectId = await persistence.GetAutomationActivationProjectIdAsync(activationId, ct)
+            .ConfigureAwait(false);
+        if (!ProjectId.TryParse(projectId, out var parsedProjectId))
+            return null;
+        var selectedProvider = await modelProviderResolver.ResolveAsync(parsedProjectId, ct).ConfigureAwait(false);
+        return await persistence.TryFenceAutomationActivationAsync(activationId, selectedProvider, ct)
+            .ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Shared human-Entra-subject + project-Owner authority check for both activation and

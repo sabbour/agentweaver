@@ -9,6 +9,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -363,10 +365,112 @@ public sealed class RepoAppUserAuthorizationServiceTests
             .Contain("__Host-agentweaver-repo-app-auth=").And.Contain("path=/").And.Contain("samesite=lax").And.Contain("httponly").And.Contain("secure");
     }
 
+    [Fact]
+    public async Task AuthorizationLifecycle_EmitsStructuredRedactedDiagnostics()
+    {
+        await using var database = await OpenDatabaseAsync();
+        var secrets = new InMemorySecretStore();
+        var logger = new StructuredLogger();
+        var service = CreateService(
+            database,
+            secrets,
+            new StubHttpClientFactory(TokenResponse(), UserResponse("sensitive-login")),
+            logger);
+        var subject = "sensitive-entra-object-id";
+
+        var begin = await service.BeginAsync(
+            Human(subject),
+            HumanPrincipal(),
+            "/projects?repository=sensitive-repository");
+        var state = Query(begin.AuthorizationUrl!, "state");
+        var callback = await service.CompleteAsync(
+            Human(subject),
+            HumanPrincipal(),
+            state,
+            "sensitive-oauth-code",
+            begin.CallbackCookie);
+        var poll = await service.PollAsync(Human(subject), HumanPrincipal(), begin.TransactionId!);
+        var connection = await service.GetConnectionAsync(Human(subject), HumanPrincipal());
+
+        callback.Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+        poll.Status.Should().Be("completed");
+        connection.Connected.Should().BeTrue();
+        logger.Entries.Select(x => x.EventId).Should().Contain(
+        [
+            RepoAppUserAuthorizationService.AuthorizationBeginEvent,
+            RepoAppUserAuthorizationService.AuthorizationCallbackEvent,
+            RepoAppUserAuthorizationService.CredentialPersistenceEvent,
+            RepoAppUserAuthorizationService.AuthorizationStatusEvent,
+        ]);
+        logger.Entries.Single(x => x.EventId == RepoAppUserAuthorizationService.AuthorizationBeginEvent)
+            .Properties.Should().Contain(new KeyValuePair<string, object?>("Phase", "begin"));
+        logger.Entries.Single(x => x.EventId == RepoAppUserAuthorizationService.CredentialPersistenceEvent)
+            .Properties.Should().Contain(new KeyValuePair<string, object?>("Outcome", "success"));
+        logger.Entries.All(entry =>
+            entry.Properties.Any(property => property.Key == "CorrelationId" &&
+                                             property.Value is string value &&
+                                             value.Length >= 32)).Should().BeTrue();
+        var lifecycleCorrelation = logger.Entries
+            .Single(entry => entry.EventId == RepoAppUserAuthorizationService.AuthorizationBeginEvent)
+            .Properties.Single(property => property.Key == "CorrelationId").Value;
+        logger.Entries
+            .Where(entry =>
+                entry.EventId == RepoAppUserAuthorizationService.AuthorizationCallbackEvent ||
+                entry.EventId == RepoAppUserAuthorizationService.CredentialPersistenceEvent ||
+                entry.Properties.Any(property => property.Key == "StatusPresent" && Equals(property.Value, true)))
+            .Should().OnlyContain(entry =>
+                Equals(
+                    entry.Properties.Single(property => property.Key == "CorrelationId").Value,
+                    lifecycleCorrelation));
+
+        var serializedLogs = string.Join(
+            "\n",
+            logger.Entries.Select(entry =>
+                $"{entry.Message} {string.Join(" ", entry.Properties.Select(property => $"{property.Key}={property.Value}"))}"));
+        serializedLogs.Should().NotContain(subject)
+            .And.NotContain(state)
+            .And.NotContain("sensitive-oauth-code")
+            .And.NotContain(begin.CallbackCookie)
+            .And.NotContain("sensitive-login")
+            .And.NotContain("sensitive-repository")
+            .And.NotContain("ghu_access")
+            .And.NotContain("refresh-original");
+    }
+
+    [Fact]
+    public async Task InvalidCallbackDiagnostics_DoNotLogUntrustedCallbackValues()
+    {
+        await using var database = await OpenDatabaseAsync();
+        var logger = new StructuredLogger();
+        var service = CreateService(
+            database,
+            new InMemorySecretStore(),
+            new StubHttpClientFactory(),
+            logger);
+
+        var result = await service.CompleteAsync(
+            Human("sensitive-entra-object-id"),
+            HumanPrincipal(),
+            "sensitive-invalid-state",
+            "sensitive-invalid-code",
+            "sensitive-invalid-cookie");
+
+        result.Outcome.Should().Be(RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid);
+        var serializedLogs = string.Join(
+            "\n",
+            logger.Entries.Select(entry =>
+                $"{entry.Message} {string.Join(" ", entry.Properties.Select(property => $"{property.Key}={property.Value}"))}"));
+        serializedLogs.Should().NotContain("sensitive-entra-object-id")
+            .And.NotContain("sensitive-invalid-state")
+            .And.NotContain("sensitive-invalid-code")
+            .And.NotContain("sensitive-invalid-cookie");
+    }
+
     private static RepoAppUserAuthorizationService CreateService(
         MemoryDbContext database,
         ISecretStore secrets,
-        IHttpClientFactory factory) =>
+        IHttpClientFactory factory,
+        ILogger<RepoAppUserAuthorizationService>? logger = null) =>
         new(
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -377,7 +481,8 @@ public sealed class RepoAppUserAuthorizationServiceTests
             }).Build(),
             new GitHubConnectionsPersistenceStore(database),
             secrets,
-            factory);
+            factory,
+            logger ?? NullLogger<RepoAppUserAuthorizationService>.Instance);
 
     private static CallerContext Human(string subject) => new() { User = subject, EntraObjectId = subject };
     private static ClaimsPrincipal HumanPrincipal() =>
@@ -473,4 +578,31 @@ public sealed class RepoAppUserAuthorizationServiceTests
             Inner.SetSecretAsync(key, value, etag, ct);
         public Task DeleteSecretAsync(string key, CancellationToken ct = default) => Inner.DeleteSecretAsync(key, ct);
     }
+
+    private sealed class StructuredLogger : ILogger<RepoAppUserAuthorizationService>
+    {
+        public List<StructuredLogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var properties = state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values.Where(value => value.Key != "{OriginalFormat}").ToList()
+                : [];
+            Entries.Add(new(logLevel, eventId, formatter(state, exception), properties));
+        }
+    }
+
+    private sealed record StructuredLogEntry(
+        LogLevel Level,
+        EventId EventId,
+        string Message,
+        IReadOnlyList<KeyValuePair<string, object?>> Properties);
 }

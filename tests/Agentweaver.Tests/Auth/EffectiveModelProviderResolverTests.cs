@@ -93,9 +93,33 @@ public sealed class EffectiveModelProviderResolverTests
 
         var result = await resolver.ResolveAsync(projectId, CancellationToken.None);
 
-        result.Should().BeOfType<EffectiveModelProviderResult.Unavailable>();
+        result.Should().Be(new EffectiveModelProviderResult.Unavailable(
+            EffectiveModelProviderUnavailableReason.ProjectBindingRequiresReauthorization,
+            "The project's active GitHub Copilot binding credential is unavailable. Reconnect the project's GitHub Copilot App."));
         secrets.ReadCount(ProjectCredentialReference).Should().Be(1);
         secrets.ReadCount(PlatformCredentialReference).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Redeemable_project_binding_wins_over_active_byok()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = await SeedProjectBindingAsync(db);
+        var secrets = new CountingSecretStore();
+        await SetCredentialAsync(secrets, ProjectCredentialReference, githubLogin: "project-user");
+        var byok = new ByokProviderConfigurationService(secrets);
+        var provider = await byok.AddAsync(new ByokProviderConfiguration(
+            string.Empty, "Deployment provider", "openai", "https://api.example.com/v1", "model", "key"),
+            CancellationToken.None);
+        await byok.SetActiveAsync(provider.Id, CancellationToken.None);
+        var resolver = new EffectiveModelProviderResolver(
+            new GitHubConnectionsPersistenceStore(db), byok, secrets);
+
+        var result = await resolver.ResolveAsync(projectId, CancellationToken.None);
+
+        result.Should().Be(new EffectiveModelProviderResult.ProjectGitHubCopilot(
+            ProjectBindingId, "project-user"));
     }
 
     [Fact]

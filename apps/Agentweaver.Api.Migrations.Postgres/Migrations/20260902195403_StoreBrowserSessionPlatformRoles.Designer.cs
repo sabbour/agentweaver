@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Api.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260902195403_StoreBrowserSessionPlatformRoles")]
+    partial class StoreBrowserSessionPlatformRoles
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -268,7 +271,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("copilot_binding_id");
 
-                    b.Property<long?>("InstallationId")
+                    b.Property<long>("InstallationId")
                         .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
@@ -289,7 +292,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("repository_grant_digest");
 
-                    b.Property<long?>("RepositoryId")
+                    b.Property<long>("RepositoryId")
                         .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
@@ -392,21 +395,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsUnique();
 
                     b.ToTable("automation_invocations", (string)null);
-                });
-
-            modelBuilder.Entity("Agentweaver.Api.Memory.AutomationProjectGuardRecord", b =>
-                {
-                    b.Property<string>("ProjectId")
-                        .HasColumnType("text")
-                        .HasColumnName("project_id");
-
-                    b.Property<bool>("RepositoryAttached")
-                        .HasColumnType("boolean")
-                        .HasColumnName("repository_attached");
-
-                    b.HasKey("ProjectId");
-
-                    b.ToTable("automation_project_guards", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.BacklogTaskDependencyRecord", b =>
@@ -2739,6 +2727,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .WithMany()
                         .HasForeignKey("InstallationId", "RepositoryId")
                         .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
                         .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
                 });
 

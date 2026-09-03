@@ -54,6 +54,84 @@ type SectionId = 'general' | 'access' | 'repository' | 'unattended' | 'sandbox' 
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
 
+function modelProviderReadiness(readiness: UnattendedReadiness) {
+  if (readiness.model_provider) return readiness.model_provider;
+  const blocked = readiness.reason_code === 'model_provider_connection_required'
+    || readiness.reason_code === 'copilot_binding_required'
+    || readiness.reason_code === 'copilot_app_not_configured'
+    || readiness.reason_code === 'copilot_app_repository_permissions_detected'
+    || readiness.reason_code === 'copilot_app_registration_unavailable'
+    || readiness.reason_code === 'project_model_provider_reconnect_required';
+  return {
+    status: blocked ? 'not_ready' as const : 'ready' as const,
+    source: 'none' as const,
+    reason_code: readiness.reason_code === 'project_model_provider_reconnect_required'
+      ? 'project_model_provider_reconnect_required' as const
+      : blocked
+        ? 'model_provider_connection_required' as const
+        : 'ready' as const,
+  };
+}
+
+function repositoryReadiness(
+  readiness: UnattendedReadiness,
+  repositoryRequired: boolean,
+): NonNullable<UnattendedReadiness['repository']> {
+  if (readiness.repository) return readiness.repository;
+  if (!repositoryRequired) {
+    return {
+      required: false,
+      status: 'not_required',
+      reason_code: 'not_required',
+      repo_app_installation_connected: readiness.repo_app_installation_connected,
+    };
+  }
+  if (!readiness.repo_app_installation_connected) {
+    return {
+      required: true,
+      status: 'not_ready',
+      reason_code: 'repo_app_installation_required',
+      repo_app_installation_connected: false,
+    };
+  }
+  if (readiness.reason_code === 'repo_app_installation_required'
+    || readiness.reason_code === 'repo_app_repository_grant_required') {
+    return {
+      required: true,
+      status: 'not_ready',
+      reason_code: readiness.reason_code,
+      repo_app_installation_connected: readiness.repo_app_installation_connected,
+    };
+  }
+  return {
+    required: true,
+    status: 'ready',
+    reason_code: 'ready',
+    repo_app_installation_connected: readiness.repo_app_installation_connected,
+  };
+}
+
+function modelProviderReadinessMessage(reasonCode: string) {
+  if (reasonCode === 'project_model_provider_reconnect_required') {
+    return 'Reconnect the project GitHub Copilot authorization used for unattended AI work.';
+  }
+  if (reasonCode === 'model_provider_connection_required') {
+    return 'Connect a model provider before background automation can run.';
+  }
+  return 'The model provider is ready for background automation.';
+}
+
+function repositoryReadinessMessage(reasonCode: string) {
+  if (reasonCode === 'not_required') return 'This project does not require repository access.';
+  if (reasonCode === 'repo_app_installation_required') {
+    return 'Install the GitHub Repo App to grant background repository access for this project.';
+  }
+  if (reasonCode === 'repo_app_repository_grant_required') {
+    return 'Update the GitHub Repo App installation to grant access to this repository.';
+  }
+  return 'Repository access is ready for background automation.';
+}
+
 interface GenerationModelState {
   blueprint_generation_model: string;
   workflow_generation_model: string;
@@ -385,14 +463,11 @@ export function ProjectSettingsPage() {
   const formatError = (err: unknown): string => formatApiErrorMessage(err);
 
   useEffect(() => {
-    if (repoAppAuthorizationResult !== 'success') return;
+    if (!repoAppAuthorizationResult) return;
     queueMicrotask(() => {
       setConnectRepoOpen(true);
-      const next = new URLSearchParams(searchParams);
-      next.delete('repo_app_auth');
-      setSearchParams(next, { replace: true });
     });
-  }, [repoAppAuthorizationResult, searchParams, setSearchParams]);
+  }, [repoAppAuthorizationResult]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -1149,12 +1224,16 @@ export function ProjectSettingsPage() {
                   )}
                   <TitleText>GitHub Copilot account</TitleText>
                   <Body as="p" tone="muted">
-                    This account supplies the project model provider. The Repo App controls repository access.
+                    Authorize GitHub Copilot uses GitHub user OAuth to create a durable project binding for unattended AI work.
+                    It does not install a GitHub App or grant repository access.
                   </Body>
                   <ProjectModelProviderSettings
                     projectId={projectId}
                     showConnectionStatus
                     suppressProjectOverrideWhenPlatformDefault
+                    repairRequired={unattendedReadiness
+                      ? modelProviderReadiness(unattendedReadiness).reason_code === 'project_model_provider_reconnect_required'
+                      : false}
                   />
                   <Divider />
                   <TitleText>Background requirements</TitleText>
@@ -1166,17 +1245,43 @@ export function ProjectSettingsPage() {
                   {unattendedLoading && <Spinner label="Checking automation readiness" size="extra-tiny" />}
                   {unattendedReadiness && (
                     <>
-                      <MetricRow items={[
-                        { label: 'Status', value: unattendedReadiness.status === 'ready' ? 'Ready' : 'Not ready' },
-                        { label: 'Reason code', value: unattendedReadiness.reason_code },
-                      ]} />
-                      <MessageBar intent={unattendedReadiness.status === 'ready' ? 'success' : 'warning'}>
-                        <MessageBarBody>{unattendedReadiness.message}</MessageBarBody>
-                      </MessageBar>
+                      {(() => {
+                        const model = modelProviderReadiness(unattendedReadiness);
+                        const repository = repositoryReadiness(unattendedReadiness, Boolean(project.source_repository));
+                        return (
+                          <>
+                            <TitleText>Model provider readiness</TitleText>
+                            <MetricRow items={[
+                              { label: 'Status', value: model.status === 'ready' ? 'Ready' : 'Not ready' },
+                              { label: 'Reason code', value: model.reason_code },
+                            ]} />
+                            <MessageBar intent={model.status === 'ready' ? 'success' : 'warning'}>
+                              <MessageBarBody>{modelProviderReadinessMessage(model.reason_code)}</MessageBarBody>
+                            </MessageBar>
+                            <TitleText>Repository readiness</TitleText>
+                            <MetricRow items={[
+                              {
+                                label: 'Status',
+                                value: repository.status === 'ready'
+                                  ? 'Ready'
+                                  : repository.status === 'not_required'
+                                    ? 'Not required'
+                                    : 'Not ready',
+                              },
+                              { label: 'Reason code', value: repository.reason_code },
+                            ]} />
+                            <MessageBar intent={repository.status === 'ready' ? 'success' : 'warning'}>
+                              <MessageBarBody>{repositoryReadinessMessage(repository.reason_code)}</MessageBarBody>
+                            </MessageBar>
+                          </>
+                        );
+                      })()}
                     </>
                   )}
                   <div className={styles.formActions}>
-                    {unattendedReadiness?.reason_code === 'repo_app_installation_required' && projectId && (
+                    {unattendedReadiness
+                      && repositoryReadiness(unattendedReadiness, Boolean(project.source_repository)).reason_code === 'repo_app_installation_required'
+                      && projectId && (
                       <Button
                         appearance="primary"
                         disabled={installingRepoApp}
@@ -1235,10 +1340,22 @@ export function ProjectSettingsPage() {
                   projectId={projectId}
                   projectName={project.name}
                   open={connectRepoOpen}
-                  onOpenChange={setConnectRepoOpen}
+                  onOpenChange={(open) => {
+                    setConnectRepoOpen(open);
+                    if (!open && repoAppAuthorizationResult) {
+                      const next = new URLSearchParams(searchParams);
+                      next.delete('repo_app_auth');
+                      setSearchParams(next, { replace: true });
+                    }
+                  }}
+                  authorizationResult={repoAppAuthorizationResult}
                   onConnected={(sourceRepository) => {
                     setProject((prev) => prev ? { ...prev, origin: 'github', source_repository: sourceRepository } : prev);
-                    selectSection('unattended');
+                    setConnectRepoOpen(false);
+                    const next = new URLSearchParams(searchParams);
+                    next.delete('repo_app_auth');
+                    next.set('section', 'unattended');
+                    setSearchParams(next, { replace: true });
                   }}
                 />
               </div>

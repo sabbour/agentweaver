@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
 using Agentweaver.Domain;
@@ -248,8 +249,18 @@ public sealed class UnifiedCopilotCallbackEndpointsTests
         var secretStore = services.GetRequiredService<ISecretStore>();
         var state = $"platform-state-{Guid.NewGuid():N}";
         var callbackCookie = $"platform-cookie-{Guid.NewGuid():N}";
+        var browserSessionId = $"platform-session-{Guid.NewGuid():N}";
         var verifierReference = $"platform-verifier-{Guid.NewGuid():N}";
         await secretStore.SetSecretAsync(verifierReference, "platform-verifier");
+        var db = services.GetRequiredService<MemoryDbContext>();
+        db.BrowserEntraSessions.Add(new BrowserEntraSession
+        {
+            Id = browserSessionId,
+            EntraObjectId = adminObjectId,
+            PlatformRoles = PlatformRoles.PlatformAdmin,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+        });
+        await db.SaveChangesAsync();
         await persistence.AddAuthorizationAsync(new GitHubAuthorizationRecord
         {
             State = state,
@@ -262,10 +273,12 @@ public sealed class UnifiedCopilotCallbackEndpointsTests
             ReturnRouteKey = "platform-settings",
             PkceVerifierProtected = verifierReference,
             CallbackCookieHash = HashCookie(callbackCookie),
+            BrowserSessionId = browserSessionId,
             Status = GitHubAuthorizationStatus.Pending,
             CreatedAt = DateTimeOffset.UtcNow,
         });
-        return new(state, CookieHeader(PlatformDefaultCopilotBindingService.SetCallbackCookie, callbackCookie));
+        var callbackCookieHeader = CookieHeader(PlatformDefaultCopilotBindingService.SetCallbackCookie, callbackCookie);
+        return new(state, $"{callbackCookieHeader}; {BrowserEntraSessionService.CookieName}={browserSessionId}");
     }
 
     private static string HashCookie(string value) =>

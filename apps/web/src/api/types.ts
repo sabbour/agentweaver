@@ -580,6 +580,17 @@ export interface UnattendedReadiness {
   reason_code: string;
   message: string;
   repo_app_installation_connected: boolean;
+  model_provider?: {
+    status: 'ready' | 'not_ready';
+    source: 'project' | 'platform_default' | 'byok' | 'none';
+    reason_code: 'ready' | 'model_provider_connection_required' | 'project_model_provider_reconnect_required';
+  };
+  repository?: {
+    required: boolean;
+    status: 'ready' | 'not_ready' | 'not_required';
+    reason_code: 'ready' | 'not_required' | 'repo_app_installation_required' | 'repo_app_repository_grant_required';
+    repo_app_installation_connected: boolean;
+  };
 }
 
 /**

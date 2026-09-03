@@ -169,8 +169,8 @@ public sealed class AutomationActivationRecord
 {
     public string Id { get; set; } = "";
     public string ProjectId { get; set; } = "";
-    public long InstallationId { get; set; }
-    public long RepositoryId { get; set; }
+    public long? InstallationId { get; set; }
+    public long? RepositoryId { get; set; }
     /// <summary>Non-reversible digest of the exact provider-owned repository grant.</summary>
     public string? RepositoryGrantDigest { get; set; }
     /// <summary>Opaque identity of the exact project-scoped Copilot binding.</summary>
@@ -189,6 +189,16 @@ public sealed class AutomationActivationRecord
     public AutomationActivationStatus Status { get; set; }
     public DateTimeOffset ActivatedAt { get; set; }
     public DateTimeOffset? InvalidatedAt { get; set; }
+}
+
+/// <summary>
+/// Durable per-project serialization row shared by repository attachment and automation activation.
+/// Once attached, the repository flag is monotonic so stale blank-origin reads fail closed.
+/// </summary>
+public sealed class AutomationProjectGuardRecord
+{
+    public string ProjectId { get; set; } = "";
+    public bool RepositoryAttached { get; set; }
 }
 
 public sealed class AutomationInvocationRecord

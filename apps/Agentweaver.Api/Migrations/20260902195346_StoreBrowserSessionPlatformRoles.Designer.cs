@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Agentweaver.Api.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260902195346_StoreBrowserSessionPlatformRoles")]
+    partial class StoreBrowserSessionPlatformRoles
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.7");
@@ -259,7 +262,7 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("copilot_binding_id");
 
-                    b.Property<long?>("InstallationId")
+                    b.Property<long>("InstallationId")
                         .HasColumnType("INTEGER")
                         .HasColumnName("installation_id");
 
@@ -280,7 +283,7 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("repository_grant_digest");
 
-                    b.Property<long?>("RepositoryId")
+                    b.Property<long>("RepositoryId")
                         .HasColumnType("INTEGER")
                         .HasColumnName("repository_id");
 
@@ -383,21 +386,6 @@ namespace Agentweaver.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("automation_invocations", (string)null);
-                });
-
-            modelBuilder.Entity("Agentweaver.Api.Memory.AutomationProjectGuardRecord", b =>
-                {
-                    b.Property<string>("ProjectId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("project_id");
-
-                    b.Property<bool>("RepositoryAttached")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("repository_attached");
-
-                    b.HasKey("ProjectId");
-
-                    b.ToTable("automation_project_guards", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.Decision", b =>
@@ -1829,6 +1817,7 @@ namespace Agentweaver.Api.Migrations
                         .WithMany()
                         .HasForeignKey("InstallationId", "RepositoryId")
                         .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
                         .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
                 });
 

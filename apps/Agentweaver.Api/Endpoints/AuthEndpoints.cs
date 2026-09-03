@@ -73,9 +73,10 @@ public static class AuthEndpoints
             GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
+            ILogger<RepoAppUserAuthorizationService> logger,
             CancellationToken ct) =>
         {
-            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
+            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var result = await service.BeginAsync(
                 ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
             if (result.Outcome != RepoAppAuthorizationOutcome.Success)
@@ -97,9 +98,10 @@ public static class AuthEndpoints
             GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
+            ILogger<RepoAppUserAuthorizationService> logger,
             CancellationToken ct) =>
         {
-            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
+            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var result = await service.BeginMcpHandoffAsync(
                 ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
             return result.Outcome == RepoAppAuthorizationOutcome.Success
@@ -118,9 +120,10 @@ public static class AuthEndpoints
             GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
+            ILogger<RepoAppUserAuthorizationService> logger,
             CancellationToken ct) =>
         {
-            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
+            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var result = await service.GetConnectionAsync(
                 ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
             return result.Outcome == RepoAppAuthorizationOutcome.Success
@@ -140,13 +143,14 @@ public static class AuthEndpoints
             GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
+            ILogger<RepoAppUserAuthorizationService> logger,
             CancellationToken ct) =>
         {
             var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
             if (browserSession is null)
                 return Results.Unauthorized();
 
-            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
+            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var handoff = await service.TakeMcpBrowserHandoffAsync(
                 transactionId, browserSession.Id, browserSession.EntraObjectId, ct).ConfigureAwait(false);
             if (handoff is null)
@@ -166,9 +170,10 @@ public static class AuthEndpoints
             GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
+            ILogger<RepoAppUserAuthorizationService> logger,
             CancellationToken ct) =>
         {
-            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
+            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var callbackCookie = RepoAppUserAuthorizationService.ReadCallbackCookie(httpContext);
             RepoAppUserAuthorizationService.ClearCallbackCookie(httpContext);
             var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
@@ -185,9 +190,10 @@ public static class AuthEndpoints
             GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
+            ILogger<RepoAppUserAuthorizationService> logger,
             CancellationToken ct) =>
         {
-            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
+            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var result = await service.PollAsync(
                 ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, transactionId, ct).ConfigureAwait(false);
             return result.Outcome == RepoAppAuthorizationOutcome.Success
@@ -201,9 +207,10 @@ public static class AuthEndpoints
             GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
+            ILogger<RepoAppUserAuthorizationService> logger,
             CancellationToken ct) =>
         {
-            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
+            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var outcome = await service.RefreshAsync(ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
             return outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.NoContent()
@@ -216,9 +223,10 @@ public static class AuthEndpoints
             GitHubConnectionsPersistenceStore persistence,
             ISecretStore secretStore,
             IHttpClientFactory httpClientFactory,
+            ILogger<RepoAppUserAuthorizationService> logger,
             CancellationToken ct) =>
         {
-            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
+            var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var outcome = await service.RevokeAsync(ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
             return outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.NoContent()

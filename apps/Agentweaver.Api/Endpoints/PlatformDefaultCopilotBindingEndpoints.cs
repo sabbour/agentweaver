@@ -14,14 +14,16 @@ public static class PlatformDefaultCopilotBindingEndpoints
             ISecretStore secretStore,
             IGitHubConnectionsCredentialVault credentialVault,
             IHttpClientFactory httpClientFactory,
+            BrowserEntraSessionService browserSessions,
             CopilotAppRegistrationService registration,
             ILogger<PlatformDefaultCopilotBindingService> logger,
             CancellationToken ct) =>
         {
             var service = new PlatformDefaultCopilotBindingService(
                 configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, logger);
+            var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
             var result = await service.BeginAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, browserSession?.Id, ct).ConfigureAwait(false);
             if (result.Outcome != PlatformDefaultCopilotBindingOutcome.Success)
                 return CopilotBindingFailure(result.Outcome);
 

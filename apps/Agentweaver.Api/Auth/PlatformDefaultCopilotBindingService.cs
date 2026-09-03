@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
 
@@ -58,12 +59,15 @@ internal sealed class PlatformDefaultCopilotBindingService(
     public async Task<PlatformDefaultCopilotBindingBeginResult> BeginAsync(
         CallerContext caller,
         ClaimsPrincipal principal,
+        string? browserSessionId = null,
         CancellationToken ct = default)
     {
         if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
             return new(PlatformDefaultCopilotBindingOutcome.HumanEntraSubjectRequired, null, null, null);
         if (!IsPlatformAdmin(caller))
             return new(PlatformDefaultCopilotBindingOutcome.PlatformAdminRequired, null, null, null);
+        if (string.IsNullOrWhiteSpace(browserSessionId))
+            return new(PlatformDefaultCopilotBindingOutcome.HumanEntraSubjectRequired, null, null, null);
         if (!IsConfigurationValid() ||
             await registration.ValidateAsync(ct).ConfigureAwait(false) != CopilotAppRegistrationState.Ready)
             return new(PlatformDefaultCopilotBindingOutcome.GitHubBindingUnavailable, null, null, null);
@@ -90,6 +94,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
                 ReturnRouteKey = "platform-settings",
                 PkceVerifierProtected = verifierReference,
                 CallbackCookieHash = HashCookie(cookie),
+                BrowserSessionId = browserSessionId,
                 Status = GitHubAuthorizationStatus.Pending,
                 CreatedAt = now,
             }, ct).ConfigureAwait(false);
@@ -107,8 +112,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
     }
 
     public async Task<PlatformDefaultCopilotBindingOutcome> CompleteBrowserCallbackAsync(
-        string? browserSessionId,
-        string? browserEntraObjectId,
+        BrowserEntraSession? browserSession,
         string? state,
         string? code,
         string? callbackCookie,
@@ -117,13 +121,16 @@ internal sealed class PlatformDefaultCopilotBindingService(
         if (string.IsNullOrWhiteSpace(state))
             return PlatformDefaultCopilotBindingOutcome.AuthorizationTransactionInvalid;
         var transaction = await persistence.GetPlatformDefaultCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
+        if (browserSession is null)
+            return PlatformDefaultCopilotBindingOutcome.HumanEntraSubjectRequired;
         if (transaction is null ||
-            (transaction.BrowserSessionId is not null &&
-             (!string.Equals(transaction.BrowserSessionId, browserSessionId, StringComparison.Ordinal) ||
-              !string.Equals(transaction.EntraObjectId, browserEntraObjectId, StringComparison.Ordinal))) ||
+            !string.Equals(transaction.EntraObjectId, browserSession.EntraObjectId, StringComparison.Ordinal) ||
+            !string.Equals(transaction.BrowserSessionId, browserSession.Id, StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(callbackCookie) ||
             !FixedTimeCookieHashEquals(transaction.CallbackCookieHash, callbackCookie))
             return PlatformDefaultCopilotBindingOutcome.AuthorizationTransactionInvalid;
+        if (!HasPlatformAdminRole(browserSession))
+            return PlatformDefaultCopilotBindingOutcome.PlatformAdminRequired;
         if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() > transaction.ExpiresAtUnixMilliseconds)
         {
             await WriteTombstoneAsync(transaction.PkceVerifierProtected, CancellationToken.None).ConfigureAwait(false);
@@ -549,6 +556,10 @@ internal sealed class PlatformDefaultCopilotBindingService(
 
     private static bool IsPlatformAdmin(CallerContext caller) =>
         caller.PlatformRoles.Contains(PlatformRoles.PlatformAdmin, StringComparer.Ordinal);
+
+    private static bool HasPlatformAdminRole(BrowserEntraSession session) =>
+        session.PlatformRoles.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Contains(PlatformRoles.PlatformAdmin, StringComparer.Ordinal);
 
     private sealed record CopilotCredential(
         string? Status,
