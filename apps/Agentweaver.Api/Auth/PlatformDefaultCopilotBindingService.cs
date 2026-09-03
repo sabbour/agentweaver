@@ -55,6 +55,8 @@ internal sealed class PlatformDefaultCopilotBindingService(
     private readonly string? _clientSecret = configuration["Auth:CopilotApp:ClientSecret"];
     private readonly string? _configuredCallbackUrl = configuration["Auth:CopilotApp:CallbackUrl"];
     private readonly string _scopes = configuration["Auth:CopilotApp:Scopes"] ?? "read:user";
+    private readonly CopilotCredentialRefreshService _credentialRefresh =
+        new(configuration, secretStore, httpClientFactory, logger);
 
     public async Task<PlatformDefaultCopilotBindingBeginResult> BeginAsync(
         CallerContext caller,
@@ -192,6 +194,20 @@ internal sealed class PlatformDefaultCopilotBindingService(
         return PlatformDefaultCopilotBindingOutcome.Success;
     }
 
+    /// <summary>
+    /// Redeems the stored refresh token for the active platform-default binding when its access token
+    /// has expired or is inside the redeem-ahead window. Only a rejected refresh token marks the
+    /// binding as needing re-authentication.
+    /// </summary>
+    internal async Task<CopilotCredentialRefreshOutcome> RefreshCredentialAsync(CancellationToken ct = default)
+    {
+        var binding = await persistence.GetActivePlatformDefaultCopilotBindingAsync(ct).ConfigureAwait(false);
+        return binding is null
+            ? CopilotCredentialRefreshOutcome.NotNeeded
+            : await _credentialRefresh.EnsureFreshAsync(binding.CredentialReference, DateTimeOffset.UtcNow, ct)
+                .ConfigureAwait(false);
+    }
+
     public Task<string> GetCallbackRedirectAsync(
         PlatformDefaultCopilotBindingOutcome outcome,
         CancellationToken ct = default)
@@ -223,6 +239,8 @@ internal sealed class PlatformDefaultCopilotBindingService(
         if (binding is null)
             return new(PlatformDefaultCopilotBindingOutcome.Success, false, null);
 
+        await _credentialRefresh.EnsureFreshAsync(binding.CredentialReference, DateTimeOffset.UtcNow, ct)
+            .ConfigureAwait(false);
         var secret = await secretStore.GetSecretAsync(binding.CredentialReference, ct).ConfigureAwait(false);
         var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
         if (credential is null ||
@@ -383,7 +401,14 @@ internal sealed class PlatformDefaultCopilotBindingService(
                 return null;
 
             var login = await GetGitHubLoginAsync(provider.AccessToken, timeout.Token).ConfigureAwait(false);
-            return login is null ? null : new("signed-in", provider.AccessToken, provider.RefreshToken, login);
+            return login is null
+                ? null
+                : new(
+                    "signed-in",
+                    provider.AccessToken,
+                    provider.RefreshToken,
+                    login,
+                    provider.ExpiresIn is > 0 ? DateTimeOffset.UtcNow.AddSeconds(provider.ExpiresIn.Value) : null);
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException ||
                                    (ex is OperationCanceledException && !ct.IsCancellationRequested))
@@ -565,12 +590,14 @@ internal sealed class PlatformDefaultCopilotBindingService(
         string? Status,
         string? AccessToken,
         string? RefreshToken,
-        string? GitHubLogin = null);
+        string? GitHubLogin = null,
+        DateTimeOffset? ExpiresAt = null);
 
     private sealed class ProviderTokenResponse
     {
         [System.Text.Json.Serialization.JsonPropertyName("access_token")] public string? AccessToken { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("refresh_token")] public string? RefreshToken { get; init; }
+        [System.Text.Json.Serialization.JsonPropertyName("expires_in")] public long? ExpiresIn { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("error")] public string? Error { get; init; }
     }
 

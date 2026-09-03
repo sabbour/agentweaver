@@ -72,6 +72,8 @@ public sealed class ProjectCopilotBindingService(
     private readonly string? _clientSecret = configuration["Auth:CopilotApp:ClientSecret"];
     private readonly string? _callbackUrl = configuration["Auth:CopilotApp:CallbackUrl"];
     private readonly string _scopes = configuration["Auth:CopilotApp:Scopes"] ?? "read:user";
+    private readonly CopilotCredentialRefreshService _credentialRefresh =
+        new(configuration, secretStore, httpClientFactory, logger);
 
     public async Task<McpCopilotBrowserHandoffResult> BeginMcpHandoffAsync(
         CallerContext caller,
@@ -283,6 +285,8 @@ public sealed class ProjectCopilotBindingService(
         if (binding is null)
             return new(CopilotBindingOutcome.Success, false, null);
 
+        await _credentialRefresh.EnsureFreshAsync(binding.CredentialReference, DateTimeOffset.UtcNow, ct)
+            .ConfigureAwait(false);
         var secret = await secretStore.GetSecretAsync(binding.CredentialReference, ct).ConfigureAwait(false);
         var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
         if (credential is null || !string.Equals(credential.Status, "signed-in", StringComparison.Ordinal))
@@ -299,6 +303,22 @@ public sealed class ProjectCopilotBindingService(
                 ? await GetGitHubLoginAsync(credential.AccessToken, ct).ConfigureAwait(false)
                 : null;
         return new(CopilotBindingOutcome.Success, true, login);
+    }
+
+    /// <summary>
+    /// Redeems the stored refresh token for a project's active Copilot binding when its access token
+    /// has expired or is inside the redeem-ahead window. Only a rejected refresh token marks the
+    /// binding as needing re-authentication.
+    /// </summary>
+    internal async Task<CopilotCredentialRefreshOutcome> RefreshCredentialAsync(
+        ProjectId projectId,
+        CancellationToken ct = default)
+    {
+        var binding = await persistence.GetActiveCopilotBindingAsync(projectId.ToString(), ct).ConfigureAwait(false);
+        return binding is null
+            ? CopilotCredentialRefreshOutcome.NotNeeded
+            : await _credentialRefresh.EnsureFreshAsync(binding.CredentialReference, DateTimeOffset.UtcNow, ct)
+                .ConfigureAwait(false);
     }
 
     public async Task<CopilotBindingOutcome> DisconnectAsync(
@@ -571,7 +591,14 @@ public sealed class ProjectCopilotBindingService(
                 return null;
 
             var login = await GetGitHubLoginAsync(provider.AccessToken, timeout.Token).ConfigureAwait(false);
-            return login is null ? null : new("signed-in", provider.AccessToken, provider.RefreshToken, login);
+            return login is null
+                ? null
+                : new(
+                    "signed-in",
+                    provider.AccessToken,
+                    provider.RefreshToken,
+                    login,
+                    provider.ExpiresIn is > 0 ? DateTimeOffset.UtcNow.AddSeconds(provider.ExpiresIn.Value) : null);
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException ||
                                    (ex is OperationCanceledException && !ct.IsCancellationRequested))
@@ -704,11 +731,13 @@ public sealed class ProjectCopilotBindingService(
         string? Status,
         string? AccessToken,
         string? RefreshToken,
-        string? GitHubLogin = null);
+        string? GitHubLogin = null,
+        DateTimeOffset? ExpiresAt = null);
     private sealed class ProviderTokenResponse
     {
         [System.Text.Json.Serialization.JsonPropertyName("access_token")] public string? AccessToken { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("refresh_token")] public string? RefreshToken { get; init; }
+        [System.Text.Json.Serialization.JsonPropertyName("expires_in")] public long? ExpiresIn { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("error")] public string? Error { get; init; }
     }
     private sealed class ProviderUserResponse

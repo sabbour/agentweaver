@@ -15,7 +15,8 @@ public enum GitHubCapabilityBrokerOutcome { Issued, CapabilityUnavailable }
 internal sealed class GitHubCapabilityBroker(
     GitHubConnectionsPersistenceStore persistence,
     IGitHubConnectionsCredentialVault vault,
-    RepoAppInstallationTokenService installationTokens)
+    RepoAppInstallationTokenService installationTokens,
+    CopilotCredentialRefreshService? copilotCredentialRefresh = null)
 {
     internal static readonly TimeSpan MaximumCapabilityLifetime = TimeSpan.FromMinutes(10);
     private static readonly JsonSerializerOptions CredentialJsonOptions = new(JsonSerializerDefaults.Web);
@@ -91,6 +92,7 @@ internal sealed class GitHubCapabilityBroker(
         if (fenced is null)
             return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
 
+        await EnsureCopilotCredentialFreshAsync(fenced.CredentialLocator, now, ct).ConfigureAwait(false);
         var secret = await vault.ReadCurrentAsync(fenced.CredentialLocator!, ct).ConfigureAwait(false);
         if (!secret.Found || !TryGetUsableCopilotCredential(secret.Value, now, out var credential))
         {
@@ -155,6 +157,7 @@ internal sealed class GitHubCapabilityBroker(
 
         try
         {
+            await EnsureCopilotCredentialFreshAsync(capability.CredentialLocator, now, ct).ConfigureAwait(false);
             var secret = await vault.ReadCurrentAsync(capability.CredentialLocator!, ct).ConfigureAwait(false);
             if (!secret.Found || !TryGetUsableCopilotCredential(secret.Value, now, out var credential))
                 return GitHubCapabilityBrokerOutcome.CapabilityUnavailable;
@@ -180,6 +183,20 @@ internal sealed class GitHubCapabilityBroker(
             await persistence.DeleteClaimedMarketplaceCopilotCapabilityAsync(
                 capability, CancellationToken.None).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Redeems the binding's stored refresh token before the credential is read when its access token
+    /// has expired or is about to. Without this an expired-but-refreshable binding surfaces as an
+    /// unavailable capability and pushes the operator back into a manual OAuth flow.
+    /// </summary>
+    private async Task EnsureCopilotCredentialFreshAsync(
+        GitHubConnectionsCredentialLocator? locator,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        if (copilotCredentialRefresh is not null && locator is not null)
+            await copilotCredentialRefresh.EnsureFreshAsync(locator.Key, now, ct).ConfigureAwait(false);
     }
 
     internal static bool IsOperationAllowed(
