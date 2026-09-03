@@ -5,6 +5,7 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Options;
@@ -17,13 +18,26 @@ namespace Agentweaver.Api.Assistant;
 /// </summary>
 public sealed class AssistantRunOptions
 {
-    /// <summary>Maximum number of concurrently-open operator runs a single user may hold. A new
-    /// start is rejected with 429 once the user is at this bound.</summary>
-    public int MaxConcurrentRunsPerUser { get; set; } = 3;
+    /// <summary>Maximum number of GENUINELY ACTIVE operator conversations a single user may hold at
+    /// once — counted from durable run status (<see cref="RunStatus.InProgress"/> operator runs), not
+    /// from any one API replica's in-memory cache. A new start is rejected with 429 once the user is
+    /// at this bound; merely rehydrating, reading, or listing an existing conversation never consumes
+    /// a slot.</summary>
+    public int MaxConcurrentRunsPerUser { get; set; } = 5;
 
     /// <summary>How long an operator run may sit without a new message before it is auto-closed
     /// (transitioned to Completed and its stream completed), releasing the concurrency slot.</summary>
     public TimeSpan IdleTimeout { get; set; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// How long a conversation's AgentHost pod is HELD after its last turn before being released.
+    /// Deliberately much shorter than <see cref="IdleTimeout"/>: holding the pod is what removes the
+    /// 15-20s per-turn cold start (claim bind + one-shot <c>/configure</c> + Copilot client startup),
+    /// but each AgentHost pod reserves real cluster capacity, so a conversation the human has walked
+    /// away from must give its pod back long before the conversation itself goes dormant. The next
+    /// message simply pays one cold start again.
+    /// </summary>
+    public TimeSpan PodIdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>How often the idle sweeper runs.</summary>
     public TimeSpan SweepInterval { get; set; } = TimeSpan.FromMinutes(1);
@@ -104,9 +118,9 @@ public interface IAssistantRunService
 ///
 /// It wires <see cref="IOperatorAssistantAgent"/> (the in-API Copilot loop sourcing its tools from the
 /// AgentweaverMCP server) to run one turn at a time using the caller's platform bearer token, threaded
-/// through per call — no token is cached or shared across users. An in-memory per-user concurrency
-/// bound and an idle-timeout sweep keep the number of live Copilot/MCP sessions bounded (v1: single
-/// instance; a distributed bound is a fast-follow if the API scales out).
+/// through per call — no token is cached or shared across users. A DURABLE, replica-independent
+/// per-user concurrency bound (derived from run status, so the API's replicas agree) and an idle
+/// sweep keep the number of live Copilot/MCP sessions and held AgentHost pods bounded.
 ///
 /// This is additive: it does not touch the existing <c>/api/console/turn</c> facade path.
 /// </summary>
@@ -116,6 +130,16 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     public const string OperatorAgentName = "Operator";
 
     private const int MaxHistoryMessages = 24;
+
+    /// <summary>How many of the caller's newest operator runs are read to evaluate the concurrency
+    /// bound. Generous enough that every genuinely-active conversation is seen in practice; because
+    /// the query is newest-first, a pathological overflow can only UNDER-count, which fails open (a
+    /// start is allowed) rather than falsely rejecting a legitimate one.</summary>
+    private const int ConcurrencyScanLimit = 50;
+
+    /// <summary>How many of those newest runs the duplicate-start guard considers (unchanged from
+    /// when it issued its own query).</summary>
+    private const int DuplicateScanLimit = 5;
 
     private readonly IRunStore _runStore;
     private readonly IRunEventStream _eventStream;
@@ -136,6 +160,10 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     private static readonly TimeSpan ApprovalHeartbeatInterval = TimeSpan.FromSeconds(10);
 
     private readonly ConcurrentDictionary<string, OperatorRunState> _runs = new(StringComparer.Ordinal);
+
+    /// <summary>Per-user count of starts that have passed the concurrency bound but whose durable run
+    /// row does not exist yet. Guarded by <see cref="_startLock"/>.</summary>
+    private readonly Dictionary<string, int> _pendingStarts = new(StringComparer.Ordinal);
     private readonly object _startLock = new();
     private readonly Timer _idleSweeper;
 
@@ -213,12 +241,16 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         // _runs cache) so a retry landing on a different API replica is still caught. Only matches a
         // run that is STILL InProgress — a genuinely-finished conversation with the same opening line
         // is not treated as a duplicate.
+        //
+        // This one query also feeds the concurrency bound below, so the caller's conversations are
+        // read from durable storage exactly once per start.
+        var recentRuns = await _runStore
+            .GetRunsBySubmittingUserAsync(caller.User, OperatorAgentName, ConcurrencyScanLimit, ct)
+            .ConfigureAwait(false);
+
         if (!string.IsNullOrWhiteSpace(firstMessage))
         {
-            var recent = await _runStore
-                .GetRunsBySubmittingUserAsync(caller.User, OperatorAgentName, limit: 5, ct)
-                .ConfigureAwait(false);
-            var duplicate = recent.FirstOrDefault(r =>
+            var duplicate = recentRuns.Take(DuplicateScanLimit).FirstOrDefault(r =>
                 r.Status == RunStatus.InProgress &&
                 now - r.StartedAt <= _options.DuplicateStartWindow &&
                 string.Equals(r.Task, firstMessage, StringComparison.Ordinal));
@@ -236,14 +268,29 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         var runId = RunId.New();
         var key = runId.ToString();
 
-        // Reserve the concurrency slot atomically before any IO so two parallel starts cannot both
-        // slip past the bound.
+        // Concurrency bound, counted from DURABLE run status rather than this replica's _runs map.
+        //
+        // The map conflates "resident in this process" with "actively running": RehydrateRunAsync
+        // inserts into it too, so merely opening or replying to an existing conversation used to
+        // occupy a slot for the next IdleTimeout — and with two API replicas and no session affinity
+        // the SAME conversation could occupy a slot on BOTH, so the two processes disagreed on the
+        // count and a user with a handful of open conversations was falsely told they had "too many
+        // active assistant conversations". Counting InProgress runs in the shared store fixes both:
+        // a dormant (Idle) or finished conversation frees its slot the moment it is parked, and one
+        // conversation is one row no matter how many replicas have it resident.
+        var durableActive = recentRuns.Count(r => r.Status == RunStatus.InProgress);
+
+        // In-flight starts have no durable row yet (InsertAsync happens below), so the store count
+        // alone would let concurrent starts on THIS replica all slip past the bound. Reserve under
+        // the same lock the original code used so that race stays closed within a process; across
+        // replicas the bound stays advisory, as any store-read-then-write check must be.
         lock (_startLock)
         {
-            var active = _runs.Values.Count(s => string.Equals(s.User, caller.User, StringComparison.Ordinal));
-            if (active >= _options.MaxConcurrentRunsPerUser)
+            _pendingStarts.TryGetValue(caller.User, out var pending);
+            if (durableActive + pending >= _options.MaxConcurrentRunsPerUser)
                 throw new AssistantConcurrencyLimitException(_options.MaxConcurrentRunsPerUser);
 
+            _pendingStarts[caller.User] = pending + 1;
             _runs[key] = new OperatorRunState(caller.User, projectId, modelId, now, seedHistory: resumeHistory);
         }
 
@@ -278,6 +325,12 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             _runs.TryRemove(key, out _);
             throw;
         }
+        finally
+        {
+            // The durable row now exists (or the start failed and freed its own slot), so the
+            // reservation must not keep counting against the user.
+            ReleasePendingStart(caller.User);
+        }
 
         await AppendAsync(key, EventTypes.RunStarted, new
         {
@@ -295,6 +348,20 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 .ConfigureAwait(false);
 
         return new StartAssistantRunResult(runId, RunStatus.InProgress, firstTurn);
+    }
+
+    /// <summary>Drops a start reservation taken under <see cref="_startLock"/>.</summary>
+    private void ReleasePendingStart(string user)
+    {
+        lock (_startLock)
+        {
+            if (!_pendingStarts.TryGetValue(user, out var pending))
+                return;
+            if (pending <= 1)
+                _pendingStarts.Remove(user);
+            else
+                _pendingStarts[user] = pending - 1;
+        }
     }
 
     /// <summary>
@@ -499,10 +566,20 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             OperatorAssistantResponse response;
             try
             {
+                // In agent-host mode the turn claims (or re-binds) this conversation's AgentHost pod
+                // and — unlike the original per-turn claim/release — leaves it HELD for the next
+                // message. Record that from the moment the turn starts, not once it succeeds, so a
+                // turn that dies without unwinding still leaves a pod this service knows to release.
+                if (_agentHostEnabled)
+                    state.MarkAgentHostPodHeld();
+
                 response = await _assistant.RunTurnAsync(request, sink, ct).ConfigureAwait(false);
             }
             catch (AgentProviderException ex)
             {
+                // A failed turn releases its AgentHost pod (RemoteOperatorAssistantAgent does it on
+                // its failure paths), so this conversation no longer holds one.
+                state.MarkAgentHostPodReleased();
                 await AppendAsync(runId, EventTypes.RunError, new
                 {
                     error = ex.ErrorCode,
@@ -595,15 +672,18 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
         var history = BuildHistoryFromEvents(events);
 
-        // Concurrency accounting: rehydration does NOT count against MaxConcurrentRunsPerUser. The
-        // limit exists to bound how many conversations a user can have OPEN AT ONCE (enforced in
-        // StartRunAsync when a brand-new run is created); it is not meant to make an existing
-        // conversation permanently unresumable just because the user has since started other
-        // conversations that now occupy their quota. Applying the same check here would let a run
-        // rehydrating from a cache-miss be blocked by its own resumption, and (unlike StartRunAsync)
-        // there is no "start a different one instead" escape hatch — the caller is asking for THIS
-        // conversation specifically. We still use the same _startLock used by StartRunAsync so a
-        // concurrent StartRunAsync's active-count snapshot and this insert cannot race each other.
+        // Concurrency accounting: rehydration does NOT count against MaxConcurrentRunsPerUser, and
+        // since the bound is now derived from DURABLE run status (StartRunAsync counts the caller's
+        // InProgress operator runs in the store) rather than from this dictionary, inserting here
+        // cannot consume a slot at all — being resident in one replica's cache is no longer mistaken
+        // for being actively running. The limit bounds how many conversations a user may have ACTIVE
+        // at once (enforced in StartRunAsync when a brand-new run is created); it is not meant to
+        // make an existing conversation unresumable just because the user has since started others.
+        // Applying the same check here would let a run rehydrating from a cache-miss be blocked by
+        // its own resumption, and (unlike StartRunAsync) there is no "start a different one instead"
+        // escape hatch — the caller is asking for THIS conversation specifically. We still use the
+        // same _startLock used by StartRunAsync so a concurrent StartRunAsync's reservation and this
+        // insert cannot race each other.
         lock (_startLock)
         {
             // Another turn/rehydration may have already inserted this run while we were doing the
@@ -658,13 +738,38 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         return messages;
     }
 
-    /// <summary>Closes runs that have been idle beyond the configured timeout. Exposed for tests so
-    /// the sweep can be driven deterministically without waiting on the timer.</summary>
+    /// <summary>Closes runs that have been idle beyond the configured timeout, and releases the
+    /// AgentHost pod of any conversation that has been quiet beyond the (much shorter)
+    /// <see cref="AssistantRunOptions.PodIdleTimeout"/>. Exposed for tests so the sweep can be driven
+    /// deterministically without waiting on the timer.</summary>
     internal void SweepIdleRuns(DateTimeOffset now)
     {
         foreach (var (key, state) in _runs.ToArray())
         {
-            if (now - state.LastActivityUtc < _options.IdleTimeout)
+            var quietFor = now - state.LastActivityUtc;
+
+            // Pod-idle release (independent of, and much earlier than, conversation dormancy): a
+            // conversation HOLDS its AgentHost pod between turns so the next message skips the
+            // ~15-20s claim/configure cold start, but a human who walked away must not keep that
+            // cluster capacity reserved for the full IdleTimeout. The conversation itself stays
+            // fully alive and resumable — the next message just pays one cold start again.
+            if (state.AgentHostPodHeld && quietFor >= _options.PodIdleTimeout)
+            {
+                if (_approvalGate.HasArmedApproval(key))
+                {
+                    // An armed approval means the pod is mid-turn, blocked on the operator's own
+                    // decision — releasing it would destroy the in-flight tool call.
+                    _logger.LogDebug(
+                        "Skipping AgentHost pod release for operator run {RunId}: an armed tool-approval is awaiting the operator.",
+                        key);
+                }
+                else if (state.TryMarkAgentHostPodReleasing())
+                {
+                    _ = ReleaseAgentHostPodAsync(key, "pod_idle_timeout");
+                }
+            }
+
+            if (quietFor < _options.IdleTimeout)
                 continue;
 
             // Never idle-close a run that is actively blocked on a human tool-approval decision. A
@@ -686,7 +791,43 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             if (!_runs.TryRemove(key, out _))
                 continue;
 
+            // Parking the conversation as dormant also gives its pod back, if the pod-idle sweep
+            // above has not already done so.
+            if (state.TryMarkAgentHostPodReleasing())
+                _ = ReleaseAgentHostPodAsync(key, "conversation_idle_timeout");
+
             _ = CloseIdleRunAsync(key);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort release of a held AgentHost pod. Resolved through the scope factory rather than
+    /// injected because <see cref="IAgentHostPodLifecycle"/> is only registered in-cluster (the same
+    /// optional-dependency convention <see cref="RemoteOperatorAssistantAgent"/> uses), so outside
+    /// Kubernetes — local dev and the test host — this is a no-op. Never throws: a failed release is
+    /// picked up by <c>AgentHostReaperService</c>, which reaps any claim whose run is no longer
+    /// active.
+    /// </summary>
+    private async Task ReleaseAgentHostPodAsync(string runId, string reason)
+    {
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var lifecycle = scope.ServiceProvider.GetService<IAgentHostPodLifecycle>();
+            if (lifecycle is null)
+                return;
+
+            await lifecycle.ReleaseAgentHostPodAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            _logger.LogInformation(
+                "Released the held AgentHost pod for operator run {RunId} ({Reason}); the conversation stays resumable.",
+                runId, reason);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to release the held AgentHost pod for operator run {RunId} ({Reason}); the AgentHost reaper will reclaim it.",
+                runId, reason);
         }
     }
 
@@ -773,6 +914,20 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         public string? ModelId { get; } = modelId;
         public SemaphoreSlim Turn { get; } = new(1, 1);
         public DateTimeOffset LastActivityUtc { get; private set; } = startedAt;
+
+        // 0 = no pod held, 1 = an AgentHost pod is held for this conversation between turns.
+        private int _podHeld;
+
+        /// <summary>Whether this conversation currently holds an AgentHost pod between turns.</summary>
+        public bool AgentHostPodHeld => Volatile.Read(ref _podHeld) == 1;
+
+        public void MarkAgentHostPodHeld() => Volatile.Write(ref _podHeld, 1);
+
+        public void MarkAgentHostPodReleased() => Volatile.Write(ref _podHeld, 0);
+
+        /// <summary>Claims the right to release the held pod, returning <c>true</c> for exactly one
+        /// caller so overlapping sweeps cannot issue duplicate releases.</summary>
+        public bool TryMarkAgentHostPodReleasing() => Interlocked.CompareExchange(ref _podHeld, 0, 1) == 1;
 
         public void Touch() => LastActivityUtc = DateTimeOffset.UtcNow;
 

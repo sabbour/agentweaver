@@ -207,6 +207,26 @@ public sealed class KubernetesSandboxExecutorClaimTests
         }
     }
 
+    private sealed class AlwaysConflictClaimHandler : DelegatingHandler
+    {
+        public int ClaimCreateRequests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (IsClaimPost(request))
+            {
+                ClaimCreateRequests++;
+                var response = ConflictResponse();
+                response.RequestMessage = request;
+                return Task.FromResult(response);
+            }
+
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+
     // The exact transient chain from issue #230: HttpRequestException → IOException → SocketException 104.
     private static Exception ConnectionReset() =>
         new HttpRequestException(
@@ -721,7 +741,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
-    public async Task LaunchAgentHostPod_operator_recreates_existing_claim_before_sending_current_token()
+    public async Task LaunchAgentHostPod_operator_recreates_existing_claim_when_no_turn_token_is_held()
     {
         const string runId = "run-claim-operator-refresh";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
@@ -754,12 +774,65 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 CallerBearerToken: "current-entra-token"));
 
         conflictFirst.ClaimCreateRequests.Should().Be(2,
-            "an existing one-shot-configured operator pod must be replaced before a refreshed bearer is delivered");
+            "a pre-existing claim this replica holds no turn token for is unreachable and un-reconfigurable, " +
+            "so it must be replaced rather than reused");
         fake.Requests.Should().Contain(request =>
             request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         doc.RootElement.GetProperty("callerBearerToken").GetString().Should().Be("current-entra-token");
         turnTokens.TryGetTurnToken(runId).Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_operator_reuses_held_claim_across_turns_without_reconfiguring()
+    {
+        // An operator conversation HOLDS its AgentHost pod between turns so the next message skips the
+        // claim/configure cold start that produced 15-20s of per-turn silence. When this replica still
+        // holds the pod's turn token the pod is ours and already configured, so a second turn must
+        // neither delete the claim nor replay the one-shot /configure — the current platform bearer
+        // rides on the per-turn AgentSetupParams instead.
+        const string runId = "run-claim-operator-held";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-3"}}}""");
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-3$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-3"},"status":{"podIP":"10.0.0.9"}}""");
+
+        var alwaysConflict = new AlwaysConflictClaimHandler();
+        var configureHandler = new RecordingConfigureHandler();
+        var turnTokens = new RecordingTurnTokenRegistry();
+        turnTokens.RegisterTurnToken(runId, "turn-token-from-the-previous-turn");
+        var podRegistry = new PodNameRegistry();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(alwaysConflict, fake),
+            Options(),
+            NullLogger<KubernetesSandboxExecutor>.Instance,
+            podRegistry: podRegistry,
+            turnTokenRegistry: turnTokens,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+
+        var endpoint = await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                Purpose: AgentHostPurpose.OperatorAssistant,
+                CallerBearerToken: "current-entra-token"));
+
+        endpoint.Should().Be("http://10.0.0.9:8088/a2a/agent");
+        alwaysConflict.ClaimCreateRequests.Should().Be(1,
+            "the held claim must be reused, not deleted and recreated");
+        fake.Requests.Should().NotContain(request =>
+            request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        configureHandler.Body.Should().BeNull(
+            "/configure is one-shot and must not be replayed against an already-configured held pod");
+        turnTokens.TryGetTurnToken(runId).Should().Be("turn-token-from-the-previous-turn",
+            "the held pod keeps the turn token the A2A call authenticates with");
     }
 
     [Fact]
