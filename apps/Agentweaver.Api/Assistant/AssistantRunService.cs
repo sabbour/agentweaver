@@ -250,7 +250,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         try
         {
             ProjectId? project = ProjectId.TryParse(projectId, out var pid) ? pid : null;
-            var modelSource = await ResolveAssistantModelSourceAsync(project, ct).ConfigureAwait(false);
+            var modelSource = await ResolveAssistantModelSourceAsync(ct).ConfigureAwait(false);
             var run = new Run
             {
                 Id = runId,
@@ -298,24 +298,84 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     }
 
     /// <summary>
-    /// Resolves the model source for a new Assistant run via the shared
-    /// <see cref="EffectiveModelProviderResolver"/> — for both project-context sessions (where a
-    /// project's own GitHub Copilot binding can override the platform default) and non-project
-    /// sessions (deployment BYOK, else the platform-default GitHub Copilot binding). This label only
-    /// drives bookkeeping and the agent-host capability gate below; a genuinely unavailable provider
-    /// is NOT fatal here — the in-API operator loop can still turn using the caller's own live bearer
-    /// token, exactly as before this resolver existed. <see cref="PrepareAgentHostCapabilityAsync"/>
-    /// remains the sole place that fails fast when agent-host mode actually needs a redeemable
-    /// capability and none is available.
+    /// Resolves the model source for an Assistant run via the shared
+    /// <see cref="EffectiveModelProviderResolver"/>, deliberately at PLATFORM scope
+    /// (<c>projectId: null</c>) — deployment BYOK first, else the platform-default GitHub Copilot
+    /// binding.
+    ///
+    /// <para>
+    /// Passing the session's <c>ProjectId</c> here would be wrong, and was the cause of a live bug:
+    /// per the resolver's documented precedence an active project Copilot binding ALWAYS beats
+    /// platform-level BYOK, so a lingering project binding silently pinned a session to Copilot even
+    /// after the deployment was switched to BYOK. Worse, that selection disagreed with the credential
+    /// CHECK for the same run, which is deliberately platform-scoped
+    /// (<see cref="PrepareAgentHostCapabilityAsync"/> — an Assistant session's <c>ProjectId</c> is
+    /// only incidental UI context, never repo-scoped work). Selection and validation must agree, and
+    /// platform scope is the one that matches what these sessions actually are; the incidental
+    /// <c>ProjectId</c> stays on the run purely as MCP/UI context.
+    /// </para>
+    ///
+    /// <para>
+    /// This label only drives bookkeeping and the agent-host capability gate; a genuinely unavailable
+    /// provider is NOT fatal here — the in-API operator loop can still turn using the caller's own
+    /// live bearer token, exactly as before this resolver existed.
+    /// <see cref="PrepareAgentHostCapabilityAsync"/> remains the sole place that fails fast when
+    /// agent-host mode actually needs a redeemable capability and none is available.
+    /// </para>
     /// </summary>
-    private async Task<ModelSource> ResolveAssistantModelSourceAsync(ProjectId? projectId, CancellationToken ct)
+    private async Task<ModelSource> ResolveAssistantModelSourceAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var modelProviderResolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
-        var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+        var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false);
         return effectiveProvider is EffectiveModelProviderResult.Byok
             ? ModelSource.Byok
             : ModelSource.GitHubCopilot;
+    }
+
+    /// <summary>
+    /// Re-resolves the effective model provider at the START OF EVERY TURN and repoints the persisted
+    /// run at it when it has changed since the previous turn.
+    ///
+    /// <para>
+    /// Without this the provider was pinned at session-creation time forever: <c>ModelSource</c> was
+    /// computed once in <see cref="StartRunAsync"/>, and neither <see cref="SendMessageAsync"/> nor
+    /// <see cref="RehydrateRunAsync"/> (which rebuilds state from the stored row) ever revisited it —
+    /// so switching the deployment to BYOK mid-conversation had no visible effect until the user
+    /// started a brand-new session.
+    /// </para>
+    ///
+    /// <para>
+    /// A change is applied transparently to the NEXT turn: the conversation keeps its history (which
+    /// is replayed as plain text on every turn and is not provider-specific), and the persisted
+    /// <c>ModelSource</c> is what the downstream per-turn credential fence reads — including
+    /// <c>RemoteOperatorAssistantAgent.EnsureAgentHostCapabilityAsync</c>, which loads the run row
+    /// fresh each turn — so selection and validation stay in agreement after the switch too. When the
+    /// new provider is GitHub Copilot the capability gate is re-run immediately so an unusable
+    /// platform connection fails fast with the "Connect GitHub" CTA rather than deep inside the turn.
+    /// </para>
+    /// </summary>
+    private async Task ReresolveModelSourceForTurnAsync(string runId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(runId, out var parsedRunId))
+            return;
+
+        var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+        if (run is null)
+            return;
+
+        var modelSource = await ResolveAssistantModelSourceAsync(ct).ConfigureAwait(false);
+        if (modelSource == run.ModelSource)
+            return;
+
+        _logger.LogInformation(
+            "Operator run {RunId}: effective model provider changed {Previous} -> {Current} since the last " +
+            "turn; the new provider takes effect for this turn.",
+            runId, run.ModelSource.ToApiString(), modelSource.ToApiString());
+
+        var repointed = run with { ModelSource = modelSource };
+        await PrepareAgentHostCapabilityAsync(repointed, ct).ConfigureAwait(false);
+        await _runStore.UpdateModelSourceAsync(parsedRunId, modelSource, ct).ConfigureAwait(false);
     }
 
     private async Task PrepareAgentHostCapabilityAsync(Run run, CancellationToken ct)
@@ -330,7 +390,9 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         // present) is only incidental UI context (the project the caller happened to be viewing), so
         // credential resolution must always go through the PLATFORM-level Copilot connection rather
         // than that project's own (possibly broken/missing) binding. Hence platformScoped: true, and
-        // a failure always surfaces the platform-settings CTA, never a project-specific one.
+        // a failure always surfaces the platform-settings CTA, never a project-specific one. This is
+        // the SAME scope ResolveAssistantModelSourceAsync selects the provider at, so selection and
+        // validation cannot disagree.
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
                 .ConfigureAwait(false))
             throw new ModelProviderConnectionRequiredException();
@@ -406,6 +468,10 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         try
         {
             state.Touch();
+
+            // Re-resolve the effective provider for THIS turn (a platform provider switch must take
+            // effect on the next message, not only on a brand-new session).
+            await ReresolveModelSourceForTurnAsync(runId, ct).ConfigureAwait(false);
 
             var userMessageId = Guid.NewGuid().ToString("N");
             await AppendAsync(runId, EventTypes.AgentMessage, new

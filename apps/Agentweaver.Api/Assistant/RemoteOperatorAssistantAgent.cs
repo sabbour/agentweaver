@@ -199,7 +199,11 @@ public sealed class RemoteOperatorAssistantAgent(
         // Operator/Assistant turns are personal sessions, not project-scoped work: run.ProjectId
         // (when present) is only incidental UI context, so credential resolution must always go
         // through the PLATFORM-level Copilot connection rather than that project's own (possibly
-        // broken/missing) binding. A failure always surfaces the platform-settings CTA.
+        // broken/missing) binding. A failure always surfaces the platform-settings CTA. This is the
+        // SAME scope AssistantRunService selects the session's provider at (its
+        // ResolveAssistantModelSourceAsync resolves at platform scope too, and re-resolves each
+        // turn), so selection and validation cannot disagree — and because run.ModelSource is read
+        // fresh from the store above, a mid-conversation provider switch is honoured here too.
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
                 .ConfigureAwait(false))
             throw new ModelProviderConnectionRequiredException();
