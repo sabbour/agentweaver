@@ -77,6 +77,7 @@ Conceptually, event types fall into families:
 | Family | What it explains | Example types |
 | --- | --- | --- |
 | Run lifecycle | Whether execution started, completed, failed, degraded, cancelled, or became assemble-ready | `run.started`, `run.completed`, `run.failed`, `run.degraded`, `run.assemble_ready` |
+| Model provenance | Which model provider actually served the run — BYOK provider, project GitHub Copilot binding, or platform GitHub Copilot binding — plus the binding id, GitHub login, and model id | `run.model_provider_resolved` |
 | Agent conversation | Agent turns, messages, deltas, intent, and outcome reporting | `agent.message`, `agent.message.delta`, `agent.intent`, `run.outcome` |
 | Agent usage | GitHub Copilot token consumption, AIC cost, and AppInsights model-turn telemetry | `agent.turn.usage`; `agentweaver.token.usage`; `Agentweaver model turn` spans tagged `agentweaver.span.kind=agent_turn` |
 | Tooling and gates | Tool calls, tool results, tool errors, approval requests, auto-approval, and questions | `tool.call`, `tool.result`, `tool.error`, `tool.approval_required`, `tool.auto_approved`, `agent.question_asked` |
