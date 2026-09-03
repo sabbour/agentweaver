@@ -400,7 +400,15 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         var (configProjectId, configAgentName) = _submittingUserResolver is not null
             ? await _submittingUserResolver.GetRunIdentityAsync(runId, ct).ConfigureAwait(false)
             : (null, null);
-        var byokProvider = await GetByokProviderAsync(runId, configProjectId, ct).ConfigureAwait(false);
+        var connectionProjectId = ProjectId.TryParse(configProjectId, out var parsedProjectId)
+            ? parsedProjectId
+            : (ProjectId?)null;
+        // Resolve the effective provider ONCE and keep the result: it decides both whether this pod
+        // is BYOK-configured and — when authorization fails below — WHICH Copilot binding the human
+        // must reconnect. Deriving that scope from "does the project id string parse" instead named
+        // the project's App even for platform-default binding failures.
+        var effectiveProvider = await ResolveEffectiveProviderAsync(connectionProjectId, ct).ConfigureAwait(false);
+        var byokProvider = await GetByokProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
         if (byokProvider is null && string.IsNullOrWhiteSpace(submittingUser))
         {
             throw new InvalidOperationException(
@@ -426,9 +434,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             if (_copilotCredentials is null)
                 throw new InvalidOperationException(
                     $"Cannot launch AgentHost pod for run '{runId}' without a live run-bound Copilot capability snapshot.");
-            throw ProjectId.TryParse(configProjectId, out var connectionProjectId)
-                ? new ModelProviderConnectionRequiredException(connectionProjectId)
-                : new ModelProviderConnectionRequiredException();
+            throw effectiveProvider.ToConnectionRequiredException(connectionProjectId);
         }
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
@@ -593,6 +599,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     .ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(effectiveWorkingDirectory))
                     _podRegistry?.RegisterEffectiveWorkingDirectory(runId, effectiveWorkingDirectory);
+
+                // Durable provenance for the provider this pod was actually configured with. Before
+                // this, a successful run recorded NOTHING about which provider/binding/account served
+                // its model turns.
+                await EmitModelProviderResolvedAsync(
+                    runId, effectiveProvider, byokProvider?.Model, ct).ConfigureAwait(false);
             }
             else
             {
@@ -628,16 +640,26 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         }
     }
 
+    /// <summary>
+    /// Resolves the effective model provider for <paramref name="projectId"/>, or
+    /// <see langword="null"/> when no resolver is wired (unit-test executors), in which case callers
+    /// keep their legacy behaviour.
+    /// </summary>
+    private async Task<EffectiveModelProviderResult?> ResolveEffectiveProviderAsync(
+        ProjectId? projectId,
+        CancellationToken ct) =>
+        _effectiveProviderResolver is null
+            ? null
+            : await _effectiveProviderResolver(projectId, ct).ConfigureAwait(false);
+
     private async Task<ByokProviderConfiguration?> GetByokProviderAsync(
         string runId,
-        string? projectId,
+        EffectiveModelProviderResult? effectiveProvider,
         CancellationToken ct)
     {
         var requiresByok = false;
         if (_effectiveProviderResolver is not null)
         {
-            var parsedProjectId = ProjectId.TryParse(projectId, out var value) ? value : (ProjectId?)null;
-            var effectiveProvider = await _effectiveProviderResolver(parsedProjectId, ct).ConfigureAwait(false);
             if (effectiveProvider is not EffectiveModelProviderResult.Byok)
                 return null;
             requiresByok = true;
@@ -691,7 +713,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         if (_runStore is null)
             return;
 
-        if (!RunId.TryParse(runId, out var parsedRunId))
+        // Coordinator sub-runs ({parent}-coordinator-decompose and friends) are synthetic ids with no
+        // row of their own; they share the parent's claim (the 12-char derivation is identical) and
+        // its run row. Normalize exactly like RunStoreSubmittingUserResolver so a decompose turn can
+        // persist its claim instead of failing the launch — which silently degraded every coordinator
+        // decomposition to the deterministic (non-AI) fallback.
+        var owningRunId = CoordinatorSubRunIds.StripSyntheticSuffix(runId);
+
+        if (!RunId.TryParse(owningRunId, out var parsedRunId))
         {
             throw new InvalidOperationException(
                 $"Cannot persist AgentHost claim '{claimName}' for run '{runId}': the run id does not " +
@@ -1229,6 +1258,41 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         {
             _logger.LogWarning(ex,
                 "KubernetesSandboxExecutor: failed to emit sandbox.provisioning_pending heartbeat for run {RunId} (best-effort)",
+                runId);
+        }
+    }
+
+    /// <summary>
+    /// Appends the durable <see cref="EventTypes.RunModelProviderResolved"/> provenance record for the
+    /// provider this AgentHost pod was configured with (kind, provider/binding id, GitHub login, model
+    /// id). Best-effort — a stream-append failure is logged and swallowed so provenance bookkeeping can
+    /// never fail a launch that Kubernetes would otherwise admit.
+    /// </summary>
+    private async Task EmitModelProviderResolvedAsync(
+        string runId,
+        EffectiveModelProviderResult? effectiveProvider,
+        string? modelId,
+        CancellationToken ct)
+    {
+        if (_runEventStream is null || effectiveProvider is null)
+            return;
+
+        try
+        {
+            await _runEventStream.AppendAsync(
+                runId,
+                new RunEvent(0, EventTypes.RunModelProviderResolved,
+                    effectiveProvider.ToProvenancePayload(runId, modelId)),
+                ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: failed to emit run.model_provider_resolved provenance for run {RunId} (best-effort)",
                 runId);
         }
     }
