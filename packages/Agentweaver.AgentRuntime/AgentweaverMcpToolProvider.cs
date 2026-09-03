@@ -49,16 +49,19 @@ public sealed class AgentweaverMcpToolProvider : IAgentweaverMcpToolProvider
     // Optional factory so tests can supply an HttpClient bound to an in-process host. Production
     // leaves this null and the transport creates its own pooled HttpClient.
     private readonly Func<HttpClient>? _httpClientFactory;
+    private readonly bool _ownsHttpClient;
 
     public AgentweaverMcpToolProvider(
         AgentweaverMcpConnectionOptions options,
         ILoggerFactory? loggerFactory = null,
-        Func<HttpClient>? httpClientFactory = null)
+        Func<HttpClient>? httpClientFactory = null,
+        bool ownsHttpClient = false)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options;
         _loggerFactory = loggerFactory;
         _httpClientFactory = httpClientFactory;
+        _ownsHttpClient = ownsHttpClient;
     }
 
     public async Task<AgentweaverMcpToolSession> ConnectAsync(string brokerToken, CancellationToken ct = default)
@@ -85,7 +88,7 @@ public sealed class AgentweaverMcpToolProvider : IAgentweaverMcpToolProvider
         var http = _httpClientFactory?.Invoke();
         var transport = http is null
             ? new SseClientTransport(transportOptions, _loggerFactory)
-            : new SseClientTransport(transportOptions, http, _loggerFactory, ownsHttpClient: false);
+            : new SseClientTransport(transportOptions, http, _loggerFactory, ownsHttpClient: _ownsHttpClient);
 
         var client = await McpClientFactory
             .CreateAsync(transport, clientOptions: null, loggerFactory: _loggerFactory, cancellationToken: ct)

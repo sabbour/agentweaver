@@ -64,6 +64,9 @@ public sealed class RemoteOperatorAssistantAgent(
         if (string.IsNullOrWhiteSpace(request.McpBrokerToken))
             throw new InvalidOperationException(
                 "The operator assistant AgentHost requires a per-turn MCP broker token.");
+        if (request.RenewMcpBrokerTokenAsync is null)
+            throw new InvalidOperationException(
+                "The operator assistant AgentHost requires a server-side MCP broker token renewal callback.");
 
         // IAgentHostPodLifecycle is only registered in-cluster (mirrors every other pod-per-run
         // consumer, e.g. KubernetesPodAgentEndpointResolver's optional podLifecycle) so DI validation
@@ -90,6 +93,7 @@ public sealed class RemoteOperatorAssistantAgent(
                     Purpose: AgentHostPurpose.OperatorAssistant,
                     McpBrokerToken: request.McpBrokerToken),
                 ct).ConfigureAwait(false);
+            await RefreshMcpBrokerTokenAsync(request, podLifecycle, ct).ConfigureAwait(false);
         }
         catch (ModelProviderConnectionRequiredException)
         {
@@ -140,12 +144,23 @@ public sealed class RemoteOperatorAssistantAgent(
                 ct: ct,
                 userId: request.CallerUser).ConfigureAwait(false);
 
-            var drainTask = DrainAsync(runId, channel.Reader, sink, invokedTools, ct);
+            using var turnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var drainTask = DrainAsync(
+                runId, channel.Reader, sink, invokedTools, request, podLifecycle, turnCts.Token);
 
             string text;
             try
             {
-                text = await proxy.RunTurnAsync(taskJson, isRevision: false, ct).ConfigureAwait(false);
+                var turnTask = proxy.RunTurnAsync(taskJson, isRevision: false, turnCts.Token);
+                var completed = await Task.WhenAny(turnTask, drainTask).ConfigureAwait(false);
+                if (completed == drainTask)
+                {
+                    turnCts.Cancel();
+                    await drainTask.ConfigureAwait(false);
+                    throw new InvalidOperationException(
+                        "The operator assistant AgentHost event stream ended before the model turn completed.");
+                }
+                text = await turnTask.ConfigureAwait(false);
             }
             finally
             {
@@ -220,6 +235,8 @@ public sealed class RemoteOperatorAssistantAgent(
         ChannelReader<RunEvent> reader,
         IOperatorAssistantTurnSink? sink,
         List<string> invokedTools,
+        OperatorAssistantRequest request,
+        IAgentHostPodLifecycle podLifecycle,
         CancellationToken ct)
     {
         await foreach (var runEvent in reader.ReadAllAsync(ct).ConfigureAwait(false))
@@ -251,8 +268,26 @@ public sealed class RemoteOperatorAssistantAgent(
                 case EventTypes.ToolApprovalResolved:
                     await eventStream.AppendAsync(runId, runEvent, ct).ConfigureAwait(false);
                     break;
+
+                case EventTypes.McpBrokerTokenRefreshRequired:
+                    await RefreshMcpBrokerTokenAsync(request, podLifecycle, ct).ConfigureAwait(false);
+                    break;
             }
         }
+    }
+
+    private static async Task RefreshMcpBrokerTokenAsync(
+        OperatorAssistantRequest request,
+        IAgentHostPodLifecycle podLifecycle,
+        CancellationToken ct)
+    {
+        var issuer = request.RenewMcpBrokerTokenAsync
+            ?? throw new InvalidOperationException("The MCP broker token renewal callback is unavailable.");
+        var token = await issuer(ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException("MCP broker token renewal returned an empty credential.");
+        await podLifecycle.RefreshAgentHostMcpBrokerTokenAsync(request.ConversationId, token, ct)
+            .ConfigureAwait(false);
     }
 
     private static bool TryGetString(JsonElement payload, string propertyName, out string value)

@@ -101,8 +101,8 @@ public interface IAssistantRunService
 /// whose turns stream onto the existing <see cref="IRunEventStream"/> so the unchanged
 /// <c>GET /api/runs/{id}/stream</c> and <c>/events</c> endpoints serve the transcript.
 ///
-/// It wires <see cref="IOperatorAssistantAgent"/> to run one turn at a time using a server-issued,
-/// five-minute MCP broker token bound to the authenticated caller. No browser credential or broker
+/// It wires <see cref="IOperatorAssistantAgent"/> to run one turn at a time using renewable,
+/// five-minute MCP broker tokens bound to the authenticated caller. No browser credential or broker
 /// token is cached or shared across users. An in-memory per-user concurrency
 /// bound and an idle-timeout sweep keep the number of live Copilot/MCP sessions bounded (v1: single
 /// instance; a distributed bound is a fast-follow if the API scales out).
@@ -406,9 +406,10 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         {
             state.Touch();
 
-            var brokerToken = await _brokerTokenIssuer
-                .IssueAsync(caller, runId, state.ProjectId, ct)
-                .ConfigureAwait(false);
+            Task<string> IssueBrokerTokenAsync(CancellationToken token) =>
+                _brokerTokenIssuer.IssueAsync(caller, runId, state.ProjectId, token);
+
+            var brokerToken = await IssueBrokerTokenAsync(ct).ConfigureAwait(false);
 
             var userMessageId = Guid.NewGuid().ToString("N");
             await AppendAsync(runId, EventTypes.AgentMessage, new
@@ -428,7 +429,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 ModelId: state.ModelId,
                 AgentDefinition: AgentDefinitionTemplate.Content,
                 McpBrokerToken: brokerToken,
-                History: state.HistorySnapshot());
+                History: state.HistorySnapshot(),
+                RenewMcpBrokerTokenAsync: IssueBrokerTokenAsync);
 
             var assistantMessageId = Guid.NewGuid().ToString("N");
             var sink = new RunEventSink(this, runId, assistantMessageId, ct);
@@ -803,5 +805,9 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
             return approved;
         }
+
+        public ValueTask OnMcpBrokerTokenRefreshRequiredAsync(CancellationToken _) =>
+            ValueTask.FromException(new InvalidOperationException(
+                "In-process operator MCP token renewal is unavailable; the assistant must run through AgentHost."));
     }
 }

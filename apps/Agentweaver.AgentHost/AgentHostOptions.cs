@@ -118,7 +118,7 @@ public sealed class AgentHostOptions
     /// AgentweaverMCP server's streamable-HTTP <c>/mcp</c> endpoint. Used only when a run's
     /// <see cref="Agentweaver.Domain.AgentHostPurpose"/> is <c>OperatorAssistant</c> (narrow
     /// AgentHost cutover): the pod connects to this endpoint per-turn, forwarding only the API-issued
-    /// five-minute MCP broker token. Same value the API's
+    /// renewable five-minute MCP broker token. Same value the API's
     /// <c>Assistant:McpEndpoint</c> config carries. Config key: <c>AgentHost:McpEndpoint</c>.
     /// </summary>
     public string? McpEndpoint { get; init; }

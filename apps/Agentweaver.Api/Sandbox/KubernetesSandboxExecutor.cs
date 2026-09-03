@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
@@ -374,6 +375,45 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             runId,
             new AgentHostLaunchContext(SharedWorkingDirectory: workingDirectoryOverride),
             ct);
+
+    /// <inheritdoc/>
+    public async Task RefreshAgentHostMcpBrokerTokenAsync(
+        string runId,
+        string mcpBrokerToken,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(mcpBrokerToken))
+            throw new ArgumentException("A non-empty MCP broker token is required.", nameof(mcpBrokerToken));
+        if (_httpClientFactory is null)
+            throw new InvalidOperationException("AgentHost MCP broker token renewal requires an HTTP client.");
+
+        var endpoint = _podRegistry?.TryGetAgentEndpoint(runId);
+        var turnToken = _turnTokenRegistry?.TryGetTurnToken(runId);
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri)
+            || string.IsNullOrWhiteSpace(turnToken))
+        {
+            throw new InvalidOperationException(
+                $"AgentHost MCP broker token renewal is unavailable for run '{runId}'.");
+        }
+
+        var refreshUrl = new Uri(
+            new Uri(endpointUri.GetLeftPart(UriPartial.Authority)),
+            "/configure/mcp-token");
+        using var client = _httpClientFactory.CreateClient(HttpAgentHostReadinessProbe.HttpClientName);
+        using var request = new HttpRequestMessage(HttpMethod.Post, refreshUrl)
+        {
+            Content = JsonContent.Create(new { mcpBrokerToken }),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", turnToken);
+        using var response = await client.SendAsync(request, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                $"AgentHost MCP broker token renewal failed for run '{runId}' " +
+                $"with HTTP {(int)response.StatusCode}: {detail}");
+        }
+    }
 
     /// <inheritdoc/>
     public async Task<string> LaunchAgentHostPodAsync(

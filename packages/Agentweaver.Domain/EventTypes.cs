@@ -3,6 +3,12 @@ namespace Agentweaver.Domain;
 /// <summary>Canonical event type strings used in the run event stream (FR-018).</summary>
 public static class EventTypes
 {
+    /// <summary>
+    /// Internal AgentHost control-plane signal requesting a fresh operator-assistant MCP broker
+    /// token. It is transported over A2A but is never persisted or exposed to browser clients.
+    /// </summary>
+    public const string McpBrokerTokenRefreshRequired = "mcp.broker_token.refresh_required";
+
     public const string RunStarted   = "run.started";
     public const string RunCompleted = "run.completed";
     public const string RunFailed    = "run.failed";

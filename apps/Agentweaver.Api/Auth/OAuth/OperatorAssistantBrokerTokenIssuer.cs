@@ -24,9 +24,11 @@ public sealed class OperatorAssistantBrokerTokenIssuer(
     OAuthServerConfiguration configuration,
     IHostEnvironment environment,
     IConfiguration appConfiguration,
-    ILogger<OperatorAssistantBrokerTokenIssuer> logger) : IOperatorAssistantBrokerTokenIssuer
+    ILogger<OperatorAssistantBrokerTokenIssuer> logger,
+    TimeProvider? timeProvider = null) : IOperatorAssistantBrokerTokenIssuer
 {
     internal static readonly TimeSpan TokenLifetime = TimeSpan.FromMinutes(5);
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     public async Task<string> IssueAsync(
         CallerContext caller,
@@ -98,7 +100,7 @@ public sealed class OperatorAssistantBrokerTokenIssuer(
             identity.SetClaim("agentweaver_project_id", projectId);
 
         var principal = new ClaimsPrincipal(identity);
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         principal.SetCreationDate(now);
         principal.SetExpirationDate(now.Add(TokenLifetime));
         principal.SetScopes(OAuthServerConfiguration.McpScope);
@@ -118,7 +120,7 @@ public sealed class OperatorAssistantBrokerTokenIssuer(
         {
             BaseUri = configuration.PublicOrigin,
             CancellationToken = ct,
-            CreateTokenEntry = true,
+            CreateTokenEntry = false,
             IsReferenceToken = false,
             PersistTokenPayload = false,
             Principal = principal,

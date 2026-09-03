@@ -327,6 +327,48 @@ public sealed class AssistantRunEndpointsTests
             .And.BeOnOrBefore(DateTime.UtcNow.AddMinutes(5).AddSeconds(5));
         (await response.Content.ReadAsStringAsync()).Should().NotContain(token,
             "the server-only broker credential must never be returned to the browser");
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var persistedTokenCount = await db.Database
+            .SqlQueryRaw<int>("SELECT COUNT(*) AS Value FROM OpenIddictTokens")
+            .SingleAsync();
+        persistedTokenCount.Should().Be(0,
+            "ephemeral assistant broker credentials must not create persistent OpenIddict token entries");
+    }
+
+    [Fact]
+    public async Task BrokerToken_RenewsAfterMaximumApprovalWait_WithExactIdentityAndFreshLifetime()
+    {
+        var now = new DateTimeOffset(2030, 1, 2, 3, 4, 5, TimeSpan.Zero);
+        var clock = new MutableTimeProvider(now);
+        await using var factory = new AssistantWebApplicationFactory { BrokerTokenClock = clock };
+        var client = AuthedClient(factory, AssistantWebApplicationFactory.RefreshedTestToken);
+        var projectId = await SeedProjectAsync(factory);
+
+        using var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        {
+            project_id = projectId,
+            message = "exercise deterministic renewal",
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var request = factory.Agent.LastRequest!;
+        var initial = new JsonWebTokenHandler().ReadJsonWebToken(request.McpBrokerToken);
+        initial.GetPayloadValue<long>("iat").Should().Be(now.ToUnixTimeSeconds());
+        initial.ValidTo.Should().Be(now.AddMinutes(5).UtcDateTime);
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        var renewedToken = await request.RenewMcpBrokerTokenAsync!(CancellationToken.None);
+        var renewed = new JsonWebTokenHandler().ReadJsonWebToken(renewedToken);
+
+        initial.ValidTo.Should().BeOnOrBefore(clock.GetUtcNow().UtcDateTime);
+        renewed.GetPayloadValue<long>("iat").Should().Be(clock.GetUtcNow().ToUnixTimeSeconds());
+        renewed.ValidTo.Should().Be(clock.GetUtcNow().AddMinutes(5).UtcDateTime);
+        renewed.Subject.Should().Be(initial.Subject);
+        renewed.Audiences.Should().Equal(initial.Audiences);
+        renewed.Claims.Single(claim => claim.Type == "scope").Value.Should().Be("mcp:invoke");
+        renewed.Claims.Single(claim => claim.Type == "agentweaver_project_id").Value.Should().Be(projectId);
+        renewedToken.Should().NotBe(request.McpBrokerToken);
     }
 
     [Fact]
@@ -1192,6 +1234,15 @@ public sealed class AssistantRunEndpointsTests
         return projectId.ToString();
     }
 
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan elapsed) => _utcNow = _utcNow.Add(elapsed);
+    }
+
     private sealed record EventRow(int Sequence, string Type, JsonElement Payload);
 }
 
@@ -1213,6 +1264,7 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
     public string OAuthPublicOrigin { get; set; } = "http://localhost:5000";
     public int MaxConcurrentRunsPerUser { get; set; } = 3;
     public bool UseAgentHost { get; set; }
+    public TimeProvider? BrokerTokenClock { get; set; }
 
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-{Guid.NewGuid():N}.db");
     private readonly string _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-wt-{Guid.NewGuid():N}");
@@ -1263,7 +1315,8 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
             if (existing is not null) services.Remove(existing);
             services.AddSingleton<IOperatorAssistantAgent>(AgentOverride ?? Agent);
 
-            if (!string.Equals(OAuthPublicOrigin, "http://localhost:5000", StringComparison.Ordinal))
+            if (BrokerTokenClock is not null
+                || !string.Equals(OAuthPublicOrigin, "http://localhost:5000", StringComparison.Ordinal))
             {
                 var issuer = services.FirstOrDefault(
                     descriptor => descriptor.ServiceType == typeof(IOperatorAssistantBrokerTokenIssuer));
@@ -1281,7 +1334,8 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                         },
                         sp.GetRequiredService<IHostEnvironment>(),
                         sp.GetRequiredService<IConfiguration>(),
-                        sp.GetRequiredService<ILogger<OperatorAssistantBrokerTokenIssuer>>());
+                        sp.GetRequiredService<ILogger<OperatorAssistantBrokerTokenIssuer>>(),
+                        BrokerTokenClock);
                 });
             }
         });

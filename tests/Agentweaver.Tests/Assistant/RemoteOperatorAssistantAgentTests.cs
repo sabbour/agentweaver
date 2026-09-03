@@ -33,14 +33,19 @@ public sealed class RemoteOperatorAssistantAgentTests
             NullLogger<RemoteOperatorAssistantAgent>.Instance,
             lifecycle);
 
-        await RunUntilEndpointFailureAsync(agent, Request("conversation-1", "broker-token-v1"));
-        await RunUntilEndpointFailureAsync(agent, Request("conversation-2", "broker-token-v2"));
+        await RunUntilEndpointFailureAsync(agent, Request(
+            "conversation-1", "broker-token-v1", _ => Task.FromResult("broker-token-v1-renewed")));
+        await RunUntilEndpointFailureAsync(agent, Request(
+            "conversation-2", "broker-token-v2", _ => Task.FromResult("broker-token-v2-renewed")));
 
         lifecycle.Launches.Select(launch => launch.Context.McpBrokerToken).Should().Equal(
             ["broker-token-v1", "broker-token-v2"],
             "each turn must propagate only its short-lived MCP broker token");
         lifecycle.Launches.Should().OnlyContain(launch =>
             launch.Context.Purpose == Agentweaver.Domain.AgentHostPurpose.OperatorAssistant);
+        lifecycle.Refreshes.Should().Equal(
+            [("conversation-1", "broker-token-v1-renewed"), ("conversation-2", "broker-token-v2-renewed")],
+            "each token must be renewed after pod launch and immediately before model/MCP use");
     }
 
     [Fact]
@@ -73,7 +78,38 @@ public sealed class RemoteOperatorAssistantAgentTests
             .Where(ex => ex.ErrorCode == "agenthost_unavailable");
     }
 
-    private static OperatorAssistantRequest Request(string conversationId, string mcpBrokerToken) =>
+    [Fact]
+    public async Task RunTurn_WhenPostLaunchRenewalFails_FailsExplicitly()
+    {
+        var lifecycle = new RecordingPodLifecycle();
+        var agent = new RemoteOperatorAssistantAgent(
+            new MissingEndpointResolver(),
+            new PodNameRegistry(),
+            new ThrowingHttpClientFactory(),
+            NullLoggerFactory.Instance,
+            Options.Create(new RemoteAgentProxyOptions()),
+            new ConfigurationBuilder().Build(),
+            null!,
+            NullLogger<RemoteOperatorAssistantAgent>.Instance,
+            lifecycle);
+
+        var act = () => agent.RunTurnAsync(
+            Request(
+                "conversation-renewal-failure",
+                "initial-token",
+                _ => Task.FromException<string>(new InvalidOperationException("issuer unavailable"))),
+            null,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<AgentProviderException>()
+            .WithMessage("*issuer unavailable*");
+        lifecycle.Refreshes.Should().BeEmpty();
+    }
+
+    private static OperatorAssistantRequest Request(
+        string conversationId,
+        string mcpBrokerToken,
+        Func<CancellationToken, Task<string>>? renew = null) =>
         new(
             ConversationId: conversationId,
             Message: "test",
@@ -84,7 +120,8 @@ public sealed class RemoteOperatorAssistantAgentTests
             ModelId: null,
             AgentDefinition: "You are the operator.",
             McpBrokerToken: mcpBrokerToken,
-            History: []);
+            History: [],
+            RenewMcpBrokerTokenAsync: renew);
 
     private sealed class MissingEndpointResolver : ISandboxAgentEndpointResolver
     {
@@ -95,6 +132,7 @@ public sealed class RemoteOperatorAssistantAgentTests
     private sealed class RecordingPodLifecycle : IAgentHostPodLifecycle
     {
         public List<(string RunId, AgentHostLaunchContext Context)> Launches { get; } = [];
+        public List<(string RunId, string Token)> Refreshes { get; } = [];
 
         public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default) =>
             throw new NotSupportedException();
@@ -116,6 +154,15 @@ public sealed class RemoteOperatorAssistantAgentTests
 
         public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default) =>
             Task.CompletedTask;
+
+        public Task RefreshAgentHostMcpBrokerTokenAsync(
+            string runId,
+            string mcpBrokerToken,
+            CancellationToken ct = default)
+        {
+            Refreshes.Add((runId, mcpBrokerToken));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class ThrowingHttpClientFactory : IHttpClientFactory

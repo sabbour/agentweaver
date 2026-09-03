@@ -4,6 +4,7 @@ using System.Security.Claims;
 using Agentweaver.Api;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Api.Assistant;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -47,6 +48,18 @@ public sealed class AuthenticationSchemeCutoverTests : IClassFixture<EntraWebApp
 
         factory.Services.GetService<IAuthenticationSchemeProvider>().Should().BeNull();
         factory.Services.GetService<OAuthServerConfiguration>().Should().BeNull();
+        factory.Services.GetService<IOperatorAssistantBrokerTokenIssuer>().Should().BeNull();
+        factory.Services.GetService<IAssistantRunService>().Should().BeNull();
+        factory.Services.GetService<IOperatorAssistantAgent>().Should().BeNull();
+    }
+
+    [Fact]
+    public void WebRole_BuildsCompleteAssistantIssuanceGraph()
+    {
+        _factory.Services.GetRequiredService<OAuthServerConfiguration>().Should().NotBeNull();
+        _factory.Services.GetRequiredService<IOperatorAssistantBrokerTokenIssuer>().Should().NotBeNull();
+        _factory.Services.GetRequiredService<IAssistantRunService>().Should().NotBeNull();
+        _factory.Services.GetRequiredService<IOperatorAssistantAgent>().Should().NotBeNull();
     }
 
     [Fact]

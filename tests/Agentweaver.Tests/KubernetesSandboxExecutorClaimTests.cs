@@ -60,11 +60,13 @@ public sealed class KubernetesSandboxExecutorClaimTests
         FakeKubeHandler handler, IRunSubmittingUserResolver submittingUserResolver,
         IHttpClientFactory? httpClientFactory = null, IRunOptionsStore? runOptions = null,
         IPodNameRegistry? podRegistry = null,
+        IAgentHostTurnTokenRegistry? turnTokenRegistry = null,
         Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService? previewService = null,
         IGitHubCopilotCapabilityCredentialProvider? copilotCredentials = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null) =>
         new(ClientFor(handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
-            podRegistry: podRegistry, readinessProbe: null, submittingUserResolver: submittingUserResolver,
+            podRegistry: podRegistry, turnTokenRegistry: turnTokenRegistry, readinessProbe: null,
+            submittingUserResolver: submittingUserResolver,
             httpClientFactory: httpClientFactory, runOptions: runOptions,
             copilotCredentials: copilotCredentials ?? new FixedGitHubCopilotCapabilityCredentialProvider(),
             previewService: previewService,
@@ -104,12 +106,14 @@ public sealed class KubernetesSandboxExecutorClaimTests
         }
 
         public string? RequestUri { get; private set; }
+        public string? Authorization { get; private set; }
         public string? Body { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestUri = request.RequestUri?.ToString();
+            Authorization = request.Headers.Authorization?.ToString();
             Body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
@@ -515,6 +519,29 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("copilotCredential").GetProperty("snapshotReference").GetString().Should().Be("snapshot-test");
         body.GetProperty("copilotCredential").GetProperty("accessToken").GetString().Should().NotBe(mcpBrokerToken,
             "the MCP broker credential and Copilot capability have different trust purposes");
+    }
+
+    [Fact]
+    public async Task RefreshAgentHostMcpBrokerToken_UsesTurnAuthenticatedControlPlane()
+    {
+        const string runId = "run-claim-operator-renewal";
+        var registry = new PodNameRegistry();
+        registry.RegisterAgentEndpoint(runId, "http://10.0.0.7:8088/a2a/agent");
+        registry.RegisterTurnToken(runId, "turn-control-token");
+        var refreshHandler = new RecordingConfigureHandler(statusCode: HttpStatusCode.NoContent);
+        var executor = NewExecutor(
+            new FakeKubeHandler(),
+            new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(refreshHandler),
+            podRegistry: registry,
+            turnTokenRegistry: registry);
+
+        await executor.RefreshAgentHostMcpBrokerTokenAsync(runId, "renewed-broker-token");
+
+        refreshHandler.RequestUri.Should().Be("http://10.0.0.7:8088/configure/mcp-token");
+        refreshHandler.Authorization.Should().Be("Bearer turn-control-token");
+        using var body = JsonDocument.Parse(refreshHandler.Body!);
+        body.RootElement.GetProperty("mcpBrokerToken").GetString().Should().Be("renewed-broker-token");
     }
 
     [Fact]

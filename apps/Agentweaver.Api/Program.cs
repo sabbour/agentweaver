@@ -196,17 +196,17 @@ builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.IPreviewCommandMod
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorWorkflowFactory>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorRunService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorStatusReader>();
-// Operator assistant (#346, narrow AgentHost cutover #347): MCP-driven chat modeled as a lightweight
-// "operator run". Model/SDK/MCP execution now runs on a sandbox AgentHost pod, dispatched through the
-// SAME warm-pool claim + /configure + A2A streaming mechanism Coordinator subtasks use
-// (RemoteOperatorAssistantAgent) — the in-API Copilot/MCP loop (OperatorAssistantAgent) and its MCP
-// tool-provider registration are no longer wired here; that class now runs ONLY inside the AgentHost
-// pod under AgentHostPurpose.OperatorAssistant. AssistantRunService persists the conversation as a run
-// and streams turns onto the existing run event stream, unchanged.
-builder.Services.AddSingleton<IOperatorAssistantAgent, Agentweaver.Api.Assistant.RemoteOperatorAssistantAgent>();
-builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(builder.Configuration.GetSection("Assistant"));
-builder.Services.AddSingleton<IOperatorAssistantBrokerTokenIssuer, OperatorAssistantBrokerTokenIssuer>();
-builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService, Agentweaver.Api.Assistant.AssistantRunService>();
+if (!isWorker)
+{
+    // Operator assistant is a web/API surface. Keeping the complete issuance and execution graph out
+    // of worker hosts also keeps its OpenIddict/OAuth dependencies role-coherent.
+    builder.Services.AddSingleton<IOperatorAssistantAgent, Agentweaver.Api.Assistant.RemoteOperatorAssistantAgent>();
+    builder.Services.Configure<Agentweaver.Api.Assistant.AssistantRunOptions>(
+        builder.Configuration.GetSection("Assistant"));
+    builder.Services.AddSingleton<IOperatorAssistantBrokerTokenIssuer, OperatorAssistantBrokerTokenIssuer>();
+    builder.Services.AddSingleton<Agentweaver.Api.Assistant.IAssistantRunService,
+        Agentweaver.Api.Assistant.AssistantRunService>();
+}
 
 // GitHub Repo App / Copilot App connection credentials live in the server-side secret store.
 // The legacy per-user token store is deliberately absent: all GitHub authority is now pinned
