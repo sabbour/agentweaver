@@ -42,15 +42,19 @@ public sealed class AuthenticationSchemeCutoverTests : IClassFixture<EntraWebApp
     }
 
     [Fact]
-    public void DevelopmentWorkerRole_BuildsWithoutApiAuthenticationOrBrokerConfiguration()
+    public async Task DevelopmentWorkerRole_ExposesAnonymousProbesWithoutApiSchemesOrBrokerConfiguration()
     {
         using var factory = new WorkerWebApplicationFactory();
+        using var client = factory.CreateClient();
 
         factory.Services.GetService<IAuthenticationSchemeProvider>().Should().BeNull();
+        factory.Services.GetService<IAuthorizationPolicyProvider>().Should().BeNull();
         factory.Services.GetService<OAuthServerConfiguration>().Should().BeNull();
         factory.Services.GetService<IOperatorAssistantBrokerTokenIssuer>().Should().BeNull();
         factory.Services.GetService<IAssistantRunService>().Should().BeNull();
         factory.Services.GetService<IOperatorAssistantAgent>().Should().BeNull();
+        (await client.GetAsync("/healthz")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.GetAsync("/readyz")).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Fact]

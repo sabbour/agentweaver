@@ -277,7 +277,6 @@ if (!isWorker)
         .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TestAuthenticationHandler>(
             AgentweaverAuthenticationSchemes.TestBypass, _ => { });
 }
-
 if (builder.Environment.IsDevelopment()
     && builder.Configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth"))
 {
@@ -288,37 +287,40 @@ else if (builder.Configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth"))
     Console.Error.WriteLine("CRITICAL: Testing:BypassGitHubTokenAuth is ignored outside Development.");
 }
 
-builder.Services.AddAuthorization(options =>
+if (!isWorker)
 {
-    static Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder Authenticated() =>
-        new(AgentweaverAuthenticationSchemes.Composite);
+    builder.Services.AddAuthorization(options =>
+    {
+        static Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder Authenticated() =>
+            new(AgentweaverAuthenticationSchemes.Composite);
 
-    options.AddPolicy(
-        EndpointAuthorizationPolicies.AuthenticatedSelf,
-        Authenticated().RequireAuthenticatedUser().Build());
-    options.AddPolicy(
-        EndpointAuthorizationPolicies.AuthenticatedPlatform,
-        Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformRoleRequirement()).Build());
-    options.AddPolicy(
-        EndpointAuthorizationPolicies.PlatformOrMcp,
-        Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrBrokerRequirement()).Build());
-    options.AddPolicy(
-        EndpointAuthorizationPolicies.InternalService,
-        Authenticated().RequireAuthenticatedUser().AddRequirements(new InternalServiceRequirement()).Build());
-    options.AddPolicy(
-        EndpointAuthorizationPolicies.RunCapability,
-        Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrRunCapabilityRequirement()).Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.AuthenticatedSelf,
+            Authenticated().RequireAuthenticatedUser().Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.AuthenticatedPlatform,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformRoleRequirement()).Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.PlatformOrMcp,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrBrokerRequirement()).Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.InternalService,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new InternalServiceRequirement()).Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.RunCapability,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrRunCapabilityRequirement()).Build());
 
-    options.FallbackPolicy = Authenticated()
-        .RequireAuthenticatedUser()
-        .RequireAssertion(_ => false)
-        .Build();
-});
-builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHandler>();
-builder.Services.AddSingleton<IAuthorizationHandler, EndpointSchemeAuthorizationHandler>();
-builder.Services.AddSingleton<
-    Microsoft.AspNetCore.Authorization.IAuthorizationMiddlewareResultHandler,
-    AgentweaverAuthorizationResultHandler>();
+        options.FallbackPolicy = Authenticated()
+            .RequireAuthenticatedUser()
+            .RequireAssertion(_ => false)
+            .Build();
+    });
+    builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHandler>();
+    builder.Services.AddSingleton<IAuthorizationHandler, EndpointSchemeAuthorizationHandler>();
+    builder.Services.AddSingleton<
+        Microsoft.AspNetCore.Authorization.IAuthorizationMiddlewareResultHandler,
+        AgentweaverAuthorizationResultHandler>();
+}
 builder.Services.AddScoped<ICallerContextAccessor, ClaimsCallerContextAccessor>();
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<EntraOAuthRedirectService>();
