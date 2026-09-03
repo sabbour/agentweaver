@@ -1,5 +1,11 @@
 # Agentweaver API Test Harness Plan
 
+> **Superseded safety model (2026-09-02):** Hostname-based staging/production
+> classification, production confirmation flags, and TLS bypasses described below are
+> historical only. The implementation accepts arbitrary HTTPS hosts, permits HTTP only
+> for loopback, rejects URL credentials/fragments, and confines bearer credentials to
+> the configured origin.
+
 _Last updated: 2026-07-14 — author: Tank (Backend Engineer)_
 
 > **Status: design spec.** Unlike the UI and MCP specs, the harness this document

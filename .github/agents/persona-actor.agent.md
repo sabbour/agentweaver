@@ -70,8 +70,7 @@ Each dispatch supplies, in the task prompt:
   e.g. via `gh auth token`, if Harness did not resolve one) — you do not resolve
   target-safety/prod decisions yourself; Harness has already vetted the target
   before dispatching you.
-- Whether `-k`/`--insecure` is needed for this target's TLS (Harness only permits
-  this for localhost/staging hosts; never pass it if not explicitly told to).
+- TLS uses normal certificate validation. Never bypass certificate verification.
 - A transcript file path to append to (e.g.
   `scripts/api-harness/transcripts/<persona>-live-<timestamp>.jsonl`).
 

@@ -78,10 +78,6 @@ async function main() {
   const responses = path.join(runtime, 'responses');
   const stateFile = path.join(runtime, 'state.json');
   const launchId = args['launch-id'];
-  const guardOptions = {
-    allowProd: args['allow-prod'] === true,
-    confirmProduction: args['confirm-production'] === true,
-  };
   let browserRuntime;
   let heartbeat;
   let stopping = false;
@@ -120,14 +116,11 @@ async function main() {
       storageState: existsSync(recoveredStorageState) ? recoveredStorageState : session.storageState,
       sessionStorageSeed: recovery?.sessionStorageSeed ?? null,
       headless: true,
-      allowAgentweaverPreviewNavigation: true,
-      ...guardOptions,
     });
     const capture = attachPageCapture(browserRuntime.page);
     if (recovery?.lastUrl && recovery.lastUrl !== 'about:blank') {
       const destination = new URL(recovery.lastUrl);
       if (destination.origin === new URL(session.baseUrl).origin) await browserRuntime.goto(destination.toString());
-      else await browserRuntime.gotoPreview(destination.toString());
     }
     await writeState('ready', { recovered: Boolean(recovery) });
     heartbeat = setInterval(() => {

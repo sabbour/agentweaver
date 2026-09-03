@@ -1,5 +1,11 @@
 # Agentweaver MCP Test Harness Plan
 
+> **Superseded safety model (2026-09-02):** Hostname allowlists and production
+> confirmation flags described below are historical only. MCP HTTP targets use normal
+> TLS, arbitrary HTTPS hosts, and the exact `/mcp` pathname. Deterministic smoke creates
+> a unique remote-safe project, archives its run, and deletes only that project in
+> `finally`; caller-supplied disposable projects are never deleted.
+
 _Last updated: 2026-07-14 — author: Morpheus (Runtime Engineer)_
 
 > **Status: design spec only.** No code in this plan is built yet. This document

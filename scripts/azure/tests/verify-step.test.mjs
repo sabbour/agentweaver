@@ -169,6 +169,15 @@ test("run: performs authenticated feature checks when HOST resolves and a token 
     if (joined.includes("Programmed") || joined.includes("Accepted") || joined.includes("ResolvedRefs")) return { stdout: "True", stderr: "", code: 0 };
     if (joined.includes("addresses")) return { stdout: "1.2.3.4", stderr: "", code: 0 };
     if (joined.includes("defaultdomaincertificate")) return { stdout: "*.westus2.cloudapp.azure.com", stderr: "", code: 0 };
+    if (joined.includes("agentweaver-runtime-config") && joined.includes("OAUTH_PUBLIC_ORIGIN")) {
+      return { stdout: "https://agentweaver.westus2.cloudapp.azure.com", stderr: "", code: 0 };
+    }
+    if (joined.includes("agentweaver-runtime-config") && joined.includes("OAUTH_SIGNING_CERTIFICATE_NAME")) {
+      return { stdout: "agentweaver-oauth-signing", stderr: "", code: 0 };
+    }
+    if (joined.includes("agentweaver-runtime-config") && joined.includes("OAUTH_ENCRYPTION_CERTIFICATE_NAME")) {
+      return { stdout: "agentweaver-oauth-encryption", stderr: "", code: 0 };
+    }
     if (joined.includes("secretproviderclasspodstatus")) return { stdout: "spc-1\n", stderr: "", code: 0 };
     if (joined.includes("auth can-i")) return { stdout: "yes", stderr: "", code: 0 };
     if (joined.includes("agentweaver-sandbox")) return { stdout: "", stderr: "", code: 1 }; // legacy template/warmpool: absent
@@ -213,4 +222,40 @@ test("run: performs authenticated feature checks when HOST resolves and a token 
   const result = await run(CFG, { exec, log: noopLog(), env: { AGENTWEAVER_VALIDATION_TOKEN: "tok" }, fetchImpl });
   assert.ok(calledUrls.some((u) => u.includes("/api/projects/proj-1/memory")));
   assert.equal(result.ok, true);
+});
+
+test("run: verifies configured OAuth certificate families and enabled Key Vault versions", async () => {
+  const captureImpl = (_cmd, args) => {
+    const joined = args.join(" ");
+    if (joined.includes("--field-selector=status.phase=Running")) return { stdout: "pod-1\n", stderr: "", code: 0 };
+    if (joined.includes("Programmed") || joined.includes("Accepted") || joined.includes("ResolvedRefs")) return { stdout: "True", stderr: "", code: 0 };
+    if (joined.includes("addresses")) return { stdout: "1.2.3.4", stderr: "", code: 0 };
+    if (joined.includes("defaultdomaincertificate")) return { stdout: "*.example.test", stderr: "", code: 0 };
+    if (joined.includes("OAUTH_PUBLIC_ORIGIN")) return { stdout: "https://agentweaver.example.test", stderr: "", code: 0 };
+    if (joined.includes("OAUTH_SIGNING_CERTIFICATE_NAME")) return { stdout: "oauth-signing-custom", stderr: "", code: 0 };
+    if (joined.includes("OAUTH_ENCRYPTION_CERTIFICATE_NAME")) return { stdout: "oauth-encryption-custom", stderr: "", code: 0 };
+    if (joined.includes("keyvault certificate show")) return { stdout: "", stderr: "", code: 0 };
+    if (joined.includes("keyvault secret list-versions")) return { stdout: "2", stderr: "", code: 0 };
+    if (joined.includes("secretproviderclasspodstatus")) return { stdout: "spc-1\n", stderr: "", code: 0 };
+    if (joined.includes("auth can-i")) return { stdout: "yes", stderr: "", code: 0 };
+    if (joined.includes("agentweaver-sandbox")) return { stdout: "", stderr: "", code: 1 };
+    return { stdout: "", stderr: "", code: 0 };
+  };
+  const fetchImpl = async (url) => {
+    const origin = "https://agentweaver.example.test";
+    if (url.includes("oauth-protected-resource")) return {
+      ok: true, json: async () => ({ resource: `${origin}/mcp`, authorization_servers: [`${origin}/`], scopes_supported: ["mcp:invoke"] }),
+    };
+    if (url.endsWith("/oauth/jwks")) return { ok: true, json: async () => ({ keys: [{ use: "sig", alg: "RS256", kid: "active" }, { use: "sig", alg: "RS256", kid: "previous" }] }) };
+    if (url.includes(".well-known")) return { ok: true, json: async () => ({ issuer: `${origin}/`, jwks_uri: `${origin}/oauth/jwks` }) };
+    return { status: 401, ok: false, json: async () => ({}) };
+  };
+  const result = await run({
+    NAMESPACE: "agentweaver",
+    KEYVAULT_NAME: "test-kv",
+    OAUTH_SIGNING_CERTIFICATE_NAME: "oauth-signing-custom",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "oauth-encryption-custom",
+  }, { exec: fakeExec(captureImpl), log: noopLog(), env: {}, fetchImpl });
+  assert.equal(result.ok, true);
+  assert.ok(result.results.some((entry) => entry.message.includes("runtime retains the newest two usable versions")));
 });

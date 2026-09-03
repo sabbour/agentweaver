@@ -18,7 +18,7 @@
 //
 // Usage:
 //   node run-persona.mjs --scenario generated-artifacts-seam \
-//     --base-url https://agentweaver.<zone>.westus2.staging.aksapp.io [--insecure]
+//     --base-url https://agentweaver.example.com
 //
 //   Token resolution order: --token <t>  >  $AGENTWEAVER_TOKEN  >  `gh auth token`.
 //   Base URL: --base-url  >  $AGENTWEAVER_BASE_URL.
@@ -48,6 +48,7 @@ import { writeFinding, printReport } from './lib/reporter.mjs';
 import { loadPersona } from '../persona-briefs/index.mjs';
 import { adaptApiEvidence } from '../harness-judge/adapters/api.mjs';
 import { judgeEvidence } from '../harness-judge/core.mjs';
+import { networkTargetEvidence, validateNetworkTarget } from '../harness-shared/target-guard.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -67,12 +68,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const NO_PERSONA_VERSION_SENTINEL = 'unknown';
 
 function parseArgs(argv) {
-  const out = { insecure: false, keep: false, allowInsecureProd: false, rung: 'scoping' };
+  const out = { keep: false, rung: 'scoping' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--insecure') out.insecure = true;
-    else if (a === '--allow-insecure-prod') out.allowInsecureProd = true;
-    else if (a === '--keep') out.keep = true;
+    if (a === '--keep') out.keep = true;
     else if (a === '--scenario') out.scenario = argv[++i];
     else if (a === '--base-url' || a === '--target') out.baseUrl = argv[++i];
     else if (a === '--persona') out.persona = argv[++i];
@@ -81,8 +80,6 @@ function parseArgs(argv) {
     else if (a === '--target-revision') out.targetRevision = argv[++i];
     else if (a === '--rung') out.rung = argv[++i];
     else if (a === '--out') out.out = argv[++i];
-    else if (a === '--allow-prod') out.allowProd = true;
-    else if (a === '--i-understand-this-targets-production') out.confirmProduction = true;
     else if (a === '--token') out.token = argv[++i];
     else if (a === '--auth-provider') out.authProvider = argv[++i];
     else if (a === '--recorder-auth-root') out.recorderAuthRoot = argv[++i];
@@ -90,29 +87,6 @@ function parseArgs(argv) {
     else if (a === '--list') out.list = true;
   }
   return out;
-}
-
-/**
- * `--insecure` disables TLS verification, which is fine for localhost or the
- * staging zone but dangerous against production. Only allow it for hosts that are
- * clearly non-prod unless the caller explicitly opts in with --allow-insecure-prod.
- * @returns {string|null} an error message when the combination is disallowed, else null
- */
-export function checkInsecureAllowed(baseUrl, insecure, allowInsecureProd) {
-  if (!insecure) return null;
-  let host;
-  try {
-    host = new URL(baseUrl).hostname.toLowerCase();
-  } catch {
-    return `--base-url "${baseUrl}" is not a valid URL`;
-  }
-  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost');
-  const isStaging = host.includes('.staging.') || host.endsWith('.staging');
-  if (isLocal || isStaging || allowInsecureProd) return null;
-  return (
-    `refusing to disable TLS verification (--insecure) against non-staging host "${host}". ` +
-    `Use a trusted certificate, target a *.staging.* / localhost host, or pass --allow-insecure-prod to override.`
-  );
 }
 
 function resolveToken(explicit) {
@@ -158,9 +132,10 @@ async function main() {
     return 2;
   }
 
-  const insecureError = checkInsecureAllowed(baseUrl, args.insecure, args.allowInsecureProd);
-  if (insecureError) {
-    console.error(`error: ${insecureError}`);
+  try {
+    validateNetworkTarget(baseUrl);
+  } catch (error) {
+    console.error(`error: ${error.message}`);
     return 2;
   }
 
@@ -207,7 +182,7 @@ async function main() {
   console.log('  mode    : API-only (no browser), generated-artifact seam validation');
 
   const client = new AgentweaverClient({
-    baseUrl, token, authProvider, insecure: args.insecure, allowProd: args.allowProd, confirmProduction: args.confirmProduction,
+    baseUrl, token, authProvider,
   });
 
   let result;
@@ -245,6 +220,16 @@ async function main() {
     schema: 'agentweaver.persona-finding/v2',
     generatedAt: new Date().toISOString(),
     target: baseUrl,
+    preflight: {
+      ...networkTargetEvidence(baseUrl, {
+        surface: 'api',
+        authSource: authProvider ? `provider:${args.authProvider}` : args.token ? 'cli-token' : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'github-cli',
+      }),
+      projectId: evidence.projectId ?? null,
+      runId: evidence.runId ?? null,
+      cleanupIntent: args.keep ? 'retain-harness-created-resources' : 'delete-harness-created-resources',
+      cleanupResult: args.keep ? 'retained' : 'completed-by-scenario',
+    },
     kind,
     persona: {
       title: personaTitle,

@@ -52,6 +52,8 @@ copilot mcp add aw-remote \
 
 Use `copilot mcp get aw-remote` / `copilot mcp remove aw-remote` to inspect or remove it.
 This registration is saved to `~/.copilot/mcp-config.json` and persists across sessions.
+The harness accepts any HTTPS host, but requires the pathname to be exactly `/mcp`;
+HTTP is loopback-only and TLS certificate validation cannot be disabled.
 
 **Session-scoped override**, e.g. for a one-off run against a different host without
 touching persisted config, use `--additional-mcp-config` with an inline JSON string or an

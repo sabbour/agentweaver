@@ -185,7 +185,8 @@ resource group (pick an existing one or create a new one), a location, the
 AKS cluster / ACR / Key Vault names, the Postgres server/location/access-mode
 settings (prefilled with sensible defaults, editable), and Microsoft Entra
 application and tenant IDs. It then provisions
-the cluster, identity, monitoring, the MCP OAuth signing key, PostgreSQL,
+the cluster, identity, monitoring, durable MCP OAuth signing/encryption certificates
+(with active/previous version overlap during rotation), PostgreSQL,
 builds and pushes images (or optionally imports already-published GHCR images
 by immutable ref, or four operator-specified fully-qualified custom image
 refs), verifies image provenance, and performs an initial SHA-identified
@@ -435,6 +436,11 @@ project's maintained harness workflows:
 - **agentweaver-harness-scenarios** — List built-in harness scenarios and persona catalogs, or generate reviewed surface adapters.
 - **agentweaver-mcp-harness** — Run Agentweaver's MCP protocol harness for tool-surface validation, repro reruns, or scenario exploration.
 - **agentweaver-ui-harness** — Run Agentweaver's deployed-UI harness for browser evidence, repros, or scenario exploration.
+
+All network harnesses use host-agnostic transport validation: arbitrary HTTPS hosts
+are accepted, HTTP is loopback-only, URL credentials/fragments and TLS bypasses are
+rejected, and bearer/session credentials remain confined to their configured origin.
+Deterministic MCP smoke deletes only the unique project it creates.
 
 ## AKS architecture
 

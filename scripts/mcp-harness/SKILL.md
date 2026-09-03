@@ -26,13 +26,12 @@ There are **two** entry points, for two different jobs:
 Both transports work the same for either entry point:
 
 - **stdio** (`--target stdio`) spawns a **local subprocess** via
-  `--server-command`/`--server-args`. There is no network target, so the
-  `target-guard.mjs` host allowlist and the `--allow-prod`/`--i-understand-prod`
-  requirement do **not** apply — `stdio` is only a transport selector, never a URL.
+  `--server-command`/`--server-args`. There is no network target validation —
+  `stdio` is only a transport selector, never a URL.
 - **http** (`--target <url>`) requires a real base URL that **must include the
-  `/mcp` path suffix** (e.g. `https://<host>/mcp`; the bare origin is not the
-  endpoint). The host allowlist (`localhost`, `127.0.0.1`, `::1`, `*.staging.*`)
-  applies; production hosts require both `--allow-prod` and `--i-understand-prod`.
+  exact `/mcp` pathname** (e.g. `https://<host>/mcp`; the bare origin and
+  `/mcp/` are not the endpoint). Any HTTPS host is accepted; HTTP is loopback-only.
+  URL credentials/fragments and TLS bypasses are rejected.
   http transport also requires **OAuth**: `--token`/`AGENTWEAVER_TOKEN` must be an
   Agentweaver broker token for the exact `/mcp` resource with `mcp:invoke`, obtained
   through the app's OAuth flow. Raw Entra and GitHub tokens are rejected. Stdio
@@ -68,7 +67,7 @@ node scripts/mcp-harness/run-persona.mjs `
   --seed priya
 ```
 
-This resolves the persona core + `<id>.mcp.md` adapter, applies the target guard
+This resolves the persona core + `<id>.mcp.md` adapter, applies transport validation
 (http only; stdio exempt), resolves the token, constructs the transcript path, and
 writes the exact sub-agent dispatch prompt under `scripts/mcp-harness/dispatch/`.
 It prints a `DISPATCH-REQUIRED` banner with the charter path, the dispatch-prompt
@@ -135,11 +134,12 @@ npm --prefix scripts/mcp-harness run smoke -- `
   --target stdio `
   --server-command dotnet `
   --server-args '["run","--project","apps/Agentweaver.Mcp","--","--stdio"]' `
-  --project-id <disposable-project-id>
+  --project-id <disposable-project-id> `
+  --project-is-disposable
 ```
 
 The smoke command supports `--target stdio|http`, `--token`, `--project-id`,
-`--goal`, `--timeout-ms`, `--poll-ms`, `--allow-prod`, `--i-understand-prod`, and
+`--project-is-disposable`, `--goal`, `--timeout-ms`, `--poll-ms`, and
 `--list` (a no-connect print of the reviewed persona IDs with MCP adapters). On
 success it emits JSON headed by `DRIVE+CAPTURE OK`, including the run ID, terminal
 status, artifact count, and compatibility report. A non-zero exit means the driver
@@ -159,11 +159,12 @@ a reason to bypass discovery or call a guessed tool.
 
 ## Options and safety
 
-- Targets are limited to localhost or staging by default (http transport only).
-  Production requires both `--allow-prod` and `--i-understand-prod`. Do not weaken
-  these guards.
-- Only provide a project ID for a safe, disposable test project. Both paths submit
-  a task and attempt cleanup against it.
+- Network targets use the host-agnostic transport rules above; stdio is exempt.
+- `--project-id` requires `--project-is-disposable`. The run is archived, but a
+  caller-supplied project is never deleted.
+- Without `--project-id`, smoke creates a uniquely named project with a remote-safe
+  empty working-directory request and the software-development blueprint. It deletes
+  only that owned project after archiving the run, on success or failure.
 
 Exit codes for `run-persona.mjs`: `0` means the phase completed (finalize produced
 a verdict from real evidence with a passing capability contract, or prepare emitted

@@ -159,8 +159,6 @@ export async function ensureSessionRuntime({
       '--sessions-dir', sessionsDirectory,
       '--launch-id', launchId,
     ];
-    if (guardOptions.allowProd) workerArgs.push('--allow-prod');
-    if (guardOptions.confirmProduction) workerArgs.push('--confirm-production');
     const logPath = path.join(runtime, 'worker.log');
     const logHandle = openSync(logPath, 'w', 0o600);
     let child;

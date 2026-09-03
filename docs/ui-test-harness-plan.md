@@ -1,5 +1,11 @@
 # Agentweaver UI Test Harness Plan (Playwright)
 
+> **Superseded safety model (2026-09-02):** Hostname allowlists, production
+> confirmation flags, TLS bypasses, and authenticated cross-origin preview navigation
+> described below are historical only. The implementation is host-agnostic, requires
+> HTTPS except on loopback, and keeps requests/navigation same-origin except for the
+> explicit trusted identity-provider login flow.
+
 _Last updated: 2026-07-14_
 
 ## Goal

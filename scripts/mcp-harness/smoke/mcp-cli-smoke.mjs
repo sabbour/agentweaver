@@ -2,9 +2,12 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { McpHarnessClient } from '../mcp-client/client.mjs';
 import { assertCapabilitiesCompatible, checkCapabilities, loadCapabilitiesContract } from '../lib/capabilities-contract.mjs';
 import { classifySmokeStatus } from '../lib/smoke-confirm-gate.mjs';
+import { networkTargetEvidence } from '../../harness-shared/target-guard.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -35,45 +38,34 @@ async function callStep(client, report, capability, step, arguments_ = {}) {
   return result.structuredContent;
 }
 
-function projectsFrom(value) {
-  if (Array.isArray(value)) return value;
-  if (Array.isArray(value?.projects)) return value.projects;
-  if (Array.isArray(value?.items)) return value.items;
-  return [];
-}
-
 function projectIdFrom(value) {
   return value?.id ?? value?.project_id ?? value?.projectId;
 }
 
 async function resolveProject(client, report, options) {
-  if (options.projectId) return { id: options.projectId, source: 'provided' };
-
-  const listed = projectsFrom(await callStep(client, report, 'list-projects', 'project discovery'));
-  const project = options.projectName
-    ? listed.find((item) => item?.name === options.projectName)
-    : listed[0];
-  if (project) {
-    const id = projectIdFrom(project);
-    if (!id) throw new Error('project discovery failed (project_list): selected project did not contain an id');
-    return { id, source: 'reused', name: project.name };
+  if (options.projectId) {
+    if (!options.projectIsDisposable) {
+      throw new Error('configuration failed: --project-id requires --project-is-disposable; supplied projects are never deleted');
+    }
+    return { id: options.projectId, source: 'provided', owned: false };
   }
 
-  const name = options.projectName ?? 'agentweaver-mcp-smoke';
+  const name = `${options.projectName ?? 'agentweaver-mcp-smoke'}-${options.uniqueId()}`;
   const created = await callStep(client, report, 'create-project', 'project creation', {
     name,
-    working_directory: options.workingDirectory ?? '.',
-    ...(options.blueprintId ? { blueprint_id: options.blueprintId } : {}),
+    working_directory: options.workingDirectory ?? '',
+    blueprint_id: options.blueprintId ?? 'blueprint-software-development',
   });
   const id = projectIdFrom(created);
   if (!id) throw new Error('project creation failed (project_create): response did not contain a project id');
-  return { id, source: 'created', name };
+  return { id, source: 'created', name, owned: true };
 }
 
 export async function runSmoke({
   client,
   contract,
   projectId,
+  projectIsDisposable = false,
   projectName,
   workingDirectory,
   blueprintId,
@@ -83,15 +75,26 @@ export async function runSmoke({
   sleepFn = sleep,
   now = () => Date.now(),
   logger = console,
+  uniqueId = () => randomUUID().slice(0, 12),
+  isCancelled = () => false,
+  preflight = networkTargetEvidence('stdio', { surface: 'mcp', authSource: 'none' }),
 }) {
   if (timeoutMs > 300_000) throw new Error('configuration failed: --timeout-ms cannot exceed 300000 (5 minutes)');
 
   const report = checkCapabilities(await client.discoverTools(), contract);
   assertCapabilitiesCompatible(report);
   let runId = null;
+  let project = null;
   let primaryError = null;
+  const cleanupErrors = [];
+  preflight.cleanupIntent = projectId
+    ? 'archive-run; retain caller-owned disposable project'
+    : 'archive-run; delete harness-created project';
   try {
-    const project = await resolveProject(client, report, { projectId, projectName, workingDirectory, blueprintId });
+    project = await resolveProject(client, report, {
+      projectId, projectIsDisposable, projectName, workingDirectory, blueprintId, uniqueId,
+    });
+    preflight.projectId = project.id;
     const submit = await callStep(client, report, 'submit-run', 'run submission', {
       project_id: project.id,
       task: goal,
@@ -104,6 +107,7 @@ export async function runSmoke({
     let latest = null;
     let confirmed = false;
     while (now() < deadline) {
+      if (isCancelled()) throw new Error('smoke cancelled; cleanup will still run');
       latest = await callStep(client, report, 'poll-run', 'run polling', { run_id: runId });
       const action = classifySmokeStatus(latest, { terminal, alreadyConfirmed: confirmed });
       if (action === 'break') break;
@@ -133,6 +137,7 @@ export async function runSmoke({
       artifactCount: files.length,
       project,
       contract: report,
+      preflight,
     };
   } catch (error) {
     primaryError = error;
@@ -142,8 +147,28 @@ export async function runSmoke({
       try {
         await callStep(client, report, 'cleanup-run', 'run cleanup', { run_id: runId });
       } catch (cleanupError) {
-        if (!primaryError) throw cleanupError;
-        logger.error(`${cleanupError.message}; original failure: ${primaryError.message}`);
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (project?.owned) {
+      try {
+        await callStep(client, report, 'delete-project', 'project cleanup', { project_id: project.id });
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    preflight.runId = runId;
+    preflight.cleanupResult = cleanupErrors.length
+      ? `failed: ${cleanupErrors.map((error) => error.message).join('; ')}`
+      : 'completed';
+    if (cleanupErrors.length) {
+      if (primaryError) {
+        primaryError.cleanupErrors = cleanupErrors.map((error) => error.message);
+        logger.error(`cleanup failure(s): ${primaryError.cleanupErrors.join('; ')}; original failure: ${primaryError.message}`);
+      } else {
+        const cleanupError = cleanupErrors[0];
+        cleanupError.cleanupErrors = cleanupErrors.map((error) => error.message);
+        throw cleanupError;
       }
     }
   }
@@ -159,30 +184,49 @@ async function main() {
 
   const baseUrl = process.env.AGENTWEAVER_BASE_URL?.replace(/\/+$/, '');
   const target = arg('--target') ?? (baseUrl ? `${baseUrl}/mcp` : 'stdio');
-  const client = await McpHarnessClient.connect({
-    target,
-    command: arg('--server-command'),
-    args: arg('--server-args') ? JSON.parse(arg('--server-args')) : ['--stdio'],
-    token: arg('--token') ?? process.env.AGENTWEAVER_TOKEN,
-    allowProd: process.argv.includes('--allow-prod'),
-    iUnderstandProd: process.argv.includes('--i-understand-prod'),
+  const tokenSource = arg('--token') ? 'cli-token' : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none';
+  const preflight = networkTargetEvidence(target, {
+    surface: 'mcp',
+    authSource: tokenSource,
+    exactPath: target === 'stdio' ? undefined : '/mcp',
   });
+  const preflightOut = path.resolve(arg('--preflight-out') ?? path.join(
+    ROOT, '..', '..', 'artifacts', 'mcp-harness', `smoke-preflight-${randomUUID()}.json`,
+  ));
+  let client = null;
+  let cancelledSignal = null;
+  const onCancel = (signal) => { cancelledSignal = signal; };
+  process.once('SIGINT', onCancel);
+  process.once('SIGTERM', onCancel);
   try {
+    client = await McpHarnessClient.connect({
+      target,
+      command: arg('--server-command'),
+      args: arg('--server-args') ? JSON.parse(arg('--server-args')) : ['--stdio'],
+      token: arg('--token') ?? process.env.AGENTWEAVER_TOKEN,
+    });
     const contract = await loadCapabilitiesContract(path.join(ROOT, 'required-capabilities.json'));
     const result = await runSmoke({
       client,
       contract,
       projectId: arg('--project-id') ?? process.env.AGENTWEAVER_SMOKE_PROJECT_ID,
+      projectIsDisposable: process.argv.includes('--project-is-disposable'),
       projectName: arg('--project-name') ?? process.env.AGENTWEAVER_SMOKE_PROJECT_NAME,
       workingDirectory: arg('--working-directory') ?? process.env.AGENTWEAVER_SMOKE_WORKING_DIRECTORY,
       blueprintId: arg('--blueprint-id') ?? process.env.AGENTWEAVER_SMOKE_BLUEPRINT_ID,
       goal: arg('--goal'),
       timeoutMs: Number(arg('--timeout-ms') ?? 300_000),
       pollMs: Number(arg('--poll-ms') ?? 2_000),
+      isCancelled: () => cancelledSignal !== null,
+      preflight,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } finally {
-    await client.close();
+    process.removeListener('SIGINT', onCancel);
+    process.removeListener('SIGTERM', onCancel);
+    await mkdir(path.dirname(preflightOut), { recursive: true });
+    await writeFile(preflightOut, `${JSON.stringify(preflight, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await client?.close();
   }
 }
 

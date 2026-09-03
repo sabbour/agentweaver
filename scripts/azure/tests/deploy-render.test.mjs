@@ -390,6 +390,17 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   }
 });
 
+test("runtime config preserves operator-selected OAuth certificate families for active/previous version loading", () => {
+  const literals = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "oauth-signing-rotation",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "oauth-encryption-rotation",
+  });
+  assert.equal(literals.OAUTH_SIGNING_CERTIFICATE_NAME, "oauth-signing-rotation");
+  assert.equal(literals.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "oauth-encryption-rotation");
+  assert.equal(literals.OAUTH_PUBLIC_ORIGIN, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
+});
+
 test("manifestForFilename() throws a clear error for an unknown filename (fail-fast, no silent partial applies)", () => {
   assert.throws(() => manifestForFilename([], "not-a-real-file.yaml"), /no FILE_RESOURCES entry/);
 });

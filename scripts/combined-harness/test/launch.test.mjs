@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildCommands, runCombined } from '../launch.mjs';
+import { buildCommands, runCombined, sanitizeCommand, sanitizeEnvironment } from '../launch.mjs';
 
 const command = (surface) => JSON.stringify(['node', `${surface}-runner.mjs`, '--batch', '{batchId}', '--scenario', '{scenarioId}', '--out', '{verdictDir}/{scenarioId}.json']);
 
@@ -41,4 +41,38 @@ test('runs all children independently and aggregates successful sibling verdicts
   assert.deepEqual(report.missingSurfaces, ['ui']);
   assert.equal(report.aggregation.code, 0);
   assert.equal(writes.length, 1);
+});
+
+test('persisted process reports redact token-bearing arguments and environment values', () => {
+  const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.signaturevalue';
+  assert.deepEqual(
+    sanitizeCommand(['node', 'runner.mjs', '--token', jwt, `--authorization=Bearer ${jwt}`, 'AGENTWEAVER_TOKEN=opaque', '--scenario', 'safe']),
+    ['node', 'runner.mjs', '--token', '[REDACTED]', '--authorization=[REDACTED]', 'AGENTWEAVER_TOKEN=[REDACTED]', '--scenario', 'safe'],
+  );
+  assert.deepEqual(sanitizeEnvironment({
+    AGENTWEAVER_TOKEN: jwt,
+    SAFE: `prefix Bearer ${jwt}`,
+  }), {
+    AGENTWEAVER_TOKEN: '[REDACTED]',
+    SAFE: 'prefix Bearer [REDACTED]',
+  });
+});
+
+test('combined report never persists extra child outcome fields', async () => {
+  const writes = [];
+  await runCombined({
+    'scenario-id': 'case-1', 'batch-id': 'batch-1', 'verdict-dir': 'test-verdicts',
+    surfaces: 'mcp', 'mcp-command': JSON.stringify(['node', 'runner.mjs', '--token', 'top-secret']),
+  }, {
+    mkdir: async () => {},
+    writeFile: async (_file, content) => writes.push(content),
+    runCommand: async () => ({ code: 0, signal: null, error: null, env: { TOKEN: 'leak' }, stdout: 'leak' }),
+    readVerdicts: () => [{ batchId: 'batch-1', scenarioId: 'case-1', surface: 'mcp' }],
+  });
+  const report = JSON.parse(writes[0]);
+  assert.equal(report.processes[0].command.at(-1), '[REDACTED]');
+  assert.equal('env' in report.processes[0], false);
+  assert.equal('stdout' in report.processes[0], false);
+  assert.equal(report.preflight[0].surface, 'mcp');
+  assert.equal(report.preflight[0].cleanupResult, 'delegated-to-surface');
 });

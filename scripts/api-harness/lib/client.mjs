@@ -31,7 +31,7 @@
  *                              round-trip `ms`. null if the header is absent.
  */
 
-import { assertTargetAllowed } from '../../harness-shared/target-guard.mjs';
+import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
 
 // Response headers, in priority order, that carry a backend correlation id we can
 // pin each turn to. traceparent (W3C) first — that's what App Insights ingests.
@@ -43,21 +43,17 @@ export class AgentweaverClient {
    * @param {string} opts.baseUrl   e.g. https://agentweaver.<zone>.westus2.staging.aksapp.io
    * @param {string} [opts.token]   bearer token
    * @param {{getAuthorization: () => Promise<string>}} [opts.authProvider] in-memory authorization provider
-   * @param {boolean} [opts.insecure] skip TLS verification (staging self-signed / SAN drift)
    */
-  constructor({ baseUrl, token, authProvider, insecure = false, allowProd = false, confirmProduction = false }) {
-    assertTargetAllowed(baseUrl, { allowProd, confirmProduction });
+  constructor({ baseUrl, token, authProvider }) {
+    const target = validateNetworkTarget(baseUrl);
     if (!authProvider && !token) throw new Error('An auth provider or bearer token is required.');
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.origin = target.origin;
+    this.baseUrl = target.href.replace(/\/+$/, '');
     this.authProvider = authProvider ?? {
       getAuthorization: async () => `Bearer ${token}`,
     };
     /** @type {ApiCall[]} */
     this.calls = [];
-    if (insecure) {
-      // Node's global fetch (undici) honours this env for TLS verification.
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-    }
   }
 
   /**
@@ -66,7 +62,17 @@ export class AgentweaverClient {
    * @returns {Promise<ApiCall>}
    */
   async call(method, path, body) {
-    const url = path.startsWith('http') ? path : `${this.baseUrl}${path}`;
+    let url;
+    try {
+      url = new URL(path, `${this.baseUrl}/`);
+      validateNetworkTarget(url);
+      if (url.origin !== this.origin) {
+        throw new Error(`refusing to send API credentials outside configured origin ${this.origin}`);
+      }
+    } catch (error) {
+      if (/refusing to send/.test(String(error?.message))) throw error;
+      throw new Error(`API path "${path}" is not a valid same-origin URL`);
+    }
     const started = Date.now();
     let status = 0;
     let responseBody = null;
@@ -89,7 +95,19 @@ export class AgentweaverClient {
         init.headers['Content-Type'] = 'application/json';
         init.body = JSON.stringify(body);
       }
-      const res = await fetch(url, init);
+      init.redirect = 'manual';
+      let res = await fetch(url, init);
+      let redirects = 0;
+      while (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
+        const redirected = new URL(res.headers.get('location'), url);
+        validateNetworkTarget(redirected);
+        if (redirected.origin !== this.origin) {
+          throw new Error(`refusing cross-origin API redirect from ${this.origin} to ${redirected.origin}`);
+        }
+        if (++redirects > 5) throw new Error('API redirect limit exceeded');
+        url = redirected;
+        res = await fetch(url, init);
+      }
       status = res.status;
       for (const h of CORRELATION_HEADERS) {
         const v = res.headers.get(h);
@@ -115,7 +133,7 @@ export class AgentweaverClient {
 
     const record = {
       method,
-      path: path.replace(this.baseUrl, ''),
+      path: new URL(path, `${this.baseUrl}/`).pathname,
       status,
       ms: Date.now() - started,
       requestBody: body ?? null,

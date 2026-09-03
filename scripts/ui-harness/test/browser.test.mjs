@@ -2,13 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { guardedUrl } from '../lib/browser.mjs';
 
-test('browser target boundary permits staging and blocks production before launch', () => {
+test('browser target boundary accepts arbitrary HTTPS hosts', () => {
   assert.equal(guardedUrl('https://agentweaver.foo.staging.example.com', '/projects', {}).pathname, '/projects');
-  assert.throws(() => guardedUrl('https://agentweaver.example.com', '/', {}), /refusing non-staging target/);
-  assert.equal(
-    guardedUrl('https://agentweaver.example.com', '/', { allowProd: true, confirmProduction: true }).hostname,
-    'agentweaver.example.com',
-  );
+  assert.equal(guardedUrl('https://agentweaver.example.com', '/', {}).hostname, 'agentweaver.example.com');
+  assert.throws(() => guardedUrl('http://agentweaver.example.com', '/', {}), /HTTPS/);
 });
 
 test('browser target boundary blocks cross-origin navigation', () => {
@@ -66,11 +63,11 @@ test('browser target boundary permits the whole GitHub origin in login mode', ()
   // blocked when the flag is absent -- this is the actual security boundary.
   assert.throws(
     () => guardedUrl(baseUrl, 'https://github.com/login/oauth/authorize?client_id=test', {}),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
   assert.throws(
     () => guardedUrl(baseUrl, 'https://github.com/sessions/two-factor', {}),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
 
   // The flag only ever widens the allowlist to the real github.com origin --
@@ -81,7 +78,7 @@ test('browser target boundary permits the whole GitHub origin in login mode', ()
   );
   assert.throws(
     () => guardedUrl(baseUrl, 'https://github.com.evil.example.com/login', { allowIdentityProviderNavigation: true }),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
 });
 
@@ -102,11 +99,11 @@ test('browser target boundary permits configured Entra and Microsoft-account ori
   );
   assert.throws(
     () => guardedUrl(baseUrl, 'https://contoso.b2clogin.com/contoso.onmicrosoft.com/oauth2/v2.0/authorize', identityProviderOptions),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
   assert.throws(
     () => guardedUrl(baseUrl, 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize', {}),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
 });
 
@@ -121,30 +118,18 @@ test('browser target boundary honors a custom configured Entra authority origin 
     guardedUrl(baseUrl, 'https://contoso.b2clogin.com/contoso.onmicrosoft.com/oauth2/v2.0/authorize', identityProviderOptions).origin,
     'https://contoso.b2clogin.com',
   );
+  assert.throws(
+    () => guardedUrl(baseUrl, 'http://contoso.example/authorize', {
+      allowIdentityProviderNavigation: true,
+      identityProviderOrigins: ['http://contoso.example/authorize'],
+    }),
+    /HTTPS is required/,
+  );
 });
 
-test('browser target boundary permits only generated previews in preview mode', () => {
+test('browser target boundary rejects generated previews because authenticated automation is same-origin', () => {
   const baseUrl = 'https://agentweaver.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io';
   const previewUrl = 'https://swift-falcon-amber-abcdefghijklmnopqrstuvwxyz-preview.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io';
 
-  assert.equal(
-    guardedUrl(baseUrl, previewUrl, { allowAgentweaverPreviewNavigation: true }).hostname,
-    new URL(previewUrl).hostname,
-  );
-  assert.throws(
-    () => guardedUrl(baseUrl, previewUrl, {}),
-    /cross-origin/,
-  );
-  assert.throws(
-    () => guardedUrl(baseUrl, 'https://evil-preview.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io', {
-      allowAgentweaverPreviewNavigation: true,
-    }),
-    /cross-origin/,
-  );
-  assert.throws(
-    () => guardedUrl(baseUrl, 'https://swift-falcon-amber-abcdefghijklmnopqrstuvwxyz-preview.other.staging.example.com', {
-      allowAgentweaverPreviewNavigation: true,
-    }),
-    /cross-origin/,
-  );
+  assert.throws(() => guardedUrl(baseUrl, previewUrl, {}), /cross-origin/);
 });

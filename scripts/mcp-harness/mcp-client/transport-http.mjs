@@ -1,7 +1,7 @@
-import { assertTargetAllowed } from '../../harness-shared/target-guard.mjs';
+import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
 
-export async function createHttpTransport({ target, token, allowProd = false, iUnderstandProd = false }) {
-  assertTargetAllowed(target, { allowProd, confirmProduction: iUnderstandProd });
+export async function createHttpTransport({ target, token }) {
+  const url = validateNetworkTarget(target, { exactPath: '/mcp' });
   const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
-  return new StreamableHTTPClientTransport(new URL(target), { requestInit: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined });
+  return new StreamableHTTPClientTransport(url, { requestInit: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined });
 }

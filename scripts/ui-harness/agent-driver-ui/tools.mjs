@@ -27,6 +27,7 @@ import {
   navigateForAppEvidence,
 } from '../lib/ui-actions.mjs';
 import { computeDriverP0, reportDriverP0 } from '../lib/reporter-ui.mjs';
+import { networkTargetEvidence } from '../../harness-shared/target-guard.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -44,10 +45,7 @@ function parseArgs(argv) {
 }
 
 function options(args) {
-  return {
-    allowProd: args['allow-prod'] === true,
-    confirmProduction: args['confirm-production'] === true,
-  };
+  return {};
 }
 
 async function resolveIdentityProviderOrigins(baseUrl, guardOptions) {
@@ -118,6 +116,10 @@ export async function init(args) {
   const session = {
     id: randomUUID(), baseUrl, persona: { id: persona.id, name: persona.name, coreVersion: persona.version, adapterVersion: persona.adapter.version, text: persona.text },
     storageState, steps: [], commandFailures: [], processedRequestIds: [], createdAt: new Date().toISOString(),
+    preflight: {
+      ...networkTargetEvidence(baseUrl, { surface: 'ui', authSource: 'playwright-storage-state' }),
+      cleanupIntent: 'close browser session and remove runtime state',
+    },
   };
   await saveSession(SESSIONS, session);
   try {
@@ -231,6 +233,13 @@ export async function finish(args, { write = console.log } = {}) {
     };
     const driver = computeDriverP0(session.steps, session.commandFailures);
     const result = { driver, normalizedEvidence: adaptUiEvidence(transcript) };
+    session.preflight ??= {
+      ...networkTargetEvidence(session.baseUrl, { surface: 'ui', authSource: 'playwright-storage-state' }),
+      cleanupIntent: 'close browser session and remove runtime state',
+    };
+    session.preflight.runId = session.id;
+    session.preflight.cleanupResult = 'completed';
+    result.preflight = session.preflight;
     const transcriptDirectory = path.join(ROOT, 'transcripts-ui', session.id);
     await mkdir(transcriptDirectory, { recursive: true });
     await writeFile(path.join(transcriptDirectory, 'result.json'), JSON.stringify(result, null, 2), 'utf8');

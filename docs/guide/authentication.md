@@ -7,6 +7,11 @@ title: Authentication
 Agentweaver uses Microsoft Entra ID for browser sign-in and platform authorization.
 Sign in with your organization account. Entra App Roles and project assignments control your Agentweaver actions.
 
+The deployed OAuth issuer is pinned to the configured public HTTPS origin, and the MCP
+resource is always that exact origin plus `/mcp`. It is not inferred from request
+headers. Hosted signing and encryption keys come from the active and previous usable
+versions of configured Azure Key Vault certificate families.
+
 GitHub access is separate from sign-in. The Copilot App provides AI access. The Repo App provides repository access.
 
 ## Signing in

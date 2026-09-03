@@ -12,8 +12,8 @@
 // run-persona.mjs does NOT itself dispatch PersonaActor (the Harness agent does) — this
 // file owns the DETERMINISTIC scaffolding around that dynamic drive, in two phases:
 //
-//   prepare  (default): resolve the persona brief (core + <id>.mcp.md adapter), apply the
-//            shared target guard (http only; stdio is a local subprocess and exempt),
+//   prepare  (default): resolve the persona brief (core + <id>.mcp.md adapter), apply
+//            shared transport validation (http only; stdio is a local subprocess and exempt),
 //            resolve the token, construct the transcript path under transcripts/, and
 //            assemble the exact dispatch prompt for the agent-driver charter. It writes
 //            that prompt under dispatch/ and prints a DISPATCH-REQUIRED banner for the
@@ -41,7 +41,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, isAbsolute, resolve } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
-import { assertTargetAllowed } from '../harness-shared/target-guard.mjs';
+import { networkTargetEvidence, validateNetworkTarget } from '../harness-shared/target-guard.mjs';
 import { loadPersona, listPersonas } from '../persona-briefs/index.mjs';
 import { loadCapabilitiesContract, checkCapabilities } from './lib/capabilities-contract.mjs';
 import { computeMcpP0 } from './lib/mcp-p0.mjs';
@@ -53,7 +53,7 @@ export const CHARTER_PATH = join(HERE, 'agent-driver', 'AGENT.md');
 export const CONTRACT_PATH = join(HERE, 'required-capabilities.json');
 
 export function parseArgs(argv) {
-  const out = { serverArgs: null, allowProd: false, confirmProduction: false, insecure: false };
+  const out = { serverArgs: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--scenario' || a === '--persona') out.scenario = argv[++i];
@@ -71,9 +71,6 @@ export function parseArgs(argv) {
     else if (a === '--server-command') out.serverCommand = argv[++i];
     else if (a === '--server-args') out.serverArgs = argv[++i];
     else if (a === '--timeout') out.timeoutMs = Number(argv[++i]) * 1000;
-    else if (a === '--allow-prod') out.allowProd = true;
-    else if (a === '--i-understand-prod' || a === '--i-understand-this-targets-production') out.confirmProduction = true;
-    else if (a === '--insecure') out.insecure = true;
     else if (a === '--no-capability-check') out.skipCapabilityCheck = true;
     else if (a === '--list') out.list = true;
   }
@@ -82,9 +79,9 @@ export function parseArgs(argv) {
 
 /**
  * Resolve the transport shape from `--target`. `stdio` is a local-subprocess sentinel,
- * never a URL, so it bypasses the host allowlist entirely (matching the smoke path and
+ * never a URL, so it bypasses network validation entirely (matching the smoke path and
  * README). Any other value must be a real http(s) base URL that includes the `/mcp`
- * suffix, and is subject to the shared target guard.
+ * suffix, and is subject to shared transport validation.
  * @returns {{ mode: 'stdio'|'http', target: string }}
  */
 export function resolveTransport(args) {
@@ -93,14 +90,14 @@ export function resolveTransport(args) {
 }
 
 /**
- * Apply the shared target guard for http targets only. Returns an error string when the
+ * Apply shared transport validation for http targets only. Returns an error string when the
  * target is disallowed, else null. stdio has no network target so it is always allowed.
  * @returns {string|null}
  */
 export function checkTargetAllowed(transport, args) {
   if (transport.mode === 'stdio') return null;
   try {
-    assertTargetAllowed(transport.target, { allowProd: args.allowProd, confirmProduction: args.confirmProduction });
+    validateNetworkTarget(transport.target, { exactPath: '/mcp' });
     return null;
   } catch (err) {
     return err.message;
@@ -142,7 +139,7 @@ export function buildDispatchPrompt({ persona, transport, token, transcriptPath,
     : 'Broker token: NONE - obtain one through the Agentweaver OAuth flow (stdio transport needs none).';
   const targetLine = transport.mode === 'stdio'
     ? 'Transport: stdio (a local MCP server subprocess Harness already started — no network target, no token needed).'
-    : `Transport: http — MCP endpoint ${transport.target} (already vetted by the target guard). Attach the bearer token on every request.`;
+    : `Transport: http — MCP endpoint ${transport.target} (already transport-validated). Attach the bearer token on every request.`;
   return [
     '# MCP persona-driver dispatch',
     '',
@@ -264,7 +261,7 @@ export async function runCapabilityCheck({ client, contractPath = CONTRACT_PATH 
  * judge. Returns { normalized, prompt, p0, capability, parseErrors }.
  */
 export function prepareJudgeEvidence({
-  transcriptText, persona, metadata, capability = { available: false, reason: 'not run' },
+  transcriptText, persona, metadata, capability = { available: false, reason: 'not run' }, preflight,
 }) {
   const { turns, parseErrors } = parseTranscriptJsonl(transcriptText);
   const p0 = computeMcpP0({ turns });
@@ -283,7 +280,10 @@ export function prepareJudgeEvidence({
         ? { title: 'required-capabilities contract', kind: 'P0', evidence: JSON.stringify(capability.report) }
         : { title: 'required-capabilities contract', kind: 'P0', evidence: `not evaluated: ${capability.reason}` },
     ],
-    attachments: parseErrors.length ? [{ kind: 'transcript-parse-errors', evidence: JSON.stringify(parseErrors) }] : [],
+    attachments: [
+      ...(preflight ? [{ kind: 'sanitized-preflight', evidence: JSON.stringify(preflight) }] : []),
+      ...(parseErrors.length ? [{ kind: 'transcript-parse-errors', evidence: JSON.stringify(parseErrors) }] : []),
+    ],
     summary: `MCP harness ${metadata.scenarioId}`,
   });
   return {
@@ -301,9 +301,9 @@ export function prepareJudgeEvidence({
  */
 export async function finalizeVerdict({
   transcriptText, persona, metadata, capability = { available: false, reason: 'not run' },
-  outPath, judge, timeoutMs, now = new Date(),
+  outPath, judge, timeoutMs, now = new Date(), preflight,
 }) {
-  const prepared = prepareJudgeEvidence({ transcriptText, persona, metadata, capability });
+  const prepared = prepareJudgeEvidence({ transcriptText, persona, metadata, capability, preflight });
   const { normalized, p0, parseErrors } = prepared;
   const judged = await judgeEvidence(normalized, { judge, timeoutMs });
   const finalOut = outPath ?? join(HERE, 'verdicts', `${metadata.scenarioId}-${stamp(now)}.json`);
@@ -336,8 +336,6 @@ async function connectClient(transport, args) {
     command: args.serverCommand,
     args: args.serverArgs ? JSON.parse(args.serverArgs) : ['--stdio'],
     token: resolveToken(args.token) ?? undefined,
-    allowProd: args.allowProd,
-    iUnderstandProd: args.confirmProduction,
   });
 }
 
@@ -372,6 +370,15 @@ async function main() {
   const now = new Date();
   const sessionId = buildSessionId({ scenario: args.scenario, now });
   const metadata = buildVerdictMetadata({ args, persona, transport, sessionId, now });
+  const preflight = {
+    ...networkTargetEvidence(transport.target, {
+      surface: 'mcp',
+      authSource: args.token ? 'cli-token' : process.env.AGENTWEAVER_TOKEN ? 'environment' : 'none',
+      exactPath: transport.mode === 'http' ? '/mcp' : undefined,
+    }),
+    projectId: args.projectId ?? null,
+    cleanupIntent: args.projectId ? 'caller-owned-project-not-deleted' : 'none',
+  };
 
   // ---- FINALIZE phase: a transcript already exists, judge it. ----
   if (args.transcript) {
@@ -407,7 +414,7 @@ async function main() {
 
     if (nativeJudgeExport) {
       const { normalized, prompt, p0 } = prepareJudgeEvidence({
-        transcriptText, persona, metadata, capability,
+        transcriptText, persona, metadata, capability, preflight,
       });
       await mkdir(dirname(args.dumpEvidence), { recursive: true });
       await mkdir(dirname(args.promptOut), { recursive: true });
@@ -426,7 +433,7 @@ async function main() {
     }
 
     const { verdict, verdictPath, p0 } = await finalizeVerdict({
-      transcriptText, persona, metadata, capability, outPath: args.out, timeoutMs: args.timeoutMs, now,
+      transcriptText, persona, metadata, capability, outPath: args.out, timeoutMs: args.timeoutMs, now, preflight,
     });
 
     console.log(`Persona     : ${metadata.persona}`);
@@ -456,15 +463,18 @@ async function main() {
     persona, transport, token, transcriptPath, projectId: args.projectId, goal: args.goal, charterText,
   });
   const dispatchPath = join(HERE, 'dispatch', `${sessionId}.md`);
+  const preflightPath = join(HERE, 'dispatch', `${sessionId}.preflight.json`);
   await mkdir(dirname(dispatchPath), { recursive: true });
   await mkdir(dirname(transcriptPath), { recursive: true });
   await writeFile(dispatchPath, `${prompt}\n`, 'utf8');
+  await writeFile(preflightPath, `${JSON.stringify(preflight, null, 2)}\n`, 'utf8');
 
   console.log('DISPATCH-REQUIRED — a fresh agent-driver sub-agent must drive this persona.');
   console.log(`Persona        : ${metadata.persona}`);
   console.log(`Transport      : ${transport.mode}${transport.mode === 'http' ? ` (${transport.target})` : ''}`);
   console.log(`Charter        : ${relativize(CHARTER_PATH)}`);
   console.log(`Dispatch prompt: ${relativize(dispatchPath)}`);
+  console.log(`Preflight      : ${relativize(preflightPath)}`);
   console.log(`Transcript path: ${relativize(transcriptPath)}`);
   console.log('');
   console.log('Next: dispatch the agent-driver sub-agent (via the `task` tool) with the prompt above,');

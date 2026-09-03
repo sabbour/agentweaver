@@ -225,6 +225,74 @@ export async function run(cfg, opts = {}) {
     log.info("--- Authenticated feature validation ---");
     const origin = `https://${host}`;
     const resource = `${origin}/mcp`;
+    const configuredOrigin = await jsonpath(
+      NAMESPACE,
+      ["configmap", "agentweaver-runtime-config"],
+      "{.data.OAUTH_PUBLIC_ORIGIN}",
+      { exec },
+    );
+    const configuredSigningName = await jsonpath(
+      NAMESPACE,
+      ["configmap", "agentweaver-runtime-config"],
+      "{.data.OAUTH_SIGNING_CERTIFICATE_NAME}",
+      { exec },
+    );
+    const configuredEncryptionName = await jsonpath(
+      NAMESPACE,
+      ["configmap", "agentweaver-runtime-config"],
+      "{.data.OAUTH_ENCRYPTION_CERTIFICATE_NAME}",
+      { exec },
+    );
+    const expectedSigningName = cfg.OAUTH_SIGNING_CERTIFICATE_NAME || "agentweaver-oauth-signing";
+    const expectedEncryptionName = cfg.OAUTH_ENCRYPTION_CERTIFICATE_NAME || "agentweaver-oauth-encryption";
+    record(
+      configuredOrigin === origin,
+      configuredOrigin === origin
+        ? "OAuth public origin ConfigMap value matches the canonical ingress origin"
+        : `OAuth public origin ConfigMap mismatch (expected ${origin})`,
+    );
+    record(
+      configuredSigningName === expectedSigningName && configuredEncryptionName === expectedEncryptionName,
+      configuredSigningName === expectedSigningName && configuredEncryptionName === expectedEncryptionName
+        ? "OAuth Key Vault certificate families are wired to the runtime ConfigMap"
+        : "OAuth Key Vault certificate family ConfigMap values are missing or inconsistent",
+    );
+
+    if (cfg.KEYVAULT_NAME) {
+      for (const [usage, name] of [
+        ["signing", expectedSigningName],
+        ["encryption", expectedEncryptionName],
+      ]) {
+        const certificate = await exec.capture("az", [
+          "keyvault", "certificate", "show",
+          "--vault-name", cfg.KEYVAULT_NAME,
+          "--name", name,
+          "--output", "none",
+        ], { allowFailure: true });
+        record(
+          certificate.code === 0,
+          certificate.code === 0
+            ? `OAuth ${usage} certificate '${name}' exists in Key Vault`
+            : `OAuth ${usage} certificate '${name}' is missing from Key Vault`,
+        );
+        const versions = await exec.capture("az", [
+          "keyvault", "secret", "list-versions",
+          "--vault-name", cfg.KEYVAULT_NAME,
+          "--name", name,
+          "--query", 'length([?attributes.enabled != `false`])',
+          "--output", "tsv",
+        ], { allowFailure: true });
+        const usableVersionCount = Number.parseInt(versions.stdout.trim(), 10);
+        record(
+          versions.code === 0 && usableVersionCount >= 1,
+          versions.code === 0 && usableVersionCount >= 1
+            ? `OAuth ${usage} certificate has ${usableVersionCount} enabled version(s); runtime retains the newest two usable versions`
+            : `OAuth ${usage} certificate has no enabled secret version`,
+        );
+      }
+    } else {
+      info("KEYVAULT_NAME is unavailable; skipping OAuth certificate version verification");
+    }
     const resourceMetadataPaths = [
       "/.well-known/oauth-protected-resource",
       "/.well-known/oauth-protected-resource/mcp",

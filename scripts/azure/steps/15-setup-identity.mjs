@@ -31,6 +31,13 @@ export const AGENTHOST_IDENTITY_NAME = "agentweaver-agenthost-identity";
 export const OAUTH_SIGNING_CERTIFICATE_NAME = "agentweaver-oauth-signing";
 export const OAUTH_ENCRYPTION_CERTIFICATE_NAME = "agentweaver-oauth-encryption";
 
+export function oauthCertificateNames(cfg = {}) {
+  return {
+    signing: cfg.OAUTH_SIGNING_CERTIFICATE_NAME || OAUTH_SIGNING_CERTIFICATE_NAME,
+    encryption: cfg.OAUTH_ENCRYPTION_CERTIFICATE_NAME || OAUTH_ENCRYPTION_CERTIFICATE_NAME,
+  };
+}
+
 /**
  * Sets a Key Vault secret, tolerating transient RBAC-propagation Forbidden errors with bounded retry.
  * Writes `value` to a short-lived private (0600) scratch file and passes it via `az`'s '--file'
@@ -278,8 +285,9 @@ export async function run(cfg, opts = {}) {
 
   log.info("");
   log.section("Step 3b: Create durable OAuth certificates");
-  await createCertificateIfMissing(cfg.KEYVAULT_NAME, OAUTH_SIGNING_CERTIFICATE_NAME, { exec, log });
-  await createCertificateIfMissing(cfg.KEYVAULT_NAME, OAUTH_ENCRYPTION_CERTIFICATE_NAME, { exec, log });
+  const certificateNames = oauthCertificateNames(cfg);
+  await createCertificateIfMissing(cfg.KEYVAULT_NAME, certificateNames.signing, { exec, log });
+  await createCertificateIfMissing(cfg.KEYVAULT_NAME, certificateNames.encryption, { exec, log });
   await createRoleAssignmentIdempotent(
     ["--role", "Key Vault Secrets Officer", "--assignee-object-id", IDENTITY_OBJECT_ID, "--assignee-principal-type", "ServicePrincipal", "--scope", KEYVAULT_ID],
     { exec },

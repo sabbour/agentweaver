@@ -167,26 +167,33 @@ Run the deterministic CLI-to-MCP smoke test from the repository root:
 ```powershell
 $env:AGENTWEAVER_BASE_URL = "https://<staging-host>"
 $env:AGENTWEAVER_TOKEN = "<agentweaver-broker-token>"
-$env:AGENTWEAVER_SMOKE_PROJECT_ID = "<configured-staging-project-id>" # optional
 npm run test:mcp-smoke
 ```
 
-The test discovers the live MCP tools, verifies their capability contract, checks
-Agentweaver sign-in, creates or reuses a project, submits a minimal run, polls for at
-most five minutes, confirms an outcome gate when needed, requires a successful
-terminal state and at least one artifact, then archives the run. Each failure
-names the workflow step and MCP tool that failed.
+The test discovers the live MCP tools (including `project_delete`), verifies their
+capability contract, creates a uniquely named project using a server-assigned workspace
+path and the software-development blueprint, submits a minimal run, polls for at most
+five minutes, confirms an outcome gate when needed, and requires an artifact. In
+`finally`, it archives the run and deletes only the project it created, including after
+failure, timeout, or cancellation. The primary failure remains separate from cleanup
+failures.
 
 For local stdio testing, pass the server command explicitly:
 
 ```powershell
 npm run test:mcp-smoke -- --target stdio --server-command dotnet `
   --server-args '["run","--project","apps/Agentweaver.Mcp","--","--stdio"]' `
-  --project-id <id>
+  --project-id <id> `
+  --project-is-disposable
 ```
 
-HTTP targets must be localhost or staging unless both `--allow-prod` and
-`--i-understand-prod` are supplied. Prefer a preconfigured smoke project; if no
-project exists, use `AGENTWEAVER_SMOKE_PROJECT_NAME`,
-`AGENTWEAVER_SMOKE_WORKING_DIRECTORY`, and `AGENTWEAVER_SMOKE_BLUEPRINT_ID` to
-control project creation.
+An explicit project ID is accepted only with `--project-is-disposable`; smoke archives
+its run but never deletes a caller-owned project. Without an ID, use
+`AGENTWEAVER_SMOKE_PROJECT_NAME`, `AGENTWEAVER_SMOKE_WORKING_DIRECTORY`, and
+`AGENTWEAVER_SMOKE_BLUEPRINT_ID` only to override creation defaults. Do not pass a local
+Windows path to a deployed AKS target.
+
+HTTP targets must be absolute URLs with pathname exactly `/mcp`. Any HTTPS host is
+accepted; HTTP is loopback-only. URL credentials, fragments, `/mcp/`, and TLS bypasses
+are rejected. Sanitized preflight evidence records origin/path, auth source, project/run
+IDs, cleanup intent/result, and TLS mode without recording the token.

@@ -103,6 +103,8 @@ test('a failed capture command persists through finish', async () => {
     );
 
     assert.equal(result.driver.pass, false);
+    assert.equal(result.preflight.surface, 'ui');
+    assert.equal(result.preflight.cleanupResult, 'completed');
     assert.deepEqual(result.driver.failures.map((item) => item.kind), ['no-evidence', 'command-failed']);
     assert.match(output[0], /UI DRIVER P0 FAIL/);
   } finally {

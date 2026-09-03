@@ -37,7 +37,6 @@ test('parseArgs maps the api-parity CLI shape', () => {
     '--project-id', 'proj-1', '--batch-id', 'b1', '--seed', 's1', '--out', 'v.json',
     '--transcript', 'tr.jsonl', '--dump-evidence', 'evidence.json', '--prompt-out', 'prompt.txt',
     '--server-command', 'dotnet', '--server-args', '["run"]',
-    '--allow-prod', '--i-understand-prod',
   ]);
   assert.equal(args.scenario, 'priya');
   assert.equal(args.target, 'http://localhost:5000/mcp');
@@ -51,8 +50,6 @@ test('parseArgs maps the api-parity CLI shape', () => {
   assert.equal(args.promptOut, 'prompt.txt');
   assert.equal(args.serverCommand, 'dotnet');
   assert.equal(args.serverArgs, '["run"]');
-  assert.equal(args.allowProd, true);
-  assert.equal(args.confirmProduction, true);
 });
 
 test('parseArgs accepts --persona and --base-url aliases', () => {
@@ -67,23 +64,19 @@ test('resolveTransport treats stdio as a sentinel and any URL as http', () => {
   assert.deepEqual(resolveTransport({ target: 'http://localhost:5000/mcp' }), { mode: 'http', target: 'http://localhost:5000/mcp' });
 });
 
-test('checkTargetAllowed exempts stdio and enforces the guard for http', () => {
+test('checkTargetAllowed exempts stdio and validates transport and exact MCP path for http', () => {
   assert.equal(checkTargetAllowed({ mode: 'stdio', target: 'stdio' }, {}), null);
   assert.equal(checkTargetAllowed({ mode: 'http', target: 'http://localhost:5000/mcp' }, {}), null);
-  assert.equal(checkTargetAllowed({ mode: 'http', target: 'https://mcp.staging.example.test/mcp' }, {}), null);
-  const prod = checkTargetAllowed({ mode: 'http', target: 'https://prod.example.test/mcp' }, {});
-  assert.match(prod, /--allow-prod/);
-  assert.equal(
-    checkTargetAllowed({ mode: 'http', target: 'https://prod.example.test/mcp' }, { allowProd: true, confirmProduction: true }),
-    null,
-  );
+  assert.equal(checkTargetAllowed({ mode: 'http', target: 'https://arbitrary.example.test/mcp' }, {}), null);
+  assert.match(checkTargetAllowed({ mode: 'http', target: 'http://remote.example.test/mcp' }, {}), /HTTPS/);
+  assert.match(checkTargetAllowed({ mode: 'http', target: 'https://remote.example.test/mcp/' }, {}), /exactly/);
 });
 
 test('buildSessionId and buildTranscriptPath are deterministic for a fixed clock', () => {
   const now = new Date('2026-07-15T03:20:11.500Z');
   const sessionId = buildSessionId({ scenario: 'priya', now });
   assert.equal(sessionId, 'priya-live-2026-07-15T03-20-11-500Z');
-  const transcriptPath = buildTranscriptPath({ sessionId, dir: '/tmp/transcripts' });
+  const transcriptPath = buildTranscriptPath({ sessionId, dir: path.join(TEST_DIR, 'transcripts') });
   assert.equal(path.basename(transcriptPath), 'priya-live-2026-07-15T03-20-11-500Z.jsonl');
 });
 
@@ -192,6 +185,7 @@ test('runCapabilityCheck fails closed without a client and runs the contract wit
       { name: 'project_github_capability_status' },
       { name: 'project_list' },
       { name: 'project_create', inputSchema: { type: 'object', required: ['name', 'working_directory'], properties: { name: { type: 'string' }, working_directory: { type: 'string' } } } },
+      { name: 'project_delete', inputSchema: { type: 'object', required: ['project_id'], properties: { project_id: { type: 'string' } } } },
       { name: 'diagnostics_get' },
       { name: 'coordinator_outcome_spec_confirm', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } } },
     ]),

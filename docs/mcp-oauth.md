@@ -32,6 +32,13 @@ Production loads active and previous signing and encryption certificate versions
 from Azure Key Vault. Startup fails closed without usable durable keys.
 Development may generate process-ephemeral keys.
 
+Provision and deploy carry the certificate family names through
+`OAUTH_SIGNING_CERTIFICATE_NAME` and `OAUTH_ENCRYPTION_CERTIFICATE_NAME`. Routine
+rotation adds a new version under the same name; the loader selects the newest two
+enabled, time-valid versions. Deployment verification checks the canonical origin,
+exact `/mcp` resource, runtime certificate names, Key Vault versions, and keyed RS256
+JWKS output.
+
 In production the gateway terminates TLS and forwards HTTP to the API. Forwarded
 scheme and host processing runs before routing and OpenIddict, accepts exactly one
 hop, and trusts only configured private gateway CIDRs. The AKS deploy derives

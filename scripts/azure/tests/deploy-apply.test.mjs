@@ -52,6 +52,8 @@ const CFG = {
   ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
   ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
   APPINSIGHTS_WORKSPACE_ID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  OAUTH_SIGNING_CERTIFICATE_NAME: "oauth-signing-custom",
+  OAUTH_ENCRYPTION_CERTIFICATE_NAME: "oauth-encryption-custom",
 };
 
 function makeFakes({
@@ -298,6 +300,8 @@ test("run(): applied manifests carry real kustomize-resolved values, not the com
   assert.match(runtimeConfig, /OAUTH_PUBLIC_ORIGIN/);
   assert.match(runtimeConfig, /OAUTH_TRUSTED_PROXY_NETWORKS.*10\.244\.0\.0\/16/);
   assert.match(runtimeConfig, /OAUTH_SIGNING_CERTIFICATE_NAME/);
+  assert.match(runtimeConfig, /oauth-signing-custom/);
+  assert.match(runtimeConfig, /oauth-encryption-custom/);
   assert.doesNotMatch(runtimeConfig, /mcp-oauth-signing-key|Auth__OAuth__(?:SigningKey|Issuer|Audience)|OAUTH_ISSUER|OAUTH_AUDIENCE/);
 
   const secretProviderClass = writtenFiles.get("secret-provider-class.yaml");

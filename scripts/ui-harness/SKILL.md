@@ -22,9 +22,10 @@ node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness
 npm --prefix scripts/ui-harness test
 ```
 
-Targets are limited to localhost and staging by the shared target guard. A production
-target requires **both** `--allow-prod` and `--confirm-production` on every applicable
-command. Never add those flags without explicit authorization.
+Targets are host-agnostic. Require an absolute HTTPS URL except for loopback HTTP, keep
+normal TLS validation enabled, and reject URL credentials/fragments. Automated browser
+requests and navigation stay on the configured app origin; only the explicit headful
+login flow may visit configured identity-provider origins.
 
 ## Authentication
 
@@ -122,16 +123,8 @@ anchor, declare either `--ready-test-id <test-id>` or both
 when necessary with `--readiness-timeout <milliseconds>`. A declared readiness anchor
 is mandatory for that command: the generic app shell cannot satisfy it.
 
-To open an Agentweaver sandbox preview returned by the UI, use the dedicated
-preview action:
-
-```powershell
-node scripts/ui-harness/agent-driver-ui/tools.mjs open-preview --session <sessionId> --url https://<generated-preview-host>
-```
-
-The browser permits this cross-origin navigation only for a generated
-`{token}-preview.<staging-zone>` host associated with the session's Agentweaver
-staging host. Other cross-origin navigation remains blocked.
+Cross-origin preview navigation is intentionally not available from an authenticated
+harness context. Validate preview URLs from a separate credential-free browser context.
 
 For `click` and `type-coordinator`, use `--test-id` where available. Otherwise provide
 both `--role <aria-role>` and `--name <exact-accessible-name>`. Do not use arbitrary CSS

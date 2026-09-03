@@ -12,7 +12,7 @@ There are two entry points:
   a fresh sub-agent dispatched under `agent-driver/AGENT.md` (the MCP peer of the API
   harness's `PersonaActor`) discovers the live tool menu, decides each `tools/call`
   live, pushes back, never blind-approves a gate, and appends its own JSONL transcript.
-  `run-persona.mjs` owns the deterministic scaffolding (target guard, transcript path,
+  `run-persona.mjs` owns the deterministic scaffolding (transport validation, transcript path,
   capability contract, judge) in two phases — `prepare` (emit the dispatch prompt) and
   `finalize --transcript <path>` (judge the transcript into a normalized verdict). See
   `SKILL.md` for the full contract.
@@ -22,13 +22,12 @@ There are two entry points:
 
 - **stdio transport** (`--target stdio`) spawns a **local subprocess** via
   `--server-command`/`--server-args`. There is no network target involved, so
-  `target-guard`'s host allowlist does **not** apply — `stdio` is only a
+  network target validation does **not** apply — `stdio` is only a
   transport-selector sentinel, never a URL.
 - **http transport** (`--target <url>`) requires a real base URL, and that URL
   must include the server's `/mcp` path suffix (e.g. `https://<host>/mcp`) —
-  the bare origin is not the endpoint. `target-guard`'s host allowlist
-  (`localhost`, `127.0.0.1`, `::1`, `*.staging.*`) applies to it; production
-  hosts require both `--allow-prod` and `--i-understand-prod`.
+  the pathname must be exactly `/mcp`. Any HTTPS host is accepted; HTTP is
+  loopback-only. URL credentials/fragments and TLS bypasses are rejected.
 - The Agentweaver MCP server requires **OAuth**: connecting over http transport
   needs a valid, authenticated bearer token, not an arbitrary string.
   `transport-http.mjs` attaches `--token`/`AGENTWEAVER_TOKEN` as the request's
@@ -39,24 +38,24 @@ There are two entry points:
 - Authentication: `AGENTWEAVER_TOKEN` or `--token`. The smoke
   assumes GitHub capability authorization is supplied out of band; it does not
   automate a one-time browser handoff.
-- Project selection: `--project-id` / `AGENTWEAVER_SMOKE_PROJECT_ID` takes
-  precedence. Otherwise the smoke reuses `--project-name` /
-  `AGENTWEAVER_SMOKE_PROJECT_NAME`, falls back to the first existing project,
-  or creates a project with `project_create`. Use `--working-directory` and
-  `--blueprint-id` (or their `AGENTWEAVER_SMOKE_*` env equivalents) to
-  configure project creation.
+- Project ownership: `--project-id` / `AGENTWEAVER_SMOKE_PROJECT_ID` requires
+  `--project-is-disposable`; the run is archived but that caller-owned project
+  is never deleted. Without an ID, smoke always creates a unique owned project
+  with a remote-safe empty working-directory request and
+  `blueprint-software-development` (override with `--working-directory` /
+  `--blueprint-id`), then deletes only that project in `finally`.
 
 Stdio example:
 
 ```powershell
-npm run smoke -- --target stdio --server-command dotnet --server-args '["run","--project","apps/Agentweaver.Mcp","--","--stdio"]' --project-id <id>
+npm run smoke -- --target stdio --server-command dotnet --server-args '["run","--project","apps/Agentweaver.Mcp","--","--stdio"]' --project-id <id> --project-is-disposable
 ```
 
 HTTP example (against a locally running server; the `/mcp` suffix is required,
 and `$env:AGENTWEAVER_TOKEN` must be a valid OAuth-derived bearer token):
 
 ```powershell
-npm run smoke -- --target http://localhost:5000/mcp --token $env:AGENTWEAVER_TOKEN --project-id <id>
+npm run smoke -- --target http://localhost:5000/mcp --token $env:AGENTWEAVER_TOKEN --project-id <id> --project-is-disposable
 ```
 
 From the repository root, the equivalent command is `npm run test:mcp-smoke -- ...`.

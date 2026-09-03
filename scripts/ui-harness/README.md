@@ -26,9 +26,11 @@ If Edge is already running with `--remote-debugging-port=9222`, use `--cdp` inst
 See `scripts/ui-harness/SKILL.md` for full options and what is saved.
 
 The local git-ignored `.auth/staging.storageState.json` is reused headlessly. Expiry stops
-with `AUTH_EXPIRED`; the harness never automates reauthentication. Targets are
-restricted to localhost/staging unless both `--allow-prod` and `--confirm-production`
-are explicitly supplied. Storage state is never logged or attached to evidence.
+with `AUTH_EXPIRED`; the harness never automates reauthentication. Any HTTPS host is
+accepted (HTTP is loopback-only), with normal TLS validation. Automated navigation and
+requests are same-origin; only the explicit headful login flow may visit configured
+identity-provider origins. Storage state is origin-filtered and never logged or attached
+to evidence.
 
 `init` owns one headless browser worker per session. Separate action invocations reuse
 that worker's page, so navigation and browser state survive a documented

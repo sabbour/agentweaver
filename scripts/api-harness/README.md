@@ -48,7 +48,10 @@ node run-persona.mjs --scenario generated-artifacts-seam --target https://agentw
 
 `--target` is an alias for the legacy `--base-url`. The default rung is `scoping`; deeper approval driving remains opt-in through scenario configuration.
 
-Targets are restricted to localhost or staging hosts at `AgentweaverClient` construction. Production additionally requires both `--allow-prod` and `--i-understand-this-targets-production`; this is independent of the TLS-only `--allow-insecure-prod` flag.
+Targets are environment-agnostic: any absolute HTTPS URL is accepted, while HTTP is
+limited to loopback. URL credentials and fragments are rejected, normal TLS validation
+is always used, and bearer credentials never cross the configured origin or a
+cross-origin redirect.
 
 The generated verdict uses `agentweaver.persona-judge-verdict/v1`, including its batch/scenario join key and repro provenance. When running as the `Harness` agent, the preferred judging path is agent-native: build the prompt with `node scripts/harness-judge/core.mjs <evidence.json> --prompt-out <prompt.txt>`, dispatch it via the `task` tool to `agent_type: "Judge"` (`.github/agents/judge.agent.md`, `tools: []` — pure text-in/text-out, no file/shell/network access), then parse and persist the result with `scripts/harness-judge/save-verdict.mjs`. See `.github/agents/harness.agent.md`'s "Judging" section for the exact flow.
 

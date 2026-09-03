@@ -64,9 +64,8 @@ real live API, never simulated):
      action. Require review/confirmation before running a newly generated deep
      scenario unattended.
    - Resolve the target base URL + bearer token (see Target resolution below).
-     Also decide whether `-k`/`--insecure` is warranted (only for
-     localhost/staging hosts, per `checkInsecureAllowed`) and a transcript file
-     path under `scripts/api-harness/transcripts/` for PersonaActor to write to.
+     Keep normal TLS validation enabled and choose a transcript file path under
+     `scripts/api-harness/transcripts/` for PersonaActor to write to.
    - **Start a live tail of that transcript path so the operator can watch turns
      land in real time, before or right after dispatching PersonaActor.** Since
      PersonaActor appends each turn via shell redirection as it goes (see stage
@@ -131,8 +130,8 @@ real live API, never simulated):
      the full persona-core brief + surface-adapter text verbatim, **the
      concrete goal statement for this run** (the one piece of per-invocation
      content the now-goal-agnostic persona-core file no longer carries itself),
-     the resolved target base URL and bearer token, whether `-k`/`--insecure`
-     is needed, and the transcript file path to append to.
+     the resolved target base URL and bearer token, and the transcript file path
+     to append to. Never authorize a TLS-validation bypass.
    - While PersonaActor's background dispatch is still running, repeatedly (on
      a short interval, or once per your own reasoning turn — whichever the
      runtime naturally gives you) read back the tail process's accumulated
@@ -285,7 +284,12 @@ running as an actual Harness agent session:
 - No API URL is hardcoded for this agent. Resolve the target base URL in this order: (1) an explicit `--base-url`/`--target` flag or `reproManifest.targetRevision` provided by the caller; (2) the `$AGENTWEAVER_BASE_URL` environment variable in the current shell; (3) look up the live staging ingress hostname via `kubectl get ingress -A` (requires the correct cluster context/subscription to be current).
 - If none of the above resolves a target, stop and ask the requester for the base URL rather than guessing or reusing a stale one from memory/prior runs.
 - Resolve the bearer token in this order: an explicit token if supplied by the caller, else `$AGENTWEAVER_TOKEN`, else `gh auth token`.
-- Staging URLs follow the pattern `https://agentweaver.<zone>.westus2.staging.aksapp.io`. Apply the same policy `checkInsecureAllowed` (`scripts/api-harness/run-persona.mjs`) encodes before deciding whether PersonaActor may pass `-k`/`--insecure`: only for `localhost`/`127.0.0.1`/`::1`/`*.localhost`/`*.staging.*`/`*.staging` hosts, never for a production-looking host without an explicit, separately-confirmed override. `scripts/harness-shared/target-guard.mjs`'s `assertTargetAllowed()` remains the authoritative shared implementation of this same allow-list (still used independently by `ui-harness`/`mcp-harness`) — invoke it yourself (e.g. a one-line `node` call) if you want a hard, code-checked answer rather than applying the policy from this description.
+- Target validation is host-agnostic. `scripts/harness-shared/target-guard.mjs`
+  requires an absolute HTTP(S) URL, permits HTTP only for loopback, rejects URL
+  credentials and fragments, and always uses normal TLS validation. API bearer
+  credentials stay on the configured origin; UI automation stays same-origin
+  except for the explicit trusted identity-provider login flow; MCP HTTP targets
+  use the exact `/mcp` pathname.
 
 ### Example usage
 

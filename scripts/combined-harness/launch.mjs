@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { collectVerdictPaths, loadVerdicts } from '../harness-judge/meta-aggregate.mjs';
+import { redact } from '../harness-shared/redaction.mjs';
+import { networkTargetEvidence } from '../harness-shared/target-guard.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SURFACES = ['api', 'ui', 'mcp'];
@@ -70,6 +72,64 @@ export function buildCommands(args, tokens) {
   });
 }
 
+const SENSITIVE_ARG = /^--(?:token|authorization|api[-_]?key|secret|password|storage-state)$/i;
+
+export function sanitizeCommand(command) {
+  return command.map((part, index) => {
+    if (index > 0 && SENSITIVE_ARG.test(command[index - 1])) return '[REDACTED]';
+    if (/^[A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)=/i.test(part)) {
+      return `${part.slice(0, part.indexOf('=') + 1)}[REDACTED]`;
+    }
+    if (/^--(?:token|authorization|api[-_]?key|secret|password|storage-state)=/i.test(part)) {
+      return `${part.slice(0, part.indexOf('=') + 1)}[REDACTED]`;
+    }
+    return redact(part);
+  });
+}
+
+export function sanitizeEnvironment(environment) {
+  return redact(environment);
+}
+
+function option(command, names) {
+  const index = command.findIndex((part) => names.includes(part));
+  return index >= 0 ? command[index + 1] : null;
+}
+
+function commandPreflight(surface, command, environment) {
+  const explicitTarget = option(command, ['--target', '--base-url']);
+  const target = explicitTarget ?? (surface === 'mcp' && environment.AGENTWEAVER_BASE_URL
+    ? `${environment.AGENTWEAVER_BASE_URL.replace(/\/+$/, '')}/mcp`
+    : environment.AGENTWEAVER_BASE_URL ?? null);
+  let evidence;
+  try {
+    evidence = target
+      ? networkTargetEvidence(target, {
+        surface,
+        authSource: option(command, ['--token'])
+          ? 'cli-token'
+          : environment.AGENTWEAVER_TOKEN ? 'environment' : surface === 'ui' ? 'playwright-storage-state' : 'none',
+        exactPath: surface === 'mcp' && target !== 'stdio' ? '/mcp' : undefined,
+      })
+      : {
+        surface, transport: 'unspecified', targetOrigin: null, targetPath: null,
+        authSource: 'none', tlsMode: 'system-default',
+      };
+  } catch (error) {
+    evidence = {
+      surface, transport: 'invalid', targetOrigin: null, targetPath: null,
+      authSource: 'none', tlsMode: 'system-default', validationError: error.message,
+    };
+  }
+  return {
+    ...evidence,
+    projectId: option(command, ['--project-id']),
+    runId: null,
+    cleanupIntent: surface === 'mcp' ? 'surface-owned cleanup policy' : 'surface runner cleanup policy',
+    cleanupResult: 'delegated-to-surface',
+  };
+}
+
 export function spawnCommand(command, options = {}) {
   return new Promise((resolve) => {
     const child = (options.spawn ?? spawn)(command[0], command.slice(1), {
@@ -106,19 +166,32 @@ export async function runCombined(args, dependencies = {}) {
     AGENTWEAVER_SCENARIO_ID: scenarioId,
     AGENTWEAVER_VERDICT_DIR: verdictDir,
   };
-  const results = await Promise.all(commands.map(async ({ surface, command }) => ({
-    surface, command, ...(await run(command, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' })),
-  })));
+  const results = await Promise.all(commands.map(async ({ surface, command }) => {
+    const outcome = await run(command, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' });
+    return {
+      surface,
+      command: sanitizeCommand(command),
+      code: outcome.code ?? null,
+      signal: outcome.signal ?? null,
+      error: redact(outcome.error ?? null),
+    };
+  }));
 
   const verdicts = readVerdicts().filter((verdict) => verdict.batchId === batchId && verdict.scenarioId === scenarioId);
   const missingSurfaces = commands
     .filter(({ surface }) => !verdicts.some((verdict) => verdict.surface === surface))
     .map(({ surface }) => surface);
   const aggregateCommand = ['node', 'scripts/harness-judge/meta-aggregate.mjs', verdictDir, '--json', aggregateReport];
-  const aggregation = await run(aggregateCommand, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' });
+  const aggregationOutcome = await run(aggregateCommand, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' });
+  const aggregation = {
+    code: aggregationOutcome.code ?? null,
+    signal: aggregationOutcome.signal ?? null,
+    error: redact(aggregationOutcome.error ?? null),
+  };
   const report = {
     batchId, scenarioId, verdictDir, aggregateReport, processes: results, aggregation,
     verdictCount: verdicts.length, missingSurfaces,
+    preflight: commands.map(({ surface, command }) => commandPreflight(surface, command, childEnvironment)),
   };
   await makeDir(path.dirname(reportPathFor(args, verdictDir)), { recursive: true });
   await save(reportPathFor(args, verdictDir), `${JSON.stringify(report, null, 2)}\n`, 'utf8');

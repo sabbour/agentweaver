@@ -133,10 +133,10 @@ each time.
 
 - `--timeout <seconds>` sets the seam-check or polling timeout; `--keep` retains the
   throwaway resources.
-- `--insecure` disables TLS verification only for localhost/staging targets. It
-  needs `--allow-insecure-prod` for non-staging targets.
-- Targets are limited to localhost or staging by default. Production requires both
-  `--allow-prod` and `--i-understand-this-targets-production`.
+- Network targets must be absolute HTTP(S) URLs. HTTP is allowed only for loopback;
+  URL credentials/fragments and TLS bypasses are rejected.
+- Bearer credentials are sent only to the configured origin. Absolute cross-origin
+  paths and cross-origin redirects fail closed.
 
 Exit codes for `run-persona.mjs`: `0` means deterministic driver checks passed and
 evidence was captured, `1` means a deterministic check failed, `2` is setup or

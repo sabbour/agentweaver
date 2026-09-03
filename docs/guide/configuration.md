@@ -46,8 +46,8 @@ identity. The clients receive only short-lived Agentweaver access tokens for the
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `Auth:OAuth:PublicOrigin` | `http://localhost:5000` in Development; required elsewhere | Canonical issuer origin used by both API and MCP. MCP derives the exact `<origin>/mcp` resource, discovery URL, and challenge from it. Production requires HTTPS. |
-| `Auth:OAuth:Certificates:SigningName` | none | Azure Key Vault certificate-secret name for access-token signing |
-| `Auth:OAuth:Certificates:EncryptionName` | none | Azure Key Vault certificate-secret name for protocol artifact encryption |
+| `Auth:OAuth:Certificates:SigningName` | none | Azure Key Vault certificate family for access-token signing; the newest two usable secret versions provide active/previous overlap |
+| `Auth:OAuth:Certificates:EncryptionName` | none | Azure Key Vault certificate family for protocol artifact encryption; the newest two usable secret versions provide active/previous overlap |
 | `Auth:OAuth:DynamicRegistration:PerSourcePerDay` | `20` | Database-backed daily RFC 7591 quota per source address |
 | `Auth:OAuth:DynamicRegistration:MaximumActive` | `1000` | Deployment-wide active dynamic-client quota |
 
@@ -62,6 +62,14 @@ cannot be configured independently or inferred from request headers. Production
 startup fails when either durable certificate is unavailable. The API loads the
 active and previous enabled Key Vault versions so a rotation overlap remains
 published. Development alone may use process-ephemeral certificates.
+
+Azure tooling exposes those names as `OAUTH_SIGNING_CERTIFICATE_NAME` and
+`OAUTH_ENCRYPTION_CERTIFICATE_NAME` in environment/params files and as matching
+`--oauth-*-certificate-name` provisioning flags. Routine rotation creates another
+certificate version under the same name; changing the name migrates to another
+certificate family. `azure:verify` checks the canonical public origin, runtime
+ConfigMap names, Key Vault certificate objects/versions, discovery metadata, resource,
+and JWKS.
 
 Anonymous dynamic registration accepts public native clients only. It permits
 tightly formed reverse-domain private-use callbacks and HTTP callbacks on literal
