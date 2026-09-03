@@ -951,3 +951,25 @@ produce `driver.pass: true`.
 - status: fixed
 
 Hosted MCP accepts only Agentweaver broker JWTs for the canonical /mcp resource with mcp:invoke. Raw Entra, GitHub, and API-key credentials are rejected; stdio requires AGENTWEAVER_TOKEN and the API validates that broker token.
+
+---
+
+## MCP smoke must stop on terminal coordinator assembly states
+
+- date: 2026-09-03
+- category: bug
+- surface: mcp
+- status: fixed
+
+run_status can remain top-level in_progress while coordinator_status is assembly_blocked, assembly_failed, or assembly_declined. Treat those coordinator states as terminal and report them immediately; otherwise deterministic smoke waits until its five-minute timeout and hides the actual failing step. Fixed in e5d57089 with MCP harness tests.
+
+---
+
+## Blank-project MCP runs require a live model capability
+
+- date: 2026-09-03
+- category: environment-fact
+- surface: mcp
+- status: open
+
+On staging revision e12ff596, a blank-origin software-development project reached assembly_blocked because its only subtask failed github_copilot_auth_required: GitHub Copilot requires a live run-bound capability snapshot. OAuth/MCP protocol and Copilot CLI connectivity can pass independently; they do not prove that an owned blank project has the project/platform Copilot capability (or configured BYOK provider) needed for agent execution.
