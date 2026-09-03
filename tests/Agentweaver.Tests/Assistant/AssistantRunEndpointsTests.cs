@@ -8,6 +8,7 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -205,6 +206,148 @@ public sealed class AssistantRunEndpointsTests
         run!.ModelSource.Should().Be(ModelSource.Byok,
             "assistant runs must follow the deployment-wide BYOK mode instead of always hardcoding GitHub Copilot");
         factory.Agent.Requests.Should().ContainSingle(request => request.ProjectId == null);
+    }
+
+    [Fact]
+    public async Task StartRun_AgentHostWithIncidentalProjectCopilotBinding_AndPlatformByokActive_SelectsByok()
+    {
+        // Scope-mismatch regression. Provider SELECTION used to resolve against the incidental
+        // project the caller happened to be viewing, where an active project Copilot binding always
+        // beats platform BYOK — so switching the deployment to BYOK silently changed nothing for
+        // Sessions, and the resulting "GitHub Copilot" label disagreed with the run's own credential
+        // CHECK, which is deliberately platform-scoped. Selection now resolves at platform scope too,
+        // so the deployment-wide BYOK provider wins and no Copilot binding is required at all.
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        var client = AuthedClient(factory);
+        var projectDirectory = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-project-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(projectDirectory);
+        try
+        {
+            var projectResponse = await client.PostAsJsonAsync("/api/projects", new
+            {
+                name = "Assistant byok with incidental project binding",
+                origin = "blank",
+                working_directory = projectDirectory,
+            });
+            projectResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+            var projectId = (await projectResponse.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("project_id").GetString()!;
+            await SeedProjectCopilotBindingAsync(factory, projectId);
+            await SeedByokProviderConfigurationAsync(factory);
+
+            var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+            {
+                project_id = projectId,
+                message = "Start a BYOK session from inside a project with its own Copilot binding",
+            });
+
+            response.StatusCode.Should().Be(HttpStatusCode.Created,
+                "a platform-scoped BYOK deployment needs no Copilot binding, so an incidental project " +
+                "binding must not drag the session back onto GitHub Copilot");
+            var runId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+                .GetProperty("run_id").GetString()!;
+
+            var runStore = factory.Services.GetRequiredService<IRunStore>();
+            var run = await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None);
+            run!.ModelSource.Should().Be(ModelSource.Byok,
+                "provider selection must use the same platform scope the credential check uses");
+
+            await using var scope = factory.Services.CreateAsyncScope();
+            var persistence = scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
+            (await persistence.GetCapabilitySnapshotsAsync(runId, CancellationToken.None))
+                .Should().BeEmpty("a BYOK session never needs a GitHub Copilot capability snapshot");
+        }
+        finally
+        {
+            try { Directory.Delete(projectDirectory, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task SendMessage_ByokSessionWithNoConfigChange_StaysOnByokAcrossTurns()
+    {
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        await SeedByokProviderConfigurationAsync(factory);
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "opening turn" });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "second turn" });
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var run = await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None);
+        run!.ModelSource.Should().Be(ModelSource.Byok,
+            "re-resolving each turn must be a no-op while the resolver's answer is unchanged");
+        factory.Agent.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task SendMessage_PlatformSwitchedToByokBetweenTurns_UsesByokOnTheNextTurn()
+    {
+        // The provider used to be pinned at session-creation time forever: StartRunAsync resolved it
+        // once and no later turn revisited it, so a mid-conversation platform switch only took effect
+        // for brand-new sessions.
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        await SeedPlatformDefaultCopilotBindingAsync(factory);
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "opening turn on Copilot" });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        (await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None))!
+            .ModelSource.Should().Be(ModelSource.GitHubCopilot);
+
+        await SeedByokProviderConfigurationAsync(factory);
+
+        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None))!
+            .ModelSource.Should().Be(ModelSource.Byok,
+                "a platform provider switch must take effect on the next message, not only on a new session");
+    }
+
+    [Fact]
+    public async Task SendMessage_PlatformSwitchedFromByokToCopilotBetweenTurns_CapturesPlatformScopedCredential()
+    {
+        // The mirror direction: a session opened under BYOK that later needs GitHub Copilot must
+        // acquire its capability snapshot from the PLATFORM connection on the very next turn, so the
+        // credential check keeps agreeing with the (re-resolved) provider selection.
+        await using var factory = new AssistantWebApplicationFactory { UseAgentHost = true };
+        await SeedByokProviderConfigurationAsync(factory);
+        var client = AuthedClient(factory);
+
+        var start = await client.PostAsJsonAsync("/api/assistant/runs", new { message = "opening turn on BYOK" });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+
+        await SeedPlatformDefaultCopilotBindingAsync(factory);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            await byok.SetActiveAsync(null, CancellationToken.None);
+        }
+
+        var turn = await client.PostAsJsonAsync($"/api/assistant/runs/{runId}/messages", new { message = "next turn" });
+        turn.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        (await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None))!
+            .ModelSource.Should().Be(ModelSource.GitHubCopilot);
+
+        await using var assertScope = factory.Services.CreateAsyncScope();
+        var persistence = assertScope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>();
+        var snapshots = await persistence.GetCapabilitySnapshotsAsync(runId, CancellationToken.None);
+        snapshots.Should().ContainSingle(snapshot =>
+            snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+            snapshot.SourceBindingId == PlatformDefaultCopilotBindingRecord.SingletonId &&
+            snapshot.ProjectId == null,
+            "the re-resolved turn's credential must come from the same platform scope selection used");
     }
 
     [Fact]
@@ -1266,7 +1409,25 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
     public bool UseAgentHost { get; set; }
     public TimeProvider? BrokerTokenClock { get; set; }
 
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-{Guid.NewGuid():N}.db");
+    /// <summary>Overrides the per-factory temp SQLite file so two factories can be pointed at the
+    /// SAME durable store, simulating the deployment's two API replicas (which have their own
+    /// in-memory caches and no session affinity, but share one database).</summary>
+    public string? SharedDatabasePath { get; set; }
+
+    /// <summary>Optional AgentHost pod lifecycle double. <see cref="IAgentHostPodLifecycle"/> is only
+    /// registered in-cluster in production, so tests that assert pod hold/release behaviour supply
+    /// their own.</summary>
+    public IAgentHostPodLifecycle? PodLifecycle { get; set; }
+
+    /// <summary>How long a conversation's AgentHost pod is held after its last turn.</summary>
+    public TimeSpan PodIdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>How long a durable InProgress run may be silent before the concurrency check stops
+    /// counting it and parks it. Lets tests simulate a run stranded by an API pod restart.</summary>
+    public TimeSpan StaleActiveRunThreshold { get; set; } = TimeSpan.FromMinutes(90);
+
+    private readonly string _ownDbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-{Guid.NewGuid():N}.db");
+    private string _dbPath => SharedDatabasePath ?? _ownDbPath;
     private readonly string _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-wt-{Guid.NewGuid():N}");
     private readonly string _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-cp-{Guid.NewGuid():N}");
     private readonly string _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-ccp-{Guid.NewGuid():N}");
@@ -1304,6 +1465,8 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["RunBounds:MaxSteps"] = "50",
                 ["RunBounds:MaxMinutes"] = "10",
                 ["Assistant:MaxConcurrentRunsPerUser"] = MaxConcurrentRunsPerUser.ToString(),
+                ["Assistant:PodIdleTimeout"] = PodIdleTimeout.ToString(),
+                ["Assistant:StaleActiveRunThreshold"] = StaleActiveRunThreshold.ToString(),
                 ["Sandbox:AgentExecutionMode"] = UseAgentHost ? "pod-per-run" : "in-api",
                 ["Auth:OAuth:PublicOrigin"] = OAuthPublicOrigin,
             });
@@ -1337,6 +1500,13 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                         sp.GetRequiredService<ILogger<OperatorAssistantBrokerTokenIssuer>>(),
                         BrokerTokenClock);
                 });
+            }
+
+            if (PodLifecycle is not null)
+            {
+                var existingLifecycle = services.FirstOrDefault(d => d.ServiceType == typeof(IAgentHostPodLifecycle));
+                if (existingLifecycle is not null) services.Remove(existingLifecycle);
+                services.AddSingleton(PodLifecycle);
             }
         });
     }
@@ -1386,6 +1556,10 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
     public OperatorAssistantRequest? LastRequest { get; private set; }
     public System.Collections.Concurrent.ConcurrentQueue<OperatorAssistantRequest> Requests { get; } = new();
 
+    /// <summary>When set, the fake throws this instead of replying, and clears it so only the NEXT
+    /// turn fails. Lets tests exercise the service's per-turn failure and cancellation unwinding.</summary>
+    public Exception? ThrowOnNextTurn { get; set; }
+
     public async Task<OperatorAssistantResponse> RunTurnAsync(
         OperatorAssistantRequest request,
         IOperatorAssistantTurnSink? sink,
@@ -1393,6 +1567,12 @@ public sealed class FakeOperatorAssistantAgent : IOperatorAssistantAgent
     {
         LastRequest = request;
         Requests.Enqueue(request);
+
+        if (ThrowOnNextTurn is { } failure)
+        {
+            ThrowOnNextTurn = null;
+            throw failure;
+        }
 
         if (sink is not null && EmitApproval)
         {

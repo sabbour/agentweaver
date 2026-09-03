@@ -149,8 +149,20 @@ public sealed class EfRunEventStream : IRunEventStream
         return events;
     }
 
-    private async Task<int> WriteThroughAsync(string runId, RunEvent evt, CancellationToken ct)
+    /// <inheritdoc />
+    public async Task<DateTimeOffset?> GetLastEventTimestampAsync(string runId, CancellationToken ct = default)
     {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var latest = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == runId)
+            .MaxAsync(e => (DateTime?)e.CreatedAt, ct)
+            .ConfigureAwait(false);
+        return latest is null
+            ? null
+            : new DateTimeOffset(DateTime.SpecifyKind(latest.Value, DateTimeKind.Utc));
+    }
+
+    private async Task<int> WriteThroughAsync(string runId, RunEvent evt, CancellationToken ct)    {
         var payloadJson = JsonSerializer.Serialize(evt.Payload);
         // Prefer the event's own TimestampUtc (stamped by RunStreamStore.RecordNext/Record) over
         // DateTime.UtcNow so CreatedAt reflects "when it happened", not "when it was persisted".

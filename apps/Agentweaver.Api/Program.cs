@@ -333,6 +333,11 @@ builder.Services.AddScoped<IGitHubConnectionsCredentialVault, GitHubConnectionsC
 builder.Services.AddScoped<GitHubRepositorySelectionClient>();
 builder.Services.AddScoped<GitHubRepositorySelectionBroker>();
 builder.Services.AddScoped<Agentweaver.Api.Webhooks.RepoAppInstallationTokenService>();
+builder.Services.AddScoped<CopilotCredentialRefreshService>(sp => new(
+    sp.GetRequiredService<IConfiguration>(),
+    sp.GetRequiredService<ISecretStore>(),
+    sp.GetRequiredService<IHttpClientFactory>(),
+    sp.GetRequiredService<ILogger<CopilotCredentialRefreshService>>()));
 builder.Services.AddScoped<GitHubCapabilityBroker>();
 builder.Services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
 builder.Services.AddScoped<EffectiveModelProviderResolver>();

@@ -70,6 +70,12 @@ repository installation screen. Repository authorization remains a separate Repo
 Platform-default Copilot consent supplies AI access to all users, projects, and background runs
 that inherit it. It grants no repository access.
 
+A Copilot binding keeps the refresh token that GitHub returns with its access token. GitHub
+access tokens expire after about eight hours. Agentweaver redeems the refresh token
+automatically, shortly before the access token expires, and stores the new pair. You do not
+reconnect after an expiry. Agentweaver asks you to connect again only when GitHub rejects the
+refresh token, for example after you revoke the authorization.
+
 GitHub authorization does not replace your Entra identity. It does not grant an Agentweaver platform role or project membership.
 
 Project roles in Agentweaver do not translate to GitHub permissions. Repository and

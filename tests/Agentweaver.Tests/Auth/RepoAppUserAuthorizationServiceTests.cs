@@ -214,13 +214,82 @@ public sealed class RepoAppUserAuthorizationServiceTests
     }
 
     [Fact]
+    public async Task Callback_ResolvesTheAuthorizedIdentityOnTheApiHostNotTheOAuthHost()
+    {
+        await using var database = await OpenDatabaseAsync();
+        var factory = new StubHttpClientFactory(TokenResponse(), UserResponse("sabbour"));
+        var service = CreateService(database, new InMemorySecretStore(), factory);
+        var begin = await service.BeginAsync(Human("entra"), HumanPrincipal(), "settings");
+
+        var callback = await service.CompleteBrowserCallbackAsync(
+            null,
+            null,
+            Query(begin.AuthorizationUrl!, "state"),
+            "code",
+            begin.CallbackCookie);
+
+        callback.Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+        factory.RequestUris.Should().Contain("https://github.com/login/oauth/access_token")
+            .And.Contain("https://api.github.com/user")
+            .And.NotContain("https://github.com/user");
+    }
+
+    [Fact]
+    public async Task Callback_ReportsTheProviderFailureReasonWithoutLeakingCallbackValues()
+    {
+        await using var database = await OpenDatabaseAsync();
+        var logger = new StructuredLogger();
+        var service = CreateService(
+            database,
+            new InMemorySecretStore(),
+            new StubHttpClientFactory("""{"error":"bad_verification_code"}"""),
+            logger);
+        var begin = await service.BeginAsync(Human("entra"), HumanPrincipal(), "settings");
+        var state = Query(begin.AuthorizationUrl!, "state");
+
+        var callback = await service.CompleteBrowserCallbackAsync(null, null, state, "sensitive-oauth-code", begin.CallbackCookie);
+
+        callback.Outcome.Should().Be(RepoAppAuthorizationOutcome.GitHubBindingUnavailable);
+        var exchange = logger.Entries
+            .Single(entry => entry.EventId == RepoAppUserAuthorizationService.AuthorizationExchangeEvent);
+        exchange.Level.Should().Be(LogLevel.Warning);
+        exchange.Properties.Should().Contain(new KeyValuePair<string, object?>("Phase", "code_exchange"))
+            .And.Contain(new KeyValuePair<string, object?>("Outcome", "provider_token_response_invalid"));
+        var serializedLogs = string.Join(
+            "\n",
+            logger.Entries.Select(entry =>
+                $"{entry.Message} {string.Join(" ", entry.Properties.Select(property => $"{property.Key}={property.Value}"))}"));
+        serializedLogs.Should().NotContain("sensitive-oauth-code").And.NotContain(state);
+    }
+
+    [Fact]
+    public async Task ApiHostOverride_RedirectsProviderIdentityCallsForEnterpriseDeployments()
+    {
+        await using var database = await OpenDatabaseAsync();
+        var factory = new StubHttpClientFactory(TokenResponse(), UserResponse("sabbour"));
+        var service = CreateService(
+            database,
+            new InMemorySecretStore(),
+            factory,
+            settings: new Dictionary<string, string?> { ["Auth:RepoApp:ApiUrl"] = "https://api.github.com/" });
+        var begin = await service.BeginAsync(Human("entra"), HumanPrincipal(), "settings");
+
+        (await service.CompleteAsync(
+            Human("entra"), HumanPrincipal(), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+
+        factory.RequestUris.Should().Contain("https://api.github.com/user");
+    }
+
+    [Fact]
     public async Task Refresh_PreservesStableGrantVersion_AndRevokeWritesTombstone()
     {
         await using var database = await OpenDatabaseAsync();
         var secrets = new InMemorySecretStore();
-        var service = CreateService(database, secrets, new StubHttpClientFactory(
+        var factory = new StubHttpClientFactory(
             TokenResponse(),
-            TokenResponse("ghu_refreshed", "refresh-rotated")));
+            TokenResponse("ghu_refreshed", "refresh-rotated"));
+        var service = CreateService(database, secrets, factory);
         var begin = await service.BeginAsync(Human("entra"), HumanPrincipal(), "settings");
         var completed = await service.CompleteAsync(
             Human("entra"), HumanPrincipal(), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie);
@@ -240,6 +309,8 @@ public sealed class RepoAppUserAuthorizationServiceTests
             .And.NotContain("ghu_").And.NotContain("refresh-");
         database.ChangeTracker.Clear();
         (await database.GitHubAppAuthorizations.SingleAsync()).RevokedAt.Should().NotBeNull();
+        factory.RequestUris.Should().Contain("https://api.github.com/applications/repo-client/grant")
+            .And.NotContain("https://github.com/applications/repo-client/grant");
     }
 
     [Fact]
@@ -470,19 +541,25 @@ public sealed class RepoAppUserAuthorizationServiceTests
         MemoryDbContext database,
         ISecretStore secrets,
         IHttpClientFactory factory,
-        ILogger<RepoAppUserAuthorizationService>? logger = null) =>
-        new(
-            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Auth:RepoApp:ClientId"] = "repo-client",
-                ["Auth:RepoApp:ClientSecret"] = "repo-secret",
-                ["Auth:RepoApp:CallbackUrl"] = "https://agentweaver.test/auth/github/repo-app/callback",
-                ["Auth:RepoApp:FrontendUrl"] = "https://agentweaver.test",
-            }).Build(),
+        ILogger<RepoAppUserAuthorizationService>? logger = null,
+        IReadOnlyDictionary<string, string?>? settings = null)
+    {
+        var configuration = new Dictionary<string, string?>
+        {
+            ["Auth:RepoApp:ClientId"] = "repo-client",
+            ["Auth:RepoApp:ClientSecret"] = "repo-secret",
+            ["Auth:RepoApp:CallbackUrl"] = "https://agentweaver.test/auth/github/repo-app/callback",
+            ["Auth:RepoApp:FrontendUrl"] = "https://agentweaver.test",
+        };
+        foreach (var setting in settings ?? new Dictionary<string, string?>())
+            configuration[setting.Key] = setting.Value;
+        return new(
+            new ConfigurationBuilder().AddInMemoryCollection(configuration).Build(),
             new GitHubConnectionsPersistenceStore(database),
             secrets,
             factory,
             logger ?? NullLogger<RepoAppUserAuthorizationService>.Instance);
+    }
 
     private static CallerContext Human(string subject) => new() { User = subject, EntraObjectId = subject };
     private static ClaimsPrincipal HumanPrincipal() =>
@@ -546,16 +623,25 @@ public sealed class RepoAppUserAuthorizationServiceTests
     {
         private readonly Queue<string> _responses = new(responses.Length == 0 ? [TokenResponse()] : responses);
         public List<string> RequestBodies { get; } = [];
+        public List<string> RequestUris { get; } = [];
 
-        public HttpClient CreateClient(string name) => new(new StubHandler(RequestBodies, _responses));
+        public HttpClient CreateClient(string name) => new(new StubHandler(RequestBodies, RequestUris, _responses));
     }
 
-    private sealed class StubHandler(List<string> bodies, Queue<string> responses) : HttpMessageHandler
+    private sealed class StubHandler(List<string> bodies, List<string> uris, Queue<string> responses) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             bodies.Add(request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(ct));
-            var body = request.RequestUri?.AbsolutePath switch
+            var uri = request.RequestUri!;
+            uris.Add(uri.GetLeftPart(UriPartial.Path));
+
+            // GitHub's REST endpoints exist only on the API host; the OAuth host answers
+            // "406 Not Acceptable" for them, so the stub refuses to serve them off-host.
+            if (IsApiPath(uri.AbsolutePath) && !string.Equals(uri.Host, "api.github.com", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.NotAcceptable);
+
+            var body = uri.AbsolutePath switch
             {
                 "/user" => responses.Count > 0 && responses.Peek().Contains("\"login\"", StringComparison.Ordinal)
                     ? responses.Dequeue()
@@ -567,6 +653,9 @@ public sealed class RepoAppUserAuthorizationServiceTests
                 Content = new StringContent(body),
             };
         }
+
+        private static bool IsApiPath(string path) =>
+            path == "/user" || path.StartsWith("/applications/", StringComparison.Ordinal);
     }
 
     private sealed class ThrowingGetSecretStore : ISecretStore

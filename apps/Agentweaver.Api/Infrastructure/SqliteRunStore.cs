@@ -765,4 +765,16 @@ public sealed class SqliteRunStore : IRunStore
             }, ct).ConfigureAwait(false);
         WarnIfNoRows(rows, runId, "update workflow selection reason");
     }
+
+    public async Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            "UPDATE runs SET model_source = $modelSource WHERE run_id = $runId;",
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$modelSource", modelSource.ToApiString());
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, "update model source");
+    }
 }

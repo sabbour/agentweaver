@@ -160,6 +160,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private const string ApiGroup = SandboxClaimConventions.ApiGroup;
     private const string ApiVersion = SandboxClaimConventions.ApiVersion;
     private const string ClaimPlural = SandboxClaimConventions.ClaimPlural;
+
+    /// <summary>
+    /// Annotation carrying the fencing token of the owner that created an AgentHost claim, so a
+    /// later fenced release can prove the claim it is deleting is still the one it created rather
+    /// than a newer one placed under the same deterministic name by another API replica.
+    /// </summary>
+    internal const string HolderTokenAnnotation = "agentweaver.io/agent-host-holder-token";
     private const string ContainerName = "agentweaver-sandbox";
 
     /// <summary>
@@ -450,11 +457,24 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         var connectionProjectId = ProjectId.TryParse(configProjectId, out var parsedProjectId)
             ? parsedProjectId
             : (ProjectId?)null;
+        // The scope the model provider is resolved at. For ordinary project/orchestration work this
+        // IS the run's project. For a personal, platform-scoped Assistant ("Session") launch it must
+        // be PLATFORM scope (null) instead: the run row's ProjectId there is only the project the
+        // human happened to be viewing when they opened the chat, and per the resolver's documented
+        // precedence an active project Copilot binding always beats platform-level BYOK. Deriving
+        // the scope from that incidental id undid AssistantRunService's deliberate platform-scoped
+        // selection and label: a session could be labelled and credential-gated as platform BYOK
+        // while the pod it actually launched was configured for the project's Copilot binding (or
+        // the reverse). Selection, validation, and pod configuration must all agree.
+        var providerScopeProjectId = launchContext.ResolvesModelProviderAtPlatformScope
+            ? null
+            : connectionProjectId;
+
         // Resolve the effective provider ONCE and keep the result: it decides both whether this pod
         // is BYOK-configured and — when authorization fails below — WHICH Copilot binding the human
         // must reconnect. Deriving that scope from "does the project id string parse" instead named
         // the project's App even for platform-default binding failures.
-        var effectiveProvider = await ResolveEffectiveProviderAsync(connectionProjectId, ct).ConfigureAwait(false);
+        var effectiveProvider = await ResolveEffectiveProviderAsync(providerScopeProjectId, ct).ConfigureAwait(false);
         var byokProvider = await GetByokProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
         if (byokProvider is null && string.IsNullOrWhiteSpace(submittingUser))
         {
@@ -481,7 +501,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             if (_copilotCredentials is null)
                 throw new InvalidOperationException(
                     $"Cannot launch AgentHost pod for run '{runId}' without a live run-bound Copilot capability snapshot.");
-            throw effectiveProvider.ToConnectionRequiredException(connectionProjectId);
+            throw effectiveProvider.ToConnectionRequiredException(providerScopeProjectId);
         }
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
@@ -491,27 +511,48 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // SandboxTemplate, or warm pool — the pod is already warm and gets its per-run context
             // via the /configure POST below.
             claimCreated = await CreateAgentHostClaimAsync(
-                claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
+                claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext.HolderToken, ct).ConfigureAwait(false);
 
             if (!claimCreated && launchContext.Purpose == AgentHostPurpose.OperatorAssistant)
             {
-                // Every operator turn carries the CURRENT browser/platform bearer. An orphaned
-                // claim from a crashed prior turn is already configured with the old credential
-                // and /configure is intentionally one-shot, so it must never be reused.
-                _logger.LogInformation(
-                    "KubernetesSandboxExecutor: recreating existing AgentHost claim {Claim} for a fresh operator-assistant caller credential.",
-                    claimName);
-                await DeleteClaimAsync(claimName).ConfigureAwait(false);
-                _podRegistry?.Unregister(runId);
-                _turnTokenRegistry?.UnregisterTurnToken(runId);
-                await Task.Delay(1000, ct).ConfigureAwait(false);
-                claimCreated = await CreateAgentHostClaimAsync(
-                    claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
-                if (!claimCreated)
+                // An operator conversation HOLDS its pod across turns (see
+                // RemoteOperatorAssistantAgent's remarks), so a pre-existing claim is normally OUR
+                // OWN warm, already-configured pod from the previous message — reusing it is exactly
+                // the point, and skips the ~8s one-shot /configure plus the rest of the cold start.
+                // The stale-credential hazard that used to force a delete/recreate here is gone: the
+                // current short-lived MCP broker token is renewed over the authenticated control
+                // plane before every turn and immediately before every MCP tool call.
+                //
+                // The turn token is what makes "ours" decidable: it is per-replica in-memory state
+                // registered when THIS process configured the pod, and the A2A call is authenticated
+                // with it. Without it the claim is an orphan from a crashed turn or a pod configured
+                // by the other replica (no session affinity) — unreachable and un-reconfigurable, so
+                // it must still be recreated exactly as before.
+                var heldTurnToken = _turnTokenRegistry?.TryGetTurnToken(runId);
+                if (string.IsNullOrWhiteSpace(heldTurnToken))
                 {
-                    throw new InvalidOperationException(
-                        $"AgentHost claim '{claimName}' was deleted to refresh the operator-assistant caller credential, " +
-                        "but the replacement create still conflicted.");
+                    _logger.LogInformation(
+                        "KubernetesSandboxExecutor: recreating existing AgentHost claim {Claim} — this replica holds no turn token for run {RunId}, so the pod cannot be reused.",
+                        claimName, runId);
+                    await DeleteClaimAsync(claimName).ConfigureAwait(false);
+                    _podRegistry?.Unregister(runId);
+                    _turnTokenRegistry?.UnregisterTurnToken(runId);
+                    await Task.Delay(1000, ct).ConfigureAwait(false);
+                    claimCreated = await CreateAgentHostClaimAsync(
+                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext.HolderToken, ct).ConfigureAwait(false);
+                    if (!claimCreated)
+                    {
+                        throw new InvalidOperationException(
+                            $"AgentHost claim '{claimName}' was deleted to refresh the operator-assistant caller credential, " +
+                            "but the replacement create still conflicted.");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "KubernetesSandboxExecutor: holding AgentHost claim {Claim} for operator run {RunId} across turns; " +
+                        "reusing the already-configured pod and refreshing its MCP broker token per turn.",
+                        claimName, runId);
                 }
             }
             else if (!claimCreated && launchContext.WorkspaceMode != ExecutionWorkspaceMode.Shared)
@@ -525,7 +566,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 _turnTokenRegistry?.UnregisterTurnToken(runId);
                 await Task.Delay(1000, ct).ConfigureAwait(false);
                 claimCreated = await CreateAgentHostClaimAsync(
-                    claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
+                    claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext.HolderToken, ct).ConfigureAwait(false);
                 if (!claimCreated)
                 {
                     throw new InvalidOperationException(
@@ -552,7 +593,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     _turnTokenRegistry?.UnregisterTurnToken(runId);
                     await Task.Delay(1000, ct).ConfigureAwait(false);
                     claimCreated = await CreateAgentHostClaimAsync(
-                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
+                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext.HolderToken, ct).ConfigureAwait(false);
                     if (!claimCreated)
                     {
                         throw new InvalidOperationException(
@@ -785,6 +826,32 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     }
 
     /// <inheritdoc/>
+    public async Task<bool> TryReleaseHeldAgentHostPodAsync(
+        string runId, string holderToken, CancellationToken ct = default)
+    {
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var currentHolder = await TryGetAgentHostClaimAnnotationAsync(claimName, HolderTokenAnnotation, ct)
+            .ConfigureAwait(false);
+
+        // Only refuse when the claim carries a DIFFERENT holder. A claim with no stamp at all (older
+        // claim, or one created by a path that does not hold across turns) is still ours to reclaim,
+        // which keeps this a safety net against a newer owner rather than a new failure mode.
+        if (!string.IsNullOrWhiteSpace(currentHolder) &&
+            !string.Equals(currentHolder, holderToken, StringComparison.Ordinal))
+        {
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: refusing to release AgentHost claim {Claim} for run {RunId} — " +
+                "it is held by another owner, so a newer launch (likely on another API replica) now " +
+                "serves this conversation.",
+                claimName, runId);
+            return false;
+        }
+
+        await ReleaseAgentHostPodAsync(runId, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <inheritdoc/>
     public async Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
     {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
@@ -877,7 +944,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// (<see cref="CallAgentHostConfigureAsync"/>).
     /// </summary>
     private async Task<bool> CreateAgentHostClaimAsync(
-        string claimName, string warmPoolName, string? workingDirectory, string runId, CancellationToken ct)
+        string claimName, string warmPoolName, string? workingDirectory, string runId,
+        string? holderToken, CancellationToken ct)
     {
         var annotations = new Dictionary<string, string>
         {
@@ -888,6 +956,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         };
         if (!string.IsNullOrWhiteSpace(workingDirectory))
             annotations["agentweaver.io/working-directory"] = workingDirectory;
+        // Fencing stamp for holders that must later prove the claim they are about to delete is
+        // still THEIRS. Claim names are a deterministic derivation of the run id, so a holder whose
+        // process-local state went stale (its conversation's next turn landed on the other API
+        // replica, which cold-started a fresh pod under the very same name) would otherwise delete a
+        // claim another replica is actively serving a turn from. See
+        // IAgentHostPodLifecycle.TryReleaseHeldAgentHostPodAsync.
+        if (!string.IsNullOrWhiteSpace(holderToken))
+            annotations[HolderTokenAnnotation] = holderToken;
 
         var manifest = new
         {
@@ -1022,7 +1098,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         return false;
     }
 
-    private async Task<string?> TryGetAgentHostClaimWorkingDirectoryAsync(string claimName, CancellationToken ct)
+    private async Task<string?> TryGetAgentHostClaimWorkingDirectoryAsync(string claimName, CancellationToken ct) =>
+        await TryGetAgentHostClaimAnnotationAsync(claimName, "agentweaver.io/working-directory", ct)
+            .ConfigureAwait(false);
+
+    private async Task<string?> TryGetAgentHostClaimAnnotationAsync(
+        string claimName, string annotation, CancellationToken ct)
     {
         try
         {
@@ -1033,15 +1114,15 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("metadata", out var meta) &&
                 meta.TryGetProperty("annotations", out var ann) &&
-                ann.TryGetProperty("agentweaver.io/working-directory", out var wd) &&
-                wd.ValueKind == JsonValueKind.String)
-                return wd.GetString();
+                ann.TryGetProperty(annotation, out var value) &&
+                value.ValueKind == JsonValueKind.String)
+                return value.GetString();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex,
-                "KubernetesSandboxExecutor: failed to read working-directory annotation for claim {Claim}",
-                claimName);
+                "KubernetesSandboxExecutor: failed to read {Annotation} annotation for claim {Claim}",
+                annotation, claimName);
         }
 
         return null;

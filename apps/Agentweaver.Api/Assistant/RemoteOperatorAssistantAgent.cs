@@ -34,10 +34,23 @@ namespace Agentweaver.Api.Assistant;
 /// </para>
 ///
 /// <para>
-/// Each turn is fully self-contained (the caller always replays the bounded conversation history), so
-/// the pod is claimed fresh and released after every turn rather than held for the conversation's
-/// whole lifetime — reusing <see cref="IAgentHostPodLifecycle"/>'s existing launch/release lifecycle
-/// exactly as coordinator subtasks do, with no new pod/claim bookkeeping.
+/// The pod is HELD for the conversation, not for a single turn. Claiming a warm pod and running its
+/// one-shot <c>/configure</c> (which itself runs <c>CopilotAIAgent.SetupAsync</c> and starts a
+/// Copilot/BYOK client from scratch) costs ~8s, and the surrounding claim-bind + readiness gate adds
+/// several more — so releasing the pod in a per-turn <c>finally</c>, as this agent originally did,
+/// paid that entire cold start again on EVERY message (measured live at 15-20s of silence per turn).
+/// The pod is therefore released only when the turn FAILS; a successful turn leaves the claim in
+/// place so the next message re-binds the very same, already-configured pod. Because <c>/configure</c>
+/// is one-shot, the current short-lived MCP broker token is renewed over the authenticated
+/// API-to-pod control plane before every turn and again immediately before every MCP tool call, so
+/// a held pod never serves MCP calls with a stale credential.
+/// </para>
+///
+/// <para>
+/// Holding cannot leak pods: <c>AssistantRunService</c> releases the pod once the conversation has
+/// been quiet for <c>Assistant:PodIdleTimeout</c> and again when the conversation is parked as
+/// dormant, and <c>AgentHostReaperService</c> reaps any claim whose run is no longer active as the
+/// cross-replica backstop.
 /// </para>
 /// </summary>
 public sealed class RemoteOperatorAssistantAgent(
@@ -91,7 +104,8 @@ public sealed class RemoteOperatorAssistantAgent(
                 new AgentHostLaunchContext(
                     SharedWorkingDirectory: null,
                     Purpose: AgentHostPurpose.OperatorAssistant,
-                    McpBrokerToken: request.McpBrokerToken),
+                    McpBrokerToken: request.McpBrokerToken,
+                    HolderToken: request.PodHolderToken),
                 ct).ConfigureAwait(false);
             await RefreshMcpBrokerTokenAsync(request, podLifecycle, ct).ConfigureAwait(false);
         }
@@ -177,20 +191,36 @@ public sealed class RemoteOperatorAssistantAgent(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // A failed turn may have left the pod half-configured or wedged, so it must NOT be
+            // carried into the next message — release it here (the success path deliberately does
+            // not, so the conversation keeps its warm, already-configured pod).
+            await TryReleaseAgentHostPodAsync(podLifecycle, runId).ConfigureAwait(false);
             throw ClassifyOrWrap(ex, runId, "Operator assistant turn failed on the AgentHost pod");
+        }
+        catch (OperationCanceledException)
+        {
+            await TryReleaseAgentHostPodAsync(podLifecycle, runId).ConfigureAwait(false);
+            throw;
         }
         finally
         {
             await ((IAsyncDisposable)proxy).DisposeAsync().ConfigureAwait(false);
-            try
-            {
-                await podLifecycle.ReleaseAgentHostPodAsync(runId, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(
-                    ex, "RemoteOperatorAssistantAgent: failed to release AgentHost pod for run {RunId} (best-effort).", runId);
-            }
+        }
+    }
+
+    /// <summary>Best-effort pod release used on the failure paths only; a release failure must never
+    /// mask the original turn error. The idle/dormancy sweeps in <see cref="AssistantRunService"/> and
+    /// the <c>AgentHostReaperService</c> are the backstops for anything missed here.</summary>
+    private async Task TryReleaseAgentHostPodAsync(IAgentHostPodLifecycle podLifecycle, string runId)
+    {
+        try
+        {
+            await podLifecycle.ReleaseAgentHostPodAsync(runId, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex, "RemoteOperatorAssistantAgent: failed to release AgentHost pod for run {RunId} (best-effort).", runId);
         }
     }
 
@@ -217,7 +247,11 @@ public sealed class RemoteOperatorAssistantAgent(
         // Operator/Assistant turns are personal sessions, not project-scoped work: run.ProjectId
         // (when present) is only incidental UI context, so credential resolution must always go
         // through the PLATFORM-level Copilot connection rather than that project's own (possibly
-        // broken/missing) binding. A failure always surfaces the platform-settings CTA.
+        // broken/missing) binding. A failure always surfaces the platform-settings CTA. This is the
+        // SAME scope AssistantRunService selects the session's provider at (its
+        // ResolveAssistantModelSourceAsync resolves at platform scope too, and re-resolves each
+        // turn), so selection and validation cannot disagree — and because run.ModelSource is read
+        // fresh from the store above, a mid-conversation provider switch is honoured here too.
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
                 .ConfigureAwait(false))
             throw new ModelProviderConnectionRequiredException();

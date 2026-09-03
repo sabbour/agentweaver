@@ -211,6 +211,26 @@ public sealed class KubernetesSandboxExecutorClaimTests
         }
     }
 
+    private sealed class AlwaysConflictClaimHandler : DelegatingHandler
+    {
+        public int ClaimCreateRequests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (IsClaimPost(request))
+            {
+                ClaimCreateRequests++;
+                var response = ConflictResponse();
+                response.RequestMessage = request;
+                return Task.FromResult(response);
+            }
+
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+
     // The exact transient chain from issue #230: HttpRequestException → IOException → SocketException 104.
     private static Exception ConnectionReset() =>
         new HttpRequestException(
@@ -488,6 +508,112 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task LaunchAgentHostPod_for_an_operator_assistant_resolves_the_provider_at_platform_scope()
+    {
+        // Regression (rubber-duck review, Layer 4 follow-up): the executor derived the
+        // provider-resolution scope from the run row's ProjectId. For a personal operator Assistant
+        // ("Session") conversation that id is only the project the human happened to be VIEWING when
+        // they opened the chat, and per the resolver's precedence an active project Copilot binding
+        // always beats platform-level BYOK — so a session that AssistantRunService had deliberately
+        // selected AND credential-gated at PLATFORM scope got its pod configured from that
+        // incidental project's Copilot binding instead. Selection, validation, and pod
+        // configuration must all resolve at the same (platform) scope.
+        const string runId = "run-claim-operator-platform-scope";
+        var projectId = ProjectId.New();
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var observedScopes = new List<ProjectId?>();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("entra-object-id", projectId.ToString()),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: new UnexpectedGitHubCopilotCapabilityCredentialProvider(),
+            byokProviderConfiguration: new FixedByokProviderConfigurationProvider(
+                new ByokProviderConfiguration(
+                    Id: "platform-provider",
+                    Name: "Platform BYOK provider",
+                    Type: "openai",
+                    BaseUrl: "https://models.example.com",
+                    Model: "gpt-5",
+                    ApiKey: "platform-key")),
+            effectiveProviderResolver: (scope, _) =>
+            {
+                observedScopes.Add(scope);
+                return Task.FromResult<EffectiveModelProviderResult>(scope is null
+                    ? new EffectiveModelProviderResult.Byok("platform-provider", "openai")
+                    : new EffectiveModelProviderResult.ProjectGitHubCopilot($"binding-{scope}", "project-bot"));
+            });
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                Purpose: AgentHostPurpose.OperatorAssistant,
+                McpBrokerToken: "platform-scoped-broker-token"));
+
+        observedScopes.Should().NotBeEmpty().And.AllSatisfy(scope => scope.Should().BeNull(),
+            "an Assistant session's incidental project id must never decide which provider serves it");
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("byokProviderConfiguration").GetProperty("apiKey").GetString()
+            .Should().Be("platform-key");
+        doc.RootElement.GetProperty("copilotCredential").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_for_project_work_still_resolves_the_provider_at_project_scope()
+    {
+        // The other half of the same fix: genuine project-scoped work (coordinator runs, subtasks,
+        // retries, Build/Test) is unchanged — it must keep resolving against its REAL project id, so
+        // a project's own Copilot binding continues to win for the work that belongs to it.
+        const string runId = "run-claim-project-scope";
+        var projectId = ProjectId.New();
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-3"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-3$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-3"},"status":{"podIP":"10.0.0.9"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var observedScopes = new List<ProjectId?>();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("entra-object-id", projectId.ToString()),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider(),
+            effectiveProviderResolver: (scope, _) =>
+            {
+                observedScopes.Add(scope);
+                return Task.FromResult<EffectiveModelProviderResult>(scope is null
+                    ? new EffectiveModelProviderResult.Byok("platform-provider", "openai")
+                    : new EffectiveModelProviderResult.ProjectGitHubCopilot($"binding-{scope}", "project-bot"));
+            });
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(SharedWorkingDirectory: null));
+
+        observedScopes.Should().NotBeEmpty().And.AllSatisfy(
+            scope => scope.Should().Be(projectId),
+            "project-scoped work keeps resolving its provider against its own project");
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("copilotCredential").GetProperty("snapshotReference").GetString()
+            .Should().Be("snapshot-test");
+    }
+
+    [Fact]
     public void Router_requires_byok_provider_configuration_wiring()
     {
         var services = new ServiceCollection()
@@ -643,7 +769,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
-    public async Task LaunchAgentHostPod_operator_recreates_existing_claim_before_sending_current_token()
+    public async Task LaunchAgentHostPod_operator_recreates_existing_claim_when_no_turn_token_is_held()
     {
         const string runId = "run-claim-operator-refresh";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
@@ -676,12 +802,65 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 McpBrokerToken: "current-broker-token"));
 
         conflictFirst.ClaimCreateRequests.Should().Be(2,
-            "an existing one-shot-configured operator pod must be replaced before a refreshed bearer is delivered");
+            "a pre-existing claim this replica holds no turn token for is unreachable and un-reconfigurable, " +
+            "so it must be replaced rather than reused");
         fake.Requests.Should().Contain(request =>
             request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         doc.RootElement.GetProperty("mcpBrokerToken").GetString().Should().Be("current-broker-token");
         turnTokens.TryGetTurnToken(runId).Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_operator_reuses_held_claim_across_turns_without_reconfiguring()
+    {
+        // An operator conversation HOLDS its AgentHost pod between turns so the next message skips the
+        // claim/configure cold start that produced 15-20s of per-turn silence. When this replica still
+        // holds the pod's turn token the pod is ours and already configured, so a second turn must
+        // neither delete the claim nor replay the one-shot /configure — the current short-lived
+        // MCP broker token is renewed over the authenticated control plane instead.
+        const string runId = "run-claim-operator-held";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-3"}}}""");
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-3$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-3"},"status":{"podIP":"10.0.0.9"}}""");
+
+        var alwaysConflict = new AlwaysConflictClaimHandler();
+        var configureHandler = new RecordingConfigureHandler();
+        var turnTokens = new RecordingTurnTokenRegistry();
+        turnTokens.RegisterTurnToken(runId, "turn-token-from-the-previous-turn");
+        var podRegistry = new PodNameRegistry();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(alwaysConflict, fake),
+            Options(),
+            NullLogger<KubernetesSandboxExecutor>.Instance,
+            podRegistry: podRegistry,
+            turnTokenRegistry: turnTokens,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("entra-object-id"),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+
+        var endpoint = await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                Purpose: AgentHostPurpose.OperatorAssistant,
+                McpBrokerToken: "current-broker-token"));
+
+        endpoint.Should().Be("http://10.0.0.9:8088/a2a/agent");
+        alwaysConflict.ClaimCreateRequests.Should().Be(1,
+            "the held claim must be reused, not deleted and recreated");
+        fake.Requests.Should().NotContain(request =>
+            request.Method == "DELETE" && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        configureHandler.Body.Should().BeNull(
+            "/configure is one-shot and must not be replayed against an already-configured held pod");
+        turnTokens.TryGetTurnToken(runId).Should().Be("turn-token-from-the-previous-turn",
+            "the held pod keeps the turn token the A2A call authenticates with");
     }
 
     [Fact]
@@ -1044,10 +1223,115 @@ public sealed class KubernetesSandboxExecutorClaimTests
             "non-preview deployments (null preview service) must keep the original unconditional release");
     }
 
+    private static string ClaimJsonWithHolder(string claimName, string? holderToken)
+    {
+        var annotations = holderToken is null
+            ? string.Empty
+            : ",\"annotations\":{\"" + KubernetesSandboxExecutor.HolderTokenAnnotation + "\":\"" + holderToken + "\"}";
+        return "{\"metadata\":{\"name\":\"" + claimName + "\"" + annotations + "}}";
+    }
+
+    [Fact]
+    public async Task TryReleaseHeldAgentHostPod_refuses_to_delete_a_claim_held_by_another_owner()
+    {
+        // Claims are addressed by a name deterministically derived from the run id, while everything
+        // that decides to release one (an API replica's in-memory pod-hold flag, activity clock and
+        // sweep timer) is process-local. With no session affinity a conversation's next turn can land
+        // on the other replica, which correctly cold-starts its own pod under that SAME name — and
+        // the first replica, still believing it holds one, would delete a claim the other replica is
+        // actively serving a turn from. The stamped holder token makes the release a CAS.
+        const string runId = "run-fenced-release-foreign";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, "owner-on-the-other-replica"));
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+
+        var released = await executor.TryReleaseHeldAgentHostPodAsync(runId, "our-stale-token");
+
+        released.Should().BeFalse("the claim now belongs to a newer owner");
+        fake.Requests.Should().NotContain(
+            r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"),
+            "deleting another replica's live claim would kill a turn that is in flight");
+    }
+
+    [Fact]
+    public async Task TryReleaseHeldAgentHostPod_deletes_the_claim_it_still_holds()
+    {
+        const string runId = "run-fenced-release-own";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, "still-ours"));
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+
+        var released = await executor.TryReleaseHeldAgentHostPodAsync(runId, "still-ours");
+
+        released.Should().BeTrue();
+        fake.Requests.Should().Contain(
+            r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+    }
+
+    [Fact]
+    public async Task TryReleaseHeldAgentHostPod_still_reclaims_an_unstamped_claim()
+    {
+        // An unstamped claim (created before this fencing existed, or by a path that does not hold a
+        // pod across turns) is still ours to reclaim: the token guards against a NEWER owner, and
+        // must not become a new way to leak pods.
+        const string runId = "run-fenced-release-unstamped";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, holderToken: null));
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+
+        var released = await executor.TryReleaseHeldAgentHostPodAsync(runId, "some-token");
+
+        released.Should().BeTrue();
+        fake.Requests.Should().Contain(
+            r => r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_stamps_the_holder_token_on_the_claim_it_creates()
+    {
+        const string runId = "run-claim-holder-stamp";
+
+        var fake = new FakeKubeHandler();
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+
+        try
+        {
+            await executor.LaunchAgentHostPodAsync(
+                runId,
+                new AgentHostLaunchContext(
+                    SharedWorkingDirectory: null,
+                    Purpose: AgentHostPurpose.OperatorAssistant,
+                    McpBrokerToken: "holder-stamp-broker-token",
+                    HolderToken: "owner-token-abc"),
+                new CancellationTokenSource(TimeSpan.FromMilliseconds(50)).Token);
+        }
+        catch (Exception)
+        {
+            // Only the CREATE body matters here; readiness never completes against the fake cluster.
+        }
+
+        var create = fake.Requests.FirstOrDefault(r => r.Method == "POST" && r.Path.EndsWith("/sandboxclaims"));
+        create.Should().NotBeNull();
+        create!.Body.Should().Contain(KubernetesSandboxExecutor.HolderTokenAnnotation)
+            .And.Contain("owner-token-abc",
+                "a claim that is not stamped at creation cannot be fenced when it is released");
+    }
+
     // Minimal ISandboxPreviewService test double: only lifecycle reconciliation is exercised by the
     // release path; every other member throws so an unexpected call is caught loudly.
-    private sealed class StubPreviewService : Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService
-    {
+    private sealed class StubPreviewService : Agentweaver.Api.Sandbox.Preview.ISandboxPreviewService    {
         private readonly PreviewLifecycleState _state;
         public StubPreviewService(bool hasActivePreview) =>
             _state = hasActivePreview ? PreviewLifecycleState.PreviewActive : PreviewLifecycleState.Previewable;
