@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.27.1
+
+### Patch Changes
+
+- a979b06: Improve GitHub authorization diagnostics, report the exact build revision from the version API, and clarify how durable Copilot providers and repository-less unattended automation work.
+
 ## 0.27.0
 
 ### Minor Changes
