@@ -12,7 +12,9 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
+using OpenIddict.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -54,7 +56,11 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         using var response = await _client.PostAsJsonAsync("/oauth/register", new
         {
             client_name = "Copilot CLI test",
-            redirect_uris = new[] { "http://127.0.0.1:49152/callback" },
+            redirect_uris = new[]
+            {
+                "http://127.0.0.1:49152/callback",
+                "com.github.copilot:/oauth/callback",
+            },
             token_endpoint_auth_method = "none",
             grant_types = new[] { "authorization_code", "refresh_token" },
             response_types = new[] { "code" },
@@ -64,13 +70,19 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             HttpStatusCode.Created, await response.Content.ReadAsStringAsync());
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         document.RootElement.GetProperty("client_id").GetString().Should().StartWith("aw_native_");
+        document.RootElement.GetProperty("client_id_expires_at").GetInt64()
+            .Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         document.RootElement.TryGetProperty("client_secret", out _).Should().BeFalse();
     }
 
     [Theory]
     [InlineData("http://localhost:49152/callback")]
+    [InlineData("https://login.microsoftonline.com/common/oauth2/nativeclient")]
     [InlineData("https://example.com/*")]
     [InlineData("http://10.0.0.7/callback")]
+    [InlineData("com.example.app://evil.example/callback")]
+    [InlineData("com.app:/callback")]
+    [InlineData("http://2130706433/callback")]
     public async Task DynamicRegistration_RejectsUnsafeRedirects(string redirect)
     {
         using var response = await _client.PostAsJsonAsync("/oauth/register", new
@@ -79,6 +91,83 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             redirect_uris = new[] { redirect },
         });
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("https://other.example/mcp")]
+    [InlineData("http://localhost:5000/mcp/")]
+    public async Task Authorization_RequiresExactlyCanonicalResource(string? resource)
+    {
+        const string redirectUri = "http://127.0.0.1:49158/callback";
+        var clientId = await RegisterClientAsync(redirectUri);
+        var values = new List<KeyValuePair<string, string?>>
+        {
+            new("client_id", clientId),
+            new("redirect_uri", redirectUri),
+            new("response_type", "code"),
+            new("scope", "mcp:invoke"),
+            new("code_challenge", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            new("code_challenge_method", "S256"),
+        };
+        if (resource is not null)
+            values.Add(new("resource", resource));
+
+        using var response = await _client.GetAsync(
+            "/oauth/authorize" + QueryString.Create(values));
+        await AssertInvalidTargetAsync(response);
+    }
+
+    [Fact]
+    public async Task Authorization_RejectsMultipleResourceValues()
+    {
+        const string redirectUri = "http://127.0.0.1:49159/callback";
+        var clientId = await RegisterClientAsync(redirectUri);
+        var query = QueryString.Create(new[]
+        {
+            KeyValuePair.Create("client_id", (string?) clientId),
+            KeyValuePair.Create("redirect_uri", (string?) redirectUri),
+            KeyValuePair.Create("response_type", (string?) "code"),
+            KeyValuePair.Create("scope", (string?) "mcp:invoke"),
+            KeyValuePair.Create("code_challenge", (string?) "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            KeyValuePair.Create("code_challenge_method", (string?) "S256"),
+            KeyValuePair.Create("resource", (string?) "http://localhost:5000/mcp"),
+            KeyValuePair.Create("resource", (string?) "http://localhost:5000/mcp"),
+        });
+
+        using var response = await _client.GetAsync("/oauth/authorize" + query);
+        await AssertInvalidTargetAsync(response);
+    }
+
+    [Fact]
+    public async Task Token_RequiresExactlyCanonicalResource()
+    {
+        var clientId = await RegisterClientAsync("http://127.0.0.1:49160/callback");
+        var cases = new[]
+        {
+            Array.Empty<KeyValuePair<string, string>>(),
+            new[] { KeyValuePair.Create("resource", "https://other.example/mcp") },
+            new[] { KeyValuePair.Create("resource", "http://localhost:5000/mcp/") },
+            new[]
+            {
+                KeyValuePair.Create("resource", "http://localhost:5000/mcp"),
+                KeyValuePair.Create("resource", "http://localhost:5000/mcp"),
+            },
+        };
+
+        foreach (var resources in cases)
+        {
+            var form = new List<KeyValuePair<string, string>>
+            {
+                KeyValuePair.Create("grant_type", "refresh_token"),
+                KeyValuePair.Create("client_id", clientId),
+                KeyValuePair.Create("refresh_token", "not-a-token"),
+            };
+            form.AddRange(resources);
+            using var response = await _client.PostAsync("/oauth/token", new FormUrlEncodedContent(form));
+            response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+            (await response.Content.ReadAsStringAsync()).Should().Contain("invalid_target");
+        }
     }
 
     [Fact]
@@ -187,18 +276,50 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             ["code"] = code,
             ["redirect_uri"] = redirectUri,
             ["code_verifier"] = verifier,
+            ["resource"] = "http://localhost:5000/mcp",
         });
         token.GetProperty("access_token").GetString()!.Count(c => c == '.').Should().Be(2);
         var refreshToken = token.GetProperty("refresh_token").GetString()!;
 
-        var rotated = await RedeemAsync(new()
-        {
-            ["grant_type"] = "refresh_token",
-            ["client_id"] = clientId,
-            ["refresh_token"] = refreshToken,
-        });
+        async Task<HttpResponseMessage> RefreshAsync(string value) =>
+            await _client.PostAsync("/oauth/token", new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["grant_type"] = "refresh_token",
+                ["client_id"] = clientId,
+                ["refresh_token"] = value,
+                ["resource"] = "http://localhost:5000/mcp",
+            }));
+
+        var concurrent = await Task.WhenAll(RefreshAsync(refreshToken), RefreshAsync(refreshToken));
+        concurrent.Count(response => response.StatusCode == HttpStatusCode.OK).Should().Be(1);
+        concurrent.Count(response => response.StatusCode == HttpStatusCode.BadRequest).Should().Be(1);
+        var winner = concurrent.Single(response => response.StatusCode == HttpStatusCode.OK);
+        var rotated = await winner.Content.ReadFromJsonAsync<JsonElement>();
         var rotatedRefreshToken = rotated.GetProperty("refresh_token").GetString()!;
         rotatedRefreshToken.Should().NotBe(refreshToken);
+
+        string redeemedTokenId;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictTokenManager>();
+            var entry = await manager.FindByReferenceIdAsync(refreshToken);
+            entry.Should().NotBeNull();
+            redeemedTokenId = (await manager.GetIdAsync(entry!))!;
+            var descriptor = new OpenIddictTokenDescriptor();
+            await manager.PopulateAsync(descriptor, entry!);
+            descriptor.CreationDate = DateTimeOffset.UtcNow.AddDays(-31);
+            await manager.UpdateAsync(entry!, descriptor);
+        }
+        var maintenance = new OAuthMaintenanceService(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<OAuthMaintenanceService>.Instance);
+        await maintenance.RunOnceAsync(CancellationToken.None);
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictTokenManager>();
+            (await manager.FindByIdAsync(redeemedTokenId)).Should().NotBeNull(
+                "replay-identifying entries must survive the full fixed refresh-family lifetime plus margin");
+        }
 
         using var codeReplay = await _client.PostAsync("/oauth/token", new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -207,6 +328,7 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             ["code"] = code,
             ["redirect_uri"] = redirectUri,
             ["code_verifier"] = verifier,
+            ["resource"] = "http://localhost:5000/mcp",
         }));
         codeReplay.StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
@@ -215,6 +337,7 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             ["grant_type"] = "refresh_token",
             ["client_id"] = clientId,
             ["refresh_token"] = refreshToken,
+            ["resource"] = "http://localhost:5000/mcp",
         }));
         replay.StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
@@ -223,8 +346,74 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             ["grant_type"] = "refresh_token",
             ["client_id"] = clientId,
             ["refresh_token"] = rotatedRefreshToken,
+            ["resource"] = "http://localhost:5000/mcp",
         }));
         familyUse.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        foreach (var response in concurrent)
+            response.Dispose();
+    }
+
+    [Fact]
+    public async Task DynamicRegistration_MaintenanceDisablesExpiredApplicationAndReclaimsQuota()
+    {
+        var firstId = await RegisterClientAsync("http://127.0.0.1:49163/callback");
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var registration = await db.OAuthDynamicRegistrations.SingleAsync(x => x.ClientId == firstId);
+            registration.RegisteredAt = DateTimeOffset.UtcNow.AddDays(-31);
+            await db.SaveChangesAsync();
+        }
+
+        var maintenance = new OAuthMaintenanceService(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<OAuthMaintenanceService>.Instance);
+        await maintenance.RunOnceAsync(CancellationToken.None);
+
+        await using var verificationScope = _factory.Services.CreateAsyncScope();
+        var verificationDb = verificationScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verificationDb.OAuthDynamicRegistrations.SingleAsync(x => x.ClientId == firstId))
+            .DisabledAt.Should().NotBeNull();
+        var applications = verificationScope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        var expiredApplication = await applications.FindByClientIdAsync(firstId);
+        expiredApplication.Should().NotBeNull();
+        (await applications.GetRedirectUrisAsync(expiredApplication!)).Should().BeEmpty();
+        (await applications.GetPermissionsAsync(expiredApplication!)).Should().BeEmpty();
+
+        var activeCount = await verificationDb.OAuthDynamicRegistrations.CountAsync(x => x.DisabledAt == null);
+        var configuration = verificationScope.ServiceProvider
+            .GetRequiredService<OAuthServerConfiguration>() with
+        {
+            DynamicRegistrationsTotal = activeCount + 1,
+        };
+        var service = new OAuthDynamicClientRegistrationService(
+            verificationDb, applications, configuration);
+        using var document = JsonDocument.Parse(
+            """{"client_name":"Replacement client","redirect_uris":["http://127.0.0.1:49164/callback"]}""");
+        var replacement = await service.RegisterAsync(
+            document.RootElement, "quota-test", CancellationToken.None);
+        replacement.client_id.Should().StartWith("aw_native_");
+    }
+
+    private async Task<string> RegisterClientAsync(string redirectUri)
+    {
+        using var registration = await _client.PostAsJsonAsync("/oauth/register", new
+        {
+            client_name = "Resource validation test",
+            redirect_uris = new[] { redirectUri },
+        });
+        registration.EnsureSuccessStatusCode();
+        return (await registration.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("client_id").GetString()!;
+    }
+
+    private static async Task AssertInvalidTargetAsync(HttpResponseMessage response)
+    {
+        response.StatusCode.Should().BeOneOf(HttpStatusCode.BadRequest, HttpStatusCode.Redirect);
+        var error = response.StatusCode == HttpStatusCode.Redirect
+            ? response.Headers.Location!.Query
+            : await response.Content.ReadAsStringAsync();
+        error.Should().Contain("invalid_target");
     }
 
     private static Dictionary<string, string> ParseQuery(string query) =>

@@ -114,7 +114,8 @@ public sealed class OAuthDynamicClientRegistrationService(
         var redirects = ReadStringArray(document, "redirect_uris");
         if (redirects is not { Length: > 0 and <= 10 }
             || redirects.Distinct(StringComparer.Ordinal).Count() != redirects.Length
-            || redirects.Any(uri => !OAuthRedirectUriValidator.IsValid(uri, allowDynamicLoopbackPort: true)))
+            || redirects.Any(uri => !OAuthRedirectUriValidator.IsValid(
+                uri, allowDynamicLoopbackPort: true, allowHttps: false)))
             throw new OAuthRegistrationException("invalid_redirect_uri", "Redirect URIs must be exact native callbacks.");
 
         var name = ReadString(document, "client_name");
@@ -148,6 +149,8 @@ public sealed class OAuthDynamicClientRegistrationService(
                 .ConfigureAwait(false);
         }
         var now = DateTimeOffset.UtcNow;
+        await OAuthDynamicClientLifecycle.DisableExpiredAsync(
+            db, manager, configuration, now, ct).ConfigureAwait(false);
         var since = now.AddDays(-1);
         var sourceRegistrations = await db.OAuthDynamicRegistrations.AsNoTracking()
             .Where(x => x.DisabledAt == null && x.SourceHash == sourceHash)
@@ -162,6 +165,8 @@ public sealed class OAuthDynamicClientRegistrationService(
         var descriptor = OAuthStaticClientReconciler.BaseDescriptor(
             clientId, name, redirects, scopes, configuration.Resource.AbsoluteUri);
         descriptor.Properties["agentweaver_dynamic"] = JsonSerializer.SerializeToElement(true);
+        var expiresAt = now.Add(configuration.DynamicRegistrationLifetime);
+        descriptor.Properties["agentweaver_expires_at"] = JsonSerializer.SerializeToElement(expiresAt);
         await manager.CreateAsync(descriptor, ct).ConfigureAwait(false);
         db.OAuthDynamicRegistrations.Add(new OAuthDynamicRegistration
         {
@@ -173,7 +178,16 @@ public sealed class OAuthDynamicClientRegistrationService(
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
         await transaction.CommitAsync(ct).ConfigureAwait(false);
 
-        return new(clientId, name, redirects, method, grants, responses, string.Join(' ', scopes), now.ToUnixTimeSeconds());
+        return new(
+            clientId,
+            name,
+            redirects,
+            method,
+            grants,
+            responses,
+            string.Join(' ', scopes),
+            now.ToUnixTimeSeconds(),
+            expiresAt.ToUnixTimeSeconds());
     }
 
     private static string? ReadString(JsonElement document, string name) =>
@@ -203,9 +217,49 @@ public sealed record OAuthRegistrationResponse(
     string[] grant_types,
     string[] response_types,
     string scope,
-    long client_id_issued_at);
+    long client_id_issued_at,
+    long client_id_expires_at);
 
 public sealed class OAuthRegistrationException(string error, string description) : Exception(description)
 {
     public string Error { get; } = error;
+}
+
+internal static class OAuthDynamicClientLifecycle
+{
+    public static async Task<int> DisableExpiredAsync(
+        MemoryDbContext db,
+        IOpenIddictApplicationManager manager,
+        OAuthServerConfiguration configuration,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var active = await db.OAuthDynamicRegistrations
+            .Where(x => x.DisabledAt == null)
+            .ToListAsync(ct).ConfigureAwait(false);
+        var expired = active
+            .Where(x => x.RegisteredAt.Add(configuration.DynamicRegistrationLifetime) <= now)
+            .ToArray();
+
+        foreach (var registration in expired)
+        {
+            var application = await manager.FindByClientIdAsync(registration.ClientId, ct).ConfigureAwait(false);
+            if (application is not null)
+            {
+                var descriptor = new OpenIddictApplicationDescriptor();
+                await manager.PopulateAsync(descriptor, application, ct).ConfigureAwait(false);
+                descriptor.Permissions.Clear();
+                descriptor.RedirectUris.Clear();
+                descriptor.DisplayName = $"Expired: {descriptor.DisplayName}";
+                descriptor.Properties["agentweaver_disabled"] = JsonSerializer.SerializeToElement(true);
+                await manager.UpdateAsync(application, descriptor, ct).ConfigureAwait(false);
+            }
+
+            registration.DisabledAt = now;
+        }
+
+        if (expired.Length > 0)
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return expired.Length;
+    }
 }

@@ -42,6 +42,7 @@ public sealed class AgentweaverWebApplicationFactory : WebApplicationFactory<Pro
                 ["Auth:Mode"] = "GitHubLegacy",
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"] = TestUser,
+                ["Auth:OAuth:DynamicRegistration:RequestsPerMinute"] = "100",
                 ["Git:Author:Name"] = "Test",
                 ["Git:Author:Email"] = "test@localhost",
                 // Provider keys are required by AddAgentRuntime at startup.

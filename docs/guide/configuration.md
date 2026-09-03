@@ -50,6 +50,8 @@ identity. The clients receive only short-lived Agentweaver access tokens for the
 | `Auth:OAuth:Certificates:EncryptionName` | none | Azure Key Vault certificate-secret name for protocol artifact encryption |
 | `Auth:OAuth:DynamicRegistration:PerSourcePerDay` | `20` | Database-backed daily RFC 7591 quota per source address |
 | `Auth:OAuth:DynamicRegistration:MaximumActive` | `1000` | Deployment-wide active dynamic-client quota |
+| `Auth:OAuth:DynamicRegistration:LifetimeDays` | `30` | Active lifetime for anonymous dynamic registrations; maintenance disables the OpenIddict application and reclaims quota |
+| `Auth:OAuth:ForwardedHeaders:TrustedNetworks` | loopback in Development; required elsewhere | Comma-separated private CIDRs containing the TLS-terminating proxies. Forwarded scheme/host values from every other source are ignored. AKS deployment derives this from the cluster pod CIDRs. |
 | `Auth:OAuth:Clients` | empty | Statically known public native clients, each with `ClientId`, `DisplayName`, exact `RedirectUris`, and optional `Scopes` |
 
 The resource identifier is always the exact canonical origin plus `/mcp`; it
@@ -58,10 +60,13 @@ startup fails when either durable certificate is unavailable. The API loads the
 active and previous enabled Key Vault versions so a rotation overlap remains
 published. Development alone may use process-ephemeral certificates.
 
-Dynamic registration accepts public native clients only. It permits exact HTTPS
-and private-use callbacks, plus HTTP callbacks on literal `127.0.0.1` or `[::1]`.
-Hostnames such as `localhost`, wildcards, prefix matching, fragments, userinfo,
-client secrets, and metadata URL fetching are rejected.
+Anonymous dynamic registration accepts public native clients only. It permits
+tightly formed reverse-domain private-use callbacks and HTTP callbacks on literal
+`127.0.0.1` or `[::1]`; it never accepts HTTPS callbacks. HTTPS redirect
+registration is available only through the explicitly administered static-client
+configuration. Hostnames such as `localhost`, alternate numeric loopback forms,
+wildcards, prefix matching, fragments, userinfo, client secrets, and metadata URL
+fetching are rejected.
 
 #### Repo App user authorization
 

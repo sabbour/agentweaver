@@ -40,6 +40,8 @@ public static class OAuthAuthorizationServerEndpoints
             return Results.BadRequest(new { error = Errors.InvalidRequest });
         if (!request.IsAuthorizationCodeGrantType() && !request.IsRefreshTokenGrantType())
             return OAuthForbid(Errors.UnsupportedGrantType, "Only authorization_code and refresh_token are supported.");
+        if (!await HasExactResourceAsync(context, request, configuration.Resource.AbsoluteUri, ct).ConfigureAwait(false))
+            return OAuthForbid(Errors.InvalidTarget, "The request must target exactly the configured MCP resource.");
 
         var result = await context.AuthenticateAsync(
             OpenIddictServerAspNetCoreDefaults.AuthenticationScheme).ConfigureAwait(false);
@@ -89,8 +91,8 @@ public static class OAuthAuthorizationServerEndpoints
         var redirectUri = request.RedirectUri!;
         var scope = NormalizeScopes(request.GetScopes());
         if (!scope.Contains(OAuthServerConfiguration.McpScope, StringComparer.Ordinal)
-            || request.GetResources().Any(resource =>
-                !string.Equals(resource, configuration.Resource.AbsoluteUri, StringComparison.Ordinal)))
+            || !await HasExactResourceAsync(
+                context, request, configuration.Resource.AbsoluteUri, ct).ConfigureAwait(false))
         {
             return OAuthForbid(Errors.InvalidTarget, "The request must target the configured MCP resource.");
         }
@@ -312,6 +314,26 @@ public static class OAuthAuthorizationServerEndpoints
 
     private static string[] NormalizeScopes(IEnumerable<string> scopes) =>
         scopes.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+    private static async Task<bool> HasExactResourceAsync(
+        HttpContext context,
+        OpenIddictRequest request,
+        string expected,
+        CancellationToken ct)
+    {
+        var values = context.Request.Query["resource"].ToArray();
+        if (context.Request.HasFormContentType)
+        {
+            var form = await context.Request.ReadFormAsync(ct).ConfigureAwait(false);
+            values = [.. values, .. form["resource"]];
+        }
+
+        var parsed = request.GetResources().ToArray();
+        return values.Length == 1
+            && parsed.Length == 1
+            && string.Equals(values[0], expected, StringComparison.Ordinal)
+            && string.Equals(parsed[0], expected, StringComparison.Ordinal);
+    }
 
     private static string RenderConsent(OpenIddictRequest request, string[] scopes, string handle)
     {

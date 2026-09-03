@@ -276,13 +276,17 @@ public sealed class EntraOAuthRedirectService
     public async Task<EntraCodeExchangeResult> ExchangeCodeWithContextAsync(
         string code, string state, CancellationToken ct = default)
     {
-        var configuration = GetAuthorizationFlowConfiguration();
-        var now = DateTimeOffset.UtcNow;
-        string codeVerifier;
-        string? returnHandle;
-        string? nonce;
+        var claim = await ClaimAuthorizationAsync(state, ct).ConfigureAwait(false);
+        return await ExchangeClaimedCodeAsync(code, claim, ct).ConfigureAwait(false);
+    }
 
-        using (var scope = _scopeFactory.CreateScope())
+    public async Task<EntraAuthorizationClaim> ClaimAuthorizationAsync(
+        string state, CancellationToken ct = default)
+    {
+        _ = GetAuthorizationFlowConfiguration();
+        var now = DateTimeOffset.UtcNow;
+
+        await using (var scope = _scopeFactory.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
@@ -305,10 +309,6 @@ public sealed class EntraOAuthRedirectService
             if (existing is null || !claimed || now > existing.ExpiresAt)
                 throw new InvalidOperationException("Invalid or expired Entra OAuth state.");
 
-            codeVerifier = existing.CodeVerifier;
-            returnHandle = existing.ReturnHandle;
-            nonce = existing.Nonce;
-
             // Best-effort purge of expired states; never let cleanup break sign-in. Only translatable
             // on Postgres (prod, where growth matters); skipped on SQLite/dev.
             if (db.Database.IsNpgsql())
@@ -322,9 +322,18 @@ public sealed class EntraOAuthRedirectService
                     _logger.LogDebug(ex, "Opportunistic purge of expired Entra OAuth states failed; continuing.");
                 }
             }
-        }
 
-        var tokens = await RedeemCodeForAccessTokenAsync(code, codeVerifier, configuration, ct)
+            return new(existing.CodeVerifier, existing.ReturnHandle, existing.Nonce);
+        }
+    }
+
+    public async Task<EntraCodeExchangeResult> ExchangeClaimedCodeAsync(
+        string code,
+        EntraAuthorizationClaim claim,
+        CancellationToken ct = default)
+    {
+        var configuration = GetAuthorizationFlowConfiguration();
+        var tokens = await RedeemCodeForAccessTokenAsync(code, claim.CodeVerifier, configuration, ct)
             .ConfigureAwait(false);
 
         // Validate the access token exactly as every API request does (issuer, audience=ClientId,
@@ -333,17 +342,17 @@ public sealed class EntraOAuthRedirectService
         var claims = await _tokenValidator.ValidateAsync(tokens.AccessToken!, ct).ConfigureAwait(false);
         if (claims is null)
             throw new InvalidOperationException("Microsoft Entra returned a token that failed validation.");
-        if (nonce is not null)
+        if (claim.Nonce is not null)
         {
             if (string.IsNullOrWhiteSpace(tokens.IdToken))
                 throw new InvalidOperationException("Microsoft Entra did not return the required ID token.");
-            var idClaims = await _tokenValidator.ValidateIdTokenAsync(tokens.IdToken, nonce, ct).ConfigureAwait(false);
+            var idClaims = await _tokenValidator.ValidateIdTokenAsync(tokens.IdToken, claim.Nonce, ct).ConfigureAwait(false);
             if (idClaims is null || idClaims.ObjectId != claims.ObjectId)
                 throw new InvalidOperationException("Microsoft Entra ID token nonce or subject validation failed.");
         }
 
         _logger.LogInformation("Entra OAuth redirect flow completed for object id {ObjectId}.", claims.ObjectId);
-        return new(claims, tokens.AccessToken!, returnHandle);
+        return new(claims, tokens.AccessToken!, claim.ReturnHandle);
     }
 
     private async Task<TokenResponse> RedeemCodeForAccessTokenAsync(
@@ -436,3 +445,8 @@ public sealed record EntraCodeExchangeResult(
     EntraAccessTokenClaims Claims,
     string AccessToken,
     string? ReturnHandle);
+
+public sealed record EntraAuthorizationClaim(
+    string CodeVerifier,
+    string? ReturnHandle,
+    string? Nonce);

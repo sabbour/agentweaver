@@ -85,6 +85,7 @@ configMapGenerator:
       - "TENANT_ID=changeme"
       - "AUTH_MODE=Entra"
       - "OAUTH_PUBLIC_ORIGIN=https://agentweaver.example.com"
+      - "OAUTH_TRUSTED_PROXY_NETWORKS=10.244.0.0/16"
       - "OAUTH_SIGNING_CERTIFICATE_NAME=agentweaver-oauth-signing"
       - "OAUTH_ENCRYPTION_CERTIFICATE_NAME=agentweaver-oauth-encryption"
       - "ENTRA_CLIENT_ID="

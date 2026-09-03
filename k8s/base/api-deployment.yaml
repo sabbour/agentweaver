@@ -187,6 +187,11 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: OAUTH_PUBLIC_ORIGIN
+            - name: Auth__OAuth__ForwardedHeaders__TrustedNetworks
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_TRUSTED_PROXY_NETWORKS
             - name: Auth__OAuth__Certificates__SigningName
               valueFrom:
                 configMapKeyRef:

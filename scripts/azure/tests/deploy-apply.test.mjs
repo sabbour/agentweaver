@@ -60,6 +60,7 @@ function makeFakes({
   ddcExists = true,
   keyvaultFound = true,
   domain = "*.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io",
+  podCidrs = "10.244.0.0/16",
 } = {}) {
   const calls = [];
   const writtenFiles = new Map();
@@ -96,6 +97,9 @@ function makeFakes({
     if (cmd === "kubectl" && args[0] === "config") return { stdout: "aks-context", stderr: "", code: 0 };
     if (cmd === "az" && args[0] === "monitor" && args[1] === "app-insights") {
       return { stdout: "", stderr: "", code: 0 }; // insights already provisioned
+    }
+    if (cmd === "az" && args[0] === "aks" && args[1] === "show") {
+      return { stdout: podCidrs, stderr: "", code: 0 };
     }
     if (cmd === "kubectl" && args.includes("jsonpath={.status.domain}")) {
       return { stdout: domain, stderr: "", code: 0 };
@@ -241,6 +245,18 @@ test("run(): rejects an empty managed domain before rendering or applying manife
   assert.equal(writtenFiles.size, 0, "must not write rendered manifests when the managed domain is absent");
 });
 
+test("run(): refuses deployment when AKS cannot provide a bounded proxy CIDR", async () => {
+  const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes({ podCidrs: "" });
+  await assert.rejects(
+    run(CFG, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT }),
+    /refusing to trust unbounded forwarded headers/,
+  );
+  assert.equal(
+    calls.some((call) => call.type === "run" && call.cmd === "kubectl" && call.args.includes("api-deployment.yaml")),
+    false,
+  );
+});
+
 test("run(): accepts a valid wildcard managed domain and renders its public hostname", async () => {
   const domain = "*.valid-zone.westus2.staging.aksapp.io";
   const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes({ domain });
@@ -280,6 +296,7 @@ test("run(): applied manifests carry real kustomize-resolved values, not the com
   const runtimeConfig = writtenFiles.get("agentweaver-runtime-config.yaml");
   assert.ok(runtimeConfig, "expected the synthetic runtime-config ConfigMap to have been written before apply");
   assert.match(runtimeConfig, /OAUTH_PUBLIC_ORIGIN/);
+  assert.match(runtimeConfig, /OAUTH_TRUSTED_PROXY_NETWORKS.*10\.244\.0\.0\/16/);
   assert.match(runtimeConfig, /OAUTH_SIGNING_CERTIFICATE_NAME/);
   assert.doesNotMatch(runtimeConfig, /mcp-oauth-signing-key|Auth__OAuth__(?:SigningKey|Issuer|Audience)|OAUTH_ISSUER|OAUTH_AUDIENCE/);
 

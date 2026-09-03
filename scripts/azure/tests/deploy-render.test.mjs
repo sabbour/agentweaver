@@ -60,6 +60,7 @@ const VARS = {
   ENTRA_CLIENT_ID: "11111111-2222-3333-4444-555555555555",
   ENTRA_TENANT_ID: "66666666-7777-8888-9999-000000000000",
   ENTRA_ENTERPRISE_APP_OBJECT_ID: "77777777-8888-9999-0000-111111111111",
+  OAUTH_TRUSTED_PROXY_NETWORKS: "10.244.0.0/16",
 };
 
 test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IMAGE_TAG/AGENTHOST_IMAGE_TAG", () => {
@@ -93,6 +94,7 @@ test("buildRuntimeConfigLiterals() wires canonical OpenIddict and Key Vault cert
   assert.equal(literals.APPINSIGHTS_WORKSPACE_ID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
   assert.equal(literals.SANDBOX_PREVIEW_ZONE_SUFFIX, "abc123def456.westus2.staging.aksapp.io");
   assert.equal(literals.OAUTH_PUBLIC_ORIGIN, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
+  assert.equal(literals.OAUTH_TRUSTED_PROXY_NETWORKS, "10.244.0.0/16");
   assert.equal(literals.OAUTH_SIGNING_CERTIFICATE_NAME, "agentweaver-oauth-signing");
   assert.equal(literals.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "agentweaver-oauth-encryption");
 });
@@ -252,6 +254,7 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__Entra__RedirectUri\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_REDIRECT_URI\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__Entra__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__OAuth__PublicOrigin\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_PUBLIC_ORIGIN\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /name: Auth__OAuth__ForwardedHeaders__TrustedNetworks\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_TRUSTED_PROXY_NETWORKS\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__OAuth__Certificates__SigningName\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_SIGNING_CERTIFICATE_NAME\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__CopilotApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: COPILOT_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__RepoApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: REPO_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);

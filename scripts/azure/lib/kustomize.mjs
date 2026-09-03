@@ -318,6 +318,7 @@ export function buildRuntimeConfigLiterals(vars) {
     // ClientSecret is deliberately NOT wired here -- PKCE-only per #658; see api-deployment.yaml.
     AUTH_MODE: authMode,
     OAUTH_PUBLIC_ORIGIN: oauthOrigin,
+    OAUTH_TRUSTED_PROXY_NETWORKS: str(vars.OAUTH_TRUSTED_PROXY_NETWORKS),
     OAUTH_SIGNING_CERTIFICATE_NAME: "agentweaver-oauth-signing",
     OAUTH_ENCRYPTION_CERTIFICATE_NAME: "agentweaver-oauth-encryption",
     ENTRA_CLIENT_ID: str(vars.ENTRA_CLIENT_ID),

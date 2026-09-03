@@ -4,6 +4,7 @@ using Azure.Security.KeyVault.Secrets;
 using k8s;
 using LibGit2Sharp;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Agentweaver.Api;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
@@ -804,8 +805,12 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
         builder.Services.AddSingleton(oauthConfiguration);
         builder.Services.AddSingleton(oauthCertificates);
         builder.Services.AddScoped<OAuthDynamicClientRegistrationService>();
+        builder.Services.AddScoped<OAuthRefreshTokenFamilyRevoker>();
+        builder.Services.AddScoped<OAuthBrokerTransactionService>();
         builder.Services.AddHostedService<OAuthStaticClientReconciler>();
         builder.Services.AddHostedService<OAuthMaintenanceService>();
+        builder.Services.Configure<ForwardedHeadersOptions>(
+            options => OAuthForwardedHeaders.Configure(options, oauthConfiguration));
         builder.Services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -814,7 +819,8 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
                     context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
                     _ => new FixedWindowRateLimiterOptions
                     {
-                        PermitLimit = 10,
+                        PermitLimit = builder.Configuration.GetValue(
+                            "Auth:OAuth:DynamicRegistration:RequestsPerMinute", 10),
                         Window = TimeSpan.FromMinutes(1),
                         QueueLimit = 0,
                         AutoReplenishment = true,
@@ -826,8 +832,14 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
             .AddServer(options =>
             {
                 options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthExactResourceTokenRequestHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Exchange.ValidateAuthentication.Descriptor.Order - 1_000));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateTokenRequestContext>(
                     handler => handler.UseScopedHandler<OAuthRefreshReplayHandler>()
                         .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Exchange.ValidateAuthentication.Descriptor.Order - 500));
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ProcessSignInContext>(
+                    handler => handler.UseScopedHandler<OAuthAtomicRefreshTokenRedemptionHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.RedeemTokenEntry.Descriptor.Order - 500));
                 options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.HandleConfigurationRequestContext>(
                     handler => handler.UseInlineHandler(context =>
                         {
@@ -850,7 +862,8 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
                     .RegisterResources(oauthConfiguration.Resource.AbsoluteUri)
                     .SetAuthorizationCodeLifetime(TimeSpan.FromMinutes(1))
                     .SetAccessTokenLifetime(TimeSpan.FromMinutes(10))
-                    .SetRefreshTokenLifetime(TimeSpan.FromDays(30));
+                    .SetRefreshTokenLifetime(OAuthServerConfiguration.RefreshTokenFamilyLifetime)
+                    .DisableSlidingRefreshTokenExpiration();
 
                 foreach (var key in oauthCertificates.SigningKeys)
                     options.AddSigningKey(key);
@@ -1119,6 +1132,7 @@ if (isWorker)
 }
 else
 {
+    app.UseForwardedHeaders();
     app.UseExceptionHandler(err => err.Run(async context =>
     {
         context.Response.StatusCode = 500;

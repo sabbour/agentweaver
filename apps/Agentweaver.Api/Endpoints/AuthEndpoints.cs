@@ -1,4 +1,5 @@
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Security;
 using System.Text.Json.Serialization;
@@ -255,6 +256,7 @@ public static class AuthEndpoints
             string? state,
             string? error,
             EntraOAuthRedirectService entraOauthService,
+            OAuthBrokerTransactionService brokerTransactions,
             WebSessionExchangeService webSessionExchange,
             CancellationToken ct) =>
         {
@@ -277,14 +279,47 @@ public static class AuthEndpoints
             EntraOAuthStateCookie.Clear(httpContext);
             if (string.IsNullOrEmpty(boundState) || !EntraOAuthStateCookie.ConstantTimeEquals(boundState, state))
                 return Results.Redirect($"{frontendUrl}/?auth=error&reason=state_mismatch");
+
+            EntraAuthorizationClaim claim;
+            try
+            {
+                claim = await entraOauthService.ClaimAuthorizationAsync(state, ct).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return Results.Redirect($"{frontendUrl}/?auth=error&reason=state_mismatch");
+            }
+
             if (!string.IsNullOrWhiteSpace(error))
-                return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");
+            {
+                if (claim.ReturnHandle is null)
+                    return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");
+                return await CompleteBrokerErrorAsync(
+                    brokerTransactions,
+                    claim.ReturnHandle,
+                    string.Equals(error, "access_denied", StringComparison.Ordinal)
+                        ? OpenIddict.Abstractions.OpenIddictConstants.Errors.AccessDenied
+                        : OpenIddict.Abstractions.OpenIddictConstants.Errors.ServerError,
+                    string.Equals(error, "access_denied", StringComparison.Ordinal)
+                        ? "The resource owner denied the request."
+                        : "The upstream identity provider could not complete the request.",
+                    ct).ConfigureAwait(false);
+            }
             if (string.IsNullOrWhiteSpace(code))
-                return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
+            {
+                if (claim.ReturnHandle is null)
+                    return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
+                return await CompleteBrokerErrorAsync(
+                    brokerTransactions,
+                    claim.ReturnHandle,
+                    OpenIddict.Abstractions.OpenIddictConstants.Errors.ServerError,
+                    "The upstream identity provider returned an incomplete response.",
+                    ct).ConfigureAwait(false);
+            }
 
             try
             {
-                var exchange = await entraOauthService.ExchangeCodeWithContextAsync(code, state, ct).ConfigureAwait(false);
+                var exchange = await entraOauthService.ExchangeClaimedCodeAsync(code, claim, ct).ConfigureAwait(false);
                 var claims = exchange.Claims;
                 var accessToken = exchange.AccessToken;
                 if (exchange.ReturnHandle is not null)
@@ -298,6 +333,15 @@ public static class AuthEndpoints
             }
             catch (Exception)
             {
+                if (claim.ReturnHandle is not null)
+                {
+                    return await CompleteBrokerErrorAsync(
+                        brokerTransactions,
+                        claim.ReturnHandle,
+                        OpenIddict.Abstractions.OpenIddictConstants.Errors.ServerError,
+                        "The authorization server could not complete the upstream token exchange.",
+                        ct).ConfigureAwait(false);
+                }
                 return Results.Redirect($"{frontendUrl}/?auth=error&reason=sign_in_failed");
             }
         }).ProtocolManaged();
@@ -335,6 +379,20 @@ public static class AuthEndpoints
             PlatformDefaultCopilotBindingService.ClearCallbackCookie(httpContext);
             return Results.NoContent();
         }).AuthenticatedSelf();
+    }
+
+    private static async Task<IResult> CompleteBrokerErrorAsync(
+        OAuthBrokerTransactionService brokerTransactions,
+        string handle,
+        string error,
+        string description,
+        CancellationToken ct)
+    {
+        var redirect = await brokerTransactions.CompleteErrorAsync(
+            handle, error, description, ct).ConfigureAwait(false);
+        return redirect is null
+            ? Results.BadRequest(new { error = OpenIddict.Abstractions.OpenIddictConstants.Errors.InvalidRequest })
+            : Results.Redirect(redirect);
     }
 }
 

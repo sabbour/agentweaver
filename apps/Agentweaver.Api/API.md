@@ -49,11 +49,14 @@ The protocol endpoints are outside `/api` and use the canonical
 | `POST` | `/oauth/revoke` | Token revocation |
 | `POST` | `/oauth/register` | Restricted RFC 7591 public-native client registration |
 
-Authorization requests require PKCE S256 and the `mcp:invoke` scope. Access
+Authorization and token requests require exactly one `resource` equal to
+`{public-origin}/mcp`; missing, duplicate, alternate, or normalized values are
+rejected. Authorization requests also require PKCE S256 and the `mcp:invoke` scope. Access
 tokens are signed, ten-minute JWTs whose audience is exactly
 `{public-origin}/mcp`; authorization codes and refresh tokens are opaque,
 server-stored artifacts. A replayed refresh token revokes its complete token
-family.
+family. Anonymous registration accepts only literal loopback and constrained
+private-use callbacks; HTTPS callbacks must be administered as static clients.
 
 ## Endpoints
 

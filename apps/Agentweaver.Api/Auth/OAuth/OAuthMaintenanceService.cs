@@ -38,13 +38,21 @@ public sealed class OAuthMaintenanceService(
         if (!await TryAcquireLeaseAsync(db, ct).ConfigureAwait(false))
             return;
 
-        var cutoff = DateTimeOffset.UtcNow.AddDays(-1);
+        var now = DateTimeOffset.UtcNow;
+        var configuration = scope.ServiceProvider.GetRequiredService<OAuthServerConfiguration>();
+        await OAuthDynamicClientLifecycle.DisableExpiredAsync(
+            db,
+            scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>(),
+            configuration,
+            now,
+            ct).ConfigureAwait(false);
+
+        var cutoff = now.Subtract(OAuthServerConfiguration.RefreshReplayRetention);
         await scope.ServiceProvider.GetRequiredService<IOpenIddictTokenManager>()
             .PruneAsync(cutoff, ct).ConfigureAwait(false);
         await scope.ServiceProvider.GetRequiredService<IOpenIddictAuthorizationManager>()
             .PruneAsync(cutoff, ct).ConfigureAwait(false);
 
-        var now = DateTimeOffset.UtcNow;
         var staleTransactions = (await db.OAuthAuthorizationTransactions.AsNoTracking()
             .Select(x => new { x.HandleHash, x.ExpiresAt }).ToListAsync(ct).ConfigureAwait(false))
             .Where(x => x.ExpiresAt < now).Select(x => x.HandleHash).ToArray();

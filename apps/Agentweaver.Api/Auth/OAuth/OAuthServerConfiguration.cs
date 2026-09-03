@@ -1,9 +1,12 @@
 using System.Collections.Immutable;
+using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Azure.Security.KeyVault.Secrets;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
+using IPNetwork = System.Net.IPNetwork;
 
 namespace Agentweaver.Api.Auth.OAuth;
 
@@ -12,9 +15,13 @@ public sealed record OAuthServerConfiguration(
     Uri Resource,
     IReadOnlyList<OAuthStaticClient> StaticClients,
     int DynamicRegistrationsPerDay,
-    int DynamicRegistrationsTotal)
+    int DynamicRegistrationsTotal,
+    TimeSpan DynamicRegistrationLifetime,
+    IReadOnlyList<IPNetwork> TrustedProxyNetworks)
 {
     public const string McpScope = "mcp:invoke";
+    public static readonly TimeSpan RefreshTokenFamilyLifetime = TimeSpan.FromDays(30);
+    public static readonly TimeSpan RefreshReplayRetention = RefreshTokenFamilyLifetime + TimeSpan.FromDays(7);
 
     public static OAuthServerConfiguration Resolve(
         IConfiguration configuration,
@@ -53,10 +60,90 @@ public sealed record OAuthServerConfiguration(
 
         var perDay = configuration.GetValue("Auth:OAuth:DynamicRegistration:PerSourcePerDay", 20);
         var total = configuration.GetValue("Auth:OAuth:DynamicRegistration:MaximumActive", 1000);
-        if (perDay is < 1 or > 100 || total is < 1 or > 10000)
+        var lifetimeDays = configuration.GetValue("Auth:OAuth:DynamicRegistration:LifetimeDays", 30);
+        if (perDay is < 1 or > 100 || total is < 1 or > 10000 || lifetimeDays is < 1 or > 365)
             throw new InvalidOperationException("OAuth dynamic-registration quotas are outside supported bounds.");
 
-        return new(origin, resource, clients, perDay, total);
+        var trustedNetworksValue = configuration["Auth:OAuth:ForwardedHeaders:TrustedNetworks"];
+        if (string.IsNullOrWhiteSpace(trustedNetworksValue))
+        {
+            if (!environment.IsDevelopment())
+                throw new InvalidOperationException(
+                    "Auth:OAuth:ForwardedHeaders:TrustedNetworks is required outside Development.");
+            trustedNetworksValue = "127.0.0.0/8,::1/128";
+        }
+
+        var trustedNetworks = trustedNetworksValue
+            .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(ParseTrustedProxyNetwork)
+            .Distinct()
+            .ToArray();
+        if (trustedNetworks.Length == 0)
+            throw new InvalidOperationException("At least one trusted OAuth proxy network is required.");
+
+        return new(
+            origin,
+            resource,
+            clients,
+            perDay,
+            total,
+            TimeSpan.FromDays(lifetimeDays),
+            trustedNetworks);
+    }
+
+    private static IPNetwork ParseTrustedProxyNetwork(string value)
+    {
+        if (!IPNetwork.TryParse(value, out var network)
+            || !IsPrivateOrLoopback(network.BaseAddress)
+            || (network.BaseAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                && network.PrefixLength < 8)
+            || (network.BaseAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+                && network.PrefixLength < 7))
+        {
+            throw new InvalidOperationException(
+                $"OAuth trusted proxy network '{value}' must be a bounded private or loopback CIDR.");
+        }
+
+        return network;
+    }
+
+    private static bool IsPrivateOrLoopback(IPAddress address)
+    {
+        if (IPAddress.IsLoopback(address))
+            return true;
+        if (address.IsIPv4MappedToIPv6)
+            address = address.MapToIPv4();
+
+        var bytes = address.GetAddressBytes();
+        return bytes.Length switch
+        {
+            4 => bytes[0] == 10
+                || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31)
+                || (bytes[0] == 192 && bytes[1] == 168),
+            16 => (bytes[0] & 0xFE) == 0xFC,
+            _ => false,
+        };
+    }
+}
+
+public static class OAuthForwardedHeaders
+{
+    public static void Configure(
+        ForwardedHeadersOptions options,
+        OAuthServerConfiguration configuration)
+    {
+        options.ForwardedHeaders =
+            ForwardedHeaders.XForwardedFor |
+            ForwardedHeaders.XForwardedProto |
+            ForwardedHeaders.XForwardedHost;
+        options.ForwardLimit = 1;
+        options.RequireHeaderSymmetry = false;
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+        foreach (var network in configuration.TrustedProxyNetworks)
+            options.KnownIPNetworks.Add(network);
+        options.AllowedHosts.Clear();
+        options.AllowedHosts.Add(configuration.PublicOrigin.Host);
     }
 }
 
@@ -83,7 +170,10 @@ public sealed class OAuthStaticClient
 
 public static class OAuthRedirectUriValidator
 {
-    public static bool IsValid(string? value, bool allowDynamicLoopbackPort)
+    public static bool IsValid(
+        string? value,
+        bool allowDynamicLoopbackPort,
+        bool allowHttps = true)
     {
         if (string.IsNullOrWhiteSpace(value)
             || value.Length > 2048
@@ -95,30 +185,50 @@ public static class OAuthRedirectUriValidator
             return false;
 
         if (uri.Scheme == Uri.UriSchemeHttps)
+        {
+            if (!allowHttps)
+                return false;
             return !string.IsNullOrWhiteSpace(uri.Host);
+        }
 
         if (!IsNativePrivateUseScheme(uri.Scheme) && uri.Scheme != Uri.UriSchemeHttp)
             return false;
 
         if (IsNativePrivateUseScheme(uri.Scheme))
-            return string.IsNullOrEmpty(uri.Host) || string.Equals(uri.Host, "callback", StringComparison.OrdinalIgnoreCase);
+            return string.IsNullOrEmpty(uri.Host)
+                && uri.AbsolutePath is not "" and not "/";
 
-        if (!IsLiteralLoopback(uri.Host))
+        if (!IsLiteralLoopback(uri.Host) || !HasLiteralLoopbackAuthority(value))
             return false;
 
         return allowDynamicLoopbackPort || !uri.IsDefaultPort;
     }
 
-    private static bool IsNativePrivateUseScheme(string scheme) =>
-        !string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-        && !string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
-        && scheme.Contains('.', StringComparison.Ordinal)
-        && scheme.All(c => char.IsAsciiLetterOrDigit(c) || c is '+' or '-' or '.');
+    private static bool IsNativePrivateUseScheme(string scheme)
+    {
+        if (string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var labels = scheme.Split('.');
+        return labels.Length >= 3
+            && labels.All(label =>
+                label.Length is > 0 and <= 63
+                && char.IsAsciiLetterOrDigit(label[0])
+                && char.IsAsciiLetterOrDigit(label[^1])
+                && label.All(c => char.IsAsciiLetterOrDigit(c) || c is '+' or '-'));
+    }
 
     private static bool IsLiteralLoopback(string host) =>
         string.Equals(host, "127.0.0.1", StringComparison.Ordinal)
         || string.Equals(host, "[::1]", StringComparison.Ordinal)
         || string.Equals(host, "::1", StringComparison.Ordinal);
+
+    private static bool HasLiteralLoopbackAuthority(string value) =>
+        value.StartsWith("http://127.0.0.1:", StringComparison.Ordinal)
+        || value.StartsWith("http://127.0.0.1/", StringComparison.Ordinal)
+        || value.StartsWith("http://[::1]:", StringComparison.Ordinal)
+        || value.StartsWith("http://[::1]/", StringComparison.Ordinal);
 }
 
 public sealed record OAuthCertificateSet(

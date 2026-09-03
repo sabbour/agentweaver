@@ -1,8 +1,14 @@
 using Agentweaver.Api.Auth.OAuth;
 using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
@@ -40,6 +46,72 @@ public sealed class OAuthServerConfigurationTests
     {
         var action = () => OAuthServerConfiguration.Resolve(Configuration(), Environment("Production"));
         action.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Resolve_RequiresConfiguredProductionTrustedProxyNetworks()
+    {
+        var action = () => OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:ForwardedHeaders:TrustedNetworks", "")),
+            Environment("Production"));
+
+        action.Should().Throw<InvalidOperationException>();
+    }
+
+    [Theory]
+    [InlineData("0.0.0.0/0")]
+    [InlineData("203.0.113.0/24")]
+    [InlineData("::/0")]
+    public void Resolve_RejectsUnboundedOrPublicTrustedProxyNetworks(string network)
+    {
+        var action = () => OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:ForwardedHeaders:TrustedNetworks", network)),
+            Environment("Production"));
+
+        action.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task ProductionHttpsBehindProxy_TrustsConfiguredGatewayButIgnoresInternetSpoofing()
+    {
+        var configuration = OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:ForwardedHeaders:TrustedNetworks", "10.244.0.0/16")),
+            Environment("Production"));
+        var options = new ForwardedHeadersOptions();
+        OAuthForwardedHeaders.Configure(options, configuration);
+
+        static DefaultHttpContext RequestFrom(string address, string host, bool includeForwardedHost)
+        {
+            var context = new DefaultHttpContext();
+            context.Connection.RemoteIpAddress = IPAddress.Parse(address);
+            context.Request.Scheme = "http";
+            context.Request.Host = new HostString(host);
+            context.Request.Headers["X-Forwarded-For"] = "198.51.100.10";
+            context.Request.Headers["X-Forwarded-Proto"] = "https";
+            if (includeForwardedHost)
+                context.Request.Headers["X-Forwarded-Host"] = "agentweaver.example";
+            return context;
+        }
+
+        var trusted = RequestFrom("10.244.3.9", "agentweaver.example", includeForwardedHost: false);
+        var trustedMiddleware = new ForwardedHeadersMiddleware(
+            _ => Task.CompletedTask,
+            NullLoggerFactory.Instance,
+            Options.Create(options));
+        await trustedMiddleware.Invoke(trusted);
+        trusted.Request.IsHttps.Should().BeTrue();
+        trusted.Request.Host.Value.Should().Be("agentweaver.example");
+
+        var spoofed = RequestFrom("203.0.113.9", "agentweaver-api:8080", includeForwardedHost: true);
+        await trustedMiddleware.Invoke(spoofed);
+        spoofed.Request.IsHttps.Should().BeFalse();
+        spoofed.Request.Host.Value.Should().Be("agentweaver-api:8080");
     }
 
     [Theory]
@@ -82,9 +154,16 @@ public sealed class OAuthServerConfigurationTests
         active.KeyId.Should().NotBe(previous.KeyId);
     }
 
-    private static IConfiguration Configuration(params (string Key, string Value)[] values) =>
-        new ConfigurationBuilder().AddInMemoryCollection(
-            values.ToDictionary(x => x.Key, x => (string?)x.Value)).Build();
+    private static IConfiguration Configuration(params (string Key, string Value)[] values)
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["Auth:OAuth:ForwardedHeaders:TrustedNetworks"] = "10.244.0.0/16",
+        };
+        foreach (var (key, value) in values)
+            settings[key] = value;
+        return new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+    }
 
     private static IHostEnvironment Environment(string name) => new TestEnvironment { EnvironmentName = name };
 
