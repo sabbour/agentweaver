@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
@@ -8,6 +9,7 @@ using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Auth;
@@ -243,6 +245,8 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         {
             using var scope = Services.CreateScope();
             var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+            using var rsa = RSA.Create(2048);
+            await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
             await secrets.SetSecretAsync(
                 "repo-app-user-credential-version",
                 """{"status":"signed-in","accessToken":"test-token"}""");
@@ -265,6 +269,15 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             base.ConfigureWebHost(builder);
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Auth:RepoApp:AppId"] = "123",
+                    ["Auth:RepoApp:PrivateKeySecretName"] = "repo-app-pem",
+                    ["Auth:RepoApp:ApiUrl"] = "https://api.github.test",
+                });
+            });
             builder.ConfigureServices(services =>
             {
                 services.Configure<Microsoft.Extensions.Http.HttpClientFactoryOptions>(
@@ -287,16 +300,20 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                 Content = new StringContent(
                     request.RequestUri!.AbsolutePath switch
                     {
-                        "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/user/installations/72/repositories","permissions":{"administration":"write"}}]}""",
-                        "/user/installations/72/repositories" => """{"repositories":[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+                        "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/installation/repositories","permissions":{"administration":"write"}}]}""",
+                        "/app/installations/72/access_tokens" => """{"token":"ghs_installation_token","expires_at":"2030-01-01T00:00:00Z"}""",
+                        "/installation/repositories" => """{"repositories":[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
                         "/user/repos" when request.Method == HttpMethod.Post => """{"full_name":"octo/new-repo","clone_url":"https://github.com/octo/new-repo.git"}""",
                         _ => "{}",
                     },
                         Encoding.UTF8,
                         "application/json"),
-                StatusCode = request.RequestUri!.AbsolutePath == "/user/repos" && request.Method == HttpMethod.Post
-                    ? HttpStatusCode.Created
-                    : HttpStatusCode.OK,
+                StatusCode = request.RequestUri!.AbsolutePath switch
+                {
+                    "/user/repos" when request.Method == HttpMethod.Post => HttpStatusCode.Created,
+                    "/app/installations/72/access_tokens" => HttpStatusCode.Created,
+                    _ => HttpStatusCode.OK,
+                },
                 });
     }
 
