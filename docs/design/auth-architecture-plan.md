@@ -1,11 +1,17 @@
 # Auth architecture plan: retiring the hand-rolled auth middleware
 
-- **Status:** Proposal (design/research only — no code changes in this task)
+- **Status:** Layer 3 implemented (scheme-based API cutover); MCP process cutover remains layer 4
 - **Author:** Tank (Squad)
 - **Date:** 2026-08-02
 - **Revised:** 2026-08-02, after rubber-duck review — see [A.8](#a8-review-log) for what changed
 - **Scope:** `apps/Agentweaver.Api` request authentication, the AKS ingress/mesh boundary,
   and an evaluation of [oauth2-proxy](https://github.com/oauth2-proxy/oauth2-proxy).
+
+> **Implementation note (2026-09-02).** The approved layered implementation removed the
+> temporary dual-pipeline flag before landing. The API now uses named ASP.NET authentication
+> schemes and endpoint-bound authorization policies directly. Historical sections below
+> describe the pre-cutover system and the earlier migration proposal. The MCP process keeps
+> its existing validation until layer 4.
 
 > **Read this first — a premise correction.** The brief for this work assumed Agentweaver
 > runs on the **AKS Istio service mesh add-on** with sidecars and `istiod`. It does not.

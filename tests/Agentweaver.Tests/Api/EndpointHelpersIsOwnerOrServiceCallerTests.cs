@@ -3,8 +3,10 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using FluentAssertions;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Api;
 
@@ -15,8 +17,8 @@ namespace Agentweaver.Tests.Api;
 /// callback ONLY by comparing <c>CallerContext.User</c> against the configured <c>Auth:User</c>
 /// setting — a key no deployment manifest sets (only <c>Auth:ApiKey</c> is injected, see
 /// k8s/base/api-deployment.yaml). The shared-key internal caller is actually attributed the
-/// hardcoded <see cref="ProjectAuthorization.InternalServiceUser"/> identity by
-/// <c>GitHubTokenAuthMiddleware</c>'s internal-key path, which the old check never recognized.
+/// hardcoded <see cref="ProjectAuthorization.InternalServiceUser"/> identity and immutable
+/// internal-service scheme claim.
 /// </summary>
 public sealed class EndpointHelpersIsOwnerOrServiceCallerTests
 {
@@ -32,12 +34,17 @@ public sealed class EndpointHelpersIsOwnerOrServiceCallerTests
         StartedAt = DateTimeOffset.UtcNow,
     };
 
-    private static HttpContext MakeHttpContext(CallerContext caller)
+    private static HttpContext MakeHttpContext(
+        CallerContext caller,
+        string scheme = AgentweaverAuthenticationSchemes.TestBypass)
     {
         var http = new DefaultHttpContext();
         http.User = CallerContextClaimsAdapter.ToPrincipal(
             caller,
-            AgentweaverAuthenticationSchemes.TestBypass);
+            scheme);
+        http.RequestServices = new ServiceCollection()
+            .AddSingleton<ICallerContextAccessor>(new PrincipalCallerAccessor(http.User))
+            .BuildServiceProvider();
         return http;
     }
 
@@ -59,22 +66,23 @@ public sealed class EndpointHelpersIsOwnerOrServiceCallerTests
         {
             User = ProjectAuthorization.InternalServiceUser,
             GitHubLogin = ProjectAuthorization.InternalServiceUser,
-        });
+        }, AgentweaverAuthenticationSchemes.InternalServiceKey);
         var configuration = MakeConfiguration(authUser: null);
 
         EndpointHelpers.IsOwnerOrServiceCaller(http, run, configuration).Should().BeTrue();
     }
 
     [Fact]
-    public void IsOwnerOrServiceCaller_WithConfiguredAuthUserMatch_ReturnsTrue()
+    public void IsOwnerOrServiceCaller_WithConfiguredAuthUserMatchButUntrustedScheme_ReturnsFalse()
     {
-        // Legacy/alternate configuration shape: Auth:User is explicitly configured to some other
-        // service identity string. That path must keep working.
+        // A username collision must not grant the internal-service bypass.
         var run = MakeRun("alice");
-        var http = MakeHttpContext(new CallerContext { User = "svc-user", GitHubLogin = "svc-user" });
+        var http = MakeHttpContext(
+            new CallerContext { User = "svc-user", GitHubLogin = "svc-user" },
+            AgentweaverAuthenticationSchemes.Entra);
         var configuration = MakeConfiguration(authUser: "svc-user");
 
-        EndpointHelpers.IsOwnerOrServiceCaller(http, run, configuration).Should().BeTrue();
+        EndpointHelpers.IsOwnerOrServiceCaller(http, run, configuration).Should().BeFalse();
     }
 
     [Fact]
@@ -95,5 +103,10 @@ public sealed class EndpointHelpersIsOwnerOrServiceCallerTests
         var configuration = MakeConfiguration(authUser: null);
 
         EndpointHelpers.IsOwnerOrServiceCaller(http, run, configuration).Should().BeFalse();
+    }
+
+    private sealed class PrincipalCallerAccessor(ClaimsPrincipal principal) : ICallerContextAccessor
+    {
+        public CallerContext Current { get; } = CallerContextClaimsAdapter.FromPrincipal(principal);
     }
 }

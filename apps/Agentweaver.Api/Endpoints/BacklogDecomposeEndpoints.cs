@@ -98,7 +98,7 @@ public static class BacklogDecomposeEndpoints
             var project = await projectStore.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
             if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Viewer, ct) is { } forbid) return forbid;
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
 
             // When a ref is supplied, delegate to the ref-aware workspace service.
             var @ref = httpContext.Request.Query["ref"].FirstOrDefault();
@@ -139,7 +139,7 @@ public static class BacklogDecomposeEndpoints
 
             var project = await projectStore.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             if (await RequireProjectRoleAsync(httpContext, project, ProjectRole.Contributor, ct) is { } forbid) return forbid;
 
             string fileContent;

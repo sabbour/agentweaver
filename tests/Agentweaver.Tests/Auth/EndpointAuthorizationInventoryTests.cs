@@ -39,6 +39,20 @@ public sealed class EndpointAuthorizationInventoryTests : IDisposable
             allowsAnonymous.Should().Be(
                 !classifications[0].RequiresBearerAuthentication,
                 $"endpoint '{endpoint.RoutePattern.RawText}' must not use bare AllowAnonymous metadata");
+            var policies = endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>();
+            if (classifications[0].RequiresBearerAuthentication)
+            {
+                policies.Should().ContainSingle(
+                    $"protected endpoint '{endpoint.RoutePattern.RawText}' must derive one policy from its classification");
+                policies[0].Policy.Should().Be(
+                    EndpointAuthorizationPolicies.For(classifications[0].Kind),
+                    $"endpoint '{endpoint.RoutePattern.RawText}' metadata is the runtime authorization source");
+            }
+            else
+            {
+                policies.Should().BeEmpty(
+                    $"anonymous endpoint '{endpoint.RoutePattern.RawText}' must not retain an authorization policy");
+            }
         }
 
         var frameworkEndpoints = endpoints.Except(applicationEndpoints).ToArray();

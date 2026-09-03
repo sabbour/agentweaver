@@ -30,6 +30,26 @@ public sealed record EndpointAuthorizationMetadata(EndpointAuthorizationKind Kin
             or EndpointAuthorizationKind.RunCapability;
 }
 
+public static class EndpointAuthorizationPolicies
+{
+    public const string AuthenticatedSelf = nameof(AuthenticatedSelf);
+    public const string AuthenticatedPlatform = nameof(AuthenticatedPlatform);
+    public const string PlatformOrMcp = nameof(PlatformOrMcp);
+    public const string InternalService = nameof(InternalService);
+    public const string RunCapability = nameof(RunCapability);
+
+    public static string For(EndpointAuthorizationKind kind) => kind switch
+    {
+        EndpointAuthorizationKind.AuthenticatedSelf => AuthenticatedSelf,
+        EndpointAuthorizationKind.AuthenticatedPlatform => AuthenticatedPlatform,
+        EndpointAuthorizationKind.PlatformOrMcp => PlatformOrMcp,
+        EndpointAuthorizationKind.InternalService => InternalService,
+        EndpointAuthorizationKind.RunCapability => RunCapability,
+        _ => throw new InvalidOperationException(
+            $"Authorization kind '{kind}' does not use an ASP.NET authorization policy."),
+    };
+}
+
 public sealed class ApplicationEndpointMetadata
 {
     private ApplicationEndpointMetadata() { }
@@ -92,7 +112,8 @@ public static class EndpointAuthorizationExtensions
             for (var index = endpointBuilder.Metadata.Count - 1; index >= 0; index--)
             {
                 if (endpointBuilder.Metadata[index] is EndpointAuthorizationMetadata
-                    or IAllowAnonymous)
+                    or IAllowAnonymous
+                    or IAuthorizeData)
                 {
                     endpointBuilder.Metadata.RemoveAt(index);
                 }
@@ -102,7 +123,49 @@ public static class EndpointAuthorizationExtensions
             endpointBuilder.Metadata.Add(metadata);
             if (!metadata.RequiresBearerAuthentication)
                 endpointBuilder.Metadata.Add(new AllowAnonymousAttribute());
+            else
+                endpointBuilder.Metadata.Add(new AuthorizeAttribute(EndpointAuthorizationPolicies.For(kind)));
         });
         return builder;
+    }
+}
+
+internal sealed class EndpointAuthorizationIntegrityMiddleware(RequestDelegate next)
+{
+    public async Task InvokeAsync(HttpContext context)
+    {
+        if (context.GetEndpoint() is { } endpoint)
+        {
+            var classifications = endpoint.Metadata
+                .GetOrderedMetadata<EndpointAuthorizationMetadata>();
+            var allowsAnonymous = endpoint.Metadata.GetMetadata<IAllowAnonymous>() is not null;
+            var valid = classifications.Count == 1
+                && allowsAnonymous == !classifications[0].RequiresBearerAuthentication;
+            if (!valid)
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsync(
+                    "{\"error\":\"endpoint_authorization_metadata_invalid\"}")
+                    .ConfigureAwait(false);
+                return;
+            }
+        }
+
+        await next(context).ConfigureAwait(false);
+    }
+}
+
+internal sealed class UnmatchedEndpointMiddleware(RequestDelegate next)
+{
+    public async Task InvokeAsync(HttpContext context)
+    {
+        if (context.GetEndpoint() is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        await next(context).ConfigureAwait(false);
     }
 }

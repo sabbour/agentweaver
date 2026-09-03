@@ -114,7 +114,7 @@ public static class MetricsEndpoints
             DashboardReadService dashboard,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             return Results.Ok(await dashboard.GetOverviewAsync(caller, ct).ConfigureAwait(false));
         });
 

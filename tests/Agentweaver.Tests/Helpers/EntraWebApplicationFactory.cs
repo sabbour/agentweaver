@@ -54,6 +54,26 @@ public class EntraWebApplicationFactory : WebApplicationFactory<Program>
         string objectId,
         string? audience = null,
         params string[] roles)
+        => CreateBearerToken(objectId, audience ?? ClientId, Issuer, [], roles);
+
+    public string CreateBearerTokenWithIssuer(
+        string objectId,
+        string issuer,
+        params string[] roles)
+        => CreateBearerToken(objectId, ClientId, issuer, [], roles);
+
+    public string CreateBearerTokenWithAdditionalClaims(
+        string objectId,
+        IReadOnlyList<Claim> additionalClaims,
+        params string[] roles)
+        => CreateBearerToken(objectId, ClientId, Issuer, additionalClaims, roles);
+
+    private string CreateBearerToken(
+        string objectId,
+        string audience,
+        string issuer,
+        IReadOnlyList<Claim> additionalClaims,
+        params string[] roles)
     {
         var claims = new List<Claim>
         {
@@ -62,11 +82,12 @@ public class EntraWebApplicationFactory : WebApplicationFactory<Program>
             new("preferred_username", "entra.user@contoso.com"),
         };
         claims.AddRange(roles.Select(role => new Claim("roles", role)));
+        claims.AddRange(additionalClaims);
 
         var descriptor = new SecurityTokenDescriptor
         {
-            Issuer = Issuer,
-            Audience = audience ?? ClientId,
+            Issuer = issuer,
+            Audience = audience,
             Subject = new ClaimsIdentity(claims),
             Expires = DateTime.UtcNow.AddMinutes(30),
             NotBefore = DateTime.UtcNow.AddMinutes(-1),

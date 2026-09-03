@@ -1,4 +1,5 @@
 using Agentweaver.Api.Blueprints;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
@@ -103,11 +104,11 @@ public static class BlueprintEndpoints
                 return Results.BadRequest(new { error = "Invalid project id." });
             project = await projectStore.GetAsync(pid, ct).ConfigureAwait(false);
             if (project is null) return Results.NotFound();
-            if (!ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(project.Owner))
+            if (!httpContext.GetCaller().Owns(project.Owner))
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
         }
 
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
         var options = generationOptions.Value;
         var result = await blueprints.GenerateAsync(
             request.Description!,
@@ -162,7 +163,7 @@ public static class BlueprintEndpoints
         if (string.IsNullOrWhiteSpace(request.Repository))
             return Results.BadRequest(new { error = "repository is required." });
 
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
         var result = await suggestions
             .SuggestAsync(request.Repository!, caller.User, ct)
             .ConfigureAwait(false);

@@ -241,7 +241,22 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             ["code_verifier"] = verifier,
             ["resource"] = "http://localhost:5000/mcp",
         });
-        token.GetProperty("access_token").GetString()!.Count(c => c == '.').Should().Be(2);
+        var accessToken = token.GetProperty("access_token").GetString()!;
+        accessToken.Count(c => c == '.').Should().Be(2);
+        using (var brokerRequest = new HttpRequestMessage(HttpMethod.Get, "/api/projects"))
+        {
+            brokerRequest.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+            using var brokerResponse = await _client.SendAsync(brokerRequest);
+            brokerResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+        using (var unrelatedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/auth/session"))
+        {
+            unrelatedRequest.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+            using var unrelatedResponse = await _client.SendAsync(unrelatedRequest);
+            unrelatedResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
         var refreshToken = token.GetProperty("refresh_token").GetString()!;
 
         async Task<HttpResponseMessage> RefreshAsync(string value) =>
@@ -575,7 +590,8 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
 
 public sealed class OpenIddictServerFixture : IDisposable
 {
-    public AgentweaverWebApplicationFactory Factory { get; } = new();
+    public AgentweaverWebApplicationFactory Factory { get; } =
+        new(bypassAuthentication: false);
     public HttpClient Client { get; }
 
     public OpenIddictServerFixture() => Client = Factory.CreateClient(

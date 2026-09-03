@@ -12,7 +12,7 @@ namespace Agentweaver.Api.Endpoints;
 /// Endpoints for the MCP-driven operator assistant (#346). A "run" here is a lightweight operator
 /// chat conversation persisted in the run store (AgentName == "Operator"); its transcript streams
 /// over the existing GET /api/runs/{id}/stream and /events endpoints. Auth is enforced globally by
-/// <see cref="GitHubTokenAuthMiddleware"/> (these routes live under /api), so an unauthenticated
+/// the endpoint-bound authentication policy, so an unauthenticated
 /// request never reaches these handlers.
 ///
 /// Additive: the legacy /api/console/turn facade path is untouched.
@@ -32,7 +32,7 @@ public static class AssistantEndpoints
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var bearer = ExtractBearer(httpContext);
 
             try
@@ -110,7 +110,7 @@ public static class AssistantEndpoints
             CancellationToken ct,
             int? limit) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             try
             {
                 var runs = await assistant.ListRunsAsync(caller, limit ?? 50, ct).ConfigureAwait(false);
@@ -141,7 +141,7 @@ public static class AssistantEndpoints
             ILogger<Program> logger,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var bearer = ExtractBearer(httpContext);
             var message = request.Message?.Trim();
             if (string.IsNullOrWhiteSpace(message))

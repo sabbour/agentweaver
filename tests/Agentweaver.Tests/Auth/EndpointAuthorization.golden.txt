@@ -114,6 +114,8 @@ GET /health | OperationalAnonymous
 GET /healthz/workspace | OperationalAnonymous
 GET /oauth/authorize | ProtocolManaged
 GET /oauth/resume | ProtocolManaged
+GET /openapi/{documentName}.json | OperationalAnonymous
+GET /openapi/{documentName}.yaml | OperationalAnonymous
 PATCH /api/projects/{id} | PlatformOrMcp
 PATCH /api/projects/{id}/casting/proposals/{proposalId} | PlatformOrMcp
 PATCH /api/projects/{id}/sessions/{sessionId} | PlatformOrMcp

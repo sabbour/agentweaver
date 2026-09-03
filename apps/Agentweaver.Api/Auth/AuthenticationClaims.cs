@@ -5,9 +5,10 @@ namespace Agentweaver.Api.Auth;
 
 public static class AgentweaverAuthenticationSchemes
 {
+    public const string Composite = "Agentweaver";
     public const string Entra = "Entra";
-    public const string GitHubToken = "GitHubToken";
-    public const string McpOAuth = "McpOAuth";
+    public const string BrowserSession = "BrowserSession";
+    public const string BrokerBearer = "BrokerBearer";
     public const string InternalServiceKey = "InternalServiceKey";
     public const string RunCapability = "RunCapability";
     public const string TestBypass = "TestBypass";
@@ -25,6 +26,7 @@ public static class AgentweaverClaimTypes
     public const string AuthenticationMode = "auth_mode";
     public const string EntraObjectId = "oid";
     public const string EntraTenantId = "tid";
+    public const string BrowserSessionId = "agentweaver_browser_session_id";
 }
 
 public static class CallerContextClaimsAdapter
@@ -48,6 +50,7 @@ public static class CallerContextClaimsAdapter
             DisplayName = principal.FindFirst(ClaimTypes.Name)?.Value,
             Email = principal.FindFirst(ClaimTypes.Email)?.Value,
             AuthenticationScheme = principal.FindFirst(AgentweaverClaimTypes.AuthenticationScheme)?.Value,
+            IsInternalService = principal.HasClaim(AgentweaverClaimTypes.InternalService, "true"),
             Org = principal.FindFirst(AgentweaverClaimTypes.Organization)?.Value,
         };
     }
@@ -63,7 +66,7 @@ public static class CallerContextClaimsAdapter
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, caller.User),
-            new(AgentweaverClaimTypes.AuthenticationMode, "Entra"),
+            new(AgentweaverClaimTypes.AuthenticationMode, authenticationScheme),
             new(AgentweaverClaimTypes.AuthenticationScheme, authenticationScheme),
         };
         AddIfPresent(claims, ClaimTypes.Name, caller.DisplayName);
@@ -75,7 +78,7 @@ public static class CallerContextClaimsAdapter
         AddIfPresent(claims, AgentweaverClaimTypes.Organization, caller.Org);
         claims.AddRange(caller.PlatformRoles.Select(role => new Claim(ClaimTypes.Role, role)));
         claims.AddRange(caller.RawPlatformRoles.Select(role => new Claim(AgentweaverClaimTypes.RawPlatformRole, role)));
-        if (isInternalService)
+        if (isInternalService || caller.IsInternalService)
             claims.Add(new Claim(AgentweaverClaimTypes.InternalService, "true"));
 
         return new ClaimsPrincipal(new ClaimsIdentity(claims, "Agentweaver"));
@@ -90,5 +93,39 @@ public static class CallerContextClaimsAdapter
     {
         if (!string.IsNullOrWhiteSpace(value))
             claims.Add(new Claim(type, value));
+    }
+}
+
+public interface ICallerContextAccessor
+{
+    CallerContext Current { get; }
+}
+
+internal sealed class ClaimsCallerContextAccessor(IHttpContextAccessor httpContextAccessor)
+    : ICallerContextAccessor
+{
+    private CallerContext? _current;
+
+    public CallerContext Current =>
+        _current ??= CallerContextClaimsAdapter.FromPrincipal(
+            httpContextAccessor.HttpContext?.User
+            ?? throw new InvalidOperationException("There is no active HTTP request."));
+}
+
+public static class CallerContextHttpContextExtensions
+{
+    public static CallerContext GetCaller(this HttpContext context)
+    {
+        try
+        {
+            if (context.RequestServices?.GetService<ICallerContextAccessor>() is { } accessor)
+                return accessor.Current;
+        }
+        catch (InvalidOperationException)
+        {
+            // Hand-built HttpContext instances in unit tests can carry a root provider.
+        }
+
+        return CallerContextClaimsAdapter.FromPrincipal(context.User);
     }
 }

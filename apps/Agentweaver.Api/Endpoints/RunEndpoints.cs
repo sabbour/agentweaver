@@ -348,7 +348,7 @@ app.MapGet("/api/runs/{id}/stream", async (
         }
     }
 
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var caller = httpContext.GetCaller();
     var entry = streamStore.Get(id);
     Run? run;
     try { run = await runStore.GetAsync(runId, ct); }
@@ -742,7 +742,7 @@ app.MapPost("/api/runs/{id}/review", async (
     if (run is null) return Results.NotFound();
     if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
         return denied;
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var caller = httpContext.GetCaller();
 
     // Idempotency: return current state when the terminal decision already matches.
     if (run.Status == RunStatus.Merged && request.Approved)
@@ -1021,7 +1021,7 @@ app.MapPost("/api/runs/{id}/commit", async (
         return Results.Problem("Commit was cancelled; run reverted to awaiting review. Please retry.", statusCode: 503);
     }
 
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext).User;
+    var caller = httpContext.GetCaller().User;
     switch (mergeExecResult.Outcome)
     {
         case MergeExecutionOutcome.Merged:
@@ -1126,7 +1126,7 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
         return Results.NotFound();
 
-    var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+    var caller = httpContext.GetCaller();
 
     // Legacy runs retain the pending request's identity-string defense-in-depth. Project runs use
     // the persisted run.ProjectId authorization above as the authoritative boundary.
@@ -1369,7 +1369,7 @@ app.MapPost("/api/runs/{id}/retry", async (
         // Attribute any subsequent unattended/autopilot outcome-spec confirmation to the caller
         // retrying the run (best-effort human-readable identity), instead of letting it fall through
         // to the raw SubmittingUser (e.g. an Entra OID) — see #853/#854.
-        var retryCallerDisplayName = CoordinatorEndpoints.CallerDisplayName(ApiKeyAuthMiddleware.GetCaller(httpContext));
+        var retryCallerDisplayName = CoordinatorEndpoints.CallerDisplayName(httpContext.GetCaller());
         if (isCoordinatorRun && run.Origin == RunOrigin.BacklogPickup)
         {
             // Re-enter as a fresh unattended coordinator run; do NOT re-claim a backlog task.
@@ -1718,10 +1718,10 @@ app.MapPost("/api/runs/{id}/tool-approvals", async (
         return targetDenied;
     if (targetRunId != id
         && targetRun.ProjectId is null
-        && !ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(targetRun.SubmittingUser))
+        && !httpContext.GetCaller().Owns(targetRun.SubmittingUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
     if (approvalScope != ApprovalScope.Once
-        && !ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(targetRun.SubmittingUser))
+        && !httpContext.GetCaller().Owns(targetRun.SubmittingUser))
     {
         return Results.StatusCode(StatusCodes.Status403Forbidden);
     }
@@ -1999,7 +1999,7 @@ app.MapPost("/api/runs/{id}/tool-denials", async (
         return targetDenied;
     if (targetRunId != id
         && targetRun.ProjectId is null
-        && !ApiKeyAuthMiddleware.GetCaller(httpContext).Owns(targetRun.SubmittingUser))
+        && !httpContext.GetCaller().Owns(targetRun.SubmittingUser))
         return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     // #349: mirror the tool-approvals guard — only reject on run lifecycle when a genuinely
@@ -2075,7 +2075,12 @@ app.MapGet("/api/runs/{id}/tool-approval-policies/{toolName}", async (
     if (run is null)
         return Results.NotFound();
 
-    if (httpContext.User.HasClaim("agentweaver_internal", "true"))
+    if (httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.RunCapability)
+        || httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.InternalServiceKey))
     {
         var capabilityRunId = httpContext.Request.Headers[RunAuthorshipHeaders.RunId].ToString();
         var capabilityToken = httpContext.Request.Headers[RunAuthorshipHeaders.RunToken].ToString();

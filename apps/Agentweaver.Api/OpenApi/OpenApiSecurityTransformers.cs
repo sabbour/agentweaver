@@ -15,7 +15,7 @@ internal sealed class BearerSecuritySchemeDocumentTransformer : IOpenApiDocument
         document.Info.Version = context.DocumentName;
         document.Info.Description =
             "REST API for project creation, team casting, coordinator-run orchestration, review, and memory/decision workflows. " +
-            "Protected operations require an Authorization header using either a GitHub bearer token or an Agentweaver-issued OAuth bearer token.";
+            "Protected operations require an endpoint-appropriate Microsoft Entra or Agentweaver broker bearer token.";
 
         document.Components ??= new OpenApiComponents();
         document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>(StringComparer.Ordinal);
@@ -24,11 +24,17 @@ internal sealed class BearerSecuritySchemeDocumentTransformer : IOpenApiDocument
             Type = SecuritySchemeType.Http,
             Scheme = "bearer",
             In = ParameterLocation.Header,
-            BearerFormat = "JWT or GitHub token",
+            BearerFormat = "JWT",
             Name = "Authorization",
             Description =
                 "Provide `Authorization: Bearer <token>`. Most API routes accept either a GitHub bearer token or an Agentweaver OAuth access token minted by this service.",
         };
+        document.Components.SecuritySchemes[BearerSchemeName].Description =
+            string.Concat(
+                "Send `Authorization: ",
+                "Bearer",
+                " <token>` with a credential appropriate to the endpoint classification. ",
+                "Agentweaver broker tokens are accepted only by PlatformOrMcp operations.");
 
         return Task.CompletedTask;
     }

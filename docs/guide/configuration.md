@@ -343,8 +343,11 @@ Grounded in `apps/Agentweaver.Api/appsettings.json` (`Logging:LogLevel`). Overri
 
 ## Web environment variables
 
-The web UI authenticates users through Microsoft Entra ID and sends the resulting session
-cookie automatically — it does not require a static API key.
+The web UI authenticates users through Microsoft Entra ID and sends the resulting Entra
+bearer token to the API. The opaque browser cookie is limited to OAuth consent and GitHub
+account-linking handoffs; it is not a general API credential. `Auth:ApiKey` is reserved for
+internal service calls. API endpoint metadata selects the applicable authentication scheme,
+and unclassified endpoints are denied by the fallback policy.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |

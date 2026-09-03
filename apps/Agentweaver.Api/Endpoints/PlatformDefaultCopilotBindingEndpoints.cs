@@ -21,7 +21,7 @@ public static class PlatformDefaultCopilotBindingEndpoints
             var service = new PlatformDefaultCopilotBindingService(
                 configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, logger);
             var result = await service.BeginAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             if (result.Outcome != PlatformDefaultCopilotBindingOutcome.Success)
                 return CopilotBindingFailure(result.Outcome);
 
@@ -50,7 +50,7 @@ public static class PlatformDefaultCopilotBindingEndpoints
             var service = new PlatformDefaultCopilotBindingService(
                 configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, logger);
             var result = await service.GetConnectionAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             return result.Outcome == PlatformDefaultCopilotBindingOutcome.Success
                 ? Results.Ok(new
                 {
@@ -76,7 +76,7 @@ public static class PlatformDefaultCopilotBindingEndpoints
             var service = new PlatformDefaultCopilotBindingService(
                 configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, logger);
             var outcome = await service.DisconnectAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             return outcome == PlatformDefaultCopilotBindingOutcome.Success
                 ? Results.NoContent()
                 : CopilotBindingFailure(outcome);

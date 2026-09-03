@@ -14,7 +14,7 @@ public static class GitHubRepositorySelectionEndpoints
             GitHubRepositorySelectionBroker broker,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             if (RejectUnauthorizedSelectionCaller(httpContext, caller) is { } forbidden)
                 return forbidden;
 
@@ -53,7 +53,7 @@ public static class GitHubRepositorySelectionEndpoints
             GitHubRepositorySelectionBroker broker,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             if (RejectUnauthorizedSelectionCaller(httpContext, caller) is { } forbidden)
                 return forbidden;
             if (string.IsNullOrWhiteSpace(request?.FullName))

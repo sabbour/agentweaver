@@ -231,7 +231,8 @@ The fix is to pin issuer and audience to public values in Production on both ser
 - `apps/Agentweaver.Mcp/McpAccessTokenValidator.cs`
 - `apps/Agentweaver.Mcp/AgentweaverApiClient.cs`
 - `apps/Agentweaver.Api/Auth/OAuth`
-- `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs`
+- `apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs`
+- `apps/Agentweaver.Api/Auth/EndpointAuthorization.cs`
 - `k8s/base/mcp-deployment.yaml`
 - `k8s/base/api-deployment.yaml`
 

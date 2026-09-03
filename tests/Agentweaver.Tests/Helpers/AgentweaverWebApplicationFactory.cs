@@ -18,9 +18,15 @@ public sealed class AgentweaverWebApplicationFactory : WebApplicationFactory<Pro
     private readonly string _worktreesPath;
     private readonly string _checkpointsPath;
     private readonly string _coordinatorCheckpointsPath;
+    private readonly bool _bypassAuthentication;
 
-    public AgentweaverWebApplicationFactory()
+    public AgentweaverWebApplicationFactory() : this(bypassAuthentication: true)
     {
+    }
+
+    internal AgentweaverWebApplicationFactory(bool bypassAuthentication)
+    {
+        _bypassAuthentication = bypassAuthentication;
         _dbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-waf-{Guid.NewGuid():N}.db");
         _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-wt-{Guid.NewGuid():N}");
         _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-cp-{Guid.NewGuid():N}");
@@ -38,7 +44,7 @@ public sealed class AgentweaverWebApplicationFactory : WebApplicationFactory<Pro
                 ["Checkpoints:Path"] = _checkpointsPath,
                 ["Coordinator:Checkpoints:Path"] = _coordinatorCheckpointsPath,
                 ["Testing:BypassGitHubOrgAuthorization"] = "true",
-                ["Testing:BypassGitHubTokenAuth"]        = "true",
+                ["Testing:BypassGitHubTokenAuth"]        = _bypassAuthentication.ToString(),
                 ["Auth:Mode"] = "GitHubLegacy",
                 ["Auth:ApiKey"] = TestApiKey,
                 ["Auth:User"] = TestUser,

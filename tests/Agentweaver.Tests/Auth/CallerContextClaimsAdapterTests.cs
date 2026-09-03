@@ -22,17 +22,17 @@ public sealed class CallerContextClaimsAdapterTests
             GitHubLogin = "octocat",
             DisplayName = "Octo Cat",
             Email = "octocat@example.test",
-            AuthenticationScheme = AgentweaverAuthenticationSchemes.McpOAuth,
+            AuthenticationScheme = AgentweaverAuthenticationSchemes.BrokerBearer,
             Org = "example",
         };
 
         var principal = CallerContextClaimsAdapter.ToPrincipal(
             caller,
-            AgentweaverAuthenticationSchemes.McpOAuth);
+            AgentweaverAuthenticationSchemes.BrokerBearer);
         var projected = CallerContextClaimsAdapter.FromPrincipal(principal);
 
         projected.Should().BeEquivalentTo(caller);
-        projected.AuthenticationScheme.Should().Be(AgentweaverAuthenticationSchemes.McpOAuth);
+        projected.AuthenticationScheme.Should().Be(AgentweaverAuthenticationSchemes.BrokerBearer);
         projected.IsOAuthJwt.Should().BeTrue();
         projected.Owns("entra-object-id").Should().BeTrue();
         projected.Owns("octocat").Should().BeTrue();
@@ -50,7 +50,7 @@ public sealed class CallerContextClaimsAdapterTests
         context.Items[string.Concat("agentweaver.", "caller")] =
             new CallerContext { User = "legacy-items-user" };
 
-        GitHubTokenAuthMiddleware.GetCaller(context).User.Should().Be("claims-user");
+        CallerContextClaimsAdapter.FromPrincipal(context.User).User.Should().Be("claims-user");
     }
 
     [Fact]

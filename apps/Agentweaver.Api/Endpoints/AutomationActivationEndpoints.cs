@@ -56,7 +56,7 @@ public static class AutomationActivationEndpoints
                 httpContext, id, projectStore, configuration, ct).ConfigureAwait(false);
             if (failure is not null) return failure;
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var (outcome, activation) = await activationService.ActivateAsync(
                 caller, httpContext.User, project!.Id, ct).ConfigureAwait(false);
             return outcome switch
@@ -117,7 +117,7 @@ public static class AutomationActivationEndpoints
                 httpContext, id, projectStore, configuration, ct).ConfigureAwait(false);
             if (failure is not null) return failure;
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var outcome = await activationService.DeactivateAsync(
                 caller, httpContext.User, project!.Id, ct).ConfigureAwait(false);
             return outcome switch

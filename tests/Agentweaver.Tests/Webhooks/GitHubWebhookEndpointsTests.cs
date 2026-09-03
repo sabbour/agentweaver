@@ -52,7 +52,8 @@ public sealed class GitHubWebhookEndpointsTests : IClassFixture<RepoAppWebhookFa
         var client = _factory.CreateClient();
         var response = await client.PostAsync("/api/projects/00000000-0000-0000-0000-000000000001/webhooks/github", new StringContent("{}"));
 
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "unmatched routes are not inferred to have webhook or bearer authorization from their path");
     }
 
     private async Task SetSecretsAsync()

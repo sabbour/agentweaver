@@ -1,4 +1,5 @@
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain.BlueprintPackages;
 
 namespace Agentweaver.Api.Blueprints;
@@ -18,7 +19,7 @@ public sealed class HttpContextAuthenticatedOwnerContext(IHttpContextAccessor ac
             CallerContext caller;
             try
             {
-                caller = GitHubTokenAuthMiddleware.GetCaller(context);
+                caller = context.GetCaller();
             }
             catch (InvalidOperationException)
             {

@@ -25,7 +25,7 @@ public sealed class AuthorizationDecisionMatrixTests : IClassFixture<EntraWebApp
         { "authenticated self", "GET", "/api/auth/session", "/api/auth/session", EndpointAuthorizationKind.AuthenticatedSelf, HttpStatusCode.OK },
         { "MCP-shaped forwarded platform credential", "GET", "/api/blueprints", "/api/blueprints", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.OK },
         { "internal service", "GET", "/api/projects", "/api/projects", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.OK },
-        { "run capability", "GET", "/api/runs/not-a-run/tool-approval-policies/read_file", "/api/runs/{id}/tool-approval-policies/{toolName}", EndpointAuthorizationKind.RunCapability, HttpStatusCode.BadRequest },
+        { "run capability", "GET", "/api/runs/not-a-run/tool-approval-policies/read_file", "/api/runs/{id}/tool-approval-policies/{toolName}", EndpointAuthorizationKind.RunCapability, HttpStatusCode.Unauthorized },
         { "malformed bearer", "GET", "/api/projects", "/api/projects", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.Unauthorized },
         { "wrong audience", "GET", "/api/projects", "/api/projects", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.Unauthorized },
     };

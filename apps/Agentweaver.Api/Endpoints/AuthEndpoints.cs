@@ -32,7 +32,7 @@ public static class AuthEndpoints
 
         app.MapGet("/api/auth/context", (HttpContext httpContext) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             return Results.Ok(new
             {
                 mode = "Entra",
@@ -50,7 +50,7 @@ public static class AuthEndpoints
             EffectiveModelProviderResolver modelProviderResolver,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false);
             var aiConfigured = effectiveProvider is not EffectiveModelProviderResult.Unavailable;
             return Results.Ok(new
@@ -78,7 +78,7 @@ public static class AuthEndpoints
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
             var result = await service.BeginAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
             if (result.Outcome != RepoAppAuthorizationOutcome.Success)
                 return Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
 
@@ -102,7 +102,7 @@ public static class AuthEndpoints
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
             var result = await service.BeginMcpHandoffAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
             return result.Outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.Ok(new
                 {
@@ -123,7 +123,7 @@ public static class AuthEndpoints
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
             var result = await service.GetConnectionAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             return result.Outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.Ok(new
                 {
@@ -190,7 +190,7 @@ public static class AuthEndpoints
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
             var result = await service.PollAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, transactionId, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, transactionId, ct).ConfigureAwait(false);
             return result.Outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.Ok(new { status = result.Status })
                 : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
@@ -205,7 +205,7 @@ public static class AuthEndpoints
             CancellationToken ct) =>
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
-            var outcome = await service.RefreshAsync(ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+            var outcome = await service.RefreshAsync(httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             return outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.NoContent()
                 : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(outcome) });
@@ -220,7 +220,7 @@ public static class AuthEndpoints
             CancellationToken ct) =>
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory);
-            var outcome = await service.RevokeAsync(ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+            var outcome = await service.RevokeAsync(httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             return outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.NoContent()
                 : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(outcome) });

@@ -87,8 +87,8 @@ The main guardrails are:
 - **No long-lived token in redirect URLs.** Browser sign-in redirects with a short-lived, single-use code, then returns the GitHub token only from a POST exchange.
 - **PKCE S256 for public clients.** MCP clients cannot use `plain` PKCE and cannot redeem a code without the verifier.
 - **Redirect validation before redirecting.** Invalid OAuth clients or redirect URIs get local errors, not redirects to untrusted destinations.
-- **Short-lived access tokens.** Agentweaver JWTs last about 15 minutes; refresh tokens are rotating and theft-sensitive.
-- **Revocation at two layers.** Refresh-token chains can be revoked, and access-token `jti` values can be deny-listed until expiry.
+- **Short-lived access tokens.** Agentweaver broker JWTs last ten minutes; refresh tokens are rotating and theft-sensitive.
+- **Revocation at two layers.** Refresh-token families and their persisted OpenIddict token entries can be revoked.
 - **Fail closed on uncertain authorization.** If org membership cannot be verified for a live request, the request is blocked rather than allowed.
 - **Do not cache uncertainty.** Transient GitHub failures and rate limits are not cached as durable authorization facts.
 - **Production startup guards.** Test auth bypasses and missing public OAuth issuer/audience config fail fast in production.
@@ -102,7 +102,14 @@ Where this lives:
 
 ## Architecture at a glance
 
-Every request crosses a network-policy boundary into the gateway, then passes through two ordered middlewares: `GitHubTokenAuthMiddleware` resolves identity (Agentweaver JWT validated offline against the `jti` denylist, or a raw GitHub token validated via `GET /user` and cached), and `GitHubOrgAuthorizationMiddleware` enforces the configured allow-rule list before any protected route runs. Browser sign-in and the MCP OAuth flow both terminate at GitHub as the human identity provider.
+Every request crosses a network-policy boundary into the gateway, then ASP.NET routing
+selects the authentication and authorization policy declared by that endpoint's metadata.
+The named schemes are `Entra`, `BrowserSession`, `BrokerBearer`,
+`InternalServiceKey`, `RunCapability`, and the Development-only `TestBypass`.
+The fallback policy denies unclassified endpoints. Broker credentials can reach only
+`PlatformOrMcp` endpoints, and run capabilities can reach only their run policy-read
+endpoint. Microsoft Entra is the upstream human identity provider; GitHub authorization
+is a separately linked account capability.
 
 ![Architecture at a glance: Browser web UI, MCP client, Direct API caller, default-deny + allowlist NetworkPolicies, Istio gateway / HTTPRoute, AuthEndpoints GitHub sign-in, OAuth 2.1 Authorization Server, GitHubTokenAuthMiddleware, GitHubOrgAuthorizationMiddleware, Protected /api routes, Bearer valid? JWT jti / GitHub /user, Org + team membership, …](../diagrams/auth-security-fig1.png)
 
@@ -194,10 +201,10 @@ The API does not accept static automation keys. Hosted MCP forwards each caller'
 
 ### Why this shape
 
-- **JWT first** lets MCP callers use Agentweaver-issued tokens without calling GitHub on every request.
-- **Raw GitHub fallback** preserves direct API use by users who already have a GitHub OAuth token.
-- **Short validation caches** reduce GitHub API load but avoid long-lived stale identity decisions.
-- **Deny-list check** gives access-token revocation meaning even before the 15-minute JWT lifetime expires.
+- **Endpoint-bound schemes** prevent one credential type from being replayed against an unrelated route.
+- **Broker JWT validation** pins issuer, audience, signature, algorithm, lifetime, scope, and persisted token status.
+- **Claims projection** strips inbound private `agentweaver_*` claims before stamping the immutable authenticating scheme.
+- **A deny-by-default fallback** blocks any endpoint that is not explicitly classified.
 - **Production bypass guard** prevents a test convenience from becoming a production backdoor.
 
 ### Invariants to preserve when rebuilding
@@ -206,12 +213,13 @@ The API does not accept static automation keys. Hosted MCP forwards each caller'
 - Cache token validation by a token hash, not by raw token value in logs or cache keys intended for inspection.
 - Negative validation results should have a much shorter cache lifetime than positive results.
 - A revoked Agentweaver JWT must fail before caller context is created.
-- Middleware that needs caller identity must run after bearer-token authentication.
+- Caller accessors must project from the authenticated `ClaimsPrincipal`; request-item identity caches are forbidden.
 
 Where this lives:
 
-- `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs`
-- `apps/Agentweaver.Api/Security/ApiKeyRegistry.cs`
+- `apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs`
+- `apps/Agentweaver.Api/Auth/EndpointAuthorization.cs`
+- `apps/Agentweaver.Api/Auth/AuthenticationClaims.cs`
 - `apps/Agentweaver.Api/Security/TestingBypassGuard.cs`
 
 ## GitHub org authorization and the SAML nuance
@@ -539,7 +547,11 @@ Org authorization exempts:
 - OAuth Authorization Server routes;
 - well-known discovery routes.
 
-The rule is not "these routes are unimportant." The rule is "these routes either must be public bootstrap/discovery or are protected by a different layer." OAuth endpoints have their own validation and rate limiting; MCP has its own bearer middleware in HTTP mode.
+The rule is not "these routes are unimportant." Every API route is classified at
+declaration time as operational anonymous, protocol managed, webhook HMAC,
+authenticated self/platform, platform-or-MCP, internal service, or run capability.
+OAuth endpoints have protocol validation and rate limiting; MCP retains its own bearer
+middleware in HTTP mode until the layer-4 cutover.
 
 ### MCP bearer middleware
 
@@ -552,15 +564,15 @@ All MCP tool calls require a bearer token. MCP first accepts configured automati
 
 ### Invariants to preserve when rebuilding
 
-- Exemptions should be path-specific, documented, and intentionally small.
+- Anonymous and alternate-auth access must be endpoint metadata, never a path-prefix exemption.
 - Public bootstrap routes must have their own input validation and, where expensive, rate limits.
 - Do not exempt a route merely because it is inconvenient to authenticate.
-- Middleware ordering matters: authentication before authorization.
+- Pipeline ordering remains routing, authentication, then authorization.
 
 Where this lives:
 
-- `apps/Agentweaver.Api/Security/ApiKeyAuthMiddleware.cs`
-- `apps/Agentweaver.Api/Auth/GitHubOrgAuthorizationMiddleware.cs`
+- `apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs`
+- `apps/Agentweaver.Api/Auth/EndpointAuthorization.cs`
 - `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
 - `apps/Agentweaver.Mcp/Program.cs`
 

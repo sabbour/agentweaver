@@ -38,6 +38,13 @@ explicitly administered static registration. Dynamic registrations expire after
 30 days by default; maintenance disables the corresponding OpenIddict
 application and reclaims active quota.
 
-This layer does not change MCP request validation. Broker-only MCP validation,
-protected-resource metadata, and removal of transitional validation belong to the
-subsequent resource-server cutover.
+The API resource server validates these broker access tokens through the named
+`BrokerBearer` scheme only for endpoints classified `PlatformOrMcp`. The same
+credential is rejected by self-only, platform-only, internal-service, and
+run-capability endpoints. Issuer and audience remain pinned to the configured
+canonical origin and `/mcp` resource, so `Host` and forwarded-host input cannot
+steer validation.
+
+The separate MCP process retains its existing validation path until the layer-4
+MCP cutover. Layer 4 may remove that transitional path, but must not broaden the
+set of API endpoint classifications that accept broker credentials.

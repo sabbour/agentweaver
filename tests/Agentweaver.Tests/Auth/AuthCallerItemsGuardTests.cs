@@ -6,7 +6,7 @@ namespace Agentweaver.Tests.Auth;
 public sealed class AuthCallerItemsGuardTests
 {
     [Fact]
-    public void AuthenticatedCaller_IsNotReadFromHttpContextItemsOutsideLegacyWriter()
+    public void AuthenticatedCaller_IsNeverReadFromHttpContextItems()
     {
         var sourcePath = SourcePath();
         var repositoryRoot = Path.GetFullPath(Path.Combine(
@@ -14,12 +14,6 @@ public sealed class AuthCallerItemsGuardTests
             "..",
             "..",
             ".."));
-        var legacyWriter = Path.GetFullPath(Path.Combine(
-            repositoryRoot,
-            "apps",
-            "Agentweaver.Api",
-            "Security",
-            "ApiKeyAuthMiddleware.cs"));
         var forbiddenSymbol = string.Concat("Caller", "ItemKey");
         var forbiddenLiteral = string.Concat("\"agentweaver.", "caller\"");
 
@@ -32,8 +26,7 @@ public sealed class AuthCallerItemsGuardTests
                          SearchOption.AllDirectories))
             {
                 if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                    || file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                    || string.Equals(Path.GetFullPath(file), legacyWriter, StringComparison.OrdinalIgnoreCase))
+                    || file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -48,7 +41,7 @@ public sealed class AuthCallerItemsGuardTests
         }
 
         violations.Should().BeEmpty(
-            "CallerContext must be projected from ClaimsPrincipal; only the legacy middleware may retain the temporary Items write");
+            "CallerContext must be projected from ClaimsPrincipal through ICallerContextAccessor");
     }
 
     private static string SourcePath([CallerFilePath] string sourcePath = "") => sourcePath;

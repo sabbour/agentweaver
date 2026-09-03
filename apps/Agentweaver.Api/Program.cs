@@ -251,12 +251,71 @@ builder.Services.AddSingleton<Agentweaver.Domain.IGitHubAccessTokenProvider>(
 builder.Services.AddSingleton<CopilotAppRegistrationService>();
 builder.Services.AddHostedService<CopilotAppRegistrationStartupService>();
 builder.Services.AddSingleton<EntraAccessTokenValidator>();
+builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = AgentweaverAuthenticationSchemes.Composite;
+        options.DefaultChallengeScheme = AgentweaverAuthenticationSchemes.Composite;
+        options.DefaultForbidScheme = AgentweaverAuthenticationSchemes.Composite;
+    })
+    .AddPolicyScheme(
+        AgentweaverAuthenticationSchemes.Composite,
+        displayName: null,
+        options => options.ForwardDefaultSelector = AgentweaverAuthentication.SelectScheme)
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, EntraAuthenticationHandler>(
+        AgentweaverAuthenticationSchemes.Entra, _ => { })
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, BrowserSessionAuthenticationHandler>(
+        AgentweaverAuthenticationSchemes.BrowserSession, _ => { })
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, BrokerBearerAuthenticationHandler>(
+        AgentweaverAuthenticationSchemes.BrokerBearer, _ => { })
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, InternalServiceAuthenticationHandler>(
+        AgentweaverAuthenticationSchemes.InternalServiceKey, _ => { })
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, RunCapabilityAuthenticationHandler>(
+        AgentweaverAuthenticationSchemes.RunCapability, _ => { })
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TestAuthenticationHandler>(
+        AgentweaverAuthenticationSchemes.TestBypass, _ => { });
+
+if (builder.Environment.IsDevelopment()
+    && builder.Configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth"))
+{
+    Console.Error.WriteLine("CRITICAL: Development test authentication bypass is active.");
+}
+else if (builder.Configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth"))
+{
+    Console.Error.WriteLine("CRITICAL: Testing:BypassGitHubTokenAuth is ignored outside Development.");
+}
+
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("PlatformAccess", policy =>
-        policy.Requirements.Add(new PlatformRoleRequirement()));
+    static Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder Authenticated() =>
+        new(AgentweaverAuthenticationSchemes.Composite);
+
+    options.AddPolicy(
+        EndpointAuthorizationPolicies.AuthenticatedSelf,
+        Authenticated().RequireAuthenticatedUser().Build());
+    options.AddPolicy(
+        EndpointAuthorizationPolicies.AuthenticatedPlatform,
+        Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformRoleRequirement()).Build());
+    options.AddPolicy(
+        EndpointAuthorizationPolicies.PlatformOrMcp,
+        Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrBrokerRequirement()).Build());
+    options.AddPolicy(
+        EndpointAuthorizationPolicies.InternalService,
+        Authenticated().RequireAuthenticatedUser().AddRequirements(new InternalServiceRequirement()).Build());
+    options.AddPolicy(
+        EndpointAuthorizationPolicies.RunCapability,
+        Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrRunCapabilityRequirement()).Build());
+
+    options.FallbackPolicy = Authenticated()
+        .RequireAuthenticatedUser()
+        .RequireAssertion(_ => false)
+        .Build();
 });
 builder.Services.AddSingleton<IAuthorizationHandler, PlatformRoleAuthorizationHandler>();
+builder.Services.AddSingleton<IAuthorizationHandler, EndpointSchemeAuthorizationHandler>();
+builder.Services.AddSingleton<
+    Microsoft.AspNetCore.Authorization.IAuthorizationMiddlewareResultHandler,
+    AgentweaverAuthorizationResultHandler>();
+builder.Services.AddScoped<ICallerContextAccessor, ClaimsCallerContextAccessor>();
 builder.Services.AddSingleton<Agentweaver.Domain.IGitHubPullRequestClient, Agentweaver.Api.Github.GitHubPullRequestClient>();
 builder.Services.AddSingleton<EntraOAuthRedirectService>();
 builder.Services.AddScoped<IGitHubCopilotEntitlementProbe, GitHubCopilotEntitlementProbe>();
@@ -1149,15 +1208,21 @@ else
     app.UseRouting();
     app.UseCors();
     app.UseRateLimiter();
+    app.UseMiddleware<EndpointAuthorizationIntegrityMiddleware>();
     app.Logger.LogInformation("Running with Microsoft Entra authentication.");
-    app.UseMiddleware<GitHubTokenAuthMiddleware>();
-    app.UseMiddleware<PlatformRoleAuthorizationMiddleware>();
+    app.UseAuthentication();
+    app.UseMiddleware<UnmatchedEndpointMiddleware>();
+    app.UseAuthorization();
 
     // spec-006 (api-harness): serves the OpenAPI document at /openapi/v1.json describing every
     // minimal-API route mapped below (request/response shapes included), so the LLM-driven curl
     // harness can discover the contract instead of relying on hand-wrapped SDK-style subcommands.
-    app.MapOpenApi();
-    app.MapOpenApi("/openapi/{documentName}.yaml");
+    app.MapOpenApi()
+        .AsApplicationEndpoint()
+        .OperationalAnonymous();
+    app.MapOpenApi("/openapi/{documentName}.yaml")
+        .AsApplicationEndpoint()
+        .OperationalAnonymous();
 
     var applicationEndpoints = app.MapGroup(string.Empty)
         .AsApplicationEndpoint()

@@ -1,4 +1,5 @@
 using Agentweaver.Api.Notifications;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Security;
 
 namespace Agentweaver.Api.Endpoints;
@@ -17,7 +18,7 @@ public static class NotificationsEndpoints
             NotificationsService notifications,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var result = await notifications.GetPendingAsync(caller, ct).ConfigureAwait(false);
             return Results.Ok(result);
         });
@@ -28,7 +29,7 @@ public static class NotificationsEndpoints
             NotificationsService notifications,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             await notifications.DismissAsync(caller, notificationId, ct).ConfigureAwait(false);
             return Results.NoContent();
         });

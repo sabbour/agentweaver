@@ -3,37 +3,30 @@
 The Agentweaver backend is the single source of truth for run lifecycle,
 streaming, review, and merge. Every client is a thin layer over these endpoints.
 
-Base path: `/api`. All endpoints require a bearer API key.
+Base path: `/api`. Each endpoint declares one authorization classification; there is no
+path-based authentication allowlist.
 
 ## Authentication
 
-Send the key on every `/api` request:
+Browser and API clients send a Microsoft Entra access token:
 
 ```
 Authorization: Bearer <api-key>
 ```
 
-Keys map to the user accountable for the runs they submit. Configure them under
-`Auth`:
+The API registers separate schemes for Entra bearer tokens, the opaque browser
+session used by OAuth handoffs, Agentweaver broker bearer tokens, the internal
+service key, run capabilities, and Development test authentication. Endpoint
+metadata selects the one eligible scheme and policy. Broker tokens are accepted
+only on routes classified `PlatformOrMcp`; run capabilities are accepted only by
+the run policy-read route. `Auth:ApiKey` is reserved for authenticated internal
+service calls and is never a general user credential.
 
-```json
-{
-  "Auth": {
-    "Keys": [
-      { "Token": "dev-local-key", "User": "local-developer" }
-    ]
-  }
-}
-```
-
-A single key is also accepted via `Auth:ApiKey` plus `Auth:User`. A request
-without a recognized key is rejected with `401`. A request for a run the caller
-does not own is rejected with `403`. Project-scoped resources are likewise
-owner-scoped: memory, session, decision (inbox/promoted), and casting endpoints
-verify that the caller owns the target project and return `403` otherwise, so an
-authenticated caller cannot read or mutate another project's data by supplying its
-id (the trusted internal service identity used for a run's own agent callbacks is
-exempt). When no keys are configured, every `/api` request is unauthorized.
+Missing or invalid credentials return `401 {"error":"unauthorized"}` with
+`WWW-Authenticate: Bearer`. An authenticated principal that lacks the required
+platform or project role receives `403`. Unknown routes remain `404`. Public,
+OAuth-protocol, and webhook-HMAC routes are explicitly classified and do not rely
+on URL-prefix exemptions.
 
 ### MCP OAuth protocol endpoints
 
@@ -550,6 +543,5 @@ prompt design, correction pass, and few-shot examples.
 | `Worktrees:BasePath` | `worktrees` in app data dir | Worktree root |
 | `Git:Author:Name` | `Agentweaver` | Commit and merge author name |
 | `Git:Author:Email` | `agentweaver@localhost` | Commit and merge author email |
-| `Auth:Keys` | none | Array of `{ Token, User }` API keys |
-| `Auth:ApiKey` / `Auth:User` | none | Single-key alternative |
+| `Auth:ApiKey` | none | Internal service credential; compared in fixed time and accepted only through endpoint policy |
 | `Runs:AllowedRepositoryRoots` | `[]` (permissive) | String array of allowed parent directories for `repository_path`. When empty, any local absolute path is accepted. Shared or exposed deployments MUST configure this to restrict which repositories can be targeted. |

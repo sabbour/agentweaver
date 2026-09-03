@@ -406,7 +406,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
             return ForbiddenError();
 
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
             id,
             CallerDisplayName(caller),
@@ -459,7 +459,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
             return ForbiddenError();
 
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
         var outcome = await coordinator.ReviseOutcomeSpecAsync(id, request.Feedback!, caller.User, ct);
 
         return outcome switch
@@ -591,7 +591,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
             return ForbiddenError();
 
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
 
         try
         {
@@ -658,7 +658,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is not null)
             return ForbiddenError();
 
-        var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+        var caller = httpContext.GetCaller();
 
         var decision = new Agentweaver.Api.Coordinator.AssemblyReviewDecision(
             Approved: request.Approved,
