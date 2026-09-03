@@ -2,7 +2,7 @@
 
 ## Purpose and Mental Model
 
-Agentweaver starts life as a single API pod that does everything: it serves HTTP and the live event stream, runs the orchestration graph for every run, and writes all durable state to a single-writer SQLite file. That shape is simple and correct for one instance, but it has a ceiling. This document tells the **scaling story** — why the single pod has to give way, and the phased path that turns one vertical box into a horizontally scalable system.
+Agentweaver uses a web/worker topology for production execution. Web pods serve HTTP and events. Worker pods run orchestration and dispatch work. PostgreSQL stores durable state, and leases prevent duplicate execution across replicas.
 
 The mental model has three moving parts:
 
@@ -22,7 +22,7 @@ Two pressures push execution out of one process, and they turn out to be the *sa
 
 The single pod runs every run's heavy execution state **in-process**. Each active run holds a live model SDK session, an in-process orchestration graph, per-run event channels, and a bounded in-memory history of recently completed runs. Memory therefore scales with *concurrent + recently-completed runs* multiplied by *(SDK session + graph + event history)*. Inside a fixed container memory limit, enough parallel runs eventually exhaust it and the pod is OOM-killed.
 
-The pod cannot simply be scaled out to relieve the pressure, because the data layer underneath it is single-writer SQLite on a ReadWriteOnce volume. That constraint pins the deployment to one replica with a recreate (not rolling) update strategy, so the old pod releases the disk before the new one attaches. Vertical growth is the only lever, and it has run out.
+SQLite remains a local-development option. Production uses PostgreSQL with rolling web and worker deployments, so it can scale beyond one process.
 
 ### Isolation: the security boundary
 
@@ -39,7 +39,7 @@ The key insight is that **memory relief and isolation are the same move**. Reloc
 
 ## The phased rollout
 
-The scaling story did not land in one release. It is **three phases that are now implemented in the codebase**, each independently shippable and each gated by a flag (`Sandbox:AgentExecutionMode`, `Database:Provider`, `App:Role`) that defaults to the simple single-process shape, so any step can be reverted instantly.
+The current design combines pod-based agent execution, provider-aware persistence, and a web/worker split. `Sandbox:AgentExecutionMode`, `Database:Provider`, and `App:Role` select the runtime topology.
 
 ![The phased rollout: P1 — Agent execution in pods, P2 — Azure PostgreSQL, P3 — Web/worker split + run leasing, stops OOM, horizontal scale](../diagrams/distributed-execution-scaling-fig2.png)
 
@@ -58,7 +58,7 @@ The rule that keeps P1 single-writer-safe is precise: the pod must never open a 
 
 ### P2 — Azure Database for PostgreSQL Flexible Server
 
-P2 makes the backing store **provider-aware**, with **Azure Database for PostgreSQL Flexible Server** as the multi-writer target (the current, locked direction). The provider is selected by `Database:Provider`: `postgres`/`postgresql` routes durable state through the EF Core `MemoryDbContext` and its EF-backed stores (`EfRunStore`, `EfRunRevisionStore`, `EfWorkflowRunStore`, `EfBacklogTaskStore`, `EfCastProposalStore`, and `EfRunEventStream`), while the default `sqlite` keeps the single-writer SQLite stores. Once a real multi-writer database is underneath, the ReadWriteOnce data volume can be dropped, the deployment can move from a recreate to a rolling update strategy, and `replicas` can exceed one.
+The backing store is provider-aware. `Database:Provider=postgres` or `postgresql` routes durable state through `MemoryDbContext` and EF-backed stores, including `EfRunEventStream`. SQLite remains available for local development. Production uses Azure Database for PostgreSQL Flexible Server with rolling deployments.
 
 P2 is mostly invisible to end users — the run/review model and the public API and event contracts do not change. What changes is *where* state lives and *who may write it concurrently*. The previously separate raw stores now fold into the single `MemoryDbContext` (which maps `runs`, `run_revisions`, `projects`, `backlog_tasks`, `workflow_runs`, and `cast_proposals` to Postgres tables and `model.Ignore<>()`s them on non-Npgsql providers), so there is one connection story and one migration mechanism; the [data-layer reference](../reference/scaling-data-layer.md) covers exactly which stores move and how.
 
@@ -85,7 +85,7 @@ The division of labor is the important idea: **web pods touch clients but never 
 
 ## Durable run leasing
 
-With more than one worker, the central question becomes: **how do N identical workers share one pool of runs without two of them grabbing the same run?** A blind read-modify-write cannot answer this. If two workers both read a run as "unowned" and both write themselves as owner, the last writer wins and the run is dispatched twice — the classic double-dispatch bug. (The run-claim path is now guarded by leasing, below; the analogous subtask-dispatch path — load row, mutate, save with no ownership guard — is **not yet** converted and remains the known multi-replica hazard.)
+With more than one worker, the central question becomes: **how do identical workers share one pool of runs without duplicate execution?** Durable leases guard both run ownership and coordinator dispatch. A guarded compare-and-set selects one worker to execute each item.
 
 The fix is a **durable lease** expressed as a *guarded compare-and-set* (CAS) on the work item's row. This is implemented today as `IRunLeaseStore`: the Postgres implementation `PostgresRunLeaseStore` issues a single conditional `ExecuteUpdateAsync` against the `runs` table — claim this run **only if** `owner_id IS NULL OR lease_expires_at < now()`, stamping owner, a fresh deadline, an incremented `fencing_token`, and `attempt` in the same statement. The database guarantees that exactly one worker's update affects a row; every other worker sees zero rows changed and moves on. The winner — and only the winner — proceeds to execute. On non-Postgres single-replica deployments the binding is `NoOpRunLeaseStore`, where every claim trivially succeeds because there is no contention.
 
@@ -115,9 +115,7 @@ sequenceDiagram
 
 The lease *lifecycle* is owned by `RunWatchLoopService`: on claim it records the `(ownerId, fencingToken)`, runs a background renew loop at half the TTL (`LeaseTtl` = 5 minutes, renew every ~2.5 minutes), and releases on completion or drain. Terminal handlers and `FailRun` first re-check `IsLeaseOwnerAsync` so a worker whose lease was stolen does not finalize a run it no longer owns.
 
-> **Implemented vs. design.** Run-level leasing on the `runs` row (`owner_id`, `lease_expires_at`, `heartbeat_at`, `fencing_token`, `attempt`) is implemented. Extending the same guarded CAS to **subtask dispatch** — and the `(coordinator, subtask, attempt)` dispatch-idempotency record below — is **not yet implemented**; it remains the outstanding hardening item for safe multi-worker coordinator fan-out.
-
-A second, related guarantee covers **child dispatch** *(design target, not yet implemented)*: a coordinator that spawns child runs should do so *exactly once* per (coordinator, subtask, attempt), even if it is re-leased mid-flight to another worker. An idempotency record written in the same transaction that flips the subtask to *dispatched* would make redelivery safe — a duplicate attempt simply discovers the existing child and reuses it rather than spawning a second one.
+Coordinator dispatch also acquires a database compare-and-set lease through `WorkPlan.CoordinatorPodId`. Only the worker that acquires this lease starts the dispatch loop.
 
 **Affinity is acceptable and even desirable.** Because a worker that holds a lease also holds that run's in-process orchestration graph and its HITL gates, work for a given run prefers to stay on its owning worker. Affinity is an optimization layered on top of leasing, not a replacement for it: the lease remains the source of truth, so if the owning worker dies, any other worker can still take over.
 
