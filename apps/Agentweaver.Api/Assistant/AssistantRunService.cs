@@ -1212,6 +1212,12 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 success,
             }, ct);
 
+        public ValueTask OnRunFailedAsync(AgentProviderException providerFailure, CancellationToken _) =>
+            // Assistant conversations remain resumable after a failed turn. Persisting run.failed on
+            // the public run stream would mark the whole conversation terminal and stop future SSE
+            // replay/tailing; the outer AgentProviderException handler emits the non-terminal run.error.
+            ValueTask.CompletedTask;
+
         public async ValueTask<bool> OnApprovalRequiredAsync(
             string requestId, string toolName, string? argumentsJson, CancellationToken _)
         {

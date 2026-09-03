@@ -262,7 +262,9 @@ public sealed class RemoteOperatorAssistantAgent(
     /// re-projected through the caller's own sink (so they persist with the CORRECT conversational
     /// message id, exactly as the retired in-process path did); the three tool-approval event types
     /// are appended to the run's event stream verbatim, because the pod's own approval gate — not
-    /// this process's — is what the operator's grant/deny decision ultimately resolves.
+    /// this process's — is what the operator's grant/deny decision ultimately resolves. Structured
+    /// <c>run.failed</c> remains on the internal A2A path only: persisting it on the public operator
+    /// conversation stream would incorrectly terminalize an otherwise retryable conversation.
     /// </summary>
     private async Task DrainAsync(
         string runId,
@@ -338,8 +340,9 @@ public sealed class RemoteOperatorAssistantAgent(
         return false;
     }
 
-    private static Exception ClassifyOrWrap(Exception ex, string runId, string fallbackMessage) =>
-        AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId)
+    internal static Exception ClassifyOrWrap(Exception ex, string runId, string fallbackMessage) =>
+        ClassifyProxyFailure(ex, runId)
+        ?? AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId)
         ?? new AgentProviderException(
             ModelSource.GitHubCopilot,
             AgentProviderFailureKind.ProviderUnavailable,
@@ -347,4 +350,47 @@ public sealed class RemoteOperatorAssistantAgent(
             $"Run {runId}: {fallbackMessage}: {ex.Message}",
             isRetryable: true,
             ex);
+
+    internal static AgentProviderException? ClassifyProxyFailure(Exception ex, string runId)
+    {
+        if (ex is not WorkflowAgentInfrastructureException infrastructure)
+            return null;
+
+        if (TryMapFailureKind(infrastructure.Reason, out var failureKind))
+        {
+            return new AgentProviderException(
+                ModelSource.GitHubCopilot,
+                failureKind,
+                infrastructure.Reason,
+                infrastructure.Message,
+                infrastructure.IsRetryable ?? failureKind is AgentProviderFailureKind.ProviderUnavailable or AgentProviderFailureKind.RateLimited,
+                infrastructure);
+        }
+
+        return null;
+    }
+
+    internal static bool TryMapFailureKind(string errorCode, out AgentProviderFailureKind failureKind)
+    {
+        switch (errorCode)
+        {
+            case "github_copilot_auth_required":
+                failureKind = AgentProviderFailureKind.Authorization;
+                return true;
+            case "github_copilot_model_unavailable":
+            case "github_copilot_runtime_not_configured":
+                failureKind = AgentProviderFailureKind.Configuration;
+                return true;
+            case "github_copilot_rate_limited":
+                failureKind = AgentProviderFailureKind.RateLimited;
+                return true;
+            case "github_copilot_models_unavailable":
+            case "github_copilot_provider_unavailable":
+                failureKind = AgentProviderFailureKind.ProviderUnavailable;
+                return true;
+            default:
+                failureKind = default;
+                return false;
+        }
+    }
 }
