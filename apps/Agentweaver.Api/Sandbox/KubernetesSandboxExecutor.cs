@@ -403,11 +403,24 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         var connectionProjectId = ProjectId.TryParse(configProjectId, out var parsedProjectId)
             ? parsedProjectId
             : (ProjectId?)null;
+        // The scope the model provider is resolved at. For ordinary project/orchestration work this
+        // IS the run's project. For a personal, platform-scoped Assistant ("Session") launch it must
+        // be PLATFORM scope (null) instead: the run row's ProjectId there is only the project the
+        // human happened to be viewing when they opened the chat, and per the resolver's documented
+        // precedence an active project Copilot binding always beats platform-level BYOK. Deriving
+        // the scope from that incidental id undid AssistantRunService's deliberate platform-scoped
+        // selection and label: a session could be labelled and credential-gated as platform BYOK
+        // while the pod it actually launched was configured for the project's Copilot binding (or
+        // the reverse). Selection, validation, and pod configuration must all agree.
+        var providerScopeProjectId = launchContext.ResolvesModelProviderAtPlatformScope
+            ? null
+            : connectionProjectId;
+
         // Resolve the effective provider ONCE and keep the result: it decides both whether this pod
         // is BYOK-configured and — when authorization fails below — WHICH Copilot binding the human
         // must reconnect. Deriving that scope from "does the project id string parse" instead named
         // the project's App even for platform-default binding failures.
-        var effectiveProvider = await ResolveEffectiveProviderAsync(connectionProjectId, ct).ConfigureAwait(false);
+        var effectiveProvider = await ResolveEffectiveProviderAsync(providerScopeProjectId, ct).ConfigureAwait(false);
         var byokProvider = await GetByokProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
         if (byokProvider is null && string.IsNullOrWhiteSpace(submittingUser))
         {
@@ -434,7 +447,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             if (_copilotCredentials is null)
                 throw new InvalidOperationException(
                     $"Cannot launch AgentHost pod for run '{runId}' without a live run-bound Copilot capability snapshot.");
-            throw effectiveProvider.ToConnectionRequiredException(connectionProjectId);
+            throw effectiveProvider.ToConnectionRequiredException(providerScopeProjectId);
         }
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;

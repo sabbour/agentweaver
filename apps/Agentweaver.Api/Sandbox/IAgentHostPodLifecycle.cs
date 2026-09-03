@@ -75,4 +75,29 @@ public sealed record AgentHostLaunchContext(
     string? ScratchRoot = null,
     string? CommitAuthorName = null,
     string? CommitAuthorEmail = null,
-    string? CallerBearerToken = null);
+    string? CallerBearerToken = null)
+{
+    /// <summary>
+    /// Whether this launch must resolve its effective model provider at PLATFORM scope
+    /// (<c>projectId: null</c>) rather than at the launching run's own project scope.
+    ///
+    /// <para>
+    /// True only for <see cref="Agentweaver.Domain.AgentHostPurpose.OperatorAssistant"/> — the
+    /// personal operator "Session" conversations. Those runs are not project-scoped work: a
+    /// session's <c>Run.ProjectId</c> merely records the project the human happened to be viewing
+    /// when they opened the chat, and it is deliberately kept only as incidental MCP/UI context.
+    /// <c>AssistantRunService</c> therefore selects the session's provider, and
+    /// <c>RunGitHubCapabilitySnapshotLifecycle</c> validates its credential, at platform scope; the
+    /// pod that actually serves the conversation must be configured from the very same scope or the
+    /// three disagree (a session labelled and gated as platform BYOK could be configured for an
+    /// incidental project's Copilot binding, or the reverse).
+    /// </para>
+    ///
+    /// <para>
+    /// Every other purpose — coordinator runs, subtasks, retries, Build/Test — is genuine
+    /// project-scoped work and keeps resolving against its real project id.
+    /// </para>
+    /// </summary>
+    public bool ResolvesModelProviderAtPlatformScope =>
+        Purpose == Agentweaver.Domain.AgentHostPurpose.OperatorAssistant;
+}

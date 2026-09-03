@@ -484,6 +484,111 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task LaunchAgentHostPod_for_an_operator_assistant_resolves_the_provider_at_platform_scope()
+    {
+        // Regression (rubber-duck review, Layer 4 follow-up): the executor derived the
+        // provider-resolution scope from the run row's ProjectId. For a personal operator Assistant
+        // ("Session") conversation that id is only the project the human happened to be VIEWING when
+        // they opened the chat, and per the resolver's precedence an active project Copilot binding
+        // always beats platform-level BYOK — so a session that AssistantRunService had deliberately
+        // selected AND credential-gated at PLATFORM scope got its pod configured from that
+        // incidental project's Copilot binding instead. Selection, validation, and pod
+        // configuration must all resolve at the same (platform) scope.
+        const string runId = "run-claim-operator-platform-scope";
+        var projectId = ProjectId.New();
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var observedScopes = new List<ProjectId?>();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("entra-object-id", projectId.ToString()),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: new UnexpectedGitHubCopilotCapabilityCredentialProvider(),
+            byokProviderConfiguration: new FixedByokProviderConfigurationProvider(
+                new ByokProviderConfiguration(
+                    Id: "platform-provider",
+                    Name: "Platform BYOK provider",
+                    Type: "openai",
+                    BaseUrl: "https://models.example.com",
+                    Model: "gpt-5",
+                    ApiKey: "platform-key")),
+            effectiveProviderResolver: (scope, _) =>
+            {
+                observedScopes.Add(scope);
+                return Task.FromResult<EffectiveModelProviderResult>(scope is null
+                    ? new EffectiveModelProviderResult.Byok("platform-provider", "openai")
+                    : new EffectiveModelProviderResult.ProjectGitHubCopilot($"binding-{scope}", "project-bot"));
+            });
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                Purpose: AgentHostPurpose.OperatorAssistant));
+
+        observedScopes.Should().NotBeEmpty().And.AllSatisfy(scope => scope.Should().BeNull(),
+            "an Assistant session's incidental project id must never decide which provider serves it");
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("byokProviderConfiguration").GetProperty("apiKey").GetString()
+            .Should().Be("platform-key");
+        doc.RootElement.GetProperty("copilotCredential").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_for_project_work_still_resolves_the_provider_at_project_scope()
+    {
+        // The other half of the same fix: genuine project-scoped work (coordinator runs, subtasks,
+        // retries, Build/Test) is unchanged — it must keep resolving against its REAL project id, so
+        // a project's own Copilot binding continues to win for the work that belongs to it.
+        const string runId = "run-claim-project-scope";
+        var projectId = ProjectId.New();
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-3"}}}""");
+        handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-3$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-3"},"status":{"podIP":"10.0.0.9"}}""");
+
+        var configureHandler = new RecordingConfigureHandler();
+        var observedScopes = new List<ProjectId?>();
+        var executor = NewExecutor(
+            handler,
+            new StubSubmittingUserResolver("entra-object-id", projectId.ToString()),
+            httpClientFactory: new StubHttpClientFactory(configureHandler),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider(),
+            effectiveProviderResolver: (scope, _) =>
+            {
+                observedScopes.Add(scope);
+                return Task.FromResult<EffectiveModelProviderResult>(scope is null
+                    ? new EffectiveModelProviderResult.Byok("platform-provider", "openai")
+                    : new EffectiveModelProviderResult.ProjectGitHubCopilot($"binding-{scope}", "project-bot"));
+            });
+
+        await executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(SharedWorkingDirectory: null));
+
+        observedScopes.Should().NotBeEmpty().And.AllSatisfy(
+            scope => scope.Should().Be(projectId),
+            "project-scoped work keeps resolving its provider against its own project");
+
+        using var doc = JsonDocument.Parse(configureHandler.Body!);
+        doc.RootElement.GetProperty("copilotCredential").GetProperty("snapshotReference").GetString()
+            .Should().Be("snapshot-test");
+    }
+
+    [Fact]
     public void Router_requires_byok_provider_configuration_wiring()
     {
         var services = new ServiceCollection()
