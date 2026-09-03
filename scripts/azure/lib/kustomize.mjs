@@ -307,10 +307,21 @@ export function buildRuntimeConfigLiterals(vars) {
   }
 
   const oauthOrigin = isEntra ? entraOrigin : host ? `https://${host}` : "";
+  if (oauthOrigin === "https://agentweaver.example.com") {
+    throw new Error(
+      "HOST resolved to the committed agentweaver.example.com placeholder; refusing to render deployment manifests.",
+    );
+  }
+  const oauthTrustedProxyNetworks = str(vars.OAUTH_TRUSTED_PROXY_NETWORKS);
   const signingCertificateName = str(vars.OAUTH_SIGNING_CERTIFICATE_NAME) || "agentweaver-oauth-signing";
   const encryptionCertificateName = str(vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME) || "agentweaver-oauth-encryption";
-  const oauthCertificateConfigChecksum = createHash("sha256")
-    .update(JSON.stringify({ signingCertificateName, encryptionCertificateName }))
+  const oauthRuntimeConfigChecksum = createHash("sha256")
+    .update(JSON.stringify({
+      oauthOrigin,
+      oauthTrustedProxyNetworks,
+      signingCertificateName,
+      encryptionCertificateName,
+    }))
     .digest("hex");
   return {
     HOST: host,
@@ -324,10 +335,10 @@ export function buildRuntimeConfigLiterals(vars) {
     // ClientSecret is deliberately NOT wired here -- PKCE-only per #658; see api-deployment.yaml.
     AUTH_MODE: authMode,
     OAUTH_PUBLIC_ORIGIN: oauthOrigin,
-    OAUTH_TRUSTED_PROXY_NETWORKS: str(vars.OAUTH_TRUSTED_PROXY_NETWORKS),
+    OAUTH_TRUSTED_PROXY_NETWORKS: oauthTrustedProxyNetworks,
     OAUTH_SIGNING_CERTIFICATE_NAME: signingCertificateName,
     OAUTH_ENCRYPTION_CERTIFICATE_NAME: encryptionCertificateName,
-    OAUTH_CERTIFICATE_CONFIG_CHECKSUM: oauthCertificateConfigChecksum,
+    OAUTH_RUNTIME_CONFIG_CHECKSUM: oauthRuntimeConfigChecksum,
     ENTRA_CLIENT_ID: str(vars.ENTRA_CLIENT_ID),
     ENTRA_TENANT_ID: str(vars.ENTRA_TENANT_ID),
     ENTRA_ENTERPRISE_APP_OBJECT_ID: str(vars.ENTRA_ENTERPRISE_APP_OBJECT_ID),
@@ -386,6 +397,11 @@ export function rewriteOverlayKustomization(kustomizationText, vars) {
   const literals = buildRuntimeConfigLiterals(vars);
   for (const [key, value] of Object.entries(literals)) {
     const fullLineRe = new RegExp(`^(\\s*- )"${key}=[^"]*"\\s*$`, "m");
+    if (!fullLineRe.test(out)) {
+      throw new Error(
+        `kustomize.mjs: production overlay is missing the quoted ${key} runtime-config literal; refusing a partial deployment render`,
+      );
+    }
     out = out.replace(fullLineRe, (_match, indent) => `${indent}${JSON.stringify(`${key}=${value}`)}`);
   }
 

@@ -97,6 +97,7 @@ test("buildRuntimeConfigLiterals() wires canonical OpenIddict and Key Vault cert
   assert.equal(literals.OAUTH_TRUSTED_PROXY_NETWORKS, "10.244.0.0/16");
   assert.equal(literals.OAUTH_SIGNING_CERTIFICATE_NAME, "agentweaver-oauth-signing");
   assert.equal(literals.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "agentweaver-oauth-encryption");
+  assert.match(literals.OAUTH_RUNTIME_CONFIG_CHECKSUM, /^[a-f0-9]{64}$/);
 });
 
 test("buildRuntimeConfigLiterals() derives public Entra URLs from HOST and defaults AUTH_MODE to Entra", () => {
@@ -183,6 +184,13 @@ test("buildRuntimeConfigLiterals() requires a structurally valid public HOST for
   }
 });
 
+test("buildRuntimeConfigLiterals() refuses the committed public-origin placeholder", () => {
+  assert.throws(
+    () => buildRuntimeConfigLiterals({ ...VARS, HOST: "agentweaver.example.com" }),
+    /committed agentweaver\.example\.com placeholder/,
+  );
+});
+
 test("buildRuntimeConfigLiterals() preserves explicit local GitHubLegacy development configuration", () => {
   const literals = buildRuntimeConfigLiterals({ ...VARS, AUTH_MODE: "GitHubLegacy", HOST: "localhost:5000" });
   assert.equal(literals.ENTRA_REDIRECT_URI, "https://localhost:5000/auth/entra/callback");
@@ -228,6 +236,17 @@ test("rewriteOverlayKustomization() rewrites every images: entry and configMapGe
   assert.doesNotMatch(rewritten, /newTag: "latest"/);
 });
 
+test("rewriteOverlayKustomization() rejects a partial runtime-config rewrite", () => {
+  const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
+  const original = fs.readFileSync(overlayPath, "utf8")
+    .replace(/^\s*- "OAUTH_PUBLIC_ORIGIN=.*"\r?\n/m, "");
+
+  assert.throws(
+    () => rewriteOverlayKustomization(original, VARS),
+    /missing the quoted OAUTH_PUBLIC_ORIGIN runtime-config literal/,
+  );
+});
+
 test("writeOverlay() + kubectl kustomize builds cleanly and every resource resolves to real (not placeholder) values", async (t) => {
   const scratchDir = path.join(DEFAULT_REPO_ROOT, "scripts", "azure", "tests", ".scratch-deploy-render");
   t.after(() => fs.rmSync(scratchDir, { recursive: true, force: true }));
@@ -258,8 +277,8 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__OAuth__Certificates__SigningName\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_SIGNING_CERTIFICATE_NAME\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(
     builtYaml,
-    /agentweaver\.io\/oauth-certificate-config-checksum: [a-f0-9]{64}/,
-    "API pod template must roll when OAuth certificate-family configuration changes",
+    /agentweaver\.io\/oauth-runtime-config-checksum: [a-f0-9]{64}/,
+    "API pod template must roll when canonical OAuth runtime configuration changes",
   );
   assert.match(builtYaml, /name: Auth__CopilotApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: COPILOT_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__RepoApp__CallbackUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: REPO_APP_CALLBACK_URL\s*\n\s*name: agentweaver-runtime-config/);
@@ -308,6 +327,11 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
     "The executor that runs previews must retain explicit resource reservation and limits",
   );
   const mcpDeployment = manifestForFilename(docs, "mcp-deployment.yaml");
+  assert.match(
+    mcpDeployment,
+    /agentweaver\.io\/oauth-runtime-config-checksum: [a-f0-9]{64}/,
+    "MCP pod template must roll with the same canonical OAuth runtime configuration",
+  );
   assert.match(
     mcpDeployment,
     /name: Auth__OAuth__PublicOrigin\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_PUBLIC_ORIGIN\s*\n\s*name: agentweaver-runtime-config/,
@@ -406,7 +430,7 @@ test("runtime config preserves operator-selected OAuth certificate families for 
   assert.equal(literals.OAUTH_PUBLIC_ORIGIN, "https://agentweaver.abc123def456.westus2.staging.aksapp.io");
 });
 
-test("OAuth certificate family checksum changes only when active/previous family configuration changes", () => {
+test("OAuth runtime checksum changes with the managed origin, proxy CIDRs, or certificate families", () => {
   const first = buildRuntimeConfigLiterals({
     ...VARS,
     OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
@@ -422,9 +446,23 @@ test("OAuth certificate family checksum changes only when active/previous family
     OAUTH_SIGNING_CERTIFICATE_NAME: "signing-b",
     OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
   });
-  assert.equal(first.OAUTH_CERTIFICATE_CONFIG_CHECKSUM, unchanged.OAUTH_CERTIFICATE_CONFIG_CHECKSUM);
-  assert.notEqual(first.OAUTH_CERTIFICATE_CONFIG_CHECKSUM, changed.OAUTH_CERTIFICATE_CONFIG_CHECKSUM);
-  assert.match(first.OAUTH_CERTIFICATE_CONFIG_CHECKSUM, /^[a-f0-9]{64}$/);
+  const changedOrigin = buildRuntimeConfigLiterals({
+    ...VARS,
+    HOST: "agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
+  });
+  const changedNetworks = buildRuntimeConfigLiterals({
+    ...VARS,
+    OAUTH_TRUSTED_PROXY_NETWORKS: "10.245.0.0/16",
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing-a",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption-a",
+  });
+  assert.equal(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, unchanged.OAUTH_RUNTIME_CONFIG_CHECKSUM);
+  assert.notEqual(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, changed.OAUTH_RUNTIME_CONFIG_CHECKSUM);
+  assert.notEqual(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, changedOrigin.OAUTH_RUNTIME_CONFIG_CHECKSUM);
+  assert.notEqual(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, changedNetworks.OAUTH_RUNTIME_CONFIG_CHECKSUM);
+  assert.match(first.OAUTH_RUNTIME_CONFIG_CHECKSUM, /^[a-f0-9]{64}$/);
 });
 
 test("manifestForFilename() throws a clear error for an unknown filename (fail-fast, no silent partial applies)", () => {

@@ -19,6 +19,7 @@ import {
 } from "../steps/40-verify.mjs";
 
 const CFG = Object.freeze({ NAMESPACE: "agentweaver" });
+const RUNTIME_CHECKSUM = "a".repeat(64);
 
 function noopLog() {
   const rec = () => () => {};
@@ -195,6 +196,9 @@ test("run: reports failures for missing pods and unprogrammed gateway", async ()
 });
 
 test("run: performs authenticated feature checks when HOST resolves and a token is supplied", async () => {
+  let configuredRuntimeChecksum = RUNTIME_CHECKSUM;
+  let apiRuntimeChecksum = RUNTIME_CHECKSUM;
+  let mcpRuntimeChecksum = RUNTIME_CHECKSUM;
   const captureImpl = (cmd, args) => {
     const joined = args.join(" ");
     if (joined.includes("--field-selector=status.phase=Running")) return { stdout: "pod-1\n", stderr: "", code: 0 };
@@ -209,6 +213,15 @@ test("run: performs authenticated feature checks when HOST resolves and a token 
     }
     if (joined.includes("agentweaver-runtime-config") && joined.includes("OAUTH_ENCRYPTION_CERTIFICATE_NAME")) {
       return { stdout: "agentweaver-oauth-encryption", stderr: "", code: 0 };
+    }
+    if (joined.includes("agentweaver-runtime-config") && joined.includes("OAUTH_RUNTIME_CONFIG_CHECKSUM")) {
+      return { stdout: configuredRuntimeChecksum, stderr: "", code: 0 };
+    }
+    if (joined.includes("deployment agentweaver-api") && joined.includes("oauth-runtime-config-checksum")) {
+      return { stdout: apiRuntimeChecksum, stderr: "", code: 0 };
+    }
+    if (joined.includes("deployment agentweaver-mcp") && joined.includes("oauth-runtime-config-checksum")) {
+      return { stdout: mcpRuntimeChecksum, stderr: "", code: 0 };
     }
     if (joined.includes("secretproviderclasspodstatus")) return { stdout: "spc-1\n", stderr: "", code: 0 };
     if (joined.includes("auth can-i")) return { stdout: "yes", stderr: "", code: 0 };
@@ -254,6 +267,18 @@ test("run: performs authenticated feature checks when HOST resolves and a token 
   const result = await run(CFG, { exec, log: noopLog(), env: { AGENTWEAVER_VALIDATION_TOKEN: "tok" }, fetchImpl });
   assert.ok(calledUrls.some((u) => u.includes("/api/projects/proj-1/memory")));
   assert.equal(result.ok, true);
+
+  apiRuntimeChecksum = "b".repeat(64);
+  const staleApi = await run(CFG, { exec, log: noopLog(), env: { AGENTWEAVER_VALIDATION_TOKEN: "tok" }, fetchImpl });
+  assert.equal(staleApi.ok, false);
+  assert.ok(staleApi.results.some((entry) =>
+    entry.ok === false && entry.message.includes("has not consumed the canonical OAuth runtime configuration")));
+
+  configuredRuntimeChecksum = "placeholder";
+  apiRuntimeChecksum = "placeholder";
+  mcpRuntimeChecksum = "placeholder";
+  const placeholder = await run(CFG, { exec, log: noopLog(), env: { AGENTWEAVER_VALIDATION_TOKEN: "tok" }, fetchImpl });
+  assert.equal(placeholder.ok, false);
 });
 
 test("run: verifies configured OAuth certificate families and enabled Key Vault versions", async () => {
@@ -266,6 +291,13 @@ test("run: verifies configured OAuth certificate families and enabled Key Vault 
     if (joined.includes("OAUTH_PUBLIC_ORIGIN")) return { stdout: "https://agentweaver.example.test", stderr: "", code: 0 };
     if (joined.includes("OAUTH_SIGNING_CERTIFICATE_NAME")) return { stdout: "oauth-signing-custom", stderr: "", code: 0 };
     if (joined.includes("OAUTH_ENCRYPTION_CERTIFICATE_NAME")) return { stdout: "oauth-encryption-custom", stderr: "", code: 0 };
+    if (joined.includes("OAUTH_RUNTIME_CONFIG_CHECKSUM")) return { stdout: RUNTIME_CHECKSUM, stderr: "", code: 0 };
+    if (joined.includes("deployment agentweaver-api") && joined.includes("oauth-runtime-config-checksum")) {
+      return { stdout: RUNTIME_CHECKSUM, stderr: "", code: 0 };
+    }
+    if (joined.includes("deployment agentweaver-mcp") && joined.includes("oauth-runtime-config-checksum")) {
+      return { stdout: RUNTIME_CHECKSUM, stderr: "", code: 0 };
+    }
     if (joined.includes("keyvault certificate show")) return { stdout: "", stderr: "", code: 0 };
     if (joined.includes("keyvault secret list-versions")) return {
       stdout: JSON.stringify([
