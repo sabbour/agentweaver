@@ -1,9 +1,14 @@
 using System.Threading.Channels;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.Api.Blueprints;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Generation;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
 
@@ -185,10 +190,141 @@ public sealed class CopilotBlueprintGeneratorTests
         runner.LastTask.Should().Contain("missing review gate for user-facing output");
     }
 
+    [Fact]
+    public async Task GenerateRawForProjectAsync_ProjectlessPlatformCopilot_SucceedsWithoutPersistingAFakeProjectId()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var secrets = new InMemorySecretStore();
+        await secrets.SetSecretAsync(
+            "copilot-app-platform-default-version",
+            """
+            {"status":"signed-in","accessToken":"token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"platform-user"}
+            """);
+        var runner = new CapturingAgentRunner();
+        var generator = new CopilotBlueprintGenerator(
+            runner,
+            new CatalogReader(),
+            new ConfigurationBuilder().Build(),
+            NullLogger<CopilotBlueprintGenerator>.Instance,
+            scopeFactory: CreateScopeFactory(connection, secrets));
+
+        var raw = await generator.GenerateRawForProjectAsync(
+            "Create a research team",
+            CancellationToken.None,
+            userId: "entra-user");
+
+        raw.Should().Contain("\"id\": \"blueprint-job-search-operations\"");
+        runner.LastCapability.Should().NotBeNull();
+        runner.LastCapability!.ProjectId.Should().BeNull();
+        await using var verificationDb = new MemoryDbContext(Options(connection));
+        var stored = await verificationDb.MarketplaceCopilotCapabilities.SingleAsync(
+            x => x.CapabilityRef == runner.LastCapability.CapabilityReference);
+        stored.ProjectId.Should().BeNull();
+        stored.SourceBindingId.Should().Be(PlatformDefaultCopilotBindingRecord.SingletonId);
+    }
+
+    [Fact]
+    public async Task GenerateRawForProjectAsync_ProjectScopedCopilot_PreservesRealProjectId()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        db.Projects.Add(new ProjectRecord
+        {
+            ProjectId = projectId.ToString(),
+            Name = "Project",
+            OriginKind = "blank",
+            WorkingDirectory = "C:\\project",
+            Owner = "owner",
+            DefaultProvider = "github_copilot",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+        {
+            Id = "project-binding",
+            ProjectId = projectId.ToString(),
+            EntraObjectId = "owner",
+            CredentialReference = "copilot-app-project-project-version",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var secrets = new InMemorySecretStore();
+        await secrets.SetSecretAsync(
+            "copilot-app-project-project-version",
+            """
+            {"status":"signed-in","accessToken":"token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"project-user"}
+            """);
+        var runner = new CapturingAgentRunner();
+        var generator = new CopilotBlueprintGenerator(
+            runner,
+            new CatalogReader(),
+            new ConfigurationBuilder().Build(),
+            NullLogger<CopilotBlueprintGenerator>.Instance,
+            scopeFactory: CreateScopeFactory(connection, secrets));
+
+        var raw = await generator.GenerateRawForProjectAsync(
+            "Create a research team",
+            CancellationToken.None,
+            userId: "entra-user",
+            projectId: projectId.ToString());
+
+        raw.Should().Contain("\"id\": \"blueprint-job-search-operations\"");
+        runner.LastCapability.Should().NotBeNull();
+        runner.LastCapability!.ProjectId.Should().Be(projectId.ToString());
+        await using var verificationDb = new MemoryDbContext(Options(connection));
+        var stored = await verificationDb.MarketplaceCopilotCapabilities.SingleAsync(
+            x => x.CapabilityRef == runner.LastCapability.CapabilityReference);
+        stored.ProjectId.Should().Be(projectId.ToString());
+        stored.SourceBindingId.Should().Be("project-binding");
+    }
+
+    private static IServiceScopeFactory CreateScopeFactory(SqliteConnection connection, ISecretStore secrets)
+    {
+        var services = new ServiceCollection();
+        services.AddDbContext<MemoryDbContext>(options => options.UseSqlite(connection));
+        services.AddSingleton<ISecretStore>(secrets);
+        services.AddScoped<GitHubConnectionsPersistenceStore>();
+        services.AddScoped<ByokProviderConfigurationService>();
+        services.AddScoped<EffectiveModelProviderResolver>();
+        services.AddScoped<GenerationModelProviderExecutor>();
+        return services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+    }
+
+    private static async Task<SqliteConnection> OpenDatabaseAsync()
+    {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        await db.Database.EnsureCreatedAsync();
+        return connection;
+    }
+
+    private static DbContextOptions<MemoryDbContext> Options(SqliteConnection connection) =>
+        new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(connection).Options;
+
     private sealed class CapturingAgentRunner : IAgentRunner
     {
         public string? LastTask { get; private set; }
         public string? LastModelId { get; private set; }
+        public CopilotOperationCapability? LastCapability { get; private set; }
 
         public Task<string> ExecuteAsync(
             string task,
@@ -216,6 +352,34 @@ public sealed class CopilotBlueprintGeneratorTests
                   "sandbox_profile": "default"
                 }
                 """);
+        }
+
+        public Task<string> ExecuteForProjectAsync(
+            string task,
+            string workingDirectory,
+            string repositoryPath,
+            ModelSource modelSource,
+            string runId,
+            string? modelId,
+            ChannelWriter<RunEvent>? stream,
+            CancellationToken ct,
+            string? systemPromptContext = null,
+            string? userId = null,
+            string? projectId = null,
+            CopilotOperationCapability? copilotCapability = null)
+        {
+            LastCapability = copilotCapability;
+            return ExecuteAsync(
+                task,
+                workingDirectory,
+                repositoryPath,
+                modelSource,
+                runId,
+                modelId,
+                stream,
+                ct,
+                systemPromptContext,
+                userId);
         }
     }
 }

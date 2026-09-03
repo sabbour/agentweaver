@@ -741,12 +741,17 @@ public sealed class BlueprintService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Blueprint generation model run failed");
+            _logger.LogError(
+                ex,
+                "Unexpected blueprint generation failure before producing a draft: projectId={ProjectId} targetRepository={TargetRepository} hasUserId={HasUserId}",
+                projectId,
+                targetRepository,
+                !string.IsNullOrWhiteSpace(userId));
             const string message = "The blueprint generation model run failed to complete.";
             return new BlueprintGenerationResult(null, [message])
             {
-                FailureKind = BlueprintGenerationFailureKind.ModelRunFailed,
-                ErrorCode = "blueprint_model_run_failed",
+                FailureKind = BlueprintGenerationFailureKind.InternalError,
+                ErrorCode = "blueprint_generation_internal_error",
                 FailureMessage = message,
             };
         }

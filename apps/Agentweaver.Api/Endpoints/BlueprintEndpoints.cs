@@ -131,6 +131,15 @@ public static class BlueprintEndpoints
                         : new[] { "check_provider_auth", "check_provider_config", "retry" },
                 }, statusCode: ProviderFailureStatus(result.FailureKind));
 
+            if (result.FailureKind == BlueprintGenerationFailureKind.InternalError)
+                return Results.Json(new
+                {
+                    error = result.ErrorCode ?? "blueprint_generation_internal_error",
+                    message = "An unexpected server error prevented blueprint generation. Retry, then inspect server logs if it persists.",
+                    details = result.Errors,
+                    options = new[] { "retry" },
+                }, statusCode: StatusCodes.Status500InternalServerError);
+
             return Results.UnprocessableEntity(new
             {
                 error = "blueprint_generation_failed",

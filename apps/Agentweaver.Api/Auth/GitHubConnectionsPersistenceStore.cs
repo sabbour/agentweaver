@@ -82,13 +82,13 @@ public sealed record FencedGitHubCapabilitySnapshot(
 }
 
 /// <summary>
-/// Broker-only metadata recovered from a claimed marketplace capability. It deliberately excludes
-/// the caller-visible opaque reference and all credential material.
+/// Broker-only metadata recovered from a claimed non-run model-provider capability. It
+/// deliberately excludes the caller-visible opaque reference and all credential material.
 /// </summary>
 internal sealed record FencedMarketplaceCopilotCapability(
     SnapshotRef CapabilityReference,
     ProjectModelProviderCapabilityPurpose Purpose,
-    string ProjectId,
+    string? ProjectId,
     string EntraObjectId,
     DateTimeOffset ExpiresAt,
     DateTimeOffset ConsumedAt,
@@ -1514,9 +1514,9 @@ public sealed class GitHubConnectionsPersistenceStore(
 
     /// <summary>
     /// Issues one short-lived, caller-bound capability for the supplied non-run operation against
-    /// the project's EFFECTIVE model provider — its own active GitHub Copilot binding when present
-    /// (an explicit override, owned by any project member, not only the caller), otherwise the
-    /// platform-default GitHub Copilot binding. This matches
+    /// the scope's EFFECTIVE model provider — the project's own active GitHub Copilot binding when
+    /// a project id is supplied and present (an explicit override, owned by any project member, not
+    /// only the caller), otherwise the platform-default GitHub Copilot binding. This matches
     /// <see cref="EffectiveModelProviderResolver"/>'s precedence and
     /// <see cref="CaptureRootCapabilitySnapshotsAsync"/>'s run-snapshot precedence. The capability's
     /// purpose and calling caller are persisted and must match when the broker redeems it; the
@@ -1524,20 +1524,23 @@ public sealed class GitHubConnectionsPersistenceStore(
     /// </summary>
     internal async Task<SnapshotRef?> TryIssueProjectCopilotCapabilityAsync(
         ProjectModelProviderCapabilityPurpose purpose,
-        string projectId,
+        string? projectId,
         string entraObjectId,
         DateTimeOffset now,
         DateTimeOffset expiresAt,
         CancellationToken ct = default)
     {
         if (!Enum.IsDefined(purpose) ||
-            string.IsNullOrWhiteSpace(projectId) ||
+            (projectId is not null && string.IsNullOrWhiteSpace(projectId)) ||
             string.IsNullOrWhiteSpace(entraObjectId) ||
             expiresAt <= now)
             return null;
 
         var binding = await GetActiveCopilotBindingOrPlatformDefaultAsync(projectId, ct).ConfigureAwait(false);
         if (binding is null)
+            return null;
+        if (projectId is null &&
+            !string.Equals(binding.Id, PlatformDefaultCopilotBindingRecord.SingletonId, StringComparison.Ordinal))
             return null;
 
         var capability = SnapshotRef.Create();
@@ -1598,37 +1601,51 @@ public sealed class GitHubConnectionsPersistenceStore(
 
     /// <summary>
     /// Atomically consumes one unexpired capability only when its operation purpose, caller, and
-    /// project all match the authority issued by the server.
+    /// scope all match the authority issued by the server.
     /// </summary>
     internal async Task<FencedMarketplaceCopilotCapability?> TryClaimProjectCopilotCapabilityAsync(
         SnapshotRef capabilityReference,
         ProjectModelProviderCapabilityPurpose purpose,
-        string projectId,
+        string? projectId,
         string entraObjectId,
         DateTimeOffset now,
         CancellationToken ct = default)
     {
         if (!Enum.IsDefined(purpose) ||
-            string.IsNullOrWhiteSpace(projectId) ||
+            (projectId is not null && string.IsNullOrWhiteSpace(projectId)) ||
             string.IsNullOrWhiteSpace(entraObjectId))
             return null;
 
         // ExecuteUpdate cannot translate DateTimeOffset updates for SQLite. Parameterized SQL keeps
         // the atomic compare-and-set predicate identical across SQLite and PostgreSQL.
         var claimLeaseExpiresAt = now.Add(MarketplaceCapabilityClaimLease);
-        var changed = await db.Database.ExecuteSqlInterpolatedAsync(
-            $"""
-             UPDATE marketplace_copilot_capabilities
-             SET consumed_at = {now},
-                 claim_lease_expires_at = {claimLeaseExpiresAt}
-             WHERE capability_ref = {capabilityReference.Value}
-               AND purpose = {(int)purpose}
-               AND project_id = {projectId}
-               AND entra_object_id = {entraObjectId}
-               AND consumed_at IS NULL
-               AND expires_at > {now}
-             """,
-            ct).ConfigureAwait(false);
+        var changed = projectId is null
+            ? await db.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                 UPDATE marketplace_copilot_capabilities
+                 SET consumed_at = {now},
+                     claim_lease_expires_at = {claimLeaseExpiresAt}
+                 WHERE capability_ref = {capabilityReference.Value}
+                   AND purpose = {(int)purpose}
+                   AND project_id IS NULL
+                   AND entra_object_id = {entraObjectId}
+                   AND consumed_at IS NULL
+                   AND expires_at > {now}
+                 """,
+                ct).ConfigureAwait(false)
+            : await db.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                 UPDATE marketplace_copilot_capabilities
+                 SET consumed_at = {now},
+                     claim_lease_expires_at = {claimLeaseExpiresAt}
+                 WHERE capability_ref = {capabilityReference.Value}
+                   AND purpose = {(int)purpose}
+                   AND project_id = {projectId}
+                   AND entra_object_id = {entraObjectId}
+                   AND consumed_at IS NULL
+                   AND expires_at > {now}
+                 """,
+                ct).ConfigureAwait(false);
         if (changed != 1)
             return null;
 
@@ -1656,7 +1673,7 @@ public sealed class GitHubConnectionsPersistenceStore(
             capability.CredentialVersion,
             capability.GrantDigest)
         {
-            CredentialLocator = GitHubConnectionsCredentialLocator.ForCopilotProject(capability.CredentialReference),
+            CredentialLocator = GitHubConnectionsCredentialLocator.ForCopilotBinding(capability.CredentialReference),
         };
     }
 
@@ -2015,20 +2032,23 @@ public sealed class GitHubConnectionsPersistenceStore(
     }
 
     internal async Task<CopilotBindingSnapshotSource?> GetActiveCopilotBindingOrPlatformDefaultAsync(
-        string projectId,
+        string? projectId,
         CancellationToken ct)
     {
-        var projectBinding = await db.ProjectCopilotBindings.AsNoTracking()
-            .Where(x => x.ProjectId == projectId && x.Status == GitHubBindingStatus.Active && x.DeactivatedAt == null)
-            .Select(x => new CopilotBindingSnapshotSource(
-                x.Id,
-                x.CredentialReference,
-                x.CredentialVersion,
-                x.GrantDigest))
-            .SingleOrDefaultAsync(ct)
-            .ConfigureAwait(false);
-        if (projectBinding is not null)
-            return projectBinding;
+        if (!string.IsNullOrWhiteSpace(projectId))
+        {
+            var projectBinding = await db.ProjectCopilotBindings.AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.Status == GitHubBindingStatus.Active && x.DeactivatedAt == null)
+                .Select(x => new CopilotBindingSnapshotSource(
+                    x.Id,
+                    x.CredentialReference,
+                    x.CredentialVersion,
+                    x.GrantDigest))
+                .SingleOrDefaultAsync(ct)
+                .ConfigureAwait(false);
+            if (projectBinding is not null)
+                return projectBinding;
+        }
 
         var platformBinding = await db.PlatformDefaultCopilotBindings.AsNoTracking()
             .Where(x => x.Id == PlatformDefaultCopilotBindingRecord.SingletonId &&
@@ -2082,7 +2102,7 @@ public sealed class GitHubConnectionsPersistenceStore(
     }
 
     internal async Task<bool> IsLiveCopilotBindingAsync(
-        string projectId,
+        string? projectId,
         string bindingId,
         string grantDigest,
         CancellationToken ct)
@@ -2095,6 +2115,9 @@ public sealed class GitHubConnectionsPersistenceStore(
                 binding.Status == GitHubBindingStatus.Active &&
                 binding.DeactivatedAt == null, ct).ConfigureAwait(false);
         }
+
+        if (string.IsNullOrWhiteSpace(projectId))
+            return false;
 
         return await db.ProjectCopilotBindings.AsNoTracking().AnyAsync(binding =>
             binding.Id == bindingId &&

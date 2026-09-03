@@ -1362,6 +1362,76 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     }
 
     [Fact]
+    public async Task PlatformScopedCapability_IsPurposeCallerBoundAndSingleUse()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var now = DateTimeOffset.UtcNow;
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "entra",
+            CredentialReference = "copilot-app-platform-default-blueprint",
+            CredentialVersion = "version-blueprint",
+            GrantDigest = "digest-blueprint",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = now,
+        });
+        await db.SaveChangesAsync();
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var capability = (await persistence.TryIssueProjectCopilotCapabilityAsync(
+            ProjectModelProviderCapabilityPurpose.BlueprintGeneration,
+            projectId: null,
+            entraObjectId: "entra",
+            now,
+            now.AddMinutes(2)))!;
+        var secrets = new InMemorySecretStore();
+        var vault = new GitHubConnectionsCredentialVault(secrets);
+        await vault.WriteAsync(
+            GitHubConnectionsCredentialLocator.ForCopilotBinding("copilot-app-platform-default-blueprint"),
+            JsonSerializer.Serialize(new
+            {
+                Status = "signed-in",
+                AccessToken = "platform-test-token",
+                ExpiresAt = DateTimeOffset.Parse("2099-01-01T00:00:00Z"),
+            }));
+        var broker = new GitHubCapabilityBroker(
+            persistence,
+            vault,
+            new RepoAppInstallationTokenService(
+                new ConfigurationBuilder().AddInMemoryCollection().Build(),
+                db,
+                secrets,
+                new NullHttpClientFactory()));
+        var modelTurns = 0;
+
+        async Task<GitHubCapabilityBrokerOutcome> RedeemAsync(string? projectId, string entraObjectId) =>
+            await broker.TryUseProjectCopilotCredentialAsync(
+                capability,
+                ProjectModelProviderCapabilityPurpose.BlueprintGeneration,
+                projectId,
+                entraObjectId,
+                now,
+                (_, _) =>
+                {
+                    modelTurns++;
+                    return Task.CompletedTask;
+                },
+                CancellationToken.None);
+
+        (await RedeemAsync("project", "entra")).Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        (await RedeemAsync(null, "other-entra")).Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+        modelTurns.Should().Be(0, "no model turn can occur before the exact platform-scoped capability is redeemed");
+
+        (await RedeemAsync(null, "entra")).Should().Be(GitHubCapabilityBrokerOutcome.Issued);
+        modelTurns.Should().Be(1);
+        (await RedeemAsync(null, "entra")).Should().Be(GitHubCapabilityBrokerOutcome.CapabilityUnavailable);
+
+        (await db.MarketplaceCopilotCapabilities.CountAsync(x => x.CapabilityRef == capability.Value)).Should().Be(0,
+            "the broker deletes a claimed platform-scoped capability after redemption");
+    }
+
+    [Fact]
     public async Task MarketplaceCapabilityCleanup_IsBoundedToTerminalRecords()
     {
         await using var connection = await OpenDatabaseAsync();

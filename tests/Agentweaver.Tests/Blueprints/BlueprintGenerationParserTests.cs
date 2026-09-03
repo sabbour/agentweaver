@@ -194,6 +194,22 @@ public sealed class BlueprintGenerationParserTests
         result.Blueprint.SkillBindings[0].Skills.Should().Equal("api-data-safety");
     }
 
+    [Fact]
+    public async Task Generate_UnexpectedGeneratorFailure_ReturnsInternalErrorCode()
+    {
+        var service = GenerationService(
+            raw: null,
+            workflowGenerator: new StubWorkflowGenerator(new WorkflowGenerationException("unused")),
+            generator: new ThrowingBlueprintGenerator(new InvalidOperationException("boom")));
+
+        var result = await service.GenerateAsync("test", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(BlueprintGenerationFailureKind.InternalError);
+        result.ErrorCode.Should().Be("blueprint_generation_internal_error");
+        result.FailureMessage.Should().Be("The blueprint generation model run failed to complete.");
+    }
+
     public static IEnumerable<object[]> PersonaDrivenBlueprints()
     {
         yield return ["ambiguous travel operations", """{"id":"travel-ops","name":"Travel Ops","description":"Coordinates trip research, itinerary writing, and review.","roster":["customer-researcher","docs-writer","quality-reviewer"],"workflows":["default"],"review_policy":"default","sandbox_profile":"default"}"""];
@@ -232,8 +248,9 @@ public sealed class BlueprintGenerationParserTests
     }
 
     private static BlueprintService GenerationService(
-        string raw,
-        IWorkflowGenerator workflowGenerator)
+        string? raw,
+        IWorkflowGenerator workflowGenerator,
+        IBlueprintGenerator? generator = null)
     {
         var catalog = new CatalogReader();
         return new BlueprintService(
@@ -242,10 +259,21 @@ public sealed class BlueprintGenerationParserTests
             projectStore: null!,
             sandboxPolicyStore: null!,
             workflowRegistry: new WorkflowRegistry(new CatalogConformanceSnapshot(catalog)),
-            generator: new StubBlueprintGenerator(raw),
+            generator: generator ?? new StubBlueprintGenerator(raw!),
             workflowGenerator,
             skillDefaults: null!,
             logger: NullLogger<BlueprintService>.Instance);
+    }
+
+    private sealed class ThrowingBlueprintGenerator(Exception exception) : IBlueprintGenerator
+    {
+        public Task<string> GenerateRawAsync(
+            string description,
+            CancellationToken ct,
+            string? userId = null,
+            string? targetRepository = null,
+            string? modelId = null) =>
+            Task.FromException<string>(exception);
     }
 
     private sealed class StubBlueprintGenerator(string response) : IBlueprintGenerator

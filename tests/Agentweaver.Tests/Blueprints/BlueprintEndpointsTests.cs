@@ -425,6 +425,21 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     }
 
     [Fact]
+    public async Task GenerateBlueprint_UnexpectedGeneratorFailure_Returns500InternalError()
+    {
+        _factory.Generator.ExceptionToThrow = new InvalidOperationException("boom");
+
+        var response = await _client.PostAsJsonAsync(
+            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "a data team" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("blueprint_generation_internal_error");
+        body.GetProperty("message").GetString().Should().Contain("unexpected server error");
+        body.GetProperty("options").EnumerateArray().Select(e => e.GetString()).Should().Equal("retry");
+    }
+
+    [Fact]
     public async Task GenerateBlueprint_RosterRoleNotInCatalog_Returns422_NoRoleMinted()
     {
         // The model rostered a role that is not in the catalog; generation must reject (no minting).

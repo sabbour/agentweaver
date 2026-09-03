@@ -22,8 +22,8 @@ public interface IGitHubCopilotCapabilityCredentialProvider
         CancellationToken ct = default);
 
     /// <summary>
-    /// Redeems a purpose-bound, project-bound non-run Copilot capability. Implementations must
-    /// fail closed for an absent, expired, consumed, wrong-project, or wrong-caller capability.
+    /// Redeems a purpose-bound non-run Copilot capability. Implementations must fail closed for an
+    /// absent, expired, consumed, wrong-scope, or wrong-caller capability.
     /// </summary>
     Task<GitHubCapabilitySnapshotCredential?> GetMarketplaceCredentialAsync(
         string capabilityReference,
@@ -33,17 +33,18 @@ public interface IGitHubCopilotCapabilityCredentialProvider
         Task.FromResult<GitHubCapabilitySnapshotCredential?>(null);
 
     /// <summary>
-    /// Redeems a purpose-, caller-, and project-bound non-run Copilot capability. Implementations
+    /// Redeems a purpose-, caller-, and scope-bound non-run Copilot capability. Implementations
     /// must fail closed for a capability issued for another purpose or caller, or one that has
     /// expired or already been consumed.
     /// </summary>
     Task<GitHubCapabilitySnapshotCredential?> GetProjectOperationCredentialAsync(
         string capabilityReference,
-        string projectId,
+        string? projectId,
         string entraObjectId,
         ProjectModelProviderCapabilityPurpose purpose,
         CancellationToken ct = default) =>
-        purpose == ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification
+        purpose == ProjectModelProviderCapabilityPurpose.MarketplaceCatalogClassification &&
+        !string.IsNullOrWhiteSpace(projectId)
             ? GetMarketplaceCredentialAsync(capabilityReference, projectId, entraObjectId, ct)
             : Task.FromResult<GitHubCapabilitySnapshotCredential?>(null);
 }
