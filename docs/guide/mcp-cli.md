@@ -123,7 +123,6 @@ If a call fails with `401`, do not show the raw error. Sign in to Agentweaver, t
 
 - **Common case:** `run_task` — one call that starts the run, polls, and returns artifacts or the next action.
 - **Manual control:** `coordinator_start` → `run_status` / `run_watch` → `run_show_artifacts` → `run_get_file` → `run_review`
-- **Legacy only:** `run_submit` is a compatibility alias; prefer the two options above.
 
 ## Poll vs. stream
 

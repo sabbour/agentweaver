@@ -1,6 +1,6 @@
 # Operations experience
 
-Operations is where Agentweaver users answer one practical question: **is the system ready to keep agents moving safely?** The web UI makes that state visible through Settings, Diagnostics, Heartbeat, Flow, and project sandbox policy; MCP exposes the same core facts through focused tools.
+Operations is where Agentweaver users answer one practical question: **is the system ready to keep agents moving safely?** The web UI shows this state through Settings, Diagnostics, Heartbeat, Flow, and project sandbox policy. MCP exposes the same facts through focused tools.
 
 Scope: this page covers operations surfaces that exist today; it does not describe unsupported cost metrics, hidden telemetry, or deployment settings that are not exposed in the product.
 
@@ -43,7 +43,7 @@ Use **Diagnostics** when something feels broken. Use **Heartbeat** when Ready wo
 
 ## Settings experience
 
-Settings has two user-facing scopes:
+The **Settings** menu in the navigation rail has two user-facing scopes:
 
 - global **Settings**, which edits sandbox policy by repository path;
 - project **Settings**, which configures one project.

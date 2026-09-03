@@ -28,7 +28,7 @@ Clicking a row opens that conversation and resumes it exactly where you left off
 Type a message and send it. The assistant can, among other things:
 
 - Look up and summarize the state of the project board (backlog, ready, active runs)
-- Submit a new run with `run_submit`, then report back on its progress
+- Start a coordinator orchestration with `coordinator_start`, then report its progress
 - Answer questions about a run's status, files changed, or review state
 - Walk through cluster diagnostics if something looks off
 

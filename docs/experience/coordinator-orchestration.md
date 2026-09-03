@@ -27,11 +27,11 @@ The experience is not a faster way to skip review. It makes the work larger and 
 
 ### In the web UI
 
-The user starts from a project by choosing **Start task**. The dialog asks for a **Goal** and explains the contract in plain language: describe the goal, then the coordinator drafts an outcome spec for review and confirmation before any work is dispatched. The global floating **Start task** button offers the same entry point from anywhere in the app, adding a **Project** selector before the **Goal** field.
+The user starts from a project by choosing **Start task**. The dialog asks for a **Goal** and an optional **Workflow**. The global **Start task** button offers the same entry point from pages without that action.
 
 Before starting, the project must have a cast team with at least one active worker role. If the API returns `no_team`, the dialog and global **Start task** button show a warning with the backend message and a **Cast a team** call to action that routes to `/projects/{id}/team/cast` (`apps/web/src/api/errors.ts:35`, `apps/web/src/components/StartOrchestrationDialog.tsx:145`, `apps/web/src/components/StartOrchestrationFab.tsx:141`). Casting the team is now a prerequisite for orchestration, not an optional setup step.
 
-When the user clicks **Start**, the UI posts the goal, receives the coordinator run id, and navigates directly to the orchestration detail page. The first thing the user sees is not a fan-out of workers. The first thing they see is a coordinator run that is drafting intent.
+When the user selects **Define Outcome**, the UI posts the goal and opens the coordinator run. The coordinator then drafts an OutcomeSpec. **Direct** also creates a coordinator run, but starts from the goal without the outcome-confirmation step.
 
 That matters. A broad request such as "Add OAuth sign-in and update the docs and tests" can mean many things: provider choice, scope boundaries, migration expectations, documentation depth, and test coverage. The coordinator's first job is to turn that request into a confirmable contract, not to launch agents immediately.
 

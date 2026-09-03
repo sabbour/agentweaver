@@ -49,10 +49,9 @@ for the full fragment lifecycle, recovery commands, and changelog/release-notes 
 | Tag | Meaning |
 |---|---|
 | `vX.Y.Z` | Immutable semver release tag |
-| `latest-release` | Mutable alias — always points to the most recently *built* image |
 | `<git-sha>` | Short SHA from ad-hoc builds (CI / development) |
 
-> **Note:** `latest` is explicitly rejected by the variable scripts to prevent accidental use of a mutable tag in production.
+> **Note:** `latest` and `latest-release` are rejected by the variable scripts. Select a release tag or an immutable commit tag.
 
 ## Verifying a deployed version
 

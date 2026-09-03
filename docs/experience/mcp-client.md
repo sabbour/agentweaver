@@ -225,11 +225,10 @@ Purpose: run multi-agent orchestration with an explicit outcome-spec confirmatio
 
 ### Runs
 
-Purpose: submit, observe, inspect, retry, archive, and approve or reject agent runs.
+Purpose: observe, inspect, retry, archive, and approve or reject coordinator and child runs.
 
 | Tool | What it does for the user |
 |---|---|
-| `run_submit` | Starts a new agent run for a project, optionally targeting an agent, base branch, or model source. |
 | `run_status` | Gets the current status and details for a run. |
 | `run_watch` | Streams live progress until completion, then returns final run state. It reports agent messages, tool calls/results, status updates, completion, and review requests. |
 | `run_review` | Approves or rejects a run that is awaiting review. |
