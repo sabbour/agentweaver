@@ -7,6 +7,7 @@ using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -1243,7 +1244,21 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
     public int MaxConcurrentRunsPerUser { get; set; } = 3;
     public bool UseAgentHost { get; set; }
 
-    private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-{Guid.NewGuid():N}.db");
+    /// <summary>Overrides the per-factory temp SQLite file so two factories can be pointed at the
+    /// SAME durable store, simulating the deployment's two API replicas (which have their own
+    /// in-memory caches and no session affinity, but share one database).</summary>
+    public string? SharedDatabasePath { get; set; }
+
+    /// <summary>Optional AgentHost pod lifecycle double. <see cref="IAgentHostPodLifecycle"/> is only
+    /// registered in-cluster in production, so tests that assert pod hold/release behaviour supply
+    /// their own.</summary>
+    public IAgentHostPodLifecycle? PodLifecycle { get; set; }
+
+    /// <summary>How long a conversation's AgentHost pod is held after its last turn.</summary>
+    public TimeSpan PodIdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+    private readonly string _ownDbPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-{Guid.NewGuid():N}.db");
+    private string _dbPath => SharedDatabasePath ?? _ownDbPath;
     private readonly string _worktreesPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-wt-{Guid.NewGuid():N}");
     private readonly string _checkpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-cp-{Guid.NewGuid():N}");
     private readonly string _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"agentweaver-assistant-ccp-{Guid.NewGuid():N}");
@@ -1279,6 +1294,7 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
                 ["RunBounds:MaxSteps"] = "50",
                 ["RunBounds:MaxMinutes"] = "10",
                 ["Assistant:MaxConcurrentRunsPerUser"] = MaxConcurrentRunsPerUser.ToString(),
+                ["Assistant:PodIdleTimeout"] = PodIdleTimeout.ToString(),
                 ["Sandbox:AgentExecutionMode"] = UseAgentHost ? "pod-per-run" : "in-api",
             });
         });
@@ -1288,6 +1304,13 @@ public sealed class AssistantWebApplicationFactory : Microsoft.AspNetCore.Mvc.Te
             var existing = services.FirstOrDefault(d => d.ServiceType == typeof(IOperatorAssistantAgent));
             if (existing is not null) services.Remove(existing);
             services.AddSingleton<IOperatorAssistantAgent>(Agent);
+
+            if (PodLifecycle is not null)
+            {
+                var existingLifecycle = services.FirstOrDefault(d => d.ServiceType == typeof(IAgentHostPodLifecycle));
+                if (existingLifecycle is not null) services.Remove(existingLifecycle);
+                services.AddSingleton(PodLifecycle);
+            }
         });
     }
 

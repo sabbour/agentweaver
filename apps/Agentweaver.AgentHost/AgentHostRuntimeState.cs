@@ -185,8 +185,22 @@ internal sealed class AgentHostRuntimeState
         return true;
     }
 
-    public void SetToolApprovalApiAccess(string? apiBaseUrl, string? apiKey)
+    /// <summary>
+    /// Replaces the platform caller token an already-configured operator-assistant pod uses for its
+    /// MCP calls. <c>/configure</c> is deliberately one-shot, so without this a pod HELD across a
+    /// conversation's turns would keep serving with turn 1's bearer until it expired; the worker
+    /// delivers the current token on every turn's <c>AgentSetupParams</c> instead. Blank values are
+    /// ignored so a non-operator turn (which carries no caller token) can never blank out a
+    /// configured one.
+    /// </summary>
+    public void RefreshCallerBearerToken(string? callerBearerToken)
     {
+        if (string.IsNullOrWhiteSpace(callerBearerToken))
+            return;
+        CallerBearerToken = callerBearerToken;
+    }
+
+    public void SetToolApprovalApiAccess(string? apiBaseUrl, string? apiKey)    {
         var bearerToken = string.IsNullOrWhiteSpace(apiKey)
             ? CallerBearerToken
             : apiKey;

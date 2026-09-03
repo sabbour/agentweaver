@@ -986,7 +986,7 @@ Response `201 Created`:
 }
 ```
 
-`message` and `tools_invoked` are `null` when no opening message was supplied. On an AgentHost deployment, `project_id` is required and its GitHub Copilot App must be explicitly connected before the API creates a pod; a missing project returns `400` (`project_context_required`) and a missing connection returns `409 Conflict` with the standard redacted `model_provider_connection_required` action payload. Other errors: `429 Too Many Requests` with `{ "error": "operator_run_limit", "limit": 3 }` when the caller already has `MaxConcurrentRunsPerUser` (3) sessions in progress; other 4xx from `AssistantRunHttpException`; a model/provider failure maps to `401` (auth), `429` (rate limited), or `503` (other provider failure).
+`message` and `tools_invoked` are `null` when no opening message was supplied. On an AgentHost deployment, `project_id` is required and its GitHub Copilot App must be explicitly connected before the API creates a pod; a missing project returns `400` (`project_context_required`) and a missing connection returns `409 Conflict` with the standard redacted `model_provider_connection_required` action payload. Other errors: `429 Too Many Requests` with `{ "error": "operator_run_limit", "limit": 5 }` when the caller already has `MaxConcurrentRunsPerUser` (5) sessions actively in progress — counted from durable run status, so opening, listing, or replying to an existing conversation never consumes a slot and the API's replicas agree on the count; other 4xx from `AssistantRunHttpException`; a model/provider failure maps to `401` (auth), `429` (rate limited), or `503` (other provider failure).
 
 ### GET /api/assistant/runs
 

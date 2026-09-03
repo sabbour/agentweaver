@@ -461,23 +461,44 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
             if (!claimCreated && launchContext.Purpose == AgentHostPurpose.OperatorAssistant)
             {
-                // Every operator turn carries the CURRENT browser/platform bearer. An orphaned
-                // claim from a crashed prior turn is already configured with the old credential
-                // and /configure is intentionally one-shot, so it must never be reused.
-                _logger.LogInformation(
-                    "KubernetesSandboxExecutor: recreating existing AgentHost claim {Claim} for a fresh operator-assistant caller credential.",
-                    claimName);
-                await DeleteClaimAsync(claimName).ConfigureAwait(false);
-                _podRegistry?.Unregister(runId);
-                _turnTokenRegistry?.UnregisterTurnToken(runId);
-                await Task.Delay(1000, ct).ConfigureAwait(false);
-                claimCreated = await CreateAgentHostClaimAsync(
-                    claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
-                if (!claimCreated)
+                // An operator conversation HOLDS its pod across turns (see
+                // RemoteOperatorAssistantAgent's remarks), so a pre-existing claim is normally OUR
+                // OWN warm, already-configured pod from the previous message — reusing it is exactly
+                // the point, and skips the ~8s one-shot /configure plus the rest of the cold start.
+                // The stale-credential hazard that used to force a delete/recreate here is gone: the
+                // current platform bearer now rides on every turn's AgentSetupParams
+                // (AgentSetupParams.CallerBearerToken), which the pod applies before it turns.
+                //
+                // The turn token is what makes "ours" decidable: it is per-replica in-memory state
+                // registered when THIS process configured the pod, and the A2A call is authenticated
+                // with it. Without it the claim is an orphan from a crashed turn or a pod configured
+                // by the other replica (no session affinity) — unreachable and un-reconfigurable, so
+                // it must still be recreated exactly as before.
+                var heldTurnToken = _turnTokenRegistry?.TryGetTurnToken(runId);
+                if (string.IsNullOrWhiteSpace(heldTurnToken))
                 {
-                    throw new InvalidOperationException(
-                        $"AgentHost claim '{claimName}' was deleted to refresh the operator-assistant caller credential, " +
-                        "but the replacement create still conflicted.");
+                    _logger.LogInformation(
+                        "KubernetesSandboxExecutor: recreating existing AgentHost claim {Claim} — this replica holds no turn token for run {RunId}, so the pod cannot be reused.",
+                        claimName, runId);
+                    await DeleteClaimAsync(claimName).ConfigureAwait(false);
+                    _podRegistry?.Unregister(runId);
+                    _turnTokenRegistry?.UnregisterTurnToken(runId);
+                    await Task.Delay(1000, ct).ConfigureAwait(false);
+                    claimCreated = await CreateAgentHostClaimAsync(
+                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, ct).ConfigureAwait(false);
+                    if (!claimCreated)
+                    {
+                        throw new InvalidOperationException(
+                            $"AgentHost claim '{claimName}' was deleted to refresh the operator-assistant caller credential, " +
+                            "but the replacement create still conflicted.");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "KubernetesSandboxExecutor: holding AgentHost claim {Claim} for operator run {RunId} across turns; " +
+                        "reusing the already-configured pod and refreshing its caller credential per turn.",
+                        claimName, runId);
                 }
             }
             else if (!claimCreated && launchContext.WorkspaceMode != ExecutionWorkspaceMode.Shared)
