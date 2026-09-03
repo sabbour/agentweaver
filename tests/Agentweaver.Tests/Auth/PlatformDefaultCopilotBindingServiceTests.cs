@@ -5,10 +5,12 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
@@ -88,6 +90,45 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
             begin.CallbackCookie)).Should().Be(PlatformDefaultCopilotBindingOutcome.PlatformAdminRequired);
 
         db.PlatformDefaultCopilotBindings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CompleteBrowserCallback_WhenCredentialReadBackCannotBeVerified_FailsWithoutCreatingAnActiveBinding()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var secrets = new DisappearingCredentialReadSecretStore("copilot-app-platform-default-");
+        var service = CreateService(db, secrets, """{"access_token":"ghu_platform","refresh_token":"refresh-secret"}""");
+        var session = AdminSession("platform-admin");
+        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal(), session.Id);
+
+        (await service.CompleteBrowserCallbackAsync(session, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Should().Be(PlatformDefaultCopilotBindingOutcome.GitHubBindingUnavailable);
+
+        db.ChangeTracker.Clear();
+        (await db.PlatformDefaultCopilotBindings.CountAsync()).Should().Be(0);
+        (await db.GitHubAuthorizations.SingleAsync()).Status.Should().Be(GitHubAuthorizationStatus.Failed);
+    }
+
+    [Fact]
+    public async Task CompleteBrowserCallback_WhenPersistenceFailsAfterSecretWrite_LogsCredentialCleanupFailure()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var logger = new CapturingLogger();
+        var secrets = new FailingPlatformDefaultCommitSecretStore(db);
+        var service = CreateService(
+            db,
+            secrets,
+            """{"access_token":"ghu_platform","refresh_token":"refresh-secret"}""",
+            logger: new TypedLoggerAdapter<PlatformDefaultCopilotBindingService>(logger));
+        var session = AdminSession("platform-admin");
+        var begin = await service.BeginAsync(Admin("platform-admin"), HumanPrincipal(), session.Id);
+
+        (await service.CompleteBrowserCallbackAsync(session, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Should().Be(PlatformDefaultCopilotBindingOutcome.GitHubBindingUnavailable);
+
+        db.ChangeTracker.Clear();
+        (await db.PlatformDefaultCopilotBindings.CountAsync()).Should().Be(0);
+        logger.HasEntryMatching(LogLevel.Error, "failed to remove credential secret").Should().BeTrue();
     }
 
     [Fact]
@@ -275,7 +316,8 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
         MemoryDbContext db,
         ISecretStore secrets,
         string? provider = null,
-        StubHttpClientFactory? httpClientFactory = null)
+        StubHttpClientFactory? httpClientFactory = null,
+        ILogger<PlatformDefaultCopilotBindingService>? logger = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -293,7 +335,7 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
             new GitHubConnectionsCredentialVault(secrets),
             httpClientFactory,
             new CopilotAppRegistrationService(configuration, httpClientFactory),
-            NullLogger<PlatformDefaultCopilotBindingService>.Instance);
+            logger ?? NullLogger<PlatformDefaultCopilotBindingService>.Instance);
     }
 
     private static CallerContext Human(string id) => new() { User = id, EntraObjectId = id };
@@ -317,6 +359,74 @@ public sealed class PlatformDefaultCopilotBindingServiceTests
     }
 
     private static string Query(string url, string name) => Uri.UnescapeDataString(new Uri(url).Query.TrimStart('?').Split('&').Single(x => x.StartsWith($"{name}=", StringComparison.Ordinal)).Split('=', 2)[1]);
+
+    private sealed class TypedLoggerAdapter<TCategory>(CapturingLogger inner) : ILogger<TCategory>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => inner.BeginScope(state);
+        public bool IsEnabled(LogLevel logLevel) => inner.IsEnabled(logLevel);
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            inner.Log(logLevel, eventId, state, exception, formatter);
+    }
+
+    private sealed class DisappearingCredentialReadSecretStore(string credentialPrefix) : ISecretStore
+    {
+        private readonly InMemorySecretStore _inner = new();
+        private readonly HashSet<string> _pendingMissingReads = new(StringComparer.Ordinal);
+
+        public async Task<SecretGetResult> GetSecretAsync(string key, CancellationToken ct = default)
+        {
+            if (_pendingMissingReads.Remove(key))
+                return SecretGetResult.NotFound;
+
+            return await _inner.GetSecretAsync(key, ct).ConfigureAwait(false);
+        }
+
+        public async Task<string> SetSecretAsync(string key, string value, string? etag = null, CancellationToken ct = default)
+        {
+            var written = await _inner.SetSecretAsync(key, value, etag, ct).ConfigureAwait(false);
+            if (key.StartsWith(credentialPrefix, StringComparison.Ordinal) &&
+                !string.Equals(value, """{"status":"revoked"}""", StringComparison.Ordinal))
+            {
+                _pendingMissingReads.Add(key);
+            }
+
+            return written;
+        }
+
+        public Task DeleteSecretAsync(string key, CancellationToken ct = default) => _inner.DeleteSecretAsync(key, ct);
+    }
+
+    private sealed class FailingPlatformDefaultCommitSecretStore(MemoryDbContext db) : ISecretStore
+    {
+        private readonly InMemorySecretStore _inner = new();
+
+        public Task<SecretGetResult> GetSecretAsync(string key, CancellationToken ct = default) =>
+            _inner.GetSecretAsync(key, ct);
+
+        public async Task<string> SetSecretAsync(string key, string value, string? etag = null, CancellationToken ct = default)
+        {
+            if (key.StartsWith("copilot-app-platform-default-", StringComparison.Ordinal) &&
+                string.Equals(value, """{"status":"revoked"}""", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Simulated credential cleanup failure.");
+            }
+
+            var written = await _inner.SetSecretAsync(key, value, etag, ct).ConfigureAwait(false);
+            if (key.StartsWith("copilot-app-platform-default-", StringComparison.Ordinal))
+            {
+                await db.GitHubAuthorizations
+                    .Where(x => x.Status == GitHubAuthorizationStatus.Redeeming)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(x => x.Status, GitHubAuthorizationStatus.Pending),
+                        ct)
+                    .ConfigureAwait(false);
+            }
+
+            return written;
+        }
+
+        public Task DeleteSecretAsync(string key, CancellationToken ct = default) => _inner.DeleteSecretAsync(key, ct);
+    }
 
     private sealed class StubHttpClientFactory(string? response = null) : IHttpClientFactory
     {

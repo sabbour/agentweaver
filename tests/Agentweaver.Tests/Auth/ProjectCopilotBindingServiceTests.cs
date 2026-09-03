@@ -5,10 +5,12 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
@@ -113,6 +115,83 @@ public sealed class ProjectCopilotBindingServiceTests
         db.ChangeTracker.Clear();
         (await db.GitHubAuthorizations.SingleAsync()).Status.Should().Be(GitHubAuthorizationStatus.Failed);
         (await db.ProjectCopilotBindings.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Complete_PersistsActiveBindingAfterVerifyingTheSecretWrite()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var secrets = new InMemorySecretStore();
+        var project = ProjectId.New();
+        await SeedProjectAsync(db, project);
+        roles.SetOwner(project, "owner");
+        var service = CreateService(
+            db,
+            roles,
+            secrets,
+            """{"access_token":"ghu_provider","refresh_token":"refresh-secret"}""");
+        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project, $"/projects/{project}/team");
+
+        (await service.CompleteAsync(
+            Human("owner"), HumanPrincipal(), project, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Should().Be(CopilotBindingOutcome.Success);
+
+        var binding = await db.ProjectCopilotBindings.SingleAsync();
+        binding.Status.Should().Be(GitHubBindingStatus.Active);
+        (await secrets.GetSecretAsync(binding.CredentialReference)).Found.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Complete_WhenCredentialReadBackCannotBeVerified_FailsWithoutCreatingAnActiveBinding()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var project = ProjectId.New();
+        await SeedProjectAsync(db, project);
+        roles.SetOwner(project, "owner");
+        var secrets = new DisappearingCredentialReadSecretStore("copilot-app-project-");
+        var service = CreateService(
+            db,
+            roles,
+            secrets,
+            """{"access_token":"ghu_provider","refresh_token":"refresh-secret"}""");
+        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project, $"/projects/{project}/team");
+
+        (await service.CompleteAsync(
+            Human("owner"), HumanPrincipal(), project, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Should().Be(CopilotBindingOutcome.GitHubBindingUnavailable);
+
+        db.ChangeTracker.Clear();
+        (await db.ProjectCopilotBindings.CountAsync()).Should().Be(0);
+        (await db.GitHubAuthorizations.SingleAsync()).Status.Should().Be(GitHubAuthorizationStatus.Failed);
+    }
+
+    [Fact]
+    public async Task Complete_WhenPersistenceFailsAfterSecretWrite_LogsTombstoneCleanupFailure()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var project = ProjectId.New();
+        await SeedProjectAsync(db, project);
+        roles.SetOwner(project, "owner");
+        var logger = new CapturingLogger();
+        var secrets = new FailingProjectCommitSecretStore(db);
+        var service = CreateService(
+            db,
+            roles,
+            secrets,
+            """{"access_token":"ghu_provider","refresh_token":"refresh-secret"}""",
+            logger: new TypedLoggerAdapter<ProjectCopilotBindingService>(logger));
+        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project, $"/projects/{project}/team");
+
+        (await service.CompleteAsync(
+            Human("owner"), HumanPrincipal(), project, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Should().Be(CopilotBindingOutcome.GitHubBindingUnavailable);
+
+        db.ChangeTracker.Clear();
+        (await db.ProjectCopilotBindings.CountAsync()).Should().Be(0);
+        logger.HasEntryMatching(LogLevel.Error, "failed to tombstone secret").Should().BeTrue();
     }
 
     [Fact]
@@ -255,7 +334,8 @@ public sealed class ProjectCopilotBindingServiceTests
         MutableRoles roles,
         ISecretStore secrets,
         string? provider = null,
-        StubHttpClientFactory? httpClientFactory = null)
+        StubHttpClientFactory? httpClientFactory = null,
+        ILogger<ProjectCopilotBindingService>? logger = null)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -266,7 +346,7 @@ public sealed class ProjectCopilotBindingServiceTests
         httpClientFactory ??= new StubHttpClientFactory(provider);
         return new(configuration, new GitHubConnectionsPersistenceStore(db), secrets, httpClientFactory, roles,
             new CopilotAppRegistrationService(configuration, httpClientFactory),
-            NullLogger<ProjectCopilotBindingService>.Instance);
+            logger ?? NullLogger<ProjectCopilotBindingService>.Instance);
     }
     private static CallerContext Human(string id) => new() { User = id, EntraObjectId = id };
     private static ClaimsPrincipal HumanPrincipal() => new(new ClaimsIdentity([new Claim("oid", "owner")], "test"));
@@ -287,6 +367,75 @@ public sealed class ProjectCopilotBindingServiceTests
         await db.SaveChangesAsync();
     }
     private static string Query(string url, string name) => Uri.UnescapeDataString(new Uri(url).Query.TrimStart('?').Split('&').Single(x => x.StartsWith($"{name}=", StringComparison.Ordinal)).Split('=', 2)[1]);
+
+    private sealed class TypedLoggerAdapter<TCategory>(CapturingLogger inner) : ILogger<TCategory>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => inner.BeginScope(state);
+        public bool IsEnabled(LogLevel logLevel) => inner.IsEnabled(logLevel);
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            inner.Log(logLevel, eventId, state, exception, formatter);
+    }
+
+    private sealed class DisappearingCredentialReadSecretStore(string credentialPrefix) : ISecretStore
+    {
+        private readonly InMemorySecretStore _inner = new();
+        private readonly HashSet<string> _pendingMissingReads = new(StringComparer.Ordinal);
+
+        public async Task<SecretGetResult> GetSecretAsync(string key, CancellationToken ct = default)
+        {
+            if (_pendingMissingReads.Remove(key))
+                return SecretGetResult.NotFound;
+
+            return await _inner.GetSecretAsync(key, ct).ConfigureAwait(false);
+        }
+
+        public async Task<string> SetSecretAsync(string key, string value, string? etag = null, CancellationToken ct = default)
+        {
+            var written = await _inner.SetSecretAsync(key, value, etag, ct).ConfigureAwait(false);
+            if (key.StartsWith(credentialPrefix, StringComparison.Ordinal) &&
+                !string.Equals(value, """{"status":"revoked"}""", StringComparison.Ordinal))
+            {
+                _pendingMissingReads.Add(key);
+            }
+
+            return written;
+        }
+
+        public Task DeleteSecretAsync(string key, CancellationToken ct = default) => _inner.DeleteSecretAsync(key, ct);
+    }
+
+    private sealed class FailingProjectCommitSecretStore(MemoryDbContext db) : ISecretStore
+    {
+        private readonly InMemorySecretStore _inner = new();
+
+        public Task<SecretGetResult> GetSecretAsync(string key, CancellationToken ct = default) =>
+            _inner.GetSecretAsync(key, ct);
+
+        public async Task<string> SetSecretAsync(string key, string value, string? etag = null, CancellationToken ct = default)
+        {
+            if (key.StartsWith("copilot-app-project-", StringComparison.Ordinal) &&
+                string.Equals(value, """{"status":"revoked"}""", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Simulated tombstone failure.");
+            }
+
+            var written = await _inner.SetSecretAsync(key, value, etag, ct).ConfigureAwait(false);
+            if (key.StartsWith("copilot-app-project-", StringComparison.Ordinal))
+            {
+                await db.GitHubAuthorizations
+                    .Where(x => x.Status == GitHubAuthorizationStatus.Redeeming)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(x => x.Status, GitHubAuthorizationStatus.Pending),
+                        ct)
+                    .ConfigureAwait(false);
+            }
+
+            return written;
+        }
+
+        public Task DeleteSecretAsync(string key, CancellationToken ct = default) => _inner.DeleteSecretAsync(key, ct);
+    }
+
     private sealed class MutableRoles : IProjectRoleAssignmentStore
     {
         private readonly HashSet<(ProjectId, string)> owners = [];
