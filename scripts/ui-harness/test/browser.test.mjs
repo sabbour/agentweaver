@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { closeBrowserResources, guardedUrl } from '../lib/browser.mjs';
+import { closeBrowserResources, guardedUrl, openBrowserSession } from '../lib/browser.mjs';
 
 test('browser target boundary accepts arbitrary HTTPS hosts', () => {
   assert.equal(guardedUrl('https://agentweaver.foo.staging.example.com', '/projects', {}).pathname, '/projects');
@@ -160,4 +160,113 @@ test('browser close attempts context and browser independently and preserves bot
     },
   );
   assert.deepEqual(calls, ['context', 'browser']);
+});
+
+function startupFailureFixture(stage, { failBrowserClose = false } = {}) {
+  const calls = [];
+  const startupError = new Error(`${stage} startup failed`);
+  const browserCloseError = new Error('browser cleanup failed');
+  const page = {
+    close: async () => { calls.push('page.close'); },
+  };
+  const context = {
+    addInitScript: async () => {
+      calls.push('context.addInitScript');
+      if (stage === 'init-script') throw startupError;
+    },
+    newPage: async () => {
+      calls.push('context.newPage');
+      if (stage === 'page-creation') throw startupError;
+      return page;
+    },
+    route: async () => {
+      calls.push('context.route');
+      if (stage === 'routing') throw startupError;
+    },
+    close: async () => { calls.push('context.close'); },
+  };
+  const browser = {
+    newContext: async () => {
+      calls.push('browser.newContext');
+      if (stage === 'context-creation') throw startupError;
+      return context;
+    },
+    close: async () => {
+      calls.push('browser.close');
+      if (failBrowserClose) throw browserCloseError;
+    },
+  };
+  const dependencies = {
+    chromium: {
+      launch: async () => {
+        calls.push('chromium.launch');
+        return browser;
+      },
+    },
+    loadStorageStateForOriginImpl: async () => {
+      calls.push('loadStorageState');
+      if (stage === 'storage-state') throw startupError;
+      return { cookies: [], origins: [] };
+    },
+    loadSessionStorageSeedImpl: async () => ({
+      origin: 'https://agentweaver.example.com',
+      entries: {},
+    }),
+  };
+  return { browserCloseError, calls, dependencies, startupError };
+}
+
+for (const [stage, expectedCleanup] of Object.entries({
+  'storage-state': ['browser.close'],
+  'context-creation': ['browser.close'],
+  'page-creation': ['context.close', 'browser.close'],
+  'init-script': ['context.close', 'browser.close'],
+  routing: ['page.close', 'context.close', 'browser.close'],
+})) {
+  test(`browser startup cleans acquired resources after ${stage} failure`, async () => {
+    const fixture = startupFailureFixture(stage);
+    await assert.rejects(
+      openBrowserSession({
+        baseUrl: 'https://agentweaver.example.com',
+        storageState: 'fixture.storageState.json',
+        headless: true,
+      }, fixture.dependencies),
+      (error) => {
+        assert(error instanceof AggregateError);
+        assert.equal(error.cause, fixture.startupError);
+        assert.deepEqual(error.errors, [fixture.startupError]);
+        assert.deepEqual(error.termination, {
+          browserLaunchAttempted: true,
+          browserLaunched: true,
+          browserCloseAttempted: true,
+          browserClosed: true,
+          browserClosureProven: true,
+        });
+        return true;
+      },
+    );
+    assert.deepEqual(fixture.calls.slice(-expectedCleanup.length), expectedCleanup);
+    assert.equal(fixture.calls.includes('browser.close'), true);
+  });
+}
+
+test('browser startup preserves the primary and cleanup failures when closure is unproven', async () => {
+  const fixture = startupFailureFixture('routing', { failBrowserClose: true });
+  await assert.rejects(
+    openBrowserSession({
+      baseUrl: 'https://agentweaver.example.com',
+      storageState: 'fixture.storageState.json',
+      headless: true,
+    }, fixture.dependencies),
+    (error) => {
+      assert(error instanceof AggregateError);
+      assert.equal(error.cause, fixture.startupError);
+      assert.deepEqual(error.errors, [fixture.startupError, fixture.browserCloseError]);
+      assert.equal(error.termination.browserCloseAttempted, true);
+      assert.equal(error.termination.browserClosed, false);
+      assert.equal(error.termination.browserClosureProven, false);
+      return true;
+    },
+  );
+  assert.deepEqual(fixture.calls.slice(-3), ['page.close', 'context.close', 'browser.close']);
 });

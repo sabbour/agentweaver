@@ -362,12 +362,18 @@ export async function stopSessionRuntime({ sessionsDirectory, sessionId, timeout
   const priorRetry = await readJson(shutdownRetryPath(runtime));
   if (!initialState && !priorRetry) {
     await rm(runtime, { recursive: true, force: true });
-    return { browserClosed: true, workerTerminated: true };
+    return { browserClosed: true, browserClosureProven: true, workerTerminated: true };
   }
 
   const pid = initialState?.pid ?? priorRetry?.pid;
-  let browserClosed = initialState?.termination?.browserClosed === true
-    || priorRetry?.browserClosed === true;
+  let browserClosureProven = (
+    initialState?.termination?.browserClosed === true
+    && initialState?.termination?.browserClosureProven === true
+  ) || (
+    priorRetry?.browserClosed === true
+    && priorRetry?.browserClosureProven === true
+  );
+  let browserClosed = browserClosureProven;
   const shutdownErrors = Array.isArray(priorRetry?.errors)
     ? priorRetry.errors.map((item) => {
         const error = new Error(item?.message ?? 'previous UI session shutdown failed');
@@ -375,6 +381,9 @@ export async function stopSessionRuntime({ sessionsDirectory, sessionId, timeout
         return error;
       })
     : [];
+  if (!priorRetry && initialState?.error) {
+    shutdownErrors.push(shutdownErrorFromEvidence(initialState.error));
+  }
   if (pid && isProcessAlive(pid) && !priorRetry) {
     try {
       const requestId = randomUUID();
@@ -384,7 +393,9 @@ export async function stopSessionRuntime({ sessionsDirectory, sessionId, timeout
         requestedAt: new Date().toISOString(),
       });
       const response = await waitForResponse(runtime, requestId, timeout);
-      browserClosed ||= response?.termination?.browserClosed === true;
+      browserClosureProven ||= response?.termination?.browserClosed === true
+        && response?.termination?.browserClosureProven === true;
+      browserClosed = browserClosureProven;
       if (!response?.ok) shutdownErrors.push(shutdownErrorFromEvidence(response?.error));
       const deadline = Date.now() + timeout;
       while (isProcessAlive(pid) && Date.now() < deadline) await sleep(50);
@@ -408,20 +419,33 @@ export async function stopSessionRuntime({ sessionsDirectory, sessionId, timeout
   }
 
   const finalState = await readJson(statePath(runtime));
-  browserClosed ||= finalState?.termination?.browserClosed === true;
+  browserClosureProven ||= finalState?.termination?.browserClosed === true
+    && finalState?.termination?.browserClosureProven === true;
+  browserClosed = browserClosureProven;
   const workerTerminated = !pid || !isProcessAlive(pid);
   if (browserClosed && workerTerminated) {
     await rm(runtime, { recursive: true, force: true });
-    return { browserClosed: true, workerTerminated: true };
+    return { browserClosed: true, browserClosureProven: true, workerTerminated: true };
   }
 
   for (const name of await readdir(runtime).catch(() => [])) {
     if (name === 'action.lock' || name === 'start.lock') continue;
     await rm(path.join(runtime, name), { recursive: true, force: true });
   }
+  if (!browserClosed) {
+    shutdownErrors.push(Object.assign(new Error('browser runtime closure was not proven'), {
+      code: 'BROWSER_CLOSE_UNPROVEN',
+    }));
+  }
+  if (!workerTerminated && !shutdownErrors.some((error) => error?.code === 'WORKER_TERMINATION_UNPROVEN')) {
+    shutdownErrors.push(Object.assign(new Error(`UI session worker process ${pid} termination was not proven`), {
+      code: 'WORKER_TERMINATION_UNPROVEN',
+    }));
+  }
   await writeJsonAtomic(shutdownRetryPath(runtime), redact({
     pid: pid ?? null,
     browserClosed,
+    browserClosureProven,
     workerTerminated,
     retryAction: browserClosed
       ? 'Retry cleanup after confirming worker termination.'
@@ -435,16 +459,6 @@ export async function stopSessionRuntime({ sessionsDirectory, sessionId, timeout
     }),
     updatedAt: new Date().toISOString(),
   }));
-  if (!browserClosed) {
-    shutdownErrors.push(Object.assign(new Error('browser runtime closure was not proven'), {
-      code: 'BROWSER_CLOSE_UNPROVEN',
-    }));
-  }
-  if (!workerTerminated && !shutdownErrors.some((error) => error?.code === 'WORKER_TERMINATION_UNPROVEN')) {
-    shutdownErrors.push(Object.assign(new Error(`UI session worker process ${pid} termination was not proven`), {
-      code: 'WORKER_TERMINATION_UNPROVEN',
-    }));
-  }
   if (shutdownErrors.length === 1) throw shutdownErrors[0];
   throw new AggregateError(shutdownErrors, 'UI session shutdown was not proven', { cause: shutdownErrors[0] });
 }

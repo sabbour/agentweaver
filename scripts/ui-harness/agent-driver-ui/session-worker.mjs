@@ -138,6 +138,8 @@ export async function runSessionWorker({
   let stopping = false;
   let finishRequest;
   let workerError;
+  let browserOpenAttempted = false;
+  let startupTermination;
   let lastActivity = Date.now();
   let stateWrite = Promise.resolve();
   const { publicKey, privateKey } = generateKeyPairSync('rsa', {
@@ -174,12 +176,18 @@ export async function runSessionWorker({
     const session = await loadSession(sessionsDirectory, sessionId);
     const recovery = await loadRecovery(runtime);
     const recoveredStorageState = path.join(runtime, 'recovery.storageState.json');
-    browserRuntime = await openBrowserSessionImpl({
-      baseUrl: session.baseUrl,
-      storageState: existsSync(recoveredStorageState) ? recoveredStorageState : session.storageState,
-      sessionStorageSeed: recovery?.sessionStorageSeed ?? null,
-      headless: true,
-    });
+    browserOpenAttempted = true;
+    try {
+      browserRuntime = await openBrowserSessionImpl({
+        baseUrl: session.baseUrl,
+        storageState: existsSync(recoveredStorageState) ? recoveredStorageState : session.storageState,
+        sessionStorageSeed: recovery?.sessionStorageSeed ?? null,
+        headless: true,
+      });
+    } catch (error) {
+      startupTermination = error?.termination;
+      throw error;
+    }
     const capture = attachPageCapture(browserRuntime.page);
     if (recovery?.lastUrl && recovery.lastUrl !== 'about:blank') {
       const destination = new URL(recovery.lastUrl);
@@ -251,19 +259,38 @@ export async function runSessionWorker({
     processImpl.off('SIGTERM', requestStop);
 
     let closeError;
+    let closeTermination;
     if (browserRuntime) {
       try {
-        await browserRuntime.close();
+        closeTermination = await browserRuntime.close();
       } catch (error) {
         closeError = error;
+        closeTermination = error?.termination;
         processImpl.exitCode = 2;
       }
     }
 
     const shutdownError = combineErrors([workerError, closeError], 'UI session worker shutdown failed');
+    const startupClosureProven = startupTermination?.browserClosureProven === true
+      && startupTermination?.browserClosed === true;
+    const closeClosureProven = browserRuntime
+      ? closeTermination == null
+        ? !closeError
+        : closeTermination.browserClosureProven === true && closeTermination.browserClosed === true
+      : false;
+    const browserClosureProven = browserRuntime
+      ? closeClosureProven
+      : browserOpenAttempted ? startupClosureProven : true;
     const termination = {
-      browserCloseAttempted: Boolean(browserRuntime),
-      browserClosed: !closeError,
+      browserLaunchAttempted: browserOpenAttempted,
+      browserLaunched: browserRuntime
+        ? true
+        : startupTermination?.browserLaunched === true,
+      browserCloseAttempted: browserRuntime
+        ? true
+        : startupTermination?.browserCloseAttempted === true,
+      browserClosed: browserClosureProven,
+      browserClosureProven,
       workerExitExpected: true,
       workerTerminated: false,
     };

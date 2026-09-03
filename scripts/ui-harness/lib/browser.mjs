@@ -53,60 +53,126 @@ async function playwrightChromium() {
   return chromium;
 }
 
-export async function closeBrowserResources(context, browser) {
+export async function closeBrowserResources(context, browser, page) {
   const errors = [];
-  try {
-    await context.close();
-  } catch (error) {
-    errors.push(error);
+  if (page) {
+    try {
+      await page.close();
+    } catch (error) {
+      errors.push(error);
+    }
   }
-  try {
-    await browser.close();
-  } catch (error) {
-    errors.push(error);
+  if (context) {
+    try {
+      await context.close();
+    } catch (error) {
+      errors.push(error);
+    }
   }
+  let browserCloseAttempted = false;
+  let browserClosed = !browser;
+  if (browser) {
+    try {
+      browserCloseAttempted = true;
+      await browser.close();
+      browserClosed = true;
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  const browserClosureProven = browserClosed && errors.length === 0;
+  const termination = {
+    browserCloseAttempted,
+    browserClosed: browserClosureProven,
+    browserClosureProven,
+  };
   if (errors.length > 0) {
-    throw new AggregateError(errors, 'failed to close browser runtime', { cause: errors[0] });
+    const error = new AggregateError(errors, 'failed to close browser runtime', { cause: errors[0] });
+    error.code = 'BROWSER_CLOSE_FAILED';
+    error.termination = termination;
+    throw error;
   }
+  return termination;
 }
 
 /** Construct the browser boundary only after shared transport validation approves it. */
-export async function openBrowserSession(opts) {
-  const base = guardedUrl(opts.baseUrl, '/', opts);
-  const chromium = await playwrightChromium();
-  const browser = await chromium.launch({ headless: opts.headless !== false });
-  const contextOptions = {};
-  if (opts.storageState) contextOptions.storageState = await loadStorageStateForOrigin(opts.storageState, base.origin);
-  const context = await browser.newContext(contextOptions);
-  if (opts.storageState) {
-    const seed = opts.sessionStorageSeed ?? await loadSessionStorageSeed(opts.storageState);
-    if (seed && seed.origin === base.origin) {
-      // Re-hydrate sessionStorage before any page script runs, since Agentweaver's
-      // auth token lives there and storageState() cannot capture it (see auth.mjs).
-      await context.addInitScript(({ entries, origin }) => {
-        if (window.location.origin !== origin) return;
-        for (const [key, value] of Object.entries(entries)) {
-          try { window.sessionStorage.setItem(key, value); } catch { /* storage unavailable */ }
-        }
-      }, { entries: seed.entries, origin: base.origin });
+export async function openBrowserSession(opts, {
+  chromium: chromiumOverride,
+  loadStorageStateForOriginImpl = loadStorageStateForOrigin,
+  loadSessionStorageSeedImpl = loadSessionStorageSeed,
+} = {}) {
+  let browserLaunchAttempted = false;
+  let browser;
+  let context;
+  let page;
+  try {
+    const base = guardedUrl(opts.baseUrl, '/', opts);
+    const chromium = chromiumOverride ?? await playwrightChromium();
+    browserLaunchAttempted = true;
+    browser = await chromium.launch({ headless: opts.headless !== false });
+    const contextOptions = {};
+    if (opts.storageState) {
+      contextOptions.storageState = await loadStorageStateForOriginImpl(opts.storageState, base.origin);
     }
-  }
-  const page = await context.newPage();
-  await context.route('**/*', async (route) => {
+    context = await browser.newContext(contextOptions);
+    if (opts.storageState) {
+      const seed = opts.sessionStorageSeed ?? await loadSessionStorageSeedImpl(opts.storageState);
+      if (seed && seed.origin === base.origin) {
+        // Re-hydrate sessionStorage before any page script runs, since Agentweaver's
+        // auth token lives there and storageState() cannot capture it (see auth.mjs).
+        await context.addInitScript(({ entries, origin }) => {
+          if (window.location.origin !== origin) return;
+          for (const [key, value] of Object.entries(entries)) {
+            try { window.sessionStorage.setItem(key, value); } catch { /* storage unavailable */ }
+          }
+        }, { entries: seed.entries, origin: base.origin });
+      }
+    }
+    page = await context.newPage();
+    await context.route('**/*', async (route) => {
+      try {
+        guardedUrl(base, route.request().url(), opts);
+      } catch {
+        await route.abort('blockedbyclient');
+        return;
+      }
+      await route.continue();
+    });
+    return {
+      baseUrl: base.toString(),
+      browser, context, page,
+      goto: (destination = '/') => page.goto(guardedUrl(base, destination, opts).toString(), { waitUntil: 'domcontentloaded' }),
+      close: () => closeBrowserResources(context, browser, page),
+    };
+  } catch (startupError) {
+    let cleanupError;
+    let cleanupTermination = {
+      browserCloseAttempted: false,
+      browserClosed: !browser,
+      browserClosureProven: !browser,
+    };
     try {
-      guardedUrl(base, route.request().url(), opts);
-    } catch {
-      await route.abort('blockedbyclient');
-      return;
+      cleanupTermination = await closeBrowserResources(context, browser, page);
+    } catch (error) {
+      cleanupError = error;
+      cleanupTermination = error.termination ?? cleanupTermination;
     }
-    await route.continue();
-  });
-  return {
-    baseUrl: base.toString(),
-    browser, context, page,
-    goto: (destination = '/') => page.goto(guardedUrl(base, destination, opts).toString(), { waitUntil: 'domcontentloaded' }),
-    close: () => closeBrowserResources(context, browser),
-  };
+    const cleanupErrors = cleanupError instanceof AggregateError
+      ? cleanupError.errors
+      : cleanupError ? [cleanupError] : [];
+    const error = new AggregateError(
+      [startupError, ...cleanupErrors],
+      'failed to open browser session',
+      { cause: startupError },
+    );
+    error.code = 'BROWSER_SESSION_STARTUP_FAILED';
+    error.termination = {
+      browserLaunchAttempted,
+      browserLaunched: Boolean(browser),
+      ...cleanupTermination,
+    };
+    throw error;
+  }
 }
 
 export function keyedLocator(page, target) {

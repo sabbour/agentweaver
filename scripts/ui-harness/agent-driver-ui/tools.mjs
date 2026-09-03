@@ -270,7 +270,11 @@ export async function finish(args, {
       let runtimeStopped = false;
       try {
         const termination = await stopRuntime({ sessionsDirectory: SESSIONS, sessionId: session.id });
-        if (termination?.browserClosed !== true || termination?.workerTerminated !== true) {
+        if (
+          termination?.browserClosed !== true
+          || termination?.browserClosureProven !== true
+          || termination?.workerTerminated !== true
+        ) {
           throw new Error('browser closure and worker termination were not proven');
         }
         runtimeStopped = true;

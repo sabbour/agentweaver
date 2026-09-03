@@ -20,6 +20,7 @@ const browser = {
 };
 const page = {
   on: () => {},
+  close: async () => { await mark('page'); },
 };
 
 runSessionWorker({
@@ -27,7 +28,7 @@ runSessionWorker({
     context,
     browser,
     page,
-    close: () => closeBrowserResources(context, browser),
+    close: () => closeBrowserResources(context, browser, page),
   }),
 }).catch((error) => {
   console.error(String(error?.message ?? error));

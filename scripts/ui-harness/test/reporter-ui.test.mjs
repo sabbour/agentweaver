@@ -269,7 +269,7 @@ test('finish cleans runtime and session before surfacing evidence write failure'
         write: () => {},
         stopRuntime: async () => {
           runtimeStopped = true;
-          return { browserClosed: true, workerTerminated: true };
+          return { browserClosed: true, browserClosureProven: true, workerTerminated: true };
         },
         removeStoredSession: async () => { sessionRemoved = true; },
         mkdirImpl: async () => {},
@@ -305,13 +305,13 @@ test('finish retains session metadata for retry when runtime termination is unpr
   try {
     await assert.rejects(
       finish({ session: sessionId }, {
-        stopRuntime: async () => { throw new Error('browser close failed'); },
+        stopRuntime: async () => ({ browserClosed: true, workerTerminated: true }),
         removeStoredSession: async () => { removeAttempted = true; },
       }),
       (error) => {
         assert.match(error.message, /Cannot read properties|null/);
         assert.deepEqual(error.cleanupErrors, [
-          'browser/runtime cleanup failed: browser close failed',
+          'browser/runtime cleanup failed: browser closure and worker termination were not proven',
         ]);
         return true;
       },

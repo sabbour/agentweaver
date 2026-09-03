@@ -14,6 +14,8 @@ import {
   stopSessionRuntime,
   withSessionLock,
 } from '../lib/session-runtime.mjs';
+import { openBrowserSession } from '../lib/browser.mjs';
+import { runSessionWorker } from '../agent-driver-ui/session-worker.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -364,7 +366,7 @@ for (const failure of ['context', 'browser']) {
       );
       await waitForExit(child.pid);
       assert.equal(existsSync(path.join(sessionsDirectory, `${sessionId}.json`)), true);
-      assert.deepEqual((await readFile(marker, 'utf8')).trim().split(/\r?\n/), ['context', 'browser']);
+      assert.deepEqual((await readFile(marker, 'utf8')).trim().split(/\r?\n/), ['page', 'context', 'browser']);
       const retry = JSON.parse(await readFile(path.join(runtime, 'shutdown-retry.json'), 'utf8'));
       assert.equal(retry.browserClosed, false);
       assert.equal(retry.workerTerminated, true);
@@ -377,3 +379,96 @@ for (const failure of ['context', 'browser']) {
     }
   });
 }
+
+test('partial startup with unproven browser closure retains sanitized retry metadata', async () => {
+  const sessionsDirectory = path.join(HERE, `.sessions-${randomUUID()}`);
+  const sessionId = randomUUID();
+  const runtime = runtimeDirectory(sessionsDirectory, sessionId);
+  const sessionFile = path.join(sessionsDirectory, `${sessionId}.json`);
+  const secret = 'secret-canary-startup-cleanup';
+  const calls = [];
+  const page = {
+    close: async () => { calls.push('page'); },
+  };
+  const context = {
+    addInitScript: async () => {},
+    newPage: async () => page,
+    route: async () => { throw new Error(`routing failed token=${secret}`); },
+    close: async () => { calls.push('context'); },
+  };
+  const browser = {
+    newContext: async () => context,
+    close: async () => {
+      calls.push('browser');
+      throw new Error(`browser cleanup failed secret=${secret}`);
+    },
+  };
+  const processImpl = {
+    pid: 2_147_483_647,
+    exitCode: 0,
+    on: () => {},
+    off: () => {},
+  };
+
+  await mkdir(sessionsDirectory, { recursive: true });
+  await writeFile(sessionFile, JSON.stringify({
+    id: sessionId,
+    baseUrl: 'https://agentweaver.example.com',
+    storageState: 'fixture.storageState.json',
+  }), 'utf8');
+  try {
+    await assert.rejects(
+      runSessionWorker({
+        argv: [
+          '--session', sessionId,
+          '--sessions-dir', sessionsDirectory,
+          '--launch-id', randomUUID(),
+        ],
+        processImpl,
+        openBrowserSessionImpl: (options) => openBrowserSession(options, {
+          chromium: { launch: async () => browser },
+          loadStorageStateForOriginImpl: async () => ({ cookies: [], origins: [] }),
+          loadSessionStorageSeedImpl: async () => null,
+        }),
+      }),
+      (error) => {
+        assert(error instanceof AggregateError);
+        assert.equal(error.errors.some((item) => item.message.includes('routing failed')), true);
+        assert.equal(error.errors.some((item) => item.message.includes('browser cleanup failed')), true);
+        return true;
+      },
+    );
+    assert.deepEqual(calls, ['page', 'context', 'browser']);
+
+    const failedState = await readRuntimeState(sessionsDirectory, sessionId);
+    assert.equal(failedState.status, 'failed');
+    assert.equal(failedState.termination.browserCloseAttempted, true);
+    assert.equal(failedState.termination.browserClosed, false);
+    assert.equal(failedState.termination.browserClosureProven, false);
+    assert.equal(JSON.stringify(failedState).includes(secret), false);
+
+    await assert.rejects(
+      stopSessionRuntime({ sessionsDirectory, sessionId, timeout: 100 }),
+      (error) => {
+        assert.equal(
+          error instanceof AggregateError
+            ? error.errors.some((item) => item.code === 'BROWSER_CLOSE_UNPROVEN')
+            : error.code === 'BROWSER_CLOSE_UNPROVEN',
+          true,
+        );
+        return true;
+      },
+    );
+    assert.equal(existsSync(sessionFile), true);
+    const retry = JSON.parse(await readFile(path.join(runtime, 'shutdown-retry.json'), 'utf8'));
+    assert.equal(retry.browserClosed, false);
+    assert.equal(retry.browserClosureProven, false);
+    assert.equal(retry.errors.some((item) => item.message.includes('routing failed')), true);
+    assert.equal(retry.errors.some((item) => item.message.includes('browser cleanup failed')), true);
+    assert.equal(retry.errors.some((item) => item.code === 'BROWSER_CLOSE_UNPROVEN'), true);
+    assert.equal(JSON.stringify(retry).includes(secret), false);
+    assert.deepEqual((await readdir(runtime)).sort(), ['shutdown-retry.json']);
+  } finally {
+    await rm(sessionsDirectory, { recursive: true, force: true });
+  }
+});
