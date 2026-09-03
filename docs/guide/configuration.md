@@ -50,6 +50,7 @@ legacy `/auth/github/callback` URL for this App.
 | `Auth:RepoApp:ClientSecret` | none | Repo GitHub App OAuth client secret; set through user-secrets or Key Vault |
 | `Auth:RepoApp:CallbackUrl` | none | Exact registered callback URL, ending in `/auth/github/repo-app/callback` |
 | `Auth:RepoApp:BaseUrl` | `https://github.com` | GitHub authorization origin |
+| `Auth:RepoApp:ApiUrl` | `https://api.github.com` | GitHub API origin used to verify the authorized user and revoke grants |
 | `Auth:RepoApp:Scopes` | `repo read:user` | Explicit user-authorization scopes |
 | `Auth:RepoApp:FrontendUrl` | `http://localhost:5173` | Trusted application origin for fixed post-callback routes |
 

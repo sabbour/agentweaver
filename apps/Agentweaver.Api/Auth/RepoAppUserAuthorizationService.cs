@@ -68,6 +68,7 @@ public sealed class RepoAppUserAuthorizationService(
     internal static readonly EventId AuthorizationCallbackEvent = new(4101, "RepoAppAuthorizationCallback");
     internal static readonly EventId CredentialPersistenceEvent = new(4102, "RepoAppCredentialPersistence");
     internal static readonly EventId AuthorizationStatusEvent = new(4103, "RepoAppAuthorizationStatus");
+    internal static readonly EventId AuthorizationExchangeEvent = new(4104, "RepoAppAuthorizationExchange");
 
     private const string CookieName = "__Host-agentweaver-repo-app-auth";
     private const string CredentialStatusSignedIn = "signed-in";
@@ -83,6 +84,7 @@ public sealed class RepoAppUserAuthorizationService(
         };
 
     private readonly string _baseUrl = configuration["Auth:RepoApp:BaseUrl"] ?? "https://github.com";
+    private readonly string _apiUrl = configuration["Auth:RepoApp:ApiUrl"] ?? "https://api.github.com";
     private readonly string? _clientId = configuration["Auth:RepoApp:ClientId"];
     private readonly string? _clientSecret = configuration["Auth:RepoApp:ClientSecret"];
     private readonly string? _callbackUrl = configuration["Auth:RepoApp:CallbackUrl"];
@@ -306,7 +308,7 @@ public sealed class RepoAppUserAuthorizationService(
                     transaction.ExternalTransactionId);
             }
 
-            var credential = await ExchangeCodeAsync(code, verifierResult.Value, ct).ConfigureAwait(false);
+            var credential = await ExchangeCodeAsync(code, verifierResult.Value, transaction.ExternalTransactionId, ct).ConfigureAwait(false);
             await WriteTombstoneAsync(transaction.PkceVerifierProtected, ct).ConfigureAwait(false);
             if (credential is null)
             {
@@ -732,12 +734,12 @@ public sealed class RepoAppUserAuthorizationService(
     public static string CreateS256Challenge(string verifier) =>
         ToBase64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
 
-    private async Task<RepoAppCredential?> ExchangeCodeAsync(string code, string verifier, CancellationToken ct)
+    private async Task<RepoAppCredential?> ExchangeCodeAsync(string code, string verifier, string correlationId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_clientId) ||
             string.IsNullOrWhiteSpace(_clientSecret) ||
             string.IsNullOrWhiteSpace(_callbackUrl))
-            return null;
+            return LogExchangeFailure("provider_configuration_missing", correlationId);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(ProviderTimeout);
@@ -758,38 +760,60 @@ public sealed class RepoAppUserAuthorizationService(
             using var response = await httpClientFactory.CreateClient("github-authz")
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
             if (response.StatusCode != HttpStatusCode.OK || response.Content.Headers.ContentLength is > 64 * 1024)
-                return null;
+                return LogExchangeFailure("provider_token_endpoint_rejected", correlationId, response.StatusCode);
             var body = await ReadBoundedAsync(response.Content, timeout.Token).ConfigureAwait(false);
             var result = JsonSerializer.Deserialize<ProviderTokenResponse>(body);
             if (result is not { Error: null, AccessToken: not null } || string.IsNullOrWhiteSpace(result.AccessToken))
-                return null;
+                return LogExchangeFailure("provider_token_response_invalid", correlationId);
 
             var login = await GetGitHubLoginAsync(result.AccessToken, timeout.Token).ConfigureAwait(false);
             return login is null
-                ? null
+                ? LogExchangeFailure("provider_identity_lookup_failed", correlationId)
                 : new(null, result.AccessToken, result.RefreshToken, result.ExpiresIn is > 0
                     ? DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn.Value)
                     : null, login);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return null;
+            return LogExchangeFailure("provider_request_timed_out", correlationId);
         }
         catch (HttpRequestException)
         {
-            return null;
+            return LogExchangeFailure("provider_request_failed", correlationId);
         }
         catch (JsonException)
         {
-            return null;
+            return LogExchangeFailure("provider_token_response_unreadable", correlationId);
         }
+    }
+
+    /// <summary>
+    /// The callback surfaces a single generic outcome to the browser, so the specific
+    /// provider-side reason is only recoverable from diagnostics. Only reason codes and
+    /// provider status codes are logged; codes, tokens, and identities never are.
+    /// </summary>
+    private RepoAppCredential? LogExchangeFailure(
+        string reason,
+        string correlationId,
+        HttpStatusCode? providerStatus = null)
+    {
+        logger.LogWarning(
+            AuthorizationExchangeEvent,
+            "GitHub App authorization lifecycle: app {AppKind}, purpose {Purpose}, phase {Phase}, outcome {Outcome}, correlation {CorrelationId}, provider status {ProviderStatus}",
+            "repo",
+            "interactive_repository",
+            "code_exchange",
+            reason,
+            correlationId,
+            providerStatus is null ? 0 : (int)providerStatus.Value);
+        return null;
     }
 
     private async Task<string?> GetGitHubLoginAsync(string accessToken, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(ProviderTimeout);
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{_baseUrl.TrimEnd('/')}/user");
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{_apiUrl.TrimEnd('/')}/user");
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
         request.Headers.UserAgent.ParseAdd("Agentweaver");
@@ -864,7 +888,7 @@ public sealed class RepoAppUserAuthorizationService(
             return;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(ProviderTimeout);
-        using var request = new HttpRequestMessage(HttpMethod.Delete, $"{_baseUrl.TrimEnd('/')}/applications/{Uri.EscapeDataString(_clientId)}/grant")
+        using var request = new HttpRequestMessage(HttpMethod.Delete, $"{_apiUrl.TrimEnd('/')}/applications/{Uri.EscapeDataString(_clientId)}/grant")
         {
             Content = new StringContent(JsonSerializer.Serialize(new { access_token = accessToken }), Encoding.UTF8, "application/json"),
         };
