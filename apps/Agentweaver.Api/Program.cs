@@ -251,28 +251,31 @@ builder.Services.AddSingleton<Agentweaver.Domain.IGitHubAccessTokenProvider>(
 builder.Services.AddSingleton<CopilotAppRegistrationService>();
 builder.Services.AddHostedService<CopilotAppRegistrationStartupService>();
 builder.Services.AddSingleton<EntraAccessTokenValidator>();
-builder.Services.AddAuthentication(options =>
-    {
-        options.DefaultAuthenticateScheme = AgentweaverAuthenticationSchemes.Composite;
-        options.DefaultChallengeScheme = AgentweaverAuthenticationSchemes.Composite;
-        options.DefaultForbidScheme = AgentweaverAuthenticationSchemes.Composite;
-    })
-    .AddPolicyScheme(
-        AgentweaverAuthenticationSchemes.Composite,
-        displayName: null,
-        options => options.ForwardDefaultSelector = AgentweaverAuthentication.SelectScheme)
-    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, EntraAuthenticationHandler>(
-        AgentweaverAuthenticationSchemes.Entra, _ => { })
-    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, BrowserSessionAuthenticationHandler>(
-        AgentweaverAuthenticationSchemes.BrowserSession, _ => { })
-    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, BrokerBearerAuthenticationHandler>(
-        AgentweaverAuthenticationSchemes.BrokerBearer, _ => { })
-    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, InternalServiceAuthenticationHandler>(
-        AgentweaverAuthenticationSchemes.InternalServiceKey, _ => { })
-    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, RunCapabilityAuthenticationHandler>(
-        AgentweaverAuthenticationSchemes.RunCapability, _ => { })
-    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TestAuthenticationHandler>(
-        AgentweaverAuthenticationSchemes.TestBypass, _ => { });
+if (!isWorker)
+{
+    builder.Services.AddAuthentication(options =>
+        {
+            options.DefaultAuthenticateScheme = AgentweaverAuthenticationSchemes.Composite;
+            options.DefaultChallengeScheme = AgentweaverAuthenticationSchemes.Composite;
+            options.DefaultForbidScheme = AgentweaverAuthenticationSchemes.Composite;
+        })
+        .AddPolicyScheme(
+            AgentweaverAuthenticationSchemes.Composite,
+            displayName: null,
+            options => options.ForwardDefaultSelector = AgentweaverAuthentication.SelectScheme)
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, EntraAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.Entra, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, BrowserSessionAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.BrowserSession, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, BrokerBearerAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.BrokerBearer, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, InternalServiceAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.InternalServiceKey, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, RunCapabilityAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.RunCapability, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TestAuthenticationHandler>(
+            AgentweaverAuthenticationSchemes.TestBypass, _ => { });
+}
 
 if (builder.Environment.IsDevelopment()
     && builder.Configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth"))

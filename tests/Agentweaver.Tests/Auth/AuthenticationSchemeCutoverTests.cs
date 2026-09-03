@@ -1,14 +1,18 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
+using Agentweaver.Api;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -19,7 +23,7 @@ public sealed class AuthenticationSchemeCutoverTests : IClassFixture<EntraWebApp
     public AuthenticationSchemeCutoverTests(EntraWebApplicationFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task AllEndpointBoundSchemes_AreRegistered()
+    public async Task WebRole_AllEndpointBoundSchemes_AreRegistered()
     {
         var provider = _factory.Services.GetRequiredService<IAuthenticationSchemeProvider>();
         var names = (await provider.GetAllSchemesAsync()).Select(scheme => scheme.Name);
@@ -34,6 +38,15 @@ public sealed class AuthenticationSchemeCutoverTests : IClassFixture<EntraWebApp
             AgentweaverAuthenticationSchemes.RunCapability,
             AgentweaverAuthenticationSchemes.TestBypass,
         ]);
+    }
+
+    [Fact]
+    public void DevelopmentWorkerRole_BuildsWithoutApiAuthenticationOrBrokerConfiguration()
+    {
+        using var factory = new WorkerWebApplicationFactory();
+
+        factory.Services.GetService<IAuthenticationSchemeProvider>().Should().BeNull();
+        factory.Services.GetService<OAuthServerConfiguration>().Should().BeNull();
     }
 
     [Fact]
@@ -188,5 +201,15 @@ public sealed class AuthenticationSchemeCutoverTests : IClassFixture<EntraWebApp
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         body.Should().Contain("recognized Agentweaver platform role");
         body.Should().Contain("roles_found_on_token");
+    }
+
+    private sealed class WorkerWebApplicationFactory : EntraWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.UseEnvironment(Environments.Development);
+            builder.UseSetting("App:Role", AppRole.Worker);
+        }
     }
 }
