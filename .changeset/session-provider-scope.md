@@ -22,3 +22,12 @@ requiring a brand-new session. A changed provider is applied transparently to th
 persisted `ModelSource` is repointed (new `IRunStore.UpdateModelSourceAsync`), the conversation keeps
 its history, and when the new provider is GitHub Copilot the platform-scoped capability gate runs
 immediately so an unusable platform connection fails fast with the "Connect GitHub" CTA.
+
+`KubernetesSandboxExecutor` no longer undoes that platform scoping when it actually configures the
+pod: it used to derive the provider-resolution scope from the run row's `ProjectId`, so a personal
+Session opened from inside a project was labelled and credential-gated as platform BYOK while the pod
+serving it was configured from that project's GitHub Copilot binding (or the reverse). An
+`AgentHostPurpose.OperatorAssistant` launch now resolves at platform scope
+(`AgentHostLaunchContext.ResolvesModelProviderAtPlatformScope`), and the "reconnect" CTA it raises
+names the platform connection. Project-scoped work (coordinator runs, subtasks, retries, Build/Test)
+is unchanged and still resolves against its own project.
