@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -20,6 +20,7 @@ const ROOT = path.join(HERE, '..');
 const TOOLS = path.join(ROOT, 'agent-driver-ui', 'tools.mjs');
 const SESSIONS = path.join(ROOT, 'sessions');
 const TRANSCRIPTS = path.join(ROOT, 'transcripts-ui');
+const FIXTURE_TEXT = 'Review https://docs.example.test/guide?token=secret-canary#section unchanged';
 
 function fixtureHtml() {
   return `<!doctype html>
@@ -28,6 +29,7 @@ function fixtureHtml() {
     <main aria-label="Main content">
       <h1 id="state"></h1>
       <button data-testid="advance" type="button">Advance</button>
+      <input data-testid="coordinator-composer" />
       <div data-testid="drag-source" style="position:absolute;left:20px;top:100px;width:40px;height:40px">Source</div>
       <div data-testid="drag-target" style="position:absolute;left:200px;top:100px;width:40px;height:40px">Target</div>
     </main>
@@ -35,8 +37,14 @@ function fixtureHtml() {
       const render = () => {
         const count = sessionStorage.getItem('fixture.count') || '0';
         const drag = sessionStorage.getItem('fixture.drag') || '0';
-        document.querySelector('#state').textContent = location.pathname + ' count=' + count + ' drag=' + drag;
+        const routeExact = location.pathname === '/projects' && location.search === '?tab=runs' && location.hash === '#active';
+        const textExact = sessionStorage.getItem('fixture.textExact') || '0';
+        document.querySelector('#state').textContent = location.pathname + ' count=' + count + ' drag=' + drag + ' routeExact=' + routeExact + ' textExact=' + textExact;
       };
+      document.querySelector('[data-testid="coordinator-composer"]').addEventListener('input', (event) => {
+        sessionStorage.setItem('fixture.textExact', event.target.value === ${JSON.stringify(FIXTURE_TEXT)} ? '1' : '0');
+        render();
+      });
       document.querySelector('[data-testid="advance"]').addEventListener('click', () => {
         const next = Number(sessionStorage.getItem('fixture.count') || '0') + 1;
         sessionStorage.setItem('fixture.count', String(next));
@@ -113,6 +121,19 @@ async function waitForExit(pid) {
   assert.equal(isProcessAlive(pid), false, `process ${pid} did not exit`);
 }
 
+async function directoryContains(directory, needle) {
+  if (!existsSync(directory)) return false;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (await directoryContains(entryPath, needle)) return true;
+    } else if ((await readFile(entryPath)).includes(Buffer.from(needle))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 test('separate CLI processes preserve page state, recover crashes, and isolate sessions', { timeout: 120_000 }, async () => {
   const html = fixtureHtml();
   const server = createServer((_request, response) => {
@@ -150,30 +171,33 @@ test('separate CLI processes preserve page state, recover crashes, and isolate s
     assert.equal(originalWorker.status, 'ready');
     assert.notEqual(initialized.pid, originalWorker.pid);
 
-    const go = await runCli('goto', '--session', sessionId, '--path', '/start');
+    const go = await runCli('goto', '--session', sessionId, '--path', '/projects?tab=runs#active');
+    const typed = await runCli('type-coordinator', '--session', sessionId, '--text', FIXTURE_TEXT);
     await runCli('goto', '--session', secondSessionId, '--path', '/isolated');
     const click = await runCli('click', '--session', sessionId, '--test-id', 'advance');
     const drag = await runCli('drag', '--session', sessionId, '--from-test-id', 'drag-source', '--to-test-id', 'drag-target');
     const captured = await runCli('capture', '--session', sessionId, '--thought', 'initial-capture');
-    assert.equal(new Set([go.pid, click.pid, drag.pid, captured.pid]).size, 4);
+    assert.equal(new Set([go.pid, typed.pid, click.pid, drag.pid, captured.pid]).size, 5);
 
     const clickStep = parseJsonOutput(click.stdout);
     const dragStep = parseJsonOutput(drag.stdout);
     const captureStep = parseJsonOutput(captured.stdout);
-    assert.equal(new URL(clickStep.url).pathname, '/start');
-    assert.equal(new URL(dragStep.url).pathname, '/start');
+    assert.equal(new URL(clickStep.url).pathname, '/projects');
+    assert.equal(new URL(dragStep.url).pathname, '/projects');
     assert.deepEqual(dragStep.target.from.testId, 'drag-source');
-    assert.equal(new URL(captureStep.url).pathname, '/start');
-    assert.match(visibleHeading(captureStep), /\/start count=1 drag=1/);
+    assert.equal(new URL(captureStep.url).pathname, '/projects');
+    assert.match(visibleHeading(captureStep), /\/projects count=1 drag=1 routeExact=true textExact=1/);
+    assert.equal(await directoryContains(runtimeDirectory(SESSIONS, sessionId), FIXTURE_TEXT), false);
+    assert.equal(await directoryContains(runtimeDirectory(SESSIONS, sessionId), '?tab=runs#active'), false);
 
     const concurrent = await Promise.all([
       runCli('click', '--session', sessionId, '--test-id', 'advance', '--thought', 'concurrent-one'),
       runCli('click', '--session', sessionId, '--test-id', 'advance', '--thought', 'concurrent-two'),
     ]);
     const concurrentSteps = concurrent.map((result) => parseJsonOutput(result.stdout));
-    assert.deepEqual(concurrentSteps.map((step) => step.id).sort((a, b) => a - b), [5, 6]);
+    assert.deepEqual(concurrentSteps.map((step) => step.id).sort((a, b) => a - b), [6, 7]);
     const afterConcurrent = parseJsonOutput((await runCli('capture', '--session', sessionId, '--thought', 'after-concurrent')).stdout);
-    assert.equal(new URL(afterConcurrent.url).pathname, '/start');
+    assert.equal(new URL(afterConcurrent.url).pathname, '/projects');
     assert.match(visibleHeading(afterConcurrent), /count=3/);
 
     process.kill(originalWorker.pid, 'SIGTERM');
@@ -181,7 +205,7 @@ test('separate CLI processes preserve page state, recover crashes, and isolate s
     const recovered = parseJsonOutput((await runCli('capture', '--session', sessionId, '--thought', 'after-crash')).stdout);
     const recoveredWorker = await readRuntimeState(SESSIONS, sessionId);
     assert.notEqual(recoveredWorker.pid, originalWorker.pid);
-    assert.equal(new URL(recovered.url).pathname, '/start');
+    assert.equal(new URL(recovered.url).pathname, '/projects');
     assert.match(visibleHeading(recovered), /count=3/);
 
     const [isolatedResult, stillFirstResult] = await Promise.all([
@@ -191,17 +215,19 @@ test('separate CLI processes preserve page state, recover crashes, and isolate s
     const isolated = parseJsonOutput(isolatedResult.stdout);
     const stillFirst = parseJsonOutput(stillFirstResult.stdout);
     assert.equal(new URL(isolated.url).pathname, '/isolated');
-    assert.equal(new URL(stillFirst.url).pathname, '/start');
+    assert.equal(new URL(stillFirst.url).pathname, '/projects');
 
     const secondFinish = await runCli('finish', '--session', secondSessionId);
     const firstFinish = await runCli('finish', '--session', sessionId);
     assert.equal(parseJsonOutput(secondFinish.stdout).driver.pass, true);
     assert.equal(parseJsonOutput(firstFinish.stdout).driver.pass, true);
     assert.equal(firstFinish.stdout.includes(secret), false);
+    assert.equal(firstFinish.stdout.includes('secret-canary'), false);
     assert.equal(existsSync(path.join(SESSIONS, `${sessionId}.json`)), false);
     assert.equal(existsSync(runtimeDirectory(SESSIONS, sessionId)), false);
     const archived = await readFile(path.join(TRANSCRIPTS, sessionId, 'result.json'), 'utf8');
     assert.equal(archived.includes(secret), false);
+    assert.equal(archived.includes('secret-canary'), false);
     await rm(path.join(TRANSCRIPTS, sessionId), { recursive: true, force: true });
     await rm(path.join(TRANSCRIPTS, secondSessionId), { recursive: true, force: true });
     sessionIds.length = 0;
@@ -233,6 +259,37 @@ test('an abandoned lock owned by a dead process is recovered', async () => {
     });
     assert.equal(result, 'recovered');
   } finally {
+    await rm(sessionsDirectory, { recursive: true, force: true });
+  }
+});
+
+test('runtime shutdown force-terminates an unresponsive worker and removes its resources', { timeout: 15_000 }, async () => {
+  const sessionsDirectory = path.join(HERE, `.sessions-${randomUUID()}`);
+  const sessionId = randomUUID();
+  const runtime = runtimeDirectory(sessionsDirectory, sessionId);
+  await mkdir(path.join(runtime, 'requests'), { recursive: true });
+  await mkdir(path.join(runtime, 'responses'), { recursive: true });
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  await new Promise((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  await writeFile(path.join(runtime, 'state.json'), JSON.stringify({
+    launchId: randomUUID(),
+    pid: child.pid,
+    status: 'ready',
+    heartbeatAt: new Date().toISOString(),
+  }), 'utf8');
+
+  try {
+    await stopSessionRuntime({ sessionsDirectory, sessionId, timeout: 100 });
+    await waitForExit(child.pid);
+    assert.equal(existsSync(runtime), false);
+  } finally {
+    if (isProcessAlive(child.pid)) process.kill(child.pid, 'SIGKILL');
     await rm(sessionsDirectory, { recursive: true, force: true });
   }
 });

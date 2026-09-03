@@ -41,9 +41,11 @@ opening a CDP or remote-debugging endpoint.
 
 Persisted snapshots, actions, errors, screenshot metadata, and normalized artifacts keep
 URLs only as origin plus pathname; userinfo, query strings, and fragments remain
-in-memory only as required for the live page. `finish` closes the browser/runtime and
-removes harness-owned session state before writing evidence, so artifact failures cannot
-strand local resources.
+in-memory only as required for the live page. Action arguments are sealed for the
+session worker while crossing the private file transport. `finish` closes the
+browser/runtime and removes harness-owned session state before writing evidence, so
+artifact failures cannot strand local resources. If forced termination cannot be
+confirmed, retry metadata remains instead of being deleted prematurely.
 
 ## Pointer drag
 

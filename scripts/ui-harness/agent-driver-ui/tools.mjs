@@ -73,15 +73,6 @@ export function buildDriverTurnPrompt({ personaText, observedUi }) {
   ].join('\n'));
 }
 
-function persistedActionArgs(args) {
-  const safe = redact(args);
-  if (typeof safe.path === 'string') {
-    const url = new URL(safe.path, 'https://ui-evidence.invalid');
-    safe.path = url.pathname;
-  }
-  return safe;
-}
-
 /**
  * Gate approvals are deny-by-default. A model/judge suggestion may only approve
  * when the independently computed adapter scope explicitly permits that gate.
@@ -139,15 +130,19 @@ export async function init(args) {
     });
   } catch (error) {
     const cleanupErrors = [];
+    let runtimeStopped = false;
     try {
       await stopSessionRuntime({ sessionsDirectory: SESSIONS, sessionId: session.id });
+      runtimeStopped = true;
     } catch (cleanupError) {
       cleanupErrors.push(`browser/runtime cleanup failed: ${redact(String(cleanupError?.message ?? cleanupError))}`);
     }
-    try {
-      await removeSession(SESSIONS, session.id);
-    } catch (cleanupError) {
-      cleanupErrors.push(`session cleanup failed: ${redact(String(cleanupError?.message ?? cleanupError))}`);
+    if (runtimeStopped) {
+      try {
+        await removeSession(SESSIONS, session.id);
+      } catch (cleanupError) {
+        cleanupErrors.push(`session cleanup failed: ${redact(String(cleanupError?.message ?? cleanupError))}`);
+      }
     }
     if (cleanupErrors.length) error.cleanupErrors = cleanupErrors;
     throw error;
@@ -156,24 +151,26 @@ export async function init(args) {
 }
 
 function applyActionResponse(session, response) {
+  const evidenceResponse = redact(response);
   session.processedRequestIds ??= [];
-  if (session.processedRequestIds.includes(response.requestId)) return;
-  session.processedRequestIds.push(response.requestId);
-  if (response.step) {
-    session.steps.push(response.step);
+  if (session.processedRequestIds.includes(evidenceResponse.requestId)) return evidenceResponse;
+  session.processedRequestIds.push(evidenceResponse.requestId);
+  if (evidenceResponse.step) {
+    session.steps.push(evidenceResponse.step);
   }
-  if (response.ok || response.step?.outcome === 'failed') {
-    return;
+  if (evidenceResponse.ok || evidenceResponse.step?.outcome === 'failed') {
+    return evidenceResponse;
   }
   session.commandFailures ??= [];
   session.commandFailures.push(redact({
-    id: response.eventId ?? session.steps.length + session.commandFailures.length + 1,
-    at: response.completedAt ?? new Date().toISOString(),
-    action: response.action,
-    code: response.error?.code ?? 'COMMAND_FAILED',
-    message: response.error?.message ?? 'UI command failed',
-    readiness: response.error?.readiness ?? null,
+    id: evidenceResponse.eventId ?? session.steps.length + session.commandFailures.length + 1,
+    at: evidenceResponse.completedAt ?? new Date().toISOString(),
+    action: evidenceResponse.action,
+    code: evidenceResponse.error?.code ?? 'COMMAND_FAILED',
+    message: evidenceResponse.error?.message ?? 'UI command failed',
+    readiness: evidenceResponse.error?.readiness ?? null,
   }));
+  return evidenceResponse;
 }
 
 async function reconcileOrphanedResponses(session) {
@@ -201,7 +198,7 @@ export async function action(args, { dispatch = dispatchSessionCommand, write = 
         request: {
           kind: 'action',
           eventId,
-          args: persistedActionArgs(args),
+          args,
         },
       });
     } catch (error) {
@@ -221,18 +218,17 @@ export async function action(args, { dispatch = dispatchSessionCommand, write = 
       throw error;
     }
 
-    response.eventId = eventId;
-    applyActionResponse(session, response);
+    const evidenceResponse = applyActionResponse(session, { ...response, eventId });
     await saveSession(SESSIONS, session);
     await acknowledgeSessionResponse(SESSIONS, session.id, response.requestId);
-    if (!response.ok) {
-      const error = new Error(response.error?.message ?? 'UI command failed');
-      error.code = response.error?.code;
-      error.readiness = response.error?.readiness;
+    if (!evidenceResponse.ok) {
+      const error = new Error(evidenceResponse.error?.message ?? 'UI command failed');
+      error.code = evidenceResponse.error?.code;
+      error.readiness = evidenceResponse.error?.readiness;
       throw error;
     }
-    write(JSON.stringify(response.step, null, 2));
-    return response.step;
+    write(JSON.stringify(evidenceResponse.step, null, 2));
+    return evidenceResponse.step;
   });
 }
 
@@ -271,15 +267,19 @@ export async function finish(args, {
     } catch (error) {
       primaryError = error;
     } finally {
+      let runtimeStopped = false;
       try {
         await stopRuntime({ sessionsDirectory: SESSIONS, sessionId: session.id });
+        runtimeStopped = true;
       } catch (error) {
         cleanupErrors.push(`browser/runtime cleanup failed: ${redact(String(error?.message ?? error))}`);
       }
-      try {
-        await removeStoredSession(SESSIONS, session.id);
-      } catch (error) {
-        cleanupErrors.push(`session cleanup failed: ${redact(String(error?.message ?? error))}`);
+      if (runtimeStopped) {
+        try {
+          await removeStoredSession(SESSIONS, session.id);
+        } catch (error) {
+          cleanupErrors.push(`session cleanup failed: ${redact(String(error?.message ?? error))}`);
+        }
       }
     }
 

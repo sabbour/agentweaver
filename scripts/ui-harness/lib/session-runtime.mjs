@@ -1,9 +1,16 @@
-import { randomUUID } from 'node:crypto';
+import {
+  constants as cryptoConstants,
+  createCipheriv,
+  publicEncrypt,
+  randomBytes,
+  randomUUID,
+} from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, openSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { redact } from '../../harness-shared/redaction.mjs';
 import { assertSessionId } from './session-store.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +46,35 @@ async function writeJsonAtomic(file, value) {
   await rename(temporary, file);
 }
 
+function persistedActionArgs(args) {
+  const safe = redact(args);
+  if (typeof safe.path === 'string') {
+    safe.path = new URL(safe.path, 'https://ui-evidence.invalid').pathname;
+  }
+  return safe;
+}
+
+function sealActionArgs(args, publicKey) {
+  if (typeof publicKey !== 'string' || publicKey.length === 0) {
+    throw new Error('UI session worker is missing its argument encryption key');
+  }
+  const key = randomBytes(32);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(args), 'utf8'), cipher.final()]);
+  return {
+    algorithm: 'rsa-oaep-sha256+aes-256-gcm',
+    encryptedKey: publicEncrypt({
+      key: publicKey,
+      oaepHash: 'sha256',
+      padding: cryptoConstants.RSA_PKCS1_OAEP_PADDING,
+    }, key).toString('base64'),
+    iv: iv.toString('base64'),
+    authTag: cipher.getAuthTag().toString('base64'),
+    ciphertext: ciphertext.toString('base64'),
+  };
+}
+
 async function readJson(file) {
   try {
     return JSON.parse(await readFile(file, 'utf8'));
@@ -63,12 +99,20 @@ async function terminateProcess(pid) {
   try {
     process.kill(pid, 'SIGTERM');
   } catch {
+    if (isProcessAlive(pid)) {
+      throw new Error(`UI session worker process ${pid} could not be signaled`);
+    }
     return;
   }
   const deadline = Date.now() + 3_000;
   while (isProcessAlive(pid) && Date.now() < deadline) await sleep(50);
   if (isProcessAlive(pid)) {
     try { process.kill(pid, 'SIGKILL'); } catch { /* already stopped */ }
+  }
+  const killDeadline = Date.now() + 3_000;
+  while (isProcessAlive(pid) && Date.now() < killDeadline) await sleep(50);
+  if (isProcessAlive(pid)) {
+    throw new Error(`UI session worker process ${pid} could not be terminated`);
   }
 }
 
@@ -122,7 +166,7 @@ export async function withSessionLock(
 }
 
 async function runtimeIsReady(state) {
-  if (!state || state.status !== 'ready' || !isProcessAlive(state.pid)) return false;
+  if (!state || state.status !== 'ready' || !isProcessAlive(state.pid) || !state.argumentPublicKey) return false;
   const heartbeat = Date.parse(state.heartbeatAt ?? '');
   return Number.isFinite(heartbeat) && Date.now() - heartbeat <= HEARTBEAT_STALE_MS;
 }
@@ -250,9 +294,16 @@ export async function dispatchSessionCommand({
   timeout = COMMAND_TIMEOUT_MS,
 }) {
   const runtime = runtimeDirectory(sessionsDirectory, sessionId);
-  await ensureSessionRuntime({ sessionsDirectory, sessionId, guardOptions });
+  const state = await ensureSessionRuntime({ sessionsDirectory, sessionId, guardOptions });
   const requestId = randomUUID();
-  const envelope = { ...request, requestId, requestedAt: new Date().toISOString() };
+  const persistedRequest = request.kind === 'action'
+    ? {
+        ...request,
+        args: persistedActionArgs(request.args),
+        sealedArgs: sealActionArgs(request.args, state.argumentPublicKey),
+      }
+    : request;
+  const envelope = { ...persistedRequest, requestId, requestedAt: new Date().toISOString() };
   await writeJsonAtomic(path.join(requestsDirectory(runtime), `${requestId}.json`), envelope);
   try {
     const response = await waitForResponse(runtime, requestId, timeout);
@@ -283,17 +334,23 @@ export async function reconcileSessionResponses(sessionsDirectory, sessionId) {
 export async function stopSessionRuntime({ sessionsDirectory, sessionId, timeout = 15_000 }) {
   const runtime = runtimeDirectory(sessionsDirectory, sessionId);
   const state = await readJson(statePath(runtime));
-  if (state?.pid && isProcessAlive(state.pid)) {
-    const requestId = randomUUID();
-    await writeJsonAtomic(path.join(requestsDirectory(runtime), `${requestId}.json`), {
-      kind: 'finish',
-      requestId,
-      requestedAt: new Date().toISOString(),
-    });
-    await waitForResponse(runtime, requestId, timeout);
-    const deadline = Date.now() + timeout;
-    while (isProcessAlive(state.pid) && Date.now() < deadline) await sleep(50);
-    if (isProcessAlive(state.pid)) await terminateProcess(state.pid);
+  const pid = state?.pid;
+  if (pid && isProcessAlive(pid)) {
+    try {
+      const requestId = randomUUID();
+      await writeJsonAtomic(path.join(requestsDirectory(runtime), `${requestId}.json`), {
+        kind: 'finish',
+        requestId,
+        requestedAt: new Date().toISOString(),
+      });
+      await waitForResponse(runtime, requestId, timeout);
+      const deadline = Date.now() + timeout;
+      while (isProcessAlive(pid) && Date.now() < deadline) await sleep(50);
+    } catch {
+      // A failed graceful handshake still falls through to forced termination.
+    } finally {
+      if (isProcessAlive(pid)) await terminateProcess(pid);
+    }
   }
   await rm(runtime, { recursive: true, force: true });
 }

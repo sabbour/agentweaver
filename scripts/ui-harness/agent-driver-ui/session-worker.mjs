@@ -1,5 +1,11 @@
 #!/usr/bin/env node
-import { randomUUID } from 'node:crypto';
+import {
+  constants as cryptoConstants,
+  createDecipheriv,
+  generateKeyPairSync,
+  privateDecrypt,
+  randomUUID,
+} from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -31,6 +37,23 @@ async function writeJsonAtomic(file, value) {
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
   await rename(temporary, file);
+}
+
+function openActionArgs(sealed, privateKey) {
+  if (sealed?.algorithm !== 'rsa-oaep-sha256+aes-256-gcm') {
+    throw new Error('UI action arguments were not sealed for this worker');
+  }
+  const key = privateDecrypt({
+    key: privateKey,
+    oaepHash: 'sha256',
+    padding: cryptoConstants.RSA_PKCS1_OAEP_PADDING,
+  }, Buffer.from(sealed.encryptedKey, 'base64'));
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(sealed.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(sealed.authTag, 'base64'));
+  return JSON.parse(Buffer.concat([
+    decipher.update(Buffer.from(sealed.ciphertext, 'base64')),
+    decipher.final(),
+  ]).toString('utf8'));
 }
 
 async function loadRecovery(runtime) {
@@ -84,6 +107,11 @@ async function main() {
   let stopping = false;
   let lastActivity = Date.now();
   let stateWrite = Promise.resolve();
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
 
   const writeState = (status, extra = {}) => {
     const state = {
@@ -91,6 +119,7 @@ async function main() {
       pid: process.pid,
       status,
       heartbeatAt: new Date().toISOString(),
+      argumentPublicKey: publicKey,
       ...extra,
     };
     stateWrite = stateWrite.catch(() => {}).then(() => writeFile(
@@ -149,11 +178,12 @@ async function main() {
       }
 
       try {
+        const liveArgs = openActionArgs(request.sealedArgs, privateKey);
         const step = await executeUiAction({
           runtime: browserRuntime,
           capture,
           session,
-          args: request.args,
+          args: liveArgs,
           eventId: request.eventId,
           transcriptDirectory: path.join(path.dirname(sessionsDirectory), 'transcripts-ui', sessionId),
         });

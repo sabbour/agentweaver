@@ -181,6 +181,74 @@ test('a completed worker response is reconciled after the invoking CLI process d
   }
 });
 
+test('live action arguments stay exact while persisted evidence is deeply sanitized', async () => {
+  const sessionId = `test-${randomUUID()}`;
+  const sessionFile = path.join(SESSIONS, `${sessionId}.json`);
+  const dispatched = [];
+  const outputs = [];
+  await mkdir(SESSIONS, { recursive: true });
+  await writeFile(sessionFile, JSON.stringify({
+    id: sessionId,
+    baseUrl: 'https://agentweaver.example.staging/',
+    storageState: 'unused.storageState.json',
+    persona: { id: 'priya', name: 'Priya', coreVersion: '1', adapterVersion: '1', text: 'Test persona' },
+    steps: [],
+    commandFailures: [],
+  }), 'utf8');
+
+  try {
+    const dispatch = async ({ request }) => {
+      dispatched.push(structuredClone(request.args));
+      const liveValue = request.args.path
+        ? new URL(request.args.path, 'https://agentweaver.example.staging').toString()
+        : request.args.text;
+      return {
+        kind: 'action',
+        requestId: randomUUID(),
+        ok: true,
+        action: request.args._[0],
+        step: {
+          id: request.eventId,
+          action: request.args._[0],
+          intent: liveValue,
+          url: `https://agentweaver.example.staging${request.args.path ?? '/projects?token=secret-canary#typed'}`,
+          nested: { authorization: 'Bearer secret-canary', liveValue },
+          domSnapshot: [],
+          console: [],
+          network: [],
+        },
+      };
+    };
+    const gotoPath = '/projects?tab=runs#active';
+    const text = 'Review https://docs.example.test/guide?token=secret-canary#section unchanged';
+
+    const gotoEvidence = await action(
+      { _: ['goto'], session: sessionId, path: gotoPath },
+      { dispatch, write: (line) => outputs.push(line) },
+    );
+    const typeEvidence = await action(
+      { _: ['type-coordinator'], session: sessionId, text },
+      { dispatch, write: (line) => outputs.push(line) },
+    );
+
+    assert.equal(dispatched[0].path, gotoPath);
+    assert.equal(dispatched[1].text, text);
+    assert.equal(gotoEvidence.url, 'https://agentweaver.example.staging/projects');
+    assert.equal(typeEvidence.intent, 'Review https://docs.example.test/guide unchanged');
+    assert.equal(typeEvidence.nested.authorization, '[REDACTED]');
+
+    const persisted = await readFile(sessionFile, 'utf8');
+    assert.equal(persisted.includes('secret-canary'), false);
+    assert.equal(persisted.includes('?tab=runs'), false);
+    assert.equal(persisted.includes('#active'), false);
+    assert.equal(persisted.includes('?token='), false);
+    assert.equal(outputs.join('\n').includes('secret-canary'), false);
+  } finally {
+    await rm(sessionFile, { force: true });
+    await rm(runtimeDirectory(SESSIONS, sessionId), { recursive: true, force: true });
+  }
+});
+
 test('finish cleans runtime and session before surfacing evidence write failure', async () => {
   const sessionId = `test-${randomUUID()}`;
   const sessionFile = path.join(SESSIONS, `${sessionId}.json`);
@@ -201,7 +269,6 @@ test('finish cleans runtime and session before surfacing evidence write failure'
         write: () => {},
         stopRuntime: async () => {
           runtimeStopped = true;
-          throw new Error('browser close failed');
         },
         removeStoredSession: async () => { sessionRemoved = true; },
         mkdirImpl: async () => {},
@@ -209,9 +276,7 @@ test('finish cleans runtime and session before surfacing evidence write failure'
       }),
       (error) => {
         assert.equal(error.message, 'artifact disk failure');
-        assert.deepEqual(error.cleanupErrors, [
-          'browser/runtime cleanup failed: browser close failed',
-        ]);
+        assert.equal(error.cleanupErrors, undefined);
         return true;
       },
     );
@@ -223,7 +288,7 @@ test('finish cleans runtime and session before surfacing evidence write failure'
   }
 });
 
-test('finish preserves a primary failure and separately records all cleanup failures', async () => {
+test('finish retains session metadata for retry when runtime termination is unproven', async () => {
   const sessionId = `test-${randomUUID()}`;
   const sessionFile = path.join(SESSIONS, `${sessionId}.json`);
   await mkdir(SESSIONS, { recursive: true });
@@ -235,21 +300,23 @@ test('finish preserves a primary failure and separately records all cleanup fail
     steps: [],
     commandFailures: [],
   }), 'utf8');
+  let removeAttempted = false;
   try {
     await assert.rejects(
       finish({ session: sessionId }, {
         stopRuntime: async () => { throw new Error('browser close failed'); },
-        removeStoredSession: async () => { throw new Error('session remove failed'); },
+        removeStoredSession: async () => { removeAttempted = true; },
       }),
       (error) => {
         assert.match(error.message, /Cannot read properties|null/);
         assert.deepEqual(error.cleanupErrors, [
           'browser/runtime cleanup failed: browser close failed',
-          'session cleanup failed: session remove failed',
         ]);
         return true;
       },
     );
+    assert.equal(removeAttempted, false);
+    assert.equal(JSON.parse(await readFile(sessionFile, 'utf8')).id, sessionId);
   } finally {
     await rm(sessionFile, { force: true });
     await rm(runtimeDirectory(SESSIONS, sessionId), { recursive: true, force: true });

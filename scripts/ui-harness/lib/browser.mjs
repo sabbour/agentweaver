@@ -39,7 +39,10 @@ function isAllowedIdentityProviderNavigation(target, options = {}) {
 
 function guardedUrl(baseUrl, destination, options) {
   const base = validateNetworkTarget(baseUrl);
-  const target = validateNetworkTarget(new URL(destination, base));
+  const target = new URL(destination, base);
+  const networkTarget = new URL(target);
+  networkTarget.hash = '';
+  validateNetworkTarget(networkTarget);
   if (target.origin !== base.origin && isAllowedIdentityProviderNavigation(target, options)) return target;
   if (target.origin !== base.origin) throw new Error(`refusing cross-origin browser navigation from ${base.origin} to ${target.origin}`);
   return target;

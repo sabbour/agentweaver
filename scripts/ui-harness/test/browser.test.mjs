@@ -8,6 +8,15 @@ test('browser target boundary accepts arbitrary HTTPS hosts', () => {
   assert.throws(() => guardedUrl('http://agentweaver.example.com', '/', {}), /HTTPS/);
 });
 
+test('browser navigation preserves same-origin query strings and fragments', () => {
+  const target = guardedUrl(
+    'https://agentweaver.example.com',
+    '/projects?tab=runs#active',
+    {},
+  );
+  assert.equal(target.toString(), 'https://agentweaver.example.com/projects?tab=runs#active');
+});
+
 test('browser target boundary blocks cross-origin navigation', () => {
   assert.throws(
     () => guardedUrl('https://one.staging.example.com', 'https://two.staging.example.com', {}),

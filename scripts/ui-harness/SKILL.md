@@ -162,4 +162,7 @@ times out while idle, the next action starts a replacement from the last complet
 action's URL and protected browser-storage snapshot. Separate session IDs use separate
 workers and recovery directories; no CDP or remote-debugging endpoint is exposed.
 Cleanup runs before result persistence, so an artifact write failure cannot strand the
-browser worker or harness-owned session state.
+browser worker or harness-owned session state. Live action arguments are sealed while
+crossing the worker's private file transport and are sanitized separately for evidence.
+If forced worker termination cannot be confirmed, session/runtime metadata remains so
+cleanup can be retried instead of orphaning an untracked browser.
