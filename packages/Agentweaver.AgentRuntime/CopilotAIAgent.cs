@@ -77,6 +77,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     private ByokProviderConfiguration? _activeByokProviderConfiguration;
 
+    /// <summary>
+    /// True once the active BYOK provider configuration has been resolved for the current run, so
+    /// "not resolved yet" is distinguishable from "resolved to null (GitHub Copilot is active)".
+    /// Reset by <see cref="SetupAsync"/> so a reused instance never carries a stale mode across runs.
+    /// </summary>
+    private bool _byokProviderConfigurationResolved;
+
     // Names of tools built by an IAgentRuntimeToolProvider and wrapped in
     // InstrumentedCustomAIFunction (populated fresh on every RebuildInnerAgent call). The
     // permission handler consults this to avoid emitting a second, orphaned tool.call for these
@@ -380,12 +387,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _activeExecutor = executor;
         _governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
 
-        _activeByokProviderConfiguration = _byokProviderConfiguration is null
-            ? null
-            : await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
-        _client = _activeByokProviderConfiguration is null
-            ? await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false)
-            : _factory.CreateByokClient();
+        // Re-resolve the active model source for this run (a pooled pod instance can be set up more
+        // than once), then create the matching client through the single provider-aware seam.
+        _byokProviderConfigurationResolved = false;
+        _activeByokProviderConfiguration = null;
+        _client = await CreateProviderClientAsync(ct).ConfigureAwait(false);
         try
         {
             await _client.StartAsync(ct).ConfigureAwait(false);
@@ -547,15 +553,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     : BuildBasePrompt(_includeTeamCoordinationPrompt) + "\n\n" + _systemPromptContext,
             },
             Model = _activeByokProviderConfiguration?.Model ?? _modelId,
-            Provider = _activeByokProviderConfiguration is null ? null : new GitHub.Copilot.ProviderConfig
-            {
-                Type = _activeByokProviderConfiguration.Type,
-                BaseUrl = _activeByokProviderConfiguration.BaseUrl,
-                ApiKey = _activeByokProviderConfiguration.ApiKey,
-                WireApi = _activeByokProviderConfiguration.WireApi ?? "responses",
-                Headers = ByokProviderConfigMapper.ToHeaderDictionary(_activeByokProviderConfiguration.Headers),
-                Azure = ByokProviderConfigMapper.ToAzureOptions(_activeByokProviderConfiguration),
-            },
+            Provider = BuildByokProviderConfig(),
             // Disable persistent session store (copilot-sdk#1814): one-shot runs do not need
             // cross-session retrieval and the shared SQLite store causes "database is locked" under
             // concurrent load with multiple replicas.
@@ -740,7 +738,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     {
         if (_inner is null)
         {
-            _client ??= await _factory.CreateClientAsync(_runId, _modelId, cancellationToken).ConfigureAwait(false);
+            await ResolveByokProviderConfigurationAsync(cancellationToken).ConfigureAwait(false);
+            _client ??= await CreateProviderClientAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 await _client.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -755,6 +754,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 new SessionConfig
                 {
                     SessionId = $"agentweaver-run-{_runId}",
+                    // Carry the active BYOK provider through the restore path too — a restored
+                    // session that lost its provider config would fall back to Copilot inference.
+                    Model = _activeByokProviderConfiguration?.Model ?? _modelId,
+                    Provider = BuildByokProviderConfig(),
                     // Disable persistent session store (copilot-sdk#1814).
                     EnableSessionStore = false,
                     InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
@@ -1224,12 +1227,74 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
     }
 
-    private async Task<AgentSession> EnsureFreshClientForAiCallAsync(AgentSession session, CancellationToken ct)
+    /// <summary>
+    /// Resolves — once per run — the deployment-wide ACTIVE BYOK provider configuration that
+    /// decides whether this agent instance runs in BYOK mode or GitHub Copilot mode.
+    /// <see cref="SetupAsync"/> resolves it up front; the per-turn refresh and checkpoint-restore
+    /// paths resolve it lazily because they can run on an instance whose setup happened elsewhere.
+    /// </summary>
+    internal async ValueTask<ByokProviderConfiguration?> ResolveByokProviderConfigurationAsync(CancellationToken ct)
+    {
+        if (_byokProviderConfigurationResolved)
+            return _activeByokProviderConfiguration;
+
+        _activeByokProviderConfiguration = _byokProviderConfiguration is null
+            ? null
+            : await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
+        _byokProviderConfigurationResolved = true;
+        return _activeByokProviderConfiguration;
+    }
+
+    /// <summary>
+    /// Creates the Copilot SDK client for the ACTIVE model source. Every client-creation site goes
+    /// through here so a BYOK run never falls into the Copilot-only run-bound credential path: a
+    /// BYOK deployment holds no GitHub Copilot capability snapshot by design, so
+    /// <see cref="GitHubCopilotClientFactory.CreateClientAsync"/> would throw
+    /// <see cref="GitHubCopilotUnauthorizedException"/> on every turn.
+    /// </summary>
+    internal async Task<CopilotClient> CreateProviderClientAsync(CancellationToken ct) =>
+        await ResolveByokProviderConfigurationAsync(ct).ConfigureAwait(false) is null
+            ? await _factory.CreateClientAsync(_runId, _modelId, ct).ConfigureAwait(false)
+            : _factory.CreateByokClient();
+
+    /// <summary>
+    /// Maps the active BYOK provider configuration onto the SDK's provider config, or
+    /// <see langword="null"/> when GitHub Copilot is the active model source.
+    /// </summary>
+    private GitHub.Copilot.ProviderConfig? BuildByokProviderConfig() =>
+        _activeByokProviderConfiguration is null ? null : new GitHub.Copilot.ProviderConfig
+        {
+            Type = _activeByokProviderConfiguration.Type,
+            BaseUrl = _activeByokProviderConfiguration.BaseUrl,
+            ApiKey = _activeByokProviderConfiguration.ApiKey,
+            WireApi = _activeByokProviderConfiguration.WireApi ?? "responses",
+            Headers = ByokProviderConfigMapper.ToHeaderDictionary(_activeByokProviderConfiguration.Headers),
+            Azure = ByokProviderConfigMapper.ToAzureOptions(_activeByokProviderConfiguration),
+        };
+
+    /// <summary>
+    /// True when the run-bound GitHub Copilot credential must be re-redeemed before the next AI
+    /// call. A BYOK run always answers <see langword="false"/>: the API deliberately sends no
+    /// Copilot credential to a BYOK pod, so a null credential there means "this deployment is
+    /// BYOK", not "the Copilot credential was lost". Treating it as the latter recreates the
+    /// client through the Copilot-only path and fails every turn with
+    /// <c>github_copilot_auth_required</c>. In Copilot mode a null/expiring credential still
+    /// triggers the refresh (and its unauthorized failure) exactly as before.
+    /// </summary>
+    internal async Task<bool> ShouldRefreshClientBeforeAiCallAsync(CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_runId))
-            return session;
+            return false;
 
-        if (!await _factory.ShouldRefreshBeforeAiCallAsync(_runId, ct).ConfigureAwait(false))
+        if (await ResolveByokProviderConfigurationAsync(ct).ConfigureAwait(false) is not null)
+            return false;
+
+        return await _factory.ShouldRefreshBeforeAiCallAsync(_runId, ct).ConfigureAwait(false);
+    }
+
+    private async Task<AgentSession> EnsureFreshClientForAiCallAsync(AgentSession session, CancellationToken ct)
+    {
+        if (!await ShouldRefreshClientBeforeAiCallAsync(ct).ConfigureAwait(false))
             return session;
 
         _logger.LogInformation("GitHub Copilot token is expired or near expiry for run {RunId}; refreshing before streaming call", _runId);
@@ -1246,7 +1311,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (_client is not null)
             await _client.DisposeAsync().ConfigureAwait(false);
 
-        _client = await _factory.CreateClientAsync(_runId, _modelId, ct).ConfigureAwait(false);
+        _client = await CreateProviderClientAsync(ct).ConfigureAwait(false);
         try
         {
             await _client.StartAsync(ct).ConfigureAwait(false);
