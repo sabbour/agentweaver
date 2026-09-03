@@ -76,15 +76,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the GitHub CLI in the runtime image because GitHub diagnostics and
-# integrations invoke `gh` from the API process.
+# integrations invoke `gh` from the API process. The apt repository retains
+# only its latest package, so use the immutable release artifact for this pin.
 ARG GH_CLI_VERSION=2.98.0
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-        > /etc/apt/sources.list.d/github-cli.list \
+ARG GH_CLI_SHA256=f65a3fa2fa0eb2e97c445ee3f5e087a40aae03b64847f45a8f13805e504535d6
+RUN curl -fsSLo /tmp/gh.deb \
+        "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_amd64.deb" \
+    && echo "${GH_CLI_SHA256}  /tmp/gh.deb" | sha256sum -c - \
     && apt-get update \
-    && apt-get install -y --no-install-recommends gh=${GH_CLI_VERSION} \
+    && apt-get install -y --no-install-recommends /tmp/gh.deb \
+    && rm -f /tmp/gh.deb \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
