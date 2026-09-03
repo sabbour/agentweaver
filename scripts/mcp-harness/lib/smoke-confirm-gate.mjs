@@ -16,7 +16,8 @@
 export function classifySmokeStatus(content, { terminal, alreadyConfirmed = false }) {
   const status = String(content?.status ?? '').toLowerCase();
   const coordinatorStatus = String(content?.coordinator_status ?? '').toLowerCase();
-  if (terminal.has(status)) return 'break';
+  const terminalCoordinator = new Set(['assembly_blocked', 'assembly_failed', 'assembly_declined']);
+  if (terminal.has(status) || terminalCoordinator.has(coordinatorStatus)) return 'break';
   if (coordinatorStatus === 'awaiting_confirmation' && !alreadyConfirmed) return 'confirm';
   return 'continue';
 }

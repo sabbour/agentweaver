@@ -209,6 +209,21 @@ test('primary failure is preserved while archive and delete cleanup failures are
   assert.deepEqual(client.calls.slice(-2).map((call) => call.name), ['run_archive', 'project_delete']);
 });
 
+test('fails immediately with the coordinator assembly state and reason', async () => {
+  const client = fakeClient({
+    project_create: { id: 'project-1' },
+    run_submit: { run_id: 'run-1' },
+    run_status: { status: 'in_progress', coordinator_status: 'assembly_blocked', coordinator_status_reason: 'capability unavailable' },
+    run_archive: {},
+    project_delete: {},
+  });
+  await assert.rejects(
+    runSmoke({ client, contract, sleepFn: async () => {}, uniqueId: () => 'blocked' }),
+    /coordinator entered assembly_blocked: capability unavailable/,
+  );
+  assert.deepEqual(client.calls.slice(-2).map((call) => call.name), ['run_archive', 'project_delete']);
+});
+
 test('cancellation still archives the run and deletes the owned project', async () => {
   const client = fakeClient({
     project_create: { id: 'project-1' },

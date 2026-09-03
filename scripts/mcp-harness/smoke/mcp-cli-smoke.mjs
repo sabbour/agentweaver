@@ -134,6 +134,13 @@ export async function runSmoke({
     }
 
     const status = latest?.status?.toLowerCase();
+    const coordinatorStatus = latest?.coordinator_status?.toLowerCase();
+    const terminalCoordinator = new Set(['assembly_blocked', 'assembly_failed', 'assembly_declined']);
+    if (terminalCoordinator.has(coordinatorStatus)) {
+      const reason = latest?.coordinator_status_reason ?? latest?.result;
+      const detail = reason ? `: ${redact(String(reason))}` : '';
+      throw new Error(`run completion assertion failed (run_status): coordinator entered ${coordinatorStatus}${detail}`);
+    }
     if (!latest || !terminal.has(status)) throw new Error(`run polling failed (run_status): timed out after ${timeoutMs}ms`);
     if (!['succeeded', 'completed'].includes(status)) {
       throw new Error(`run completion assertion failed (run_status): expected succeeded/completed, got ${status}`);
