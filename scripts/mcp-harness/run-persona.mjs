@@ -37,7 +37,6 @@
 // error; 3 = inconclusive (e.g. no transcript to finalize, or the judge could not render
 // a verdict). Treat exit 3 as inconclusive, not pass.
 
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, isAbsolute, resolve } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -127,12 +126,7 @@ function relativize(p) {
 
 function resolveToken(explicit) {
   if (explicit) return explicit;
-  if (process.env.AGENTWEAVER_TOKEN) return process.env.AGENTWEAVER_TOKEN;
-  try {
-    return execFileSync('gh', ['auth', 'token'], { encoding: 'utf8' }).trim();
-  } catch {
-    return null;
-  }
+  return process.env.AGENTWEAVER_TOKEN || null;
 }
 
 /**
@@ -145,7 +139,7 @@ function resolveToken(explicit) {
 export function buildDispatchPrompt({ persona, transport, token, transcriptPath, projectId, goal, charterText }) {
   const tokenLine = token
     ? 'Bearer token: <supplied to you out-of-band as $BEARER_TOKEN; never echo it into the transcript>'
-    : 'Bearer token: resolve it yourself via `gh auth token` (stdio transport needs none).';
+    : 'Broker token: NONE - obtain one through the Agentweaver OAuth flow (stdio transport needs none).';
   const targetLine = transport.mode === 'stdio'
     ? 'Transport: stdio (a local MCP server subprocess Harness already started — no network target, no token needed).'
     : `Transport: http — MCP endpoint ${transport.target} (already vetted by the target guard). Attach the bearer token on every request.`;
@@ -453,7 +447,7 @@ async function main() {
   const transcriptPath = buildTranscriptPath({ sessionId });
   const token = transport.mode === 'http' ? resolveToken(args.token) : null;
   if (transport.mode === 'http' && !token) {
-    console.error('error: http transport needs an OAuth bearer token (pass --token, set $AGENTWEAVER_TOKEN, or run `gh auth login`)');
+    console.error('error: http transport needs an Agentweaver broker token (pass --token or set $AGENTWEAVER_TOKEN)');
     return 2;
   }
 

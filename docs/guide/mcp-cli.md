@@ -11,17 +11,16 @@ Use this guide when driving Agentweaver from Copilot CLI, Claude Desktop, or ano
 The hosted MCP endpoint is `https://<your-agentweaver-host>/mcp`. In the web app,
 open **Account settings → MCP clients** to copy the URL and a client-specific configuration.
 
-The MCP server accepts the same authenticated Agentweaver caller context as the web/API
-session. Microsoft Entra is the product sign-in boundary; GitHub App capability is connected
-separately, not used as an application identity. Set a deployment-authorized caller bearer in
-the client environment as `AGENTWEAVER_TOKEN`; do not commit it to a configuration file.
+The MCP server accepts only Agentweaver-issued broker access tokens for the exact
+`https://<your-agentweaver-host>/mcp` resource and `mcp:invoke` scope. Microsoft Entra remains
+the upstream product sign-in boundary; its access tokens are not MCP credentials. Do not commit
+broker tokens to a configuration file.
 
 ### Local (stdio)
 
 For a locally launched server (`dotnet run --project apps/Agentweaver.Mcp -- --stdio`, which is what
 Copilot CLI does via the workspace `.mcp.json`), there is no interactive OAuth handshake and no
-inbound HTTP request to carry your identity. Provide your **own** per-user token so the backend
-attributes calls to you and enforces project ownership:
+inbound HTTP request to carry your identity. Provide an Agentweaver broker token:
 
 ```jsonc
 {
@@ -31,7 +30,7 @@ attributes calls to you and enforces project ownership:
       "args": ["run", "--project", "apps/Agentweaver.Mcp", "--no-build"],
       "env": {
         "AGENTWEAVER_API_URL": "http://localhost:5000",
-        // Your own authenticated caller bearer. Do NOT use the shared internal service key.
+        // Agentweaver broker token for the MCP resource and mcp:invoke scope.
         "AGENTWEAVER_TOKEN": "${input:agentweaver-token}"
       }
     }
@@ -39,13 +38,10 @@ attributes calls to you and enforces project ownership:
 }
 ```
 
-::: danger Never configure `AGENTWEAVER_API_KEY` on a stdio client
-`AGENTWEAVER_API_KEY` is the internal service-to-service credential. The API maps it to the
-`agentweaver-internal` identity, which is **exempt from project-ownership checks**, so a stdio
-client holding it could read or mutate *any* project regardless of ownership (issue #474). Use your
-personal `AGENTWEAVER_TOKEN` instead. If a stdio server starts with only `AGENTWEAVER_API_KEY` set,
-it refuses to start and logs an error to stderr. To force the insecure fallback for legitimate
-service-to-service use cases, you must explicitly set `AGENTWEAVER_ALLOW_SHARED_KEY=true`.
+::: danger Broker tokens only
+Raw Entra access tokens, GitHub tokens, and API keys are rejected. Stdio mode refuses to start
+without `AGENTWEAVER_TOKEN`; the API independently validates the configured broker token and
+applies project authorization on every tool call.
 :::
 
 ### Claude Desktop
@@ -170,7 +166,7 @@ Run the deterministic CLI-to-MCP smoke test from the repository root:
 
 ```powershell
 $env:AGENTWEAVER_BASE_URL = "https://<staging-host>"
-$env:GITHUB_TOKEN = gh auth token
+$env:AGENTWEAVER_TOKEN = "<agentweaver-broker-token>"
 $env:AGENTWEAVER_SMOKE_PROJECT_ID = "<configured-staging-project-id>" # optional
 npm run test:mcp-smoke
 ```

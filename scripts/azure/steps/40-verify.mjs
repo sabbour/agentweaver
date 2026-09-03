@@ -114,6 +114,21 @@ export async function httpJson(url, bearerToken, { fetchImpl = fetch, timeoutMs 
   }
 }
 
+/** Fetches an anonymous discovery document, returning null on any failure. */
+export async function httpDiscoveryJson(url, { fetchImpl = fetch, timeoutMs = 10_000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetchImpl(url, { method: "GET", signal: controller.signal });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Extracts the first project's id from any of the shapes the legacy scripts tolerate. */
 export function firstProjectId(projectsJson) {
   let list;
@@ -208,6 +223,50 @@ export async function run(cfg, opts = {}) {
   if (host) {
     log.info("");
     log.info("--- Authenticated feature validation ---");
+    const origin = `https://${host}`;
+    const resource = `${origin}/mcp`;
+    const resourceMetadataPaths = [
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-protected-resource/mcp",
+    ];
+    for (const path of resourceMetadataPaths) {
+      const document = await httpDiscoveryJson(`${origin}${path}`, { fetchImpl });
+      const valid = document?.resource === resource
+        && Array.isArray(document.authorization_servers)
+        && document.authorization_servers.length === 1
+        && document.authorization_servers[0]?.replace(/\/$/, "") === origin
+        && Array.isArray(document.scopes_supported)
+        && document.scopes_supported.includes("mcp:invoke");
+      record(valid, valid
+        ? `MCP protected-resource metadata ${path} is canonical`
+        : `MCP protected-resource metadata ${path} is missing or inconsistent`);
+    }
+
+    const asMetadata = await httpDiscoveryJson(
+      `${origin}/.well-known/oauth-authorization-server`,
+      { fetchImpl },
+    );
+    const oidcMetadata = await httpDiscoveryJson(
+      `${origin}/.well-known/openid-configuration`,
+      { fetchImpl },
+    );
+    const metadataValid = [asMetadata, oidcMetadata].every((document) =>
+      document?.issuer?.replace(/\/$/, "") === origin
+      && document?.jwks_uri === `${origin}/oauth/jwks`);
+    record(metadataValid, metadataValid
+      ? "OAuth AS and OIDC metadata advertise the canonical issuer and JWKS"
+      : "OAuth AS or OIDC metadata is missing or inconsistent");
+
+    const jwks = await httpDiscoveryJson(`${origin}/oauth/jwks`, { fetchImpl });
+    const jwksValid = Array.isArray(jwks?.keys)
+      && jwks.keys.some((key) => key?.use === "sig"
+        && key?.alg === "RS256"
+        && typeof key?.kid === "string"
+        && key.kid.length > 0);
+    record(jwksValid, jwksValid
+      ? "OAuth JWKS exposes a keyed RS256 signing key"
+      : "OAuth JWKS has no keyed RS256 signing key");
+
     const unauthProjectsStatus = await httpStatus(`https://${host}/api/projects`, { fetchImpl });
     record(
       unauthProjectsStatus === 401,

@@ -163,7 +163,7 @@ async function main() {
     target,
     command: arg('--server-command'),
     args: arg('--server-args') ? JSON.parse(arg('--server-args')) : ['--stdio'],
-    token: arg('--token') ?? process.env.AGENTWEAVER_TOKEN ?? process.env.GITHUB_TOKEN,
+    token: arg('--token') ?? process.env.AGENTWEAVER_TOKEN,
     allowProd: process.argv.includes('--allow-prod'),
     iUnderstandProd: process.argv.includes('--i-understand-prod'),
   });

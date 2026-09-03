@@ -33,10 +33,10 @@ Both transports work the same for either entry point:
   `/mcp` path suffix** (e.g. `https://<host>/mcp`; the bare origin is not the
   endpoint). The host allowlist (`localhost`, `127.0.0.1`, `::1`, `*.staging.*`)
   applies; production hosts require both `--allow-prod` and `--i-understand-prod`.
-  http transport also requires **OAuth**: `--token`/`AGENTWEAVER_TOKEN` must be a
-  valid OAuth-derived bearer token (from the app's own sign-in flow, or
-  `gh auth token` where that identity is trusted), not an arbitrary string. Stdio
-  transport has no such requirement.
+  http transport also requires **OAuth**: `--token`/`AGENTWEAVER_TOKEN` must be an
+  Agentweaver broker token for the exact `/mcp` resource with `mcp:invoke`, obtained
+  through the app's OAuth flow. Raw Entra and GitHub tokens are rejected. Stdio
+  transport still uses `AGENTWEAVER_TOKEN` for downstream API calls.
 
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts)
 

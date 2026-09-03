@@ -184,13 +184,16 @@ Where this lives:
 
 ## API bearer authentication: accepting tokens safely
 
+Endpoint metadata selects a named authentication scheme. Platform endpoints use the configured
+platform identity. `PlatformOrMcp` endpoints may additionally use `BrokerBearer`; internal-service
+and run-capability credentials remain confined to their own endpoint classifications.
+
 After bootstrap, protected API calls use `Authorization: Bearer ...`. The API tries to resolve the caller in this order:
 
-1. **Agentweaver OAuth JWT.** If the bearer looks like a JWT and validates as an Agentweaver-issued access token, use its subject, GitHub login, org claim, and `jti`.
-2. **Raw GitHub bearer token.** Otherwise, ask GitHub `/user` whether the token is valid and which login owns it.
-3. **Development-only bypass.** A configured bypass can map tokens to users only in Development; production refuses to start if bypass flags are enabled.
+For broker callers, the API validates issuer, exact resource audience, keyed RS256 signature,
+lifetime, subject, and `mcp:invoke` before creating caller context.
 
-The API does not accept static automation keys. Hosted MCP forwards each caller's accepted bearer token to the API, so the end-to-end identity is always a raw GitHub token or an Agentweaver JWT that the backend can validate.
+Hosted MCP forwards only an Agentweaver broker JWT it already validated.
 
 ![API bearer authentication: accepting tokens safely: Bearer token arrives on protected API route, Looks like valid Agentweaver JWT?, jti deny-listed?, 401, Caller = JWT subject + GitHub login + org, Call GitHub /user, Caller = GitHub login, Org authorization middleware](../diagrams/auth-security-fig2.png)
 
@@ -455,21 +458,23 @@ JWKS exposes only the public key. The `kid` is deterministic from public key mat
 
 ### Validation responsibilities
 
-The MCP server validates JWTs using cached JWKS from the Authorization Server. It checks signature, issuer, audience, lifetime, and RS256 algorithm. That lets MCP reject invalid tokens without calling GitHub or the Authorization Server on every request.
+The MCP server uses ASP.NET/OpenIddict remote discovery and cached JWKS. It checks keyed RS256
+signature, exact issuer and resource audience, lifetime, subject, and `mcp:invoke`. That lets MCP
+reject invalid tokens without calling an upstream identity provider on every request.
 
 The API also validates Agentweaver JWTs when MCP forwards calls downstream. The API additionally checks the `jti` denylist, because revocation state lives in the API database. This split keeps MCP stateless for normal validation while preserving authoritative revocation at the backend.
 
 ### Issuer and audience pinning
 
-In production, issuer and audience must be public, stable values. Internal service-to-service hosts such as `http://agentweaver-api:8080` are not the OAuth issuer the client discovered and not the audience embedded in tokens. If production derived issuer/audience from internal request hosts, valid forwarded JWTs would fail validation. Agentweaver therefore requires pinned issuer/audience config in production for both API and HTTP-mode MCP.
+In production, issuer and audience must be public, stable values. Internal service-to-service hosts such as `http://agentweaver-api:8080` are not the OAuth issuer the client discovered and not the audience embedded in tokens. If production derived issuer/audience from internal request hosts, valid forwarded JWTs would fail validation. Agentweaver therefore requires one pinned `Auth:OAuth:PublicOrigin` in production; both services
+derive issuer and the exact `<origin>/mcp` audience from it.
 
 Where this lives:
 
-- `apps/Agentweaver.Api/Auth/OAuth/McpTokenService.cs`
-- `apps/Agentweaver.Mcp/McpAccessTokenValidator.cs`
-- `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
+- `apps/Agentweaver.Api/Auth/OAuth/OAuthServerConfiguration.cs`
+- `apps/Agentweaver.Mcp/McpOAuthConfiguration.cs`
+- `apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs`
 - `apps/Agentweaver.Mcp/AgentweaverApiClient.cs`
-- `apps/Agentweaver.Api/Security/OAuthConfigGuard.cs`
 - `apps/Agentweaver.Mcp/Program.cs`
 
 ## Token stores and lifetimes
@@ -550,17 +555,20 @@ Org authorization exempts:
 The rule is not "these routes are unimportant." Every API route is classified at
 declaration time as operational anonymous, protocol managed, webhook HMAC,
 authenticated self/platform, platform-or-MCP, internal service, or run capability.
-OAuth endpoints have protocol validation and rate limiting; MCP retains its own bearer
-middleware in HTTP mode until the layer-4 cutover.
+OAuth endpoints have protocol validation and rate limiting; MCP uses its own standards-based
+ASP.NET/OpenIddict resource-server policy.
 
-### MCP bearer middleware
+### MCP broker authentication
 
 HTTP-mode MCP exempts:
 
 - healthz;
 - OAuth Protected Resource metadata.
 
-All MCP tool calls require a bearer token. MCP first accepts configured automation keys (pre-shared keys for machine-to-machine callers), then Agentweaver JWTs, then — while enabled — raw GitHub tokens as a transitional path. When a caller token is accepted, MCP forwards that same bearer token to the API so the backend sees the real caller identity rather than a shared service identity.
+All MCP tool calls require an Agentweaver broker token with exact issuer and resource audience,
+keyed RS256 signature, valid lifetime, subject, and `mcp:invoke`. Raw Entra, GitHub, API-key, and
+other fallback credentials are rejected. MCP forwards only the validated broker token to the API,
+which accepts it only for `PlatformOrMcp` endpoints and still enforces project authorization.
 
 ### Invariants to preserve when rebuilding
 
@@ -573,7 +581,7 @@ Where this lives:
 
 - `apps/Agentweaver.Api/Auth/AgentweaverAuthentication.cs`
 - `apps/Agentweaver.Api/Auth/EndpointAuthorization.cs`
-- `apps/Agentweaver.Mcp/McpBearerTokenMiddleware.cs`
+- `apps/Agentweaver.Mcp/McpBrokerAuthenticationHandler.cs`
 - `apps/Agentweaver.Mcp/Program.cs`
 
 ## Agent-host warm-pool token delivery and `/configure`

@@ -305,16 +305,37 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   const mcpDeployment = manifestForFilename(docs, "mcp-deployment.yaml");
   assert.match(
     mcpDeployment,
-    /name: Auth__Mode\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: AUTH_MODE\s*\n\s*name: agentweaver-runtime-config/,
-    "MCP must receive the deployment auth mode so Entra bearer validation is enabled only in Entra mode",
+    /name: Auth__OAuth__PublicOrigin\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: OAUTH_PUBLIC_ORIGIN\s*\n\s*name: agentweaver-runtime-config/,
+    "MCP must pin broker discovery, issuer, resource metadata, and challenges to the public origin",
   );
-  assert.match(
+  assert.doesNotMatch(
     mcpDeployment,
-    /name: Auth__Entra__ClientId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_CLIENT_ID\s*\n\s*name: agentweaver-runtime-config/,
+    /Auth__Entra__|Auth__Mode|AllowGitHubPassthrough|AGENTWEAVER_API_KEY|AGENTWEAVER_ALLOW_SHARED_KEY/,
+    "MCP must not retain direct-Entra, GitHub-token, or internal-key fallback configuration",
   );
-  assert.match(
-    mcpDeployment,
-    /name: Auth__Entra__TenantId\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_TENANT_ID\s*\n\s*name: agentweaver-runtime-config/,
+  const apiDeployment = manifestForFilename(docs, "api-deployment.yaml");
+  assert.doesNotMatch(apiDeployment, /Auth__Mcp__AllowGitHubPassthrough/);
+
+  const mcpRoute = manifestForFilename(docs, "mcp-httproute.yaml");
+  assert.match(mcpRoute, /value: \/\.well-known\/oauth-protected-resource(?:\s|$)/);
+  assert.match(mcpRoute, /value: \/\.well-known\/oauth-protected-resource\/mcp(?:\s|$)/);
+
+  const apiRoute = manifestForFilename(docs, "httproute-api.yaml");
+  for (const path of [
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/openid-configuration",
+    "/oauth/authorize",
+    "/oauth/token",
+    "/oauth/register",
+    "/oauth/revoke",
+    "/oauth/jwks",
+  ]) {
+    assert.match(apiRoute, new RegExp(`value: ${path.replaceAll("/", "\\/")}(?:\\s|$)`));
+  }
+  assert.doesNotMatch(
+    apiRoute,
+    /oauth-authorization-server\/mcp|openid-configuration\/mcp|type: PathPrefix\s*\n\s*value: \/oauth/,
+    "the gateway must route only actual OpenIddict discovery, JWKS, and protocol endpoints",
   );
   const apiSaManifest = manifestForFilename(docs, "serviceaccount-api.yaml");
   assert.match(

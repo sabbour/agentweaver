@@ -264,10 +264,6 @@ spec:
                   key: repo-app-id
             - name: Auth__RepoApp__PrivateKeySecretName
               value: repo-app-private-key
-            # Backward-compat: allow raw GitHub tokens while clients migrate to the new flow.
-            # Flip to "false" once all MCP clients are using Agentweaver-minted tokens.
-            - name: Auth__Mcp__AllowGitHubPassthrough
-              value: "true"
             # GitHub Repo App / Copilot App connection credentials persist in Key Vault so the
             # API can read them back for on-behalf-of calls. Requires "Key Vault Secrets Officer"
             # on agentweaver-api-identity (granted by scripts/aks/15-setup-identity.sh).

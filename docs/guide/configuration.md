@@ -45,11 +45,14 @@ identity. The clients receive only short-lived Agentweaver access tokens for the
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Auth:OAuth:PublicOrigin` | `http://localhost:5000` in Development; required elsewhere | Canonical issuer origin. Production requires HTTPS. Paths, query strings, fragments, and userinfo are rejected. |
+| `Auth:OAuth:PublicOrigin` | `http://localhost:5000` in Development; required elsewhere | Canonical issuer origin used by both API and MCP. MCP derives the exact `<origin>/mcp` resource, discovery URL, and challenge from it. Production requires HTTPS. |
 | `Auth:OAuth:Certificates:SigningName` | none | Azure Key Vault certificate-secret name for access-token signing |
 | `Auth:OAuth:Certificates:EncryptionName` | none | Azure Key Vault certificate-secret name for protocol artifact encryption |
 | `Auth:OAuth:DynamicRegistration:PerSourcePerDay` | `20` | Database-backed daily RFC 7591 quota per source address |
 | `Auth:OAuth:DynamicRegistration:MaximumActive` | `1000` | Deployment-wide active dynamic-client quota |
+
+The MCP resource server has no direct-Entra, raw-GitHub, API-key, or shared-key fallback.
+It accepts only Agentweaver broker JWTs for `mcp:invoke`.
 | `Auth:OAuth:DynamicRegistration:LifetimeDays` | `30` | Active lifetime for anonymous dynamic registrations; maintenance disables the OpenIddict application and reclaims quota |
 | `Auth:OAuth:ForwardedHeaders:TrustedNetworks` | loopback in Development; required elsewhere | Comma-separated private CIDRs containing the TLS-terminating proxies. Forwarded scheme/host values from every other source are ignored. AKS deployment derives this from the cluster pod CIDRs. |
 | `Auth:OAuth:Clients` | empty | Statically known public native clients, each with `ClientId`, `DisplayName`, exact `RedirectUris`, and optional `Scopes` |

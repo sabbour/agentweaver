@@ -11,6 +11,12 @@ plus `/mcp`. Authorization and token requests must each carry that one exact
 `resource` value; omission, duplication, and normalized variants are rejected.
 The canonical values are not derived from request headers.
 
+The MCP resource server publishes RFC 9728 metadata anonymously at both
+`/.well-known/oauth-protected-resource` and
+`/.well-known/oauth-protected-resource/mcp`. Both documents advertise the exact
+`<public-origin>/mcp` resource, the same-origin authorization server, and only
+`mcp:invoke`.
+
 The server supports authorization code and rotating refresh-token grants only.
 PKCE S256 and explicit consent are required. The stable least-privilege scope is
 `mcp:invoke`; requesting additional approved scopes re-opens consent. Password,
@@ -45,6 +51,8 @@ run-capability endpoints. Issuer and audience remain pinned to the configured
 canonical origin and `/mcp` resource, so `Host` and forwarded-host input cannot
 steer validation.
 
-The separate MCP process retains its existing validation path until the layer-4
-MCP cutover. Layer 4 may remove that transitional path, but must not broaden the
-set of API endpoint classifications that accept broker credentials.
+The MCP process uses ASP.NET/OpenIddict remote discovery and JWKS validation. It
+accepts only broker JWTs with the exact issuer and audience, a keyed RS256
+signature, valid lifetime, subject, and `mcp:invoke` scope. It forwards only that
+validated token to the API. The API accepts broker credentials only on
+`PlatformOrMcp` endpoints and continues to enforce project authorization.

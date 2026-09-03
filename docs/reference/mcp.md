@@ -10,22 +10,19 @@ The Agentweaver MCP server exposes all Agentweaver operations as structured tool
 
 ## Setup
 
-Set your **own per-user bearer token** before starting any MCP host that uses the server:
+Set an Agentweaver broker token before starting a local stdio MCP host:
 
 ```
-AGENTWEAVER_TOKEN=$(gh auth token)
+AGENTWEAVER_TOKEN=<agentweaver-broker-token>
 ```
 
-`AGENTWEAVER_TOKEN` is your personal credential — an Agentweaver-minted OAuth access token or a
-GitHub token (e.g. from `gh auth token`). The backend attributes calls to the real user and
-enforces project ownership, so you only ever reach your own projects.
+`AGENTWEAVER_TOKEN` must be issued by Agentweaver for the exact
+`<public-origin>/mcp` audience and include `mcp:invoke`. The API attributes calls to its
+subject and enforces project ownership.
 
-::: danger Do not use the shared service key for human clients
-`AGENTWEAVER_API_KEY` is the **internal service-to-service** credential. The API maps it to the
-trusted `agentweaver-internal` identity, which is **exempt from project-ownership checks** — a
-client holding it can read or mutate *any* project regardless of who owns it (see issue #474).
-Never configure it on a desktop/stdio MCP client. It exists only for in-process/service callers.
-If a stdio client starts with only `AGENTWEAVER_API_KEY` set, the server refuses to start to protect against silent credential leaks. Legitimate service-to-service usage must explicitly set `AGENTWEAVER_ALLOW_SHARED_KEY=true` to force the insecure fallback.
+::: danger Broker tokens only
+Raw Entra access tokens, GitHub tokens, API keys, and shared service credentials are not MCP
+credentials. Stdio mode refuses to start without a configured broker token.
 :::
 
 Optionally override the API base URL (defaults to `http://localhost:5000`):
@@ -95,19 +92,23 @@ avoid the collision.
 
 The MCP server forwards every tool call to the Agentweaver API as an authenticated HTTP request using a **bearer token** (`Authorization: Bearer <key>`).
 
-- **Per-user token (recommended).** `AGENTWEAVER_TOKEN` is your own bearer (OAuth access token or a
-  GitHub token). In stdio mode — where there is no inbound HTTP request to carry your identity — it
-  is what the server forwards to the backend, so the API attributes calls to the real user and
-  enforces project ownership. This is the correct credential for desktop/stdio MCP clients.
-- **Per-caller token propagation (HTTP mode).** When the MCP server itself is reached over HTTP with a
-  bearer token (validated by `McpBearerTokenMiddleware`), that caller's token is stashed on the
-  request (`HttpContext.Items["mcp.bearer_token"]`) and `AgentweaverApiClient.GetEffectiveApiKey()`
-  uses it for the downstream API call — so each caller's identity flows through to the API rather
-  than collapsing onto a shared key. SSE streams (`run_watch`) propagate the same effective token.
-- **Shared service key (`AGENTWEAVER_API_KEY`) — internal only.** Used as a last-resort fallback for
-  genuine in-process/service callers. It maps to the trusted `agentweaver-internal` identity that
-  **bypasses project-ownership checks**, so it must never be handed to a human/stdio client (#474).
-  Credential-selection precedence is: inbound per-request token &gt; `AGENTWEAVER_TOKEN` &gt; `AGENTWEAVER_API_KEY`.
+- **HTTP mode.** ASP.NET/OpenIddict validates the broker JWT through remote discovery/JWKS,
+  requiring the exact issuer and audience, keyed RS256 signature, valid lifetime, subject, and
+  `mcp:invoke`. Only that validated token is forwarded to the API.
+- **Stdio mode.** The configured `AGENTWEAVER_TOKEN` is forwarded. The API performs the same broker
+  validation before any `PlatformOrMcp` endpoint runs.
+- **No fallback.** Raw Entra, GitHub, API-key, malformed, expired, wrong-audience, wrong-issuer,
+  wrong-scope, and unknown-key credentials are rejected.
+
+Both RFC 9728 endpoints are anonymous:
+
+- `/.well-known/oauth-protected-resource`
+- `/.well-known/oauth-protected-resource/mcp`
+
+They advertise the exact `<public-origin>/mcp` resource, same-origin authorization server, and
+`mcp:invoke`. A missing token receives a `401` challenge with `resource_metadata` and `scope` but
+no OAuth error. Invalid tokens add `error="invalid_token"`; missing scope adds
+`error="insufficient_scope"`.
 
 ## Health probe
 
@@ -117,7 +118,8 @@ The MCP server exposes an unauthenticated liveness probe:
 GET /healthz → 200 { "status": "healthy" }
 ```
 
-`/healthz` is explicitly bypassed by the bearer-token middleware so orchestrators (containers, Kubernetes probes) can check liveness without a key.
+`/healthz` and both RFC 9728 protected-resource metadata paths are explicitly public. MCP protocol
+paths require broker authentication.
 
 ## Error handling
 

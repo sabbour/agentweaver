@@ -33,11 +33,10 @@ There are two entry points:
   needs a valid, authenticated bearer token, not an arbitrary string.
   `transport-http.mjs` attaches `--token`/`AGENTWEAVER_TOKEN` as the request's
   `Authorization` header only when a token is supplied — an unauthenticated
-  request will be rejected by the server. Obtain a token via the app's own
-  OAuth sign-in flow (or `gh auth token` where that identity is what the
-  Agentweaver server trusts); stdio transport has no such requirement since it
-  never leaves the local subprocess.
-- Authentication: `AGENTWEAVER_TOKEN`, `GITHUB_TOKEN`, or `--token`. The smoke
+  request will be rejected by the server. Obtain an Agentweaver broker token via
+  the app's OAuth flow; raw Entra and GitHub tokens are rejected. Stdio transport
+  passes its configured broker token only to downstream API calls.
+- Authentication: `AGENTWEAVER_TOKEN` or `--token`. The smoke
   assumes GitHub capability authorization is supplied out of band; it does not
   automate a one-time browser handoff.
 - Project selection: `--project-id` / `AGENTWEAVER_SMOKE_PROJECT_ID` takes

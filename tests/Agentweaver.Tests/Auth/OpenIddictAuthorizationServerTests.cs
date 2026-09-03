@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Memory;
+using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -48,6 +49,22 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             .Select(x => x.GetString()).Should().BeEquivalentTo("authorization_code", "refresh_token");
         metadata.GetProperty("token_endpoint_auth_methods_supported").EnumerateArray()
             .Select(x => x.GetString()).Should().Equal("none");
+
+        using var oidcResponse = await _client.GetAsync("/.well-known/openid-configuration");
+        oidcResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var oidcDocument = JsonDocument.Parse(await oidcResponse.Content.ReadAsStringAsync());
+        oidcDocument.RootElement.GetProperty("issuer").GetString().Should().Be(
+            metadata.GetProperty("issuer").GetString());
+        oidcDocument.RootElement.GetProperty("jwks_uri").GetString().Should().Be(
+            metadata.GetProperty("jwks_uri").GetString());
+
+        using var jwksResponse = await _client.GetAsync("/oauth/jwks");
+        jwksResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var jwksDocument = JsonDocument.Parse(await jwksResponse.Content.ReadAsStringAsync());
+        jwksDocument.RootElement.GetProperty("keys").EnumerateArray().Should().Contain(key =>
+            key.GetProperty("use").GetString() == "sig"
+            && key.GetProperty("alg").GetString() == SecurityAlgorithms.RsaSha256
+            && !string.IsNullOrWhiteSpace(key.GetProperty("kid").GetString()));
     }
 
     [Fact]
@@ -243,12 +260,52 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         });
         var accessToken = token.GetProperty("access_token").GetString()!;
         accessToken.Count(c => c == '.').Should().Be(2);
+        var unownedProjectId = ProjectId.New();
+        await using (var projectScope = _factory.Services.CreateAsyncScope())
+        {
+            var now = DateTimeOffset.UtcNow;
+            await projectScope.ServiceProvider.GetRequiredService<IProjectStore>().InsertAsync(new Project
+            {
+                Id = unownedProjectId,
+                Name = $"Broker authorization {Guid.NewGuid():N}",
+                Origin = ProjectOrigin.Blank(),
+                WorkingDirectory = Directory.GetCurrentDirectory(),
+                DefaultBranch = "main",
+                Owner = "different-subject",
+                ProviderSettings = new ProjectProviderSettings
+                {
+                    DefaultProvider = ModelSource.GitHubCopilot,
+                },
+                State = ProjectState.Active,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            await projectScope.ServiceProvider.GetRequiredService<IProjectRoleAssignmentStore>()
+                .UpsertAsync(new ProjectRoleAssignment
+                {
+                    ProjectId = unownedProjectId,
+                    PrincipalId = "different-subject",
+                    Role = ProjectRole.Owner,
+                    GrantedBy = "different-subject",
+                    GrantedAt = now,
+                });
+        }
         using (var brokerRequest = new HttpRequestMessage(HttpMethod.Get, "/api/projects"))
         {
             brokerRequest.Headers.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
             using var brokerResponse = await _client.SendAsync(brokerRequest);
             brokerResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+        using (var unownedRequest = new HttpRequestMessage(
+                   HttpMethod.Get,
+                   $"/api/projects/{unownedProjectId.Value}"))
+        {
+            unownedRequest.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+            using var unownedResponse = await _client.SendAsync(unownedRequest);
+            unownedResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden,
+                "broker authentication must not bypass project authorization");
         }
         using (var unrelatedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/auth/session"))
         {

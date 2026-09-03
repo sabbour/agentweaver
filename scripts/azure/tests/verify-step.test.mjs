@@ -12,6 +12,7 @@ import {
   kubectlOk,
   httpStatus,
   httpJson,
+  httpDiscoveryJson,
   firstProjectId,
 } from "../steps/40-verify.mjs";
 
@@ -65,6 +66,22 @@ test("httpStatus: returns '000' on network failure", async () => {
 test("httpJson: returns [] on non-ok response", async () => {
   const fetchImpl = async () => ({ ok: false, status: 500 });
   assert.deepEqual(await httpJson("https://example.test/api/projects", "tok", { fetchImpl }), []);
+});
+
+test("httpDiscoveryJson: reads anonymous metadata and fails closed", async () => {
+  const expected = { issuer: "https://example.test/" };
+  assert.deepEqual(
+    await httpDiscoveryJson("https://example.test/.well-known/openid-configuration", {
+      fetchImpl: async () => ({ ok: true, json: async () => expected }),
+    }),
+    expected,
+  );
+  assert.equal(
+    await httpDiscoveryJson("https://example.test/.well-known/openid-configuration", {
+      fetchImpl: async () => ({ ok: false }),
+    }),
+    null,
+  );
 });
 
 test("firstProjectId: handles array/projects/items shapes and id/projectId keys", () => {
@@ -161,6 +178,33 @@ test("run: performs authenticated feature checks when HOST resolves and a token 
   const calledUrls = [];
   const fetchImpl = async (url, init) => {
     calledUrls.push(url);
+    const origin = "https://agentweaver.westus2.cloudapp.azure.com";
+    if (url.includes("oauth-protected-resource")) {
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({
+          resource: `${origin}/mcp`,
+          authorization_servers: [`${origin}/`],
+          scopes_supported: ["mcp:invoke"],
+        }),
+      };
+    }
+    if (url.endsWith("/.well-known/oauth-authorization-server")
+      || url.endsWith("/.well-known/openid-configuration")) {
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({ issuer: `${origin}/`, jwks_uri: `${origin}/oauth/jwks` }),
+      };
+    }
+    if (url.endsWith("/oauth/jwks")) {
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({ keys: [{ use: "sig", alg: "RS256", kid: "key-1" }] }),
+      };
+    }
     if (url.endsWith("/api/projects") && !init.headers?.Authorization) return { status: 401, ok: false, json: async () => [] };
     if (url.endsWith("/api/auth/github")) return { status: 200, ok: true, json: async () => ({}) };
     if (url.endsWith("/api/projects")) return { status: 200, ok: true, json: async () => [{ id: "proj-1" }] };

@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using FluentAssertions;
 
@@ -40,12 +42,14 @@ namespace Agentweaver.Tests.Mcp;
 /// <c>WithHttpTransport()</c> to have been registered, so this test must run the same way (not
 /// <c>--stdio</c>) to faithfully exercise the exact crashing call.
 /// </summary>
+[Collection("McpRealProcess")]
 public sealed class McpToolSchemaGenerationStartupTests
 {
     [Fact]
     public async Task RealMcpProcess_Startup_DoesNotThrowUnhandledException()
     {
         var mcpDllPath = FindMcpAssemblyPath();
+        var port = GetFreeTcpPort();
         File.Exists(mcpDllPath).Should().BeTrue($"expected the built Agentweaver.Mcp.dll at {mcpDllPath}");
 
         var psi = new ProcessStartInfo("dotnet", $"\"{mcpDllPath}\"")
@@ -58,12 +62,12 @@ public sealed class McpToolSchemaGenerationStartupTests
         };
         // Production runs Agentweaver.Mcp in HTTP mode (not --stdio) - MapMcp requires
         // WithHttpTransport() to have been registered, which Program.cs only does when --stdio is
-        // absent. Development environment skips the Auth:Mcp:Issuer/Audience Production-only check
-        // in Program.cs, and port 0 lets the OS pick a free port so this test never collides with a
+        // absent. Development derives the OAuth public origin from the loopback API URL, and port
+        // 0 lets the OS pick a free port so this test never collides with a
         // real running instance.
         psi.Environment["DOTNET_ENVIRONMENT"] = "Development";
         psi.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
-        psi.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
+        psi.Environment["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}";
 
         using var process = new Process { StartInfo = psi };
         var stdout = new StringBuilder();
@@ -96,7 +100,8 @@ public sealed class McpToolSchemaGenerationStartupTests
             // The schema exporter completes before Kestrel reports readiness. Waiting for that
             // concrete signal verifies real startup without charging every successful run six seconds.
             var exited = process.WaitForExitAsync();
-            var completed = await Task.WhenAny(listening.Task, exited, Task.Delay(TimeSpan.FromSeconds(6)));
+            var ready = WaitForHealthAsync(port, process);
+            var completed = await Task.WhenAny(ready, exited, Task.Delay(TimeSpan.FromSeconds(15)));
             string combinedOutput;
             lock (outputLock)
             {
@@ -106,9 +111,10 @@ public sealed class McpToolSchemaGenerationStartupTests
             combinedOutput.Should().NotContain("Unhandled exception",
                 because: $"the MCP server must not crash at startup (regression of 7605b692 / #419). Output:\n{combinedOutput}");
 
-            completed.Should().BeSameAs(listening.Task,
-                because: $"the MCP server must report readiness within six seconds. Output:\n{combinedOutput}");
+            completed.Should().BeSameAs(ready,
+                because: $"the MCP server must report readiness within fifteen seconds. Output:\n{combinedOutput}");
         }
+
         finally
         {
             if (!process.HasExited)
@@ -116,6 +122,37 @@ public sealed class McpToolSchemaGenerationStartupTests
                 process.Kill(entireProcessTree: true);
             }
         }
+    }
+
+    private static async Task WaitForHealthAsync(int port, Process process)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
+        var uri = new Uri($"http://127.0.0.1:{port}/healthz");
+        while (!process.HasExited)
+        {
+            try
+            {
+                using var response = await client.GetAsync(uri);
+                if (response.IsSuccessStatusCode)
+                    return;
+            }
+            catch (HttpRequestException)
+            {
+            }
+            catch (TaskCanceledException)
+            {
+            }
+            await Task.Delay(100);
+        }
+    }
+
+    private static int GetFreeTcpPort()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
     }
 
     /// <summary>

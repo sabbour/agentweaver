@@ -1,78 +1,69 @@
-using System;
-using System.Threading.Tasks;
 using Agentweaver.Mcp;
 using FluentAssertions;
-using Xunit;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 
 namespace Agentweaver.Tests.Mcp;
 
-[Trait("Category", "ProcessEnvironment")]
-public sealed class McpProgramTests : IDisposable
+[Collection("McpRealProcess")]
+public sealed class McpProgramTests
 {
-    public McpProgramTests()
-    {
-        // Clear environment variables before each test
-        Environment.SetEnvironmentVariable("AGENTWEAVER_TOKEN", null);
-        Environment.SetEnvironmentVariable("AGENTWEAVER_API_KEY", null);
-        Environment.SetEnvironmentVariable("AGENTWEAVER_ALLOW_SHARED_KEY", null);
-    }
-
-    public void Dispose()
-    {
-        // Cleanup environment variables after each test
-        Environment.SetEnvironmentVariable("AGENTWEAVER_TOKEN", null);
-        Environment.SetEnvironmentVariable("AGENTWEAVER_API_KEY", null);
-        Environment.SetEnvironmentVariable("AGENTWEAVER_ALLOW_SHARED_KEY", null);
-    }
-
     [Fact]
-    public async Task Main_Stdio_WithoutUserToken_WithApiKey_RefusesToStart()
+    public async Task Main_Stdio_WithoutBrokerToken_RefusesToStart()
     {
-        Environment.SetEnvironmentVariable("AGENTWEAVER_API_KEY", "shared-internal-key");
-        
-        // When running in stdio mode without a user token but with a shared key,
-        // it should refuse to start (return 1) to prevent silent fallback to the shared key (#474)
-        var result = await McpProgram.Main(new[] { "--stdio" });
-        
-        result.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task Main_Stdio_WithoutUserToken_WithApiKey_AndAllowSharedKey_DoesNotRefuseToStart()
-    {
-        Environment.SetEnvironmentVariable("AGENTWEAVER_API_KEY", "shared-internal-key");
-        Environment.SetEnvironmentVariable("AGENTWEAVER_ALLOW_SHARED_KEY", "true");
-        
-        // This will attempt to start the WebApplication and block, but we can't let it run forever in tests.
-        // Instead of actually starting the app and getting stuck, we know it returns 1 on failure.
-        // If we pass an invalid configuration for the host or just let it throw a different exception
-        // (like port already in use), we know it got past the credential check.
-        // To be safer and prevent hanging the test suite, we can use a timeout.
-        
-        var task = McpProgram.Main(new[] { "--stdio", "--urls", "http://localhost:0" });
-        var completed = await Task.WhenAny(task, Task.Delay(1500));
-        
-        // If it returns 1, the task will have completed with result 1
-        if (completed == task && task.Status == TaskStatus.RanToCompletion)
+        var prior = Environment.GetEnvironmentVariable("AGENTWEAVER_TOKEN");
+        try
         {
-            (await task).Should().NotBe(1, "Should not fail credential check when AGENTWEAVER_ALLOW_SHARED_KEY is true");
+            Environment.SetEnvironmentVariable("AGENTWEAVER_TOKEN", null);
+            var result = await McpProgram.Main(["--stdio"]);
+            result.Should().Be(1);
         }
-        
-        // Test passes if it didn't return 1 (either threw or is still running)
+        finally
+        {
+            Environment.SetEnvironmentVariable("AGENTWEAVER_TOKEN", prior);
+        }
     }
 
     [Fact]
-    public async Task Main_Stdio_WithUserToken_DoesNotRefuseToStart()
+    public void OAuthConfiguration_DerivesCanonicalResourceAndMetadata()
     {
-        Environment.SetEnvironmentVariable("AGENTWEAVER_API_KEY", "shared-internal-key");
-        Environment.SetEnvironmentVariable("AGENTWEAVER_TOKEN", "user-token");
-        
-        var task = McpProgram.Main(new[] { "--stdio", "--urls", "http://localhost:0" });
-        var completed = await Task.WhenAny(task, Task.Delay(1500));
-        
-        if (completed == task && task.Status == TaskStatus.RanToCompletion)
-        {
-            (await task).Should().NotBe(1, "Should not fail credential check when user token is provided");
-        }
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Auth:OAuth:PublicOrigin"] = "https://agentweaver.example",
+            })
+            .Build();
+
+        var resolved = McpOAuthConfiguration.Resolve(
+            configuration,
+            new TestEnvironment("Production"),
+            "http://agentweaver-api:8080");
+
+        resolved.Issuer.AbsoluteUri.Should().Be("https://agentweaver.example/");
+        resolved.Resource.AbsoluteUri.Should().Be("https://agentweaver.example/mcp");
+        resolved.ResourceMetadata.AbsoluteUri.Should().Be(
+            "https://agentweaver.example/.well-known/oauth-protected-resource/mcp");
+    }
+
+    [Fact]
+    public void OAuthConfiguration_ProductionRequiresConfiguredHttpsOrigin()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var action = () => McpOAuthConfiguration.Resolve(
+            configuration,
+            new TestEnvironment("Production"),
+            "http://agentweaver-api:8080");
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*PublicOrigin is required*");
+    }
+
+    private sealed class TestEnvironment(string name) : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = name;
+        public string ApplicationName { get; set; } = "tests";
+        public string ContentRootPath { get; set; } = Directory.GetCurrentDirectory();
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 }

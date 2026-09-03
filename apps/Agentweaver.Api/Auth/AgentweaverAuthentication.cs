@@ -8,6 +8,7 @@ using Agentweaver.Api.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
 
@@ -194,7 +195,7 @@ internal sealed class BrokerBearerAuthenticationHandler(
 {
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        if (!TryGetBearer(out _, out var result))
+        if (!TryGetBearer(out var token, out var result))
             return result!;
 
         var brokerResult = await Context.AuthenticateAsync(
@@ -204,9 +205,27 @@ internal sealed class BrokerBearerAuthenticationHandler(
                 brokerResult.Failure ?? new InvalidOperationException("The broker bearer token is invalid."));
 
         var source = brokerResult.Principal;
+        JsonWebToken jwt;
+        try
+        {
+            jwt = new JsonWebTokenHandler().ReadJsonWebToken(token);
+        }
+        catch (Exception exception)
+        {
+            return AuthenticateResult.Fail(exception);
+        }
+
+        var audiences = source.GetAudiences().ToArray();
         if (!source.HasScope(OAuthServerConfiguration.McpScope)
-            || !source.GetAudiences().Contains(configuration.Resource.AbsoluteUri, StringComparer.Ordinal))
-            return AuthenticateResult.Fail("The broker bearer token has an invalid scope or audience.");
+            || audiences.Length != 1
+            || !string.Equals(audiences[0], configuration.Resource.AbsoluteUri, StringComparison.Ordinal)
+            || !string.Equals(
+                jwt.Issuer.TrimEnd('/'),
+                configuration.PublicOrigin.AbsoluteUri.TrimEnd('/'),
+                StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(jwt.Kid)
+            || !string.Equals(jwt.Alg, SecurityAlgorithms.RsaSha256, StringComparison.Ordinal))
+            return AuthenticateResult.Fail("The broker bearer token has an invalid trust boundary.");
 
         var subject = source.GetClaim(OpenIddictConstants.Claims.Subject);
         if (string.IsNullOrWhiteSpace(subject))

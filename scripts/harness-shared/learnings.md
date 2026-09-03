@@ -939,3 +939,14 @@ timeout, and fail persistent auth/loading or sign-in states closed. Failed comma
 persisted separately from successful evidence, and `finish` also rejects empty,
 auth-shell-only, or failed-command sessions so a transient bootstrap screen cannot
 produce `driver.pass: true`.
+
+---
+
+## MCP accepts Agentweaver broker tokens only
+
+- date: 2026-09-03
+- category: environment-fact
+- surface: mcp
+- status: fixed
+
+Hosted MCP accepts only Agentweaver broker JWTs for the canonical /mcp resource with mcp:invoke. Raw Entra, GitHub, and API-key credentials are rejected; stdio requires AGENTWEAVER_TOKEN and the API validates that broker token.
