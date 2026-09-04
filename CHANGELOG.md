@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.2
+
+### Patch Changes
+
+- 8315ab0: Wrap shorter workflow sequences into compact serpentine layouts and separate loopback connectors into distinct outer routing lanes.
+
 ## 0.28.1
 
 ### Patch Changes
