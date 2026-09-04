@@ -21,6 +21,7 @@ import { NotificationBell } from './NotificationBell';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { StatusDot } from './StatusDot';
 import { GitHubIdentityBadge } from '../GitHubIdentityBadge';
+import { createNewAssistantSessionState } from '../../routes/assistantNavigation';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
@@ -118,7 +119,7 @@ export function LeftNav({
 
   const startNewSession = () => {
     const search = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
-    navigate(`/assistant${search}`);
+    navigate(`/assistant${search}`, { state: createNewAssistantSessionState() });
   };
 
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);

@@ -67,7 +67,14 @@ function NewSessionRouteHarness() {
   const navigate = useNavigate();
   return (
     <>
-      <button type="button" onClick={() => navigate('/assistant?project=proj-7')} data-testid="new-session-nav">
+      <button
+        type="button"
+        onClick={() => navigate(
+          '/assistant?project=proj-7',
+          { state: { assistantSessionKey: 'explicit-new-session' } },
+        )}
+        data-testid="new-session-nav"
+      >
         New session
       </button>
       <AssistantRoute />
@@ -263,11 +270,15 @@ describe('AssistantRunPage', () => {
     });
   });
 
-  it('binds the transcript to the new run while the opening message is still running', async () => {
+  it('preserves a message sent before the new session stream connects', async () => {
     const openingTurn = deferred<typeof REAL_MESSAGE_RESPONSE>();
     vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(openingTurn.promise);
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      status: 'connecting',
+    };
 
-    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    render(<Wrapper><AssistantRoute /></Wrapper>);
     typeAndSend('stream the first reply');
 
     await waitFor(() => {
@@ -277,9 +288,179 @@ describe('AssistantRunPage', () => {
       );
       expect(screen.queryByTestId('assistant-empty-state')).toBeNull();
       expect(screen.getByText(/Connected to operator run assistant-run-1/)).toBeTruthy();
+      expect(screen.getByTestId('assistant-pending-message').textContent).toContain(
+        'stream the first reply',
+      );
     });
 
     openingTurn.resolve(REAL_MESSAGE_RESPONSE);
+  });
+
+  it('merges reconnect history with a pending message without rendering a duplicate', async () => {
+    const persistedHistory = deferred<Array<{
+      sequence: number;
+      type: string;
+      payload: Record<string, unknown>;
+    }>>();
+    vi.mocked(apiClient.getRunEvents).mockReturnValueOnce(persistedHistory.promise as never);
+    const view = render(<Wrapper><AssistantRoute /></Wrapper>);
+
+    typeAndSend('keep this visible');
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-pending-message').textContent).toContain(
+        'keep this visible',
+      );
+    });
+
+    const userEvent = {
+      sequence: 1,
+      type: 'agent.message',
+      payload: {
+        messageId: 'user-1',
+        role: 'user',
+        content: 'keep this visible',
+      },
+    };
+    persistedHistory.resolve([userEvent]);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+      expect(screen.getAllByTestId('timeline-message').filter(
+        (message) => message.getAttribute('data-role') === 'user',
+      )).toHaveLength(1);
+    });
+
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [userEvent],
+      status: 'streaming',
+    };
+    view.rerender(<Wrapper><AssistantRoute /></Wrapper>);
+
+    expect(screen.getAllByTestId('timeline-message').filter(
+      (message) => message.getAttribute('data-role') === 'user',
+    )).toHaveLength(1);
+  });
+
+  it('does not reconcile a repeated message against an older identical history turn', async () => {
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [{
+        sequence: 1,
+        type: 'agent.message',
+        payload: { messageId: 'user-1', role: 'user', content: 'repeat this' },
+      }],
+    };
+    const repeatedTurn = deferred<typeof REAL_MESSAGE_RESPONSE>();
+    vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(repeatedTurn.promise);
+    const view = render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await screen.findByText('repeat this');
+    typeAndSend('repeat this');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-pending-message').textContent).toContain(
+        'repeat this',
+      );
+    });
+
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [
+        mockRunStreamState.current.events[0],
+        {
+          sequence: 2,
+          type: 'agent.message',
+          payload: { messageId: 'user-2', role: 'user', content: 'repeat this' },
+        },
+      ],
+    };
+    view.rerender(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+      expect(screen.getAllByTestId('timeline-message').filter(
+        (message) => message.getAttribute('data-role') === 'user',
+      )).toHaveLength(2);
+    });
+    repeatedTurn.resolve(REAL_MESSAGE_RESPONSE);
+  });
+
+  it('keeps a repeated optimistic message visible when delayed seed history contains an older identical turn', async () => {
+    const persistedHistory = deferred<Array<{
+      sequence: number;
+      type: string;
+      payload: Record<string, unknown>;
+    }>>();
+    vi.mocked(apiClient.getRunEvents).mockReturnValueOnce(persistedHistory.promise as never);
+    const view = render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    typeAndSend('repeat this');
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-pending-message').textContent).toContain('repeat this');
+    });
+
+    persistedHistory.resolve([{
+      sequence: 1,
+      type: 'agent.message',
+      payload: { messageId: 'user-1', role: 'user', content: 'repeat this' },
+    }]);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('assistant-pending-message').textContent).toContain('repeat this');
+      expect(screen.getAllByTestId('timeline-message').filter(
+        (message) => message.getAttribute('data-role') === 'user',
+      )).toHaveLength(1);
+    });
+
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [{
+        sequence: 2,
+        type: 'agent.message',
+        payload: { messageId: 'user-2', role: 'user', content: 'repeat this' },
+      }],
+    };
+    view.rerender(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+      expect(screen.getAllByTestId('timeline-message').filter(
+        (message) => message.getAttribute('data-role') === 'user',
+      )).toHaveLength(2);
+    });
   });
 
   it('clears the textarea before the first-run create request settles', async () => {
@@ -361,7 +542,9 @@ describe('AssistantRunPage', () => {
       );
       expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
     });
-    expect(screen.getByTestId('assistant-pending-message').textContent).toContain('second message');
+    expect(screen.getAllByTestId('assistant-pending-message').some(
+      (message) => message.textContent?.includes('second message'),
+    )).toBe(true);
 
     messageRequest.resolve(REAL_MESSAGE_RESPONSE);
     await waitFor(() => {
@@ -378,12 +561,14 @@ describe('AssistantRunPage', () => {
     await waitFor(() => {
       expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
     });
+    expect(screen.getByTestId('assistant-pending-message').textContent).toContain('hello');
 
     createRequest.reject(new Error('Request failed'));
     await waitFor(() => {
       expect(screen.getByTestId('assistant-error').textContent).toContain('Request failed');
     });
     expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
+    expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
   });
 
   it('leaves empty or busy submissions unchanged and does not dispatch the old message twice', async () => {
@@ -583,6 +768,73 @@ describe('AssistantRunPage', () => {
         { message: 'continuing message' },
       );
     });
+  });
+
+  it('does not resume a failed conversation after explicitly starting a new session', async () => {
+    render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?project=proj-7&runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<NewSessionRouteHarness />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    const err = new ApiError(404, JSON.stringify({
+      error: 'run_not_found',
+      message: 'Run not found.',
+    }));
+    vi.mocked(apiClient.sendAssistantMessage).mockRejectedValueOnce(err);
+
+    typeAndSend('failed message');
+    await waitFor(() => expect(screen.getByTestId('assistant-empty-state')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('new-session-nav'));
+    vi.mocked(apiClient.createAssistantRun).mockResolvedValueOnce(REAL_CREATE_RESPONSE);
+    vi.mocked(apiClient.sendAssistantMessage).mockResolvedValueOnce(REAL_MESSAGE_RESPONSE);
+    typeAndSend('brand new message');
+
+    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+    expect(apiClient.createAssistantRun).toHaveBeenCalledWith(
+      expect.objectContaining({ resume_from_run_id: undefined }),
+    );
+  });
+
+  it('refreshes durable history and reconnects after a successful send on a terminally errored stream', async () => {
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      status: 'error',
+      error: 'connection lost',
+      reconnect: vi.fn(),
+    };
+    vi.mocked(apiClient.getRunEvents)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        sequence: 1,
+        type: 'agent.message',
+        payload: { messageId: 'user-1', role: 'user', content: 'reconcile me' },
+      }] as never);
+
+    render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await waitFor(() => expect(apiClient.getRunEvents).toHaveBeenCalledTimes(1));
+    typeAndSend('reconcile me');
+
+    await waitFor(() => {
+      expect(apiClient.getRunEvents).toHaveBeenCalledTimes(2);
+      expect(mockRunStreamState.current.reconnect).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+    });
+    expect(screen.getByRole('button', { name: 'Retry sync' })).toBeDefined();
   });
 
   it('shows a conversation-ended message and resets on 409 operator_run_closed from sendAssistantMessage', async () => {
