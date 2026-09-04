@@ -18,9 +18,8 @@ no real UI chrome (no icons, no card affordances, no status/category badges) —
 visually indistinguishable from a flowchart tool's default output, and nothing
 like the product's actual Fluent UI v9 styling.
 
-This version instead renders each diagram as a real `<ReactFlow>` graph (the
-same `@xyflow/react` + `dagre` stack the product uses for its live workflow/
-topology graphs), with a custom node card component
+This version instead renders each diagram as a real `<ReactFlow>` graph, with
+a custom deterministic banded layout and a custom node card component
 (`docs/diagram-renderer/src/nodes.tsx`) that mirrors
 `CoordinatorTopologyGraph.tsx`'s card layout: a rounded card, an icon + title +
 subtitle column, and a pill-shaped category badge -- using the app's actual
@@ -38,18 +37,14 @@ spanning several ranks slices straight through any card in between and several
 near-parallel edges collapse onto one another -- illegible, and nothing like a
 professional draw.io/Fluent architecture diagram.
 
-Instead, each edge is drawn along the **poly-line dagre itself routes** for it
-(`docs/diagram-renderer/src/edges.tsx`'s `RoutedEdge` renders `dagre`'s
-computed `edge.points`, rounded at the corners so it still reads like a
-smoothstep curve). dagre performs real layered edge routing -- inserting
-per-rank waypoints chosen to thread each line through the gaps between ranked
-nodes -- so edges follow those gaps instead of cutting across cards. Labelled
-edges additionally hand dagre their estimated footprint (`width`/`height`) so
-it *reserves* a non-overlapping slot for each label along the route; a light
-collision-avoidance pass in `DiagramCanvas.tsx` then breaks any residual label
-overlap and keeps labels off the opaque card backgrounds. This is a generic
-pipeline fix -- every current and future graph-spec gets overlap-free routing
-with no per-diagram tuning.
+Instead, `DiagramCanvas.tsx` deterministically divides the graph into authored
+group bands and edge-derived rank bands, then routes orthogonal polylines
+through measured gutters between cards. Parallel runs receive separate packed
+lanes, long spans use side channels, and linear runs fold into compact
+serpentine rows. Label dimensions participate in the spacing calculation, and
+each label remains centred on its own connector while avoiding other labels
+and crossing lines. This is a generic pipeline fix -- every current and future
+graph-spec gets repeatable, card-safe routing with no per-diagram tuning.
 
 ## How it works
 
@@ -67,6 +62,11 @@ To add a 4th diagram: add one `docs/diagrams/src/<name>.json` graph-spec (see
 `docs/diagrams/src/graph-spec.schema.json` for the schema), run
 `npm run docs:render-diagrams`, and commit the new `.png` + `.hash.txt`. No
 per-diagram code is needed anywhere in the pipeline.
+
+The built-in workflow graph-specs are generated from
+`packages/Agentweaver.Squad/Catalog/Resources/workflows/*.yaml`. Regenerate
+those JSON files first with `node scripts/docs/workflows-to-graphspec.mjs`,
+then run `npm run docs:render-diagrams`.
 
 ## Migrating Mermaid flowcharts into this pipeline
 
