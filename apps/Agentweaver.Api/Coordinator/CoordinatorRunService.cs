@@ -874,16 +874,18 @@ public sealed class CoordinatorRunService
             switch (evt)
             {
                 case ExecutorFailedEvent failed:
-                    var reason = ContainsOutcomeSpecDraftTimeout(failed.Data)
+                    var isDraftTimeout = ContainsOutcomeSpecDraftTimeout(failed.Data);
+                    var providerFailure = isDraftTimeout ? null : FindProviderFailure(failed.Data);
+                    var reason = isDraftTimeout
                         ? "outcome_spec_draft_timeout"
-                        : $"coordinator_executor_failed:{failed.ExecutorId}";
+                        : providerFailure?.ErrorCode ?? $"coordinator_executor_failed:{failed.ExecutorId}";
                     _logger.LogError(
                         failed.Data,
                         "Coordinator executor {ExecutorId} failed for run {RunId}; transitioning to Failed with {Reason}",
                         failed.ExecutorId,
                         runId,
                         reason);
-                    await FailRunSafeAsync(runId, entry, reason).ConfigureAwait(false);
+                    await FailRunSafeAsync(runId, entry, reason, providerFailure).ConfigureAwait(false);
                     return;
 
                 case RequestInfoEvent rie:
@@ -1705,6 +1707,13 @@ public sealed class CoordinatorRunService
     }
 
     private async Task FailRunSafeAsync(string runId, RunStreamEntry entry, string reason = "watch_loop_error")
+        => await FailRunSafeAsync(runId, entry, reason, providerFailure: null).ConfigureAwait(false);
+
+    private async Task FailRunSafeAsync(
+        string runId,
+        RunStreamEntry entry,
+        string reason,
+        AgentProviderException? providerFailure)
     {
         try
         {
@@ -1722,7 +1731,24 @@ public sealed class CoordinatorRunService
                     runId);
                 return;
             }
-            entry.RecordNext(EventTypes.RunFailed, new { reason });
+            if (!entry.HasEventType(EventTypes.RunFailed))
+            {
+                if (providerFailure is null)
+                {
+                    entry.RecordNext(EventTypes.RunFailed, new { reason });
+                }
+                else
+                {
+                    entry.RecordNext(EventTypes.RunFailed, new
+                    {
+                        reason = providerFailure.ErrorCode,
+                        errorCode = providerFailure.ErrorCode,
+                        message = providerFailure.UserMessage,
+                        category = providerFailure.FailureKind.ToString(),
+                        retryable = providerFailure.IsRetryable,
+                    });
+                }
+            }
             _streamStore.Complete(runId);
             _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
         }
@@ -1738,6 +1764,17 @@ public sealed class CoordinatorRunService
             await ReleaseAgentHostPodSafeAsync(runId).ConfigureAwait(false);
             _registry.Abandon(runId);
         }
+    }
+
+    private static AgentProviderException? FindProviderFailure(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is AgentProviderException providerFailure)
+                return providerFailure;
+        }
+
+        return null;
     }
 
     /// <summary>

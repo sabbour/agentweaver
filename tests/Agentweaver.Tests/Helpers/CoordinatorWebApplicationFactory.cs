@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Helpers;
@@ -138,8 +139,8 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
             // drafting step never makes a live model call. The boilerplate spec lives in the test
             // project, not production (production fails the run when the model is unavailable).
             RemoveService<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(services);
-            services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(
-                new FakeCoordinatorSpecDrafter());
+            services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(sp =>
+                new FakeCoordinatorSpecDrafter(sp.GetRequiredService<RunStreamStore>()));
 
             // Replace the production Copilot-backed reply classifier with a deterministic, hermetic
             // fake so the confirm/revise routing at the outcome-spec gate never makes a live model

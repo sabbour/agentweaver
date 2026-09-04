@@ -806,7 +806,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         return providerFailure;
     }
 
-    private void EmitProviderFailure(AgentProviderException providerFailure)
+    internal void EmitProviderFailure(AgentProviderException providerFailure)
     {
         Emit(EventTypes.RunFailed, new
         {
