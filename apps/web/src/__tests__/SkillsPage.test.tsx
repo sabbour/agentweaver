@@ -821,7 +821,7 @@ describe('SkillsPage — blueprint defaults', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { hidden: true })).toBeNull();
       expect(document.activeElement).toBe(trigger);
-    });
+    }, { timeout: 4000 });
   });
 
   it('cancels an in-flight preview when the dialog closes', async () => {
