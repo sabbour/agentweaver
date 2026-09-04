@@ -39,6 +39,7 @@ const REPOSITORY_ACCESS_ERROR_MESSAGES: Record<string, string> = {
 const MODEL_PROVIDER_ERROR_MESSAGES: Record<string, string> = {
   github_copilot_auth_required: 'Authorize GitHub Copilot to use it as the model provider.',
   model_provider_connection_required: 'Connect a model provider to continue.',
+  project_model_provider_reconnect_required: 'Reconnect the project GitHub Copilot authorization used for unattended AI work.',
 };
 
 function repositoryAccessErrorMessage(err: unknown): string | null {
@@ -55,9 +56,6 @@ function modelProviderErrorMessage(err: unknown): string | null {
 }
 
 export function formatModelProviderErrorMessage(err: unknown, fallback?: string): string {
-  if (err instanceof ApiError && isGitHubRepoAppConnectionRequired(err)) {
-    return 'The GitHub authorization status is unavailable. Try again later.';
-  }
   const providerMessage = modelProviderErrorMessage(err);
   if (providerMessage) return providerMessage;
   const formatted = formatApiError(err, fallback);

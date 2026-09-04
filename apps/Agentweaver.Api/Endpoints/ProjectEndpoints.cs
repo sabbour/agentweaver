@@ -278,7 +278,12 @@ app.MapGet("/api/projects/{id}/github/copilot/connection", async (
         persistence, secretStore, httpClientFactory, roleAssignments, registration, logger);
     var result = await service.GetConnectionAsync(
         httpContext.GetCaller(), httpContext.User, projectId, ct).ConfigureAwait(false);
-    if (result.Outcome is not (CopilotBindingOutcome.Success or CopilotBindingOutcome.GitHubBindingUnavailable))
+    if (result.Outcome is not (
+        CopilotBindingOutcome.Success or
+        CopilotBindingOutcome.GitHubBindingUnavailable or
+        CopilotBindingOutcome.ProjectModelProviderReconnectRequired))
+        return CopilotBindingFailure(result.Outcome);
+    if (result.Outcome == CopilotBindingOutcome.ProjectModelProviderReconnectRequired)
         return CopilotBindingFailure(result.Outcome);
 
     var platformDefaultConnection = await GetPlatformDefaultCopilotConnectionAsync(

@@ -402,6 +402,68 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
     }
 
     [Fact]
+    public async Task GetProjectCopilotConnection_StaleProjectBindingRequiresReconnect()
+    {
+        await ResetBackgroundAiConfigurationAsync();
+        var id = await CreateBlankProjectAsync();
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            if (!db.Projects.Any(project => project.ProjectId == id))
+                db.Projects.Add(new ProjectRecord { ProjectId = id, OriginKind = "blank" });
+            db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+            {
+                Id = "stale-project-connection-binding",
+                ProjectId = id,
+                EntraObjectId = ProjectsWebApplicationFactory.TestUser,
+                CredentialReference = "missing-project-connection-credential",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/copilot/connection");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("project_model_provider_reconnect_required");
+    }
+
+    [Fact]
+    public async Task GetProjectCopilotConnection_StaleProjectBindingStillRequiresReconnectWhenPlatformDefaultExists()
+    {
+        var id = await CreateBlankProjectAsync();
+        await SeedPlatformDefaultCopilotBindingAsync();
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            if (!db.Projects.Any(project => project.ProjectId == id))
+                db.Projects.Add(new ProjectRecord { ProjectId = id, OriginKind = "blank" });
+            db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+            {
+                Id = "stale-project-connection-with-platform-default-binding",
+                ProjectId = id,
+                EntraObjectId = ProjectsWebApplicationFactory.TestUser,
+                CredentialReference = "missing-project-connection-with-platform-default-credential",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var response = await _client.GetAsync($"/api/projects/{id}/github/copilot/connection");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("project_model_provider_reconnect_required");
+    }
+
+    [Fact]
     public async Task GetUnattendedReadiness_BlankProjectWithPlatformDefaultDoesNotRequireRepository()
     {
         var id = await CreateBlankProjectAsync();

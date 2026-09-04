@@ -1,5 +1,9 @@
 import { ApiError } from './client';
-import { githubConnectionErrorMessage, isGitHubRepoAppConnectionRequired } from './errors';
+import {
+  formatModelProviderErrorMessage,
+  githubConnectionErrorMessage,
+  isGitHubRepoAppConnectionRequired,
+} from './errors';
 import { describe, expect, it } from 'vitest';
 
 describe('githubConnectionErrorMessage', () => {
@@ -33,6 +37,20 @@ describe('githubConnectionErrorMessage', () => {
 
   it('returns null for an unrelated 404, instead of misrepresenting it as a GitHub connection issue', () => {
     expect(githubConnectionErrorMessage(new ApiError(404, JSON.stringify({ error: 'run_not_found' })))).toBeNull();
+  });
+
+  it('returns a reconnect-required message for a stale project Copilot binding', () => {
+    expect(githubConnectionErrorMessage(
+      new ApiError(409, JSON.stringify({ error: 'project_model_provider_reconnect_required' })),
+    )).toBe('Reconnect the project GitHub Copilot authorization used for unattended AI work.');
+  });
+});
+
+describe('formatModelProviderErrorMessage', () => {
+  it('tells the operator to reconnect when the stored project Copilot binding is unusable', () => {
+    expect(formatModelProviderErrorMessage(
+      new ApiError(409, JSON.stringify({ error: 'project_model_provider_reconnect_required' })),
+    )).toBe('Reconnect the project GitHub Copilot authorization used for unattended AI work.');
   });
 });
 

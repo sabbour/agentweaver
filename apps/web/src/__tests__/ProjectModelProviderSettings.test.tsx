@@ -177,7 +177,7 @@ describe('ProjectModelProviderSettings', () => {
 
   it('surfaces actionable API errors while loading the current connection', async () => {
     vi.mocked(apiClient.getProjectCopilotConnection).mockRejectedValue(
-      new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
+      new ApiError(409, JSON.stringify({ error: 'project_model_provider_reconnect_required' })),
     );
     render(
       <Wrapper>
@@ -185,7 +185,9 @@ describe('ProjectModelProviderSettings', () => {
       </Wrapper>,
     );
 
-    expect(await screen.findByText('The GitHub authorization status is unavailable. Try again later.')).toBeDefined();
+    expect(await screen.findByText(
+      'Reconnect the project GitHub Copilot authorization used for unattended AI work.',
+    )).toBeDefined();
     expect(screen.queryByText(/repository access/i)).toBeNull();
   });
 

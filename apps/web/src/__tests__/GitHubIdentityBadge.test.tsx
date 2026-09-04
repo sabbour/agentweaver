@@ -114,7 +114,7 @@ describe('GitHubIdentityBadge', () => {
 
   it('shows specific project GitHub status failures without hiding successful status lines', async () => {
     vi.mocked(apiClient.getProjectCopilotConnection).mockRejectedValue(
-      new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })) as never,
+      new ApiError(409, JSON.stringify({ error: 'project_model_provider_reconnect_required' })) as never,
     );
     vi.mocked(apiClient.getProjectAccessOverview).mockRejectedValue(
       new ApiError(404, 'Not Found') as never,
@@ -128,7 +128,7 @@ describe('GitHubIdentityBadge', () => {
       'Repository access status is unavailable because this deployment did not return a project access snapshot.',
     )).toBeDefined();
     expect(screen.getByText(
-      'The project’s GitHub Copilot connection is currently unavailable. Retry, or reconnect it from Project settings.',
+      'Reconnect the project GitHub Copilot authorization used for unattended AI work.',
     )).toBeDefined();
   });
 

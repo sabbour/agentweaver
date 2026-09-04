@@ -18,6 +18,7 @@ public enum CopilotBindingOutcome
     AuthorizationTransactionInvalid,
     AuthorizationTransactionConsumed,
     GitHubBindingUnavailable,
+    ProjectModelProviderReconnectRequired,
 }
 
 public sealed record CopilotBindingBeginResult(
@@ -295,7 +296,7 @@ public sealed class ProjectCopilotBindingService(
             logger.LogWarning(
                 "Copilot App connection for project {ProjectId} has an active binding record but its credential secret is {SecretState}.",
                 projectId, !secret.Found ? "missing" : credential is null ? "unparseable" : $"status={credential.Status}");
-            return new(CopilotBindingOutcome.GitHubBindingUnavailable, false, null);
+            return new(CopilotBindingOutcome.ProjectModelProviderReconnectRequired, false, null);
         }
 
         var login = IsGitHubLogin(credential.GitHubLogin)
@@ -421,6 +422,7 @@ public sealed class ProjectCopilotBindingService(
         CopilotBindingOutcome.AuthorizationTransactionInvalid => "authorization_transaction_invalid",
         CopilotBindingOutcome.AuthorizationTransactionConsumed => "authorization_transaction_consumed",
         CopilotBindingOutcome.GitHubBindingUnavailable => "github_binding_unavailable",
+        CopilotBindingOutcome.ProjectModelProviderReconnectRequired => "project_model_provider_reconnect_required",
         _ => "success",
     };
 

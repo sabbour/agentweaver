@@ -329,6 +329,24 @@ public sealed class ProjectCopilotBindingServiceTests
         connection.GitHubLogin.Should().BeNull();
     }
 
+    [Fact]
+    public async Task ConnectionStatus_WithMissingCredentialRequiresReconnect()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var project = ProjectId.New();
+        await SeedProjectAsync(db, project);
+        roles.SetOwner(project, "owner");
+        await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(Binding(project, "missing-secret", "version-one"));
+        var service = CreateService(db, roles, new InMemorySecretStore());
+
+        var connection = await service.GetConnectionAsync(Human("owner"), HumanPrincipal(), project);
+
+        connection.Outcome.Should().Be(CopilotBindingOutcome.ProjectModelProviderReconnectRequired);
+        connection.Connected.Should().BeFalse();
+        connection.GitHubLogin.Should().BeNull();
+    }
+
     private static ProjectCopilotBindingService CreateService(
         MemoryDbContext db,
         MutableRoles roles,
