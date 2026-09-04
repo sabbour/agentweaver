@@ -304,15 +304,14 @@ describe('layoutDagStaircase', () => {
     expect(ys.size).toBe(3);
   });
 
-  it('leaves a short chain as a straight line (no stepping)', () => {
+  it('folds a chain at the configured threshold instead of leaving it flat', () => {
     const nodes: Node[] = [makeNode('coordinator'), makeNode('outcome'), makeNode('work')];
     const edges: Edge[] = [makeEdge('coordinator', 'outcome'), makeEdge('outcome', 'work')];
     const hints = Object.fromEntries(nodes.map((n) => [n.id, { width: 250, height: 80 }]));
 
     const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, minStepRanks: 3 }, hints);
-    // All three single-node ranks share one row (no cascade for a short chain).
     const ys = new Set(laid.map((n) => rounded(n.position.y)));
-    expect(ys.size).toBe(1);
+    expect(ys.size).toBeGreaterThan(1);
   });
 
   it('transposes the serpentine flow for the vertical (TB) orientation', () => {
@@ -466,13 +465,37 @@ describe('layoutDagStaircase', () => {
     expect(new Set(offsets).size).toBe(3);
     expect(second.map((edge) => edge.data)).toEqual(first.map((edge) => edge.data));
   });
+
+  it('assigns separated outer rails to horizontal loopback edges', () => {
+    const nodes = ['agent', 'rai', 'review', 'merge'].map((id, index) => ({
+      ...makeNode(id),
+      position: { x: index * 300, y: 100 },
+      initialWidth: 200,
+      initialHeight: 80,
+    }));
+    const edges: Edge[] = [
+      { ...makeEdge('rai', 'agent'), id: 'revise', type: 'loopback' },
+      { ...makeEdge('review', 'agent'), id: 'request-changes', type: 'loopback' },
+      { ...makeEdge('merge', 'review'), id: 'blocked', type: 'loopback' },
+    ];
+
+    const routed = routeGridEdges(edges, nodes);
+    const offsets = routed.map((edge) =>
+      (edge.data as { returnLaneOffset: number }).returnLaneOffset);
+
+    expect(routed.every((edge) => edge.sourceHandle === 'source-top')).toBe(true);
+    expect(routed.every((edge) => edge.targetHandle === 'target-top')).toBe(true);
+    expect(new Set(offsets).size).toBe(edges.length);
+    expect(Math.min(...offsets)).toBe(0);
+    expect(Math.max(...offsets)).toBeGreaterThanOrEqual(68);
+  });
 });
 
 describe('adaptive workflow definition layout', () => {
   const hintsFor = (nodes: Node[]): Record<string, NodeSizeHint> =>
     Object.fromEntries(nodes.map((node) => [node.id, { width: WORKFLOW_DEFINITION_NODE_W, height: 80 }]));
 
-  it('uses centered stage columns for a short workflow', () => {
+  it('folds a short workflow into a compact deterministic snake', () => {
     const nodes = ['start', 'review', 'done'].map(makeNode);
     const edges = [makeEdge('start', 'review'), makeEdge('review', 'done')];
 
@@ -480,28 +503,30 @@ describe('adaptive workflow definition layout', () => {
 
     expect(result.mode).toBe('columns');
     expect(result.analysis).toMatchObject({ rankCount: 3, hasBranching: false, isLongLinear: false });
-    expect(new Set(result.nodes.map((node) => rounded(node.position.y))).size).toBe(1);
+    expect(new Set(result.nodes.map((node) => rounded(node.position.y))).size).toBeGreaterThan(1);
   });
 
-  it('uses centered stage columns for branching and fan-in workflows', () => {
-    const nodes = ['start', 'approved', 'declined', 'done'].map(makeNode);
+  it('snakes single-node runs around branching ranks', () => {
+    const nodes = ['research', 'synthesis', 'review', 'gate', 'declined', 'done'].map(makeNode);
     const edges = [
-      makeEdge('start', 'approved'),
-      makeEdge('start', 'declined'),
-      makeEdge('approved', 'done'),
-      makeEdge('declined', 'done'),
+      makeEdge('research', 'synthesis'),
+      makeEdge('synthesis', 'review'),
+      makeEdge('review', 'gate'),
+      makeEdge('gate', 'declined'),
+      makeEdge('gate', 'done'),
     ];
     const hints = hintsFor(nodes);
 
     const result = layoutWorkflowDefinitionNodes(nodes, edges, hints);
     const byId = new Map(result.nodes.map((node) => [node.id, node]));
-    const center = (id: string) => centerY(byId.get(id)!, hints[id].height);
-    const branchCenter = (center('approved') + center('declined')) / 2;
 
     expect(result.mode).toBe('columns');
     expect(result.analysis).toMatchObject({ hasBranching: true, hasParallelRank: true });
-    expect(center('start')).toBe(branchCenter);
-    expect(center('done')).toBe(branchCenter);
+    expect(new Set(['research', 'synthesis', 'review', 'gate']
+      .map((id) => rounded(byId.get(id)!.position.y))).size).toBeGreaterThan(1);
+    expect(byId.get('done')!.position.x).toBeLessThan(
+      byId.get('research')!.position.x + 4 * (WORKFLOW_DEFINITION_NODE_W + 72),
+    );
   });
 
   it('reserves the staircase for genuinely long linear workflows', () => {

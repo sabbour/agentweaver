@@ -83,6 +83,16 @@ describe('landing stepped-layout reuse', () => {
     }
   });
 
+  it('wraps the smaller product, marketing, RFP, decision, and game scenarios', () => {
+    for (const id of ['product-feature', 'marketing', 'rfp', 'decision', 'game']) {
+      const scenario = SCENARIOS.find((candidate) => candidate.id === id)!;
+      const rows = new Set(
+        buildScenarioGraph(scenario).laidOutNodes.map((node) => Math.round(node.position.y)),
+      );
+      expect(rows.size, id).toBeGreaterThan(1);
+    }
+  });
+
   it('assigns a routed handle to every landing edge (stepped connector routing)', () => {
     for (const scenario of SCENARIOS) {
       const { routedEdges } = buildScenarioGraph(scenario);

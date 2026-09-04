@@ -274,8 +274,9 @@ interface BandedLayoutOptions {
 }
 
 const BANDED_MARGIN = 24;
-const BANDED_LANE_STEP = 18;
+const BANDED_LANE_STEP = 34;
 const BANDED_LABEL_CHAR_W = 7;
+const BANDED_SNAKE_MIN_RANKS = 3;
 
 function edgeLabelSize(edge: Edge): NodeSizeHint {
   if (typeof edge.label !== 'string' && typeof edge.label !== 'number') {
@@ -456,7 +457,7 @@ function layoutBandedLane(
       end += 1;
     }
     const runLength = end - layer + 1;
-    if (runLength > snakeMin) {
+    if (runLength >= snakeMin) {
       const ids = layers.slice(layer, end + 1).map((rank) => rank[0]);
       const cols = snakeColumns(ids.length, sizes, ids, options.nodeGap, aspect, options.rankdir);
       sections.push({
@@ -671,7 +672,7 @@ export function layoutWorkflowDefinitionNodes(
       rankdir: 'LR',
       rankGap: mode === 'staircase' ? 64 : 72,
       nodeGap: mode === 'staircase' ? 40 : 48,
-      snakeMinRanks: mode === 'staircase' ? 3 : Number.MAX_SAFE_INTEGER,
+      snakeMinRanks: BANDED_SNAKE_MIN_RANKS,
       targetAspect: 1.35,
     },
     nodeSizeHints,
@@ -1100,7 +1101,7 @@ export function layoutDagStaircase(
       rankdir: opts.rankdir ?? 'LR',
       rankGap: Math.max(opts.rankSep ?? 72, extraGap),
       nodeGap: opts.nodeSep ?? 40,
-      snakeMinRanks: opts.minStepRanks ?? 3,
+      snakeMinRanks: opts.minStepRanks ?? BANDED_SNAKE_MIN_RANKS,
       targetAspect: opts.targetAspect ?? 1.4,
     },
     nodeSizeHints,
@@ -1180,13 +1181,46 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
   };
   const laneOffsets = new Map<string, number>();
   const gutterGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
+  const loopbackSides = new Map<string, 'left' | 'right' | 'top' | 'bottom'>();
+  const loopbackGroups = new Map<string, Array<{ edge: Edge; span: number }>>();
   for (const edge of edges) {
-    if (edge.type !== 'spine') continue;
     const source = byId.get(edge.source);
     const target = byId.get(edge.target);
     if (!source || !target) continue;
     const sourceCenter = center(source);
     const targetCenter = center(target);
+    if (edge.type === 'loopback') {
+      const horizontal = Math.abs(targetCenter.x - sourceCenter.x)
+        >= Math.abs(targetCenter.y - sourceCenter.y);
+      const peerCenters = nodes
+        .filter((peer) => peer.id !== edge.source && peer.id !== edge.target)
+        .map((peer) => center(peer));
+      let side: 'left' | 'right' | 'top' | 'bottom';
+      if (horizontal) {
+        const above = peerCenters.filter((peer) =>
+          peer.y < Math.min(sourceCenter.y, targetCenter.y)).length;
+        const below = peerCenters.filter((peer) =>
+          peer.y > Math.max(sourceCenter.y, targetCenter.y)).length;
+        side = above <= below ? 'top' : 'bottom';
+      } else {
+        const left = peerCenters.filter((peer) =>
+          peer.x < Math.min(sourceCenter.x, targetCenter.x)).length;
+        const right = peerCenters.filter((peer) =>
+          peer.x > Math.max(sourceCenter.x, targetCenter.x)).length;
+        side = left <= right ? 'left' : 'right';
+      }
+      loopbackSides.set(edge.id, side);
+      const key = `loopback:${side}`;
+      if (!loopbackGroups.has(key)) loopbackGroups.set(key, []);
+      loopbackGroups.get(key)!.push({
+        edge,
+        span: horizontal
+          ? Math.abs(targetCenter.x - sourceCenter.x)
+          : Math.abs(targetCenter.y - sourceCenter.y),
+      });
+      continue;
+    }
+    if (edge.type !== 'spine') continue;
     const horizontal = Math.abs(targetCenter.x - sourceCenter.x)
       >= Math.abs(targetCenter.y - sourceCenter.y);
     const midpoint = horizontal
@@ -1205,6 +1239,12 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
       laneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
     });
   }
+  for (const group of loopbackGroups.values()) {
+    group.sort((a, b) => a.span - b.span || a.edge.id.localeCompare(b.edge.id));
+    group.forEach(({ edge }, index) => {
+      laneOffsets.set(edge.id, index * BANDED_LANE_STEP);
+    });
+  }
 
   return edges.map((edge) => {
     const source = byId.get(edge.source);
@@ -1213,25 +1253,16 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
     const sourceCenter = center(source);
     const targetCenter = center(target);
     if (edge.type === 'loopback') {
-      const rowPeers = (node: Node, nodeCenter: { x: number; y: number }) =>
-        nodes
-          .filter((peer) => peer.id !== node.id)
-          .map((peer) => center(peer))
-          .filter((peerCenter) => Math.abs(peerCenter.y - nodeCenter.y) <= 1);
-      const rightCrossings = [
-        ...rowPeers(source, sourceCenter).filter((peer) => peer.x > sourceCenter.x),
-        ...rowPeers(target, targetCenter).filter((peer) => peer.x > targetCenter.x),
-      ].length;
-      const leftCrossings = [
-        ...rowPeers(source, sourceCenter).filter((peer) => peer.x < sourceCenter.x),
-        ...rowPeers(target, targetCenter).filter((peer) => peer.x < targetCenter.x),
-      ].length;
-      const side = leftCrossings < rightCrossings ? 'left' : 'right';
+      const side = loopbackSides.get(edge.id) ?? 'top';
       return {
         ...edge,
         sourceHandle: `source-${side}`,
         targetHandle: `target-${side}`,
-        data: { ...(edge.data ?? {}), returnSide: side },
+        data: {
+          ...(edge.data ?? {}),
+          returnSide: side,
+          returnLaneOffset: laneOffsets.get(edge.id) ?? 0,
+        },
       };
     }
     if (edge.type !== 'spine') return edge;
