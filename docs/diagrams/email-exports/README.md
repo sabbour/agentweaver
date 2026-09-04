@@ -10,4 +10,4 @@
 
 ## Coordinator workflow
 
-`email-coordinator-workflow.png` shows how the Coordinator confirms intent, stores a plan, dispatches child runs, assembles results, and completes review. It comes from `../canonical-coordinator-architecture.png`.
+`email-coordinator-workflow.png` is a sequence diagram of the real Coordinator lifecycle. It shows outcome confirmation, durable planning, dependency-aware child dispatch, result observation, collective assembly, review, merge, Scribe, and decision promotion. It comes from `../email-coordinator-workflow.png`. The other two exports use the grouped graph-spec style.
