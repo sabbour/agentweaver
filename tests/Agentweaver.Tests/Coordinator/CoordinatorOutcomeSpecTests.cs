@@ -5,6 +5,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
@@ -176,6 +177,63 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("reason").GetString()
             .Should().Be("outcome_spec_draft_timeout");
+    }
+
+    [Fact]
+    public async Task Start_CopilotProviderFailure_PreservesTypedDurableTerminalWithoutDuplicate()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.ProviderFailureToThrow = new AgentProviderException(
+            ModelSource.GitHubCopilot,
+            AgentProviderFailureKind.ProviderUnavailable,
+            "github_copilot_models_unavailable",
+            "GitHub Copilot could not list available models.",
+            isRetryable: false);
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "A typed Copilot provider failure must remain the coordinator terminal");
+
+        RunResponse? run = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+        run.Result.Should().Be("github_copilot_models_unavailable");
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        List<RunEventRecord> durableFailures = [];
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            durableFailures = await db.RunEvents.AsNoTracking()
+                .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+                .OrderBy(e => e.Sequence)
+                .ToListAsync();
+            if (durableFailures.Count > 0)
+                break;
+            await Task.Delay(50);
+        }
+
+        var durableFailure = durableFailures.Should().ContainSingle(
+            "CopilotAIAgent already emitted the provider terminal before MAF surfaced ExecutorFailedEvent")
+            .Subject;
+        var payload = JsonSerializer.Deserialize<JsonElement>(durableFailure.PayloadJson);
+        payload.GetProperty("errorCode").GetString().Should().Be("github_copilot_models_unavailable");
+        payload.GetProperty("message").GetString().Should().Be("GitHub Copilot could not list available models.");
+        payload.GetProperty("category").GetString().Should().Be(
+            AgentProviderFailureKind.ProviderUnavailable.ToString());
+        payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
     }
 
     [Fact]
