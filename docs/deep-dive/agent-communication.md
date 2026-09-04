@@ -197,10 +197,10 @@ uses `RemoteAgentProxy` outside that factory. The orchestration graph never cros
 turn's chat/output stream and nothing more. A2A is the sole worker→AgentHost wire
 transport for that seam.
 
-![Channel C — Direct transport (A2A): Orchestration graph, RemoteAgentProxy, AgentHost, Leaf agent turn](../diagrams/canonical-agent-communication-a2a.png)
+![Sequence showing the orchestration graph invoking a RemoteAgentProxy, AgentHost executing one leaf agent turn in a sandbox pod, and streamed turn output returning to the worker](../diagrams/canonical-agent-communication-a2a.png)
 
 <!-- Rendered from ../diagrams/src/canonical-agent-communication-a2a.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Playwright (Fluent-styled sequence diagram).
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 

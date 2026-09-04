@@ -1,160 +1,222 @@
 {
-  "$schema": "./graph-spec.schema.json",
-  "title": "End-to-end flow",
-  "alt": "End-to-end flow: User selects or pastes repo, Create project from GitHub, BlueprintEndpoints, GitHubRepoBlueprintSuggestionService, GitHub user token, GitHub REST API, Signals, Catalog mapper, BlueprintService.GetPredefined, SuggestBlueprintResponse, Switch to Templates tab",
-  "direction": "LR",
-  "nodes": [
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Repository blueprint suggestion flow",
+  "alt": "Sequence showing the create-project dialog requesting a blueprint suggestion, the API collecting GitHub repository signals and mapping them to the catalog, and the UI showing either the suggestion or its template fallback",
+  "autonumber": true,
+  "participants": [
     {
       "id": "User",
-      "label": "User selects or pastes repo",
-      "icon": "branch",
-      "badge": {
-        "text": "Git",
-        "tone": "lavender"
-      }
+      "label": "User",
+      "icon": "globe",
+      "badge": { "text": "Client", "tone": "lavender" }
     },
     {
       "id": "UI",
-      "label": "Create project from GitHub",
-      "icon": "branch",
-      "badge": {
-        "text": "Git",
-        "tone": "lavender"
-      },
-      "subLabel": "Suggested tab"
+      "label": "Create project dialog",
+      "subLabel": "Suggested tab",
+      "icon": "window",
+      "badge": { "text": "UI", "tone": "teal" }
     },
     {
       "id": "Endpoint",
-      "label": "BlueprintEndpoints",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      }
+      "label": "Blueprint endpoint",
+      "subLabel": "POST /blueprints/suggest",
+      "icon": "route",
+      "badge": { "text": "API", "tone": "teal" }
     },
     {
       "id": "Service",
-      "label": "GitHubRepoBlueprintSuggestionService",
+      "label": "Suggestion service",
+      "subLabel": "repository signal mapper",
       "icon": "server",
-      "badge": {
-        "text": "Service",
-        "tone": "green"
-      }
+      "badge": { "text": "Service", "tone": "green" }
     },
     {
       "id": "Token",
-      "label": "GitHub user token",
-      "icon": "branch",
-      "badge": {
-        "text": "Git",
-        "tone": "lavender"
-      }
+      "label": "GitHub token service",
+      "subLabel": "submitting user scope",
+      "icon": "key",
+      "badge": { "text": "Auth", "tone": "marigold" }
     },
     {
       "id": "GitHub",
       "label": "GitHub REST API",
+      "subLabel": "metadata · languages · contents",
       "icon": "branch",
-      "badge": {
-        "text": "Git",
-        "tone": "lavender"
-      },
-      "subLabel": "metadata + languages + contents"
-    },
-    {
-      "id": "Signals",
-      "label": "Signals",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      },
-      "subLabel": "description, topics, languages, root files, issues"
-    },
-    {
-      "id": "Mapper",
-      "label": "Catalog mapper",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      },
-      "subLabel": "PickBlueprint"
+      "badge": { "text": "Git", "tone": "lavender" }
     },
     {
       "id": "Catalog",
-      "label": "BlueprintService.GetPredefined",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      }
-    },
-    {
-      "id": "Response",
-      "label": "SuggestBlueprintResponse",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      }
-    },
-    {
-      "id": "Templates",
-      "label": "Switch to Templates tab",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      }
+      "label": "Blueprint catalog",
+      "subLabel": "GetPredefined",
+      "icon": "database",
+      "badge": { "text": "Data", "tone": "teal" }
     }
   ],
-  "edges": [
+  "steps": [
     {
+      "type": "message",
       "from": "User",
-      "to": "UI"
+      "to": "UI",
+      "label": "select or paste repository"
     },
     {
+      "type": "message",
       "from": "UI",
       "to": "Endpoint",
       "label": "POST /api/blueprints/suggest"
     },
     {
-      "from": "Endpoint",
-      "to": "Service"
+      "type": "activation",
+      "participant": "Endpoint",
+      "action": "start"
     },
     {
+      "type": "message",
+      "from": "Endpoint",
+      "to": "Service",
+      "label": "SuggestAsync(repository, caller)"
+    },
+    {
+      "type": "activation",
+      "participant": "Service",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "Service",
+      "to": "Service",
+      "label": "parse and normalize owner/repo"
+    },
+    {
+      "type": "message",
       "from": "Service",
       "to": "Token",
-      "label": "resolve user scope"
+      "label": "resolve caller's GitHub token"
     },
     {
+      "type": "message",
+      "from": "Token",
+      "to": "Service",
+      "label": "valid access token",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
       "from": "Service",
-      "to": "GitHub"
+      "to": "GitHub",
+      "label": "read repository metadata and signals"
     },
     {
+      "type": "message",
+      "from": "GitHub",
+      "to": "Service",
+      "label": "description, topics, languages, root files",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
       "from": "Service",
-      "to": "Signals"
+      "to": "Service",
+      "label": "BuildSignals + PickBlueprint"
     },
     {
-      "from": "Signals",
-      "to": "Mapper"
+      "type": "message",
+      "from": "Service",
+      "to": "Catalog",
+      "label": "GetPredefined(mapped id)"
     },
     {
-      "from": "Mapper",
-      "to": "Catalog"
+      "type": "fragment",
+      "operator": "alt",
+      "label": "suggestion result",
+      "sections": [
+        {
+          "label": "GitHub analysis and catalog lookup succeed",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Catalog",
+              "to": "Service",
+              "label": "matching BlueprintDto",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Service",
+              "to": "Endpoint",
+              "label": "suggestion + confidence + rationale",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Endpoint",
+              "to": "UI",
+              "label": "SuggestBlueprintResponse",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "UI",
+              "to": "User",
+              "label": "show suggested blueprint",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "parse, GitHub, or catalog fallback",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Service",
+              "to": "Endpoint",
+              "label": "fallback: true + safe catalog default",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Endpoint",
+              "to": "UI",
+              "label": "fallback response",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "UI",
+              "to": "UI",
+              "label": "offer View all templates"
+            },
+            {
+              "type": "message",
+              "from": "UI",
+              "to": "User",
+              "label": "show warning and Templates route",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
     },
     {
-      "from": "Catalog",
-      "to": "Response"
+      "type": "activation",
+      "participant": "Service",
+      "action": "end"
     },
     {
-      "from": "Response",
-      "to": "UI"
-    },
-    {
-      "from": "UI",
-      "to": "Templates",
-      "label": "fallback true or error"
+      "type": "activation",
+      "participant": "Endpoint",
+      "action": "end"
     }
   ]
 }

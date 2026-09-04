@@ -196,10 +196,10 @@ Agent runs are long-lived and interactive. The UI needs low-latency updates whil
 
 Agentweaver uses a two-layer event model:
 
-![Problem solved: Run/orchestrator code emits event, Write event to SQLite first, Publish to bounded in-process channel, SSE live subscribers, Replay after reconnect or restart, SSE response](../diagrams/canonical-durable-event-stream.png)
+![Sequence showing a producer durably appending a run event before acknowledgement, publishing it to the live channel, and an SSE subscriber replaying from its cursor before tailing live events with durable recovery](../diagrams/canonical-durable-event-stream-sequence.png)
 
-<!-- Rendered from ../diagrams/src/canonical-durable-event-stream.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Rendered from ../diagrams/src/canonical-durable-event-stream-sequence.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram).
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
