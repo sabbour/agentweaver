@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.28.3
+
+### Patch Changes
+
+- da3e10d: docs: diagram consolidation, sequence-diagram renderer, and refreshed architecture/component diagrams
+- 450c644: Allow users to permanently delete their own personal Assistant sessions after the incidental project is deleted or becomes inaccessible, while preserving project authorization for project-owned runs.
+
 ## 0.28.2
 
 ### Patch Changes
