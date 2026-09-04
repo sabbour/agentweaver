@@ -38,27 +38,38 @@ function mergeParamsIntoEnv(baseEnv, paramsFile) {
 }
 
 /**
- * Resolves the env a deploy subcommand should use: explicit `--params-file` flag
- * takes precedence over auto-discovered `params.<username>.json`; explicit process
- * env vars always win over params-file values (see mergeParamsIntoEnv). Shared by
- * every subcommand that deploys real infrastructure (deploy-from-local,
- * deploy-from-commit, deploy-from-release) so none of them silently fall back to
- * requiring every variable to be set by hand in the shell.
+ * Resolves the env and forwarded argv a deploy subcommand should use. An explicit
+ * `--params-file` flag takes precedence over auto-discovered
+ * `params.<username>.json`, and its flag/value tokens are removed before strict
+ * subcommand parsers receive argv. Explicit process env vars always win over
+ * params-file values (see mergeParamsIntoEnv).
  */
-async function resolveDeployEnv(rest, { importFn, modules, log, findParamsFile = findUserParamsFile }) {
+async function resolveDeployInputs(rest, { importFn, modules, log, findParamsFile = findUserParamsFile }) {
   const { loadParamsFile } = modules.config ?? (await importFn("./lib/config.mjs"));
   const paramsFileIdx = rest.findIndex((a) => a === "--params-file" || a.startsWith("--params-file="));
   let paramsFilePath = null;
+  let argv = rest;
   if (paramsFileIdx !== -1) {
-    paramsFilePath = rest[paramsFileIdx].includes("=")
-      ? rest[paramsFileIdx].split("=").slice(1).join("=")
+    const inline = rest[paramsFileIdx].startsWith("--params-file=");
+    paramsFilePath = inline
+      ? rest[paramsFileIdx].slice("--params-file=".length)
       : rest[paramsFileIdx + 1];
+    if (!paramsFilePath) {
+      throw new Error("--params-file requires a value");
+    }
+    argv = [
+      ...rest.slice(0, paramsFileIdx),
+      ...rest.slice(paramsFileIdx + (inline ? 1 : 2)),
+    ];
   } else {
     paramsFilePath = findParamsFile();
     if (paramsFilePath) log.info(`[params] Auto-loading ${paramsFilePath}`);
   }
   const paramsFile = loadParamsFile(paramsFilePath);
-  return mergeParamsIntoEnv(process.env, paramsFile);
+  return {
+    env: mergeParamsIntoEnv(process.env, paramsFile),
+    argv,
+  };
 }
 
 const SUBCOMMANDS = Object.freeze([
@@ -165,7 +176,7 @@ export async function run(argv = [], opts = {}) {
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const env = await resolveDeployEnv(rest, { importFn, modules, log, findParamsFile });
+    const { env } = await resolveDeployInputs(rest, { importFn, modules, log, findParamsFile });
     const cfg = await resolveVariables({ env });
     return mod.run(cfg, { log });
   }
@@ -176,9 +187,12 @@ export async function run(argv = [], opts = {}) {
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const env = await resolveDeployEnv(rest, { importFn, modules, log, findParamsFile });
+    const { env, argv: deployArgs } = await resolveDeployInputs(
+      rest,
+      { importFn, modules, log, findParamsFile },
+    );
     const cfg = await resolveVariables({ env });
-    const allowDirty = rest.includes("--allow-dirty");
+    const allowDirty = deployArgs.includes("--allow-dirty");
     return mod.run(cfg, { log, allowDirty });
   }
 
@@ -190,8 +204,11 @@ export async function run(argv = [], opts = {}) {
     // Same per-user params.<username>.json auto-load as deploy-from-local -- these
     // subcommands also deploy real infrastructure and previously required every
     // variable (e.g. KEYVAULT_NAME) to be set by hand in the shell.
-    const env = await resolveDeployEnv(rest, { importFn, modules, log, findParamsFile });
-    return mod.run({ argv: rest, log, env });
+    const { env, argv: deployArgs } = await resolveDeployInputs(
+      rest,
+      { importFn, modules, log, findParamsFile },
+    );
+    return mod.run({ argv: deployArgs, log, env });
   }
 
   return mod.run({ argv: rest, log });
