@@ -252,10 +252,9 @@ public sealed class RemoteOperatorAssistantAgent(
         // ResolveAssistantModelSourceAsync resolves at platform scope too, and re-resolves each
         // turn), so selection and validation cannot disagree — and because run.ModelSource is read
         // fresh from the store above, a mid-conversation provider switch is honoured here too.
-        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
-                run, ct, platformScoped: true, userScopedEntraObjectId: run.SubmittingUser)
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
                 .ConfigureAwait(false))
-            throw ModelProviderConnectionRequiredException.ForUser();
+            throw new ModelProviderConnectionRequiredException();
     }
 
     /// <summary>
