@@ -59,6 +59,10 @@ test("ensureRepoAppPrivateKeySecret migrates the legacy secret and preserves it"
   const exec = fakeExec((_cmd, args) => {
     const operation = args[2];
     const name = requestedSecret(args);
+    if (operation === "show-deleted") {
+      assert.equal(name, REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) deleted secret was not found", code: 3 };
+    }
     if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.physicalName) {
       return canonicalAvailable
         ? { stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "", code: 0 }
@@ -90,6 +94,7 @@ test("ensureRepoAppPrivateKeySecret migrates the legacy secret and preserves it"
 
     assert.equal(result.status, "migrated");
     assert.equal(exec.calls.some((call) => call.args.includes("delete")), false);
+    assert.equal(exec.calls.some((call) => call.args.includes("recover")), false);
     assert.deepEqual(fs.readdirSync(scratchRoot), []);
   } finally {
     fs.rmSync(scratchRoot, { recursive: true, force: true });
@@ -111,6 +116,7 @@ test("ensureRepoAppPrivateKeySecret fails clearly when canonical and legacy secr
     /REPO_APP_PRIVATE_KEY_FILE|--repo-app-private-key-file/,
   );
   assert.equal(exec.calls.some((call) => call.args.includes("set")), false);
+  assert.equal(exec.calls.some((call) => call.args.includes("recover")), false);
 });
 
 test("ensureRepoAppPrivateKeySecret does not mask canonical access failures with legacy fallback", async () => {
@@ -128,6 +134,32 @@ test("ensureRepoAppPrivateKeySecret does not mask canonical access failures with
     /canonical.*inaccessible/i,
   );
   assert.equal(exec.calls.length, 1);
+  assert.equal(exec.calls.some((call) => call.args.includes("show-deleted")), false);
+  assert.equal(exec.calls.some((call) => call.args.includes("recover")), false);
+});
+
+test("ensureRepoAppPrivateKeySecret does not mask deleted-secret inspection failures with legacy fallback", async () => {
+  const exec = fakeExec((_cmd, args) => {
+    if (args[2] === "show") {
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) active secret was not found", code: 3 };
+    }
+    if (args[2] === "show-deleted") {
+      return { stdout: "", stderr: "ERROR: (ForbiddenByRbac) caller cannot inspect deleted secrets", code: 1 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  await assert.rejects(
+    ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv" },
+      { exec, log: noopLog() },
+    ),
+    /canonical.*inaccessible/i,
+  );
+  assert.equal(exec.calls.length, 2);
+  assert.equal(exec.calls.some((call) =>
+    requestedSecret(call.args) === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName), false);
+  assert.equal(exec.calls.some((call) => call.args.includes("recover")), false);
 });
 
 test("ensureRepoAppPrivateKeySecret imports a configured PEM file directly to the canonical name", async () => {
@@ -150,6 +182,8 @@ test("ensureRepoAppPrivateKeySecret imports a configured PEM file directly to th
     assert.equal(result.status, "imported");
     assert.equal(exec.calls.some((call) =>
       requestedSecret(call.args) === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName), false);
+    assert.equal(exec.calls.some((call) => call.args.includes("show-deleted")), false);
+    assert.equal(exec.calls.some((call) => call.args.includes("recover")), false);
   } finally {
     fs.rmSync(scratchRoot, { recursive: true, force: true });
   }
@@ -177,6 +211,78 @@ test("setSecretFileWithRetry retries bounded RBAC propagation failures", async (
   } finally {
     fs.rmSync(scratchRoot, { recursive: true, force: true });
   }
+});
+
+test("ensureRepoAppPrivateKeySecret recovers a canonical-only soft-deleted secret before legacy fallback", async () => {
+  let activeChecks = 0;
+  const messages = [];
+  const exec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    const name = requestedSecret(args);
+    assert.equal(name, REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+    if (operation === "show") {
+      activeChecks += 1;
+      return activeChecks < 3
+        ? { stdout: "", stderr: "ERROR: (SecretNotFound) active secret was not found", code: 3 }
+        : { stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "", code: 0 };
+    }
+    if (operation === "show-deleted") {
+      return { stdout: "https://kv/deletedsecrets/ghtok-repo-app-private-key", stderr: "", code: 0 };
+    }
+    if (operation === "recover") {
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  const result = await ensureRepoAppPrivateKeySecret(
+    { vaultName: "kv" },
+    {
+      exec,
+      log: {
+        ...noopLog(),
+        info: (message) => messages.push(message),
+        ok: (message) => messages.push(message),
+      },
+      sleep: async () => {},
+    },
+  );
+
+  assert.equal(result.status, "recovered");
+  assert.equal(exec.calls.filter((call) => call.args[2] === "show-deleted").length, 1);
+  assert.equal(exec.calls.filter((call) => call.args[2] === "recover").length, 1);
+  assert.equal(exec.calls.some((call) =>
+    requestedSecret(call.args) === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName), false);
+  assert.equal(exec.calls.some((call) => ["set", "download"].includes(call.args[2])), false);
+  assert.equal(messages.some((message) => /private-key-material|BEGIN .* PRIVATE KEY/.test(message)), false);
+});
+
+test("ensureRepoAppPrivateKeySecret fails closed when canonical recovery is inaccessible", async () => {
+  const exec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    assert.equal(requestedSecret(args), REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+    if (operation === "show") {
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) active secret was not found", code: 3 };
+    }
+    if (operation === "show-deleted") {
+      return { stdout: "https://kv/deletedsecrets/ghtok-repo-app-private-key", stderr: "", code: 0 };
+    }
+    if (operation === "recover") {
+      return { stdout: "", stderr: "ERROR: (ForbiddenByRbac) caller cannot recover secrets", code: 1 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  await assert.rejects(
+    ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv" },
+      { exec, log: noopLog(), sleep: async () => {} },
+    ),
+    /failed to recover.*ForbiddenByRbac/i,
+  );
+  assert.equal(exec.calls.filter((call) => call.args[2] === "recover").length, 1);
+  assert.equal(exec.calls.some((call) =>
+    requestedSecret(call.args) === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName), false);
 });
 
 test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret before configured-file import", async () => {
@@ -238,6 +344,10 @@ test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret dur
   const exec = fakeExec((_cmd, args) => {
     const operation = args[2];
     const name = requestedSecret(args);
+    if (operation === "show-deleted") {
+      assert.equal(name, REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) deleted secret was not found", code: 3 };
+    }
     if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.physicalName) {
       canonicalChecks += 1;
       if (canonicalChecks === 1) {
