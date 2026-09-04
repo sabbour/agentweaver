@@ -4,7 +4,7 @@ Agentweaver tracks GitHub Copilot token consumption and AI Credit (AIC) cost at 
 
 ## Run and graph cost surfaces
 
-Token usage is projected from `agent.turn.usage` events and surfaced on run cards, coordinator graphs, dashboards, and observability pages. The standalone Watch page and its live counter have been retired with the standalone run-page surface.
+Token usage is projected from `agent.turn.usage` events. It appears on run cards, coordinator graphs, dashboards, and observability pages.
 
 ![Token counter on embedded run inspection surfaces](/screenshots/watch-token-counter.png)
 

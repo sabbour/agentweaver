@@ -69,8 +69,8 @@ configMapGenerator:
     options:
       # Disabled because base Deployments reference this ConfigMap by its plain
       # name via configMapKeyRef. Configuration that must restart a workload is
-      # copied into that workload's pod-template annotation below; OAuth
-      # certificate-family names use this explicit checksum rollout trigger.
+      # copied into that workload's pod-template annotation below; the OAuth
+      # origin, proxy CIDRs, and certificate families share one rollout trigger.
       disableNameSuffixHash: true
     # Each value is double-quoted (JSON-escaped) so lib/kustomize.mjs can
     # rewrite a single literal in place with `JSON.stringify()` at deploy
@@ -87,14 +87,14 @@ configMapGenerator:
       - "OAUTH_TRUSTED_PROXY_NETWORKS=10.244.0.0/16"
       - "OAUTH_SIGNING_CERTIFICATE_NAME=agentweaver-oauth-signing"
       - "OAUTH_ENCRYPTION_CERTIFICATE_NAME=agentweaver-oauth-encryption"
-      - "OAUTH_CERTIFICATE_CONFIG_CHECKSUM=placeholder"
+      - "OAUTH_RUNTIME_CONFIG_CHECKSUM=placeholder"
       - "ENTRA_CLIENT_ID="
       - "ENTRA_TENANT_ID="
       - "ENTRA_ENTERPRISE_APP_OBJECT_ID="
       - "ENTRA_REDIRECT_URI=https://agentweaver.example.com/auth/entra/callback"
       - "ENTRA_FRONTEND_URL=https://agentweaver.example.com"
-      - "COPILOT_APP_CALLBACK_URL=https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/auth/github/copilot-app/callback"
-      - "REPO_APP_CALLBACK_URL=https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/auth/github/repo-app/callback"
+      - "COPILOT_APP_CALLBACK_URL=https://agentweaver.example.com/auth/github/copilot-app/callback"
+      - "REPO_APP_CALLBACK_URL=https://agentweaver.example.com/auth/github/repo-app/callback"
       - "KEYVAULT_URI=https://changeme.vault.azure.net"
       - "AGENTHOST_KEYVAULT_URI=https://changeme.vault.azure.net/"
       - "APPINSIGHTS_WORKSPACE_ID="
@@ -104,13 +104,18 @@ replacements:
   - source:
       kind: ConfigMap
       name: agentweaver-runtime-config
-      fieldPath: data.OAUTH_CERTIFICATE_CONFIG_CHECKSUM
+      fieldPath: data.OAUTH_RUNTIME_CONFIG_CHECKSUM
     targets:
       - select:
           kind: Deployment
           name: agentweaver-api
         fieldPaths:
-          - spec.template.metadata.annotations.[agentweaver.io/oauth-certificate-config-checksum]
+          - spec.template.metadata.annotations.[agentweaver.io/oauth-runtime-config-checksum]
+      - select:
+          kind: Deployment
+          name: agentweaver-mcp
+        fieldPaths:
+          - spec.template.metadata.annotations.[agentweaver.io/oauth-runtime-config-checksum]
   - source:
       kind: ConfigMap
       name: agentweaver-runtime-config

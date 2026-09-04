@@ -208,39 +208,13 @@ The current API implements local Git operations only — branch creation, commit
 
 This boundary keeps candidate-content reasoning local and deterministic: Agentweaver can always explain a run through its branch, tree hash, and diff without depending on remote synchronization state.
 
-## GitHub credentials and API usage
+## GitHub capabilities
 
-Agentweaver supports two GitHub sign-in flows:
+Microsoft Entra establishes platform identity and project authorization. GitHub is a separately brokered capability for repository and Copilot operations. A GitHub connection cannot grant platform or project access.
 
-1. **Device flow** for CLI-style sign-in.
-2. **OAuth redirect flow** for web sign-in and MCP OAuth broker flows.
+The API creates and tracks GitHub capability handoffs for the authenticated platform user. Sandboxes receive only run-scoped capability data during `/configure`; they do not retrieve ambient GitHub tokens or read a per-user Key Vault token store.
 
-Both flows persist tokens through `IGitHubTokenStore`. In AKS, each authenticated user's GitHub OAuth token is stored in Azure Key Vault under a per-user key (`ghtok-user--{base32(userId)}`) and is never written to shared storage. Local development uses Windows Credential Manager on Windows or an owner-only JSON file under the Agentweaver data directory on other platforms. Explicit sign-out writes a tombstone so configuration fallback does not silently re-authenticate a user who signed out.
-
-A token scope provider resolves credentials from the authenticated caller:
-
-- every GitHub operation must resolve to a real per-user scope;
-- missing caller identity fails closed rather than falling back to a shared token;
-- unattended/background work must carry the originating user identity, or move to a future explicit system identity that is itself a real linked GitHub account.
-
-Before consumers use GitHub, they ask `IGitHubAccessTokenProvider` for a valid token. The refresh service returns non-expiring tokens as-is, refreshes near-expiry tokens with the stored refresh token, serializes refreshes per scope, and signs the scope out if refresh cannot succeed. With the Key Vault token store, the refresh serialization is a short-lived distributed lease so concurrent requests on different API replicas wait for and reuse the replica that wins token rotation; local stores use an in-process gate.
-
-![GitHub credentials and API usage: User or browser, Sign-in flow, Device code flow, OAuth redirect callback, IGitHubTokenStore, API request, Resolve token scope, IGitHubAccessTokenProvider, GitHub REST API, 401 / sign-in required, /api/github/accounts, /api/github/repos, …](../diagrams/git-integration-fig3.png)
-
-<!-- Rendered from ../diagrams/src/git-integration-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-The checked-in API uses raw `HttpClient` calls with `Bearer` tokens, `Agentweaver/1.0` user agent, and GitHub JSON accept headers. The implemented REST calls include:
-
-- `GET https://api.github.com/user` for identity;
-- `GET https://api.github.com/user/orgs` for account/org listing;
-- `GET https://api.github.com/user/repos` for repositories owned by the signed-in user;
-- `GET https://api.github.com/orgs/{org}/repos` for organization repositories;
-- GitHub OAuth endpoints under `/login/device/code`, `/login/oauth/access_token`, and `/login/oauth/authorize`.
-
-The clone path does not call the GitHub REST API. It passes the access token as an ephemeral libgit2 credential while cloning over HTTPS.
+Git operations use only the capability required for the operation. A missing capability fails closed rather than using a configured or shared fallback credential.
 
 ## Failure modes and how to reason about them
 

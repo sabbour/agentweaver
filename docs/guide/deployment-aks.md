@@ -141,6 +141,11 @@ npm run azure:verify
 ## Verify
 
 All three deployment paths perform verification as part of their workflow.
+Each path reads the trusted AKS `DefaultDomainCertificate` status, derives the
+canonical `https://agentweaver.<managed-domain>` origin, and injects it into one
+runtime ConfigMap. A checksum on both the API and MCP pod templates forces them
+to restart whenever that origin changes; request `Host` and forwarded headers
+are never used to select the canonical origin.
 To re-run only verification:
 
 ```bash

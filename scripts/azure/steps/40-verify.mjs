@@ -365,6 +365,24 @@ export async function run(cfg, opts = {}) {
       "{.data.OAUTH_ENCRYPTION_CERTIFICATE_NAME}",
       { exec },
     );
+    const configuredRuntimeChecksum = await jsonpath(
+      NAMESPACE,
+      ["configmap", "agentweaver-runtime-config"],
+      "{.data.OAUTH_RUNTIME_CONFIG_CHECKSUM}",
+      { exec },
+    );
+    const apiRuntimeChecksum = await jsonpath(
+      NAMESPACE,
+      ["deployment", "agentweaver-api"],
+      "{.spec.template.metadata.annotations.agentweaver\\.io/oauth-runtime-config-checksum}",
+      { exec },
+    );
+    const mcpRuntimeChecksum = await jsonpath(
+      NAMESPACE,
+      ["deployment", "agentweaver-mcp"],
+      "{.spec.template.metadata.annotations.agentweaver\\.io/oauth-runtime-config-checksum}",
+      { exec },
+    );
     const expectedSigningName = cfg.OAUTH_SIGNING_CERTIFICATE_NAME || "agentweaver-oauth-signing";
     const expectedEncryptionName = cfg.OAUTH_ENCRYPTION_CERTIFICATE_NAME || "agentweaver-oauth-encryption";
     record(
@@ -378,6 +396,16 @@ export async function run(cfg, opts = {}) {
       configuredSigningName === expectedSigningName && configuredEncryptionName === expectedEncryptionName
         ? "OAuth Key Vault certificate families are wired to the runtime ConfigMap"
         : "OAuth Key Vault certificate family ConfigMap values are missing or inconsistent",
+    );
+    record(
+      /^[a-f0-9]{64}$/.test(configuredRuntimeChecksum)
+        && apiRuntimeChecksum === configuredRuntimeChecksum
+        && mcpRuntimeChecksum === configuredRuntimeChecksum,
+      /^[a-f0-9]{64}$/.test(configuredRuntimeChecksum)
+        && apiRuntimeChecksum === configuredRuntimeChecksum
+        && mcpRuntimeChecksum === configuredRuntimeChecksum
+        ? "API and MCP deployments consumed the canonical OAuth runtime configuration"
+        : "API or MCP deployment has not consumed the canonical OAuth runtime configuration",
     );
 
     if (cfg.KEYVAULT_NAME) {

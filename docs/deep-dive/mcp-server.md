@@ -133,7 +133,7 @@ sequenceDiagram
     participant C as MCP client
     participant RS as Agentweaver.Mcp<br/>Resource Server
     participant AS as Agentweaver.Api<br/>Authorization Server
-    participant GH as GitHub
+    participant Entra as Microsoft Entra ID
 
     C->>RS: POST /mcp without bearer token
     RS-->>C: 401 WWW-Authenticate<br/>resource_metadata=https://HOST/.well-known/oauth-protected-resource/mcp
@@ -142,9 +142,9 @@ sequenceDiagram
     C->>AS: GET /.well-known/oauth-authorization-server
     AS-->>C: authorize/token/JWKS/register/revoke metadata<br/>PKCE S256, code grant, public client
     C->>AS: GET /oauth/authorize<br/>code_challenge=S256, resource=https://HOST/mcp
-    AS->>GH: Redirect user through GitHub OAuth
-    GH-->>AS: GitHub callback
-    AS->>AS: Check org membership and create single-use code
+    AS->>Entra: Authenticate the user
+    Entra-->>AS: Entra identity and roles
+    AS->>AS: Create a single-use code
     AS-->>C: Redirect to client with authorization code
     C->>AS: POST /oauth/token with code_verifier
     AS-->>C: Bearer access token signed by AS
@@ -263,7 +263,7 @@ A rebuild should preserve this pattern:
 | Area | Conceptual purpose | Representative tools |
 |---|---|---|
 | Projects | Create, inspect, configure, rename, delete projects and list their runs. | `project_list`, `project_get`, `project_create`, `project_configure`, `project_list_runs` |
-| Runs | Submit agent work, monitor status/live events, review, inspect artifacts, retry, archive. | `run_submit`, `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_retry` |
+| Runs | Start or monitor agent work, inspect artifacts, retry, or archive. | `run_task`, `run_submit`, `run_status`, `run_watch`, `run_review`, `run_show_artifacts`, `run_retry` |
 | Coordinator orchestration | Start coordinator runs, confirm/revise outcome specs, inspect work plans and child runs, steer active work. | `coordinator_start`, `coordinator_outcome_spec_confirm`, `coordinator_work_plan_get`, `coordinator_steer`, `orchestration_topology` |
 | Backlog and board | Manage tasks through backlog/ready/problem/review/active/done flows and project pickup settings. | `backlog_capture_task`, `backlog_get_board`, `backlog_move_to_ready`, `send_all_backlog_to_ready`, `backlog_set_settings` |
 | Memory, decisions, sessions | Submit and merge decision inbox entries, record/search memory, export/import `.squad` state, track sessions. | `decision_inbox_submit`, `decision_inbox_merge`, `squad_decide`, `memory_record`, `memory_search`, `session_start` |
@@ -275,6 +275,8 @@ A rebuild should preserve this pattern:
 | Diagnostics and sandbox policy | Expose operational status and repository sandbox policy settings. | `diagnostics_get`, `heartbeat_status`, `sandbox_policy_get`, `sandbox_policy_set` |
 
 Beyond the static tool names and descriptions summarized here, the protocol-level schema may include additional MCP SDK-generated metadata.
+
+`run_submit` is a legacy alias. It starts a coordinator orchestration in `direct` mode and rejects `agent_name` and `base_branch`. Use `run_task` or `coordinator_start` for new clients.
 
 **Where this lives**
 
