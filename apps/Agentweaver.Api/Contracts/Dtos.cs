@@ -998,6 +998,9 @@ public sealed record StartOrchestrationResponse
 public sealed record StartAssistantRunRequest
 {
     [JsonPropertyName("message")] public string? Message { get; init; }
+    /// <summary>When true, persist <see cref="Message"/> as the run's opening task/title but return
+    /// before executing it, so the caller can attach the run SSE stream and then post the message.</summary>
+    [JsonPropertyName("defer_first_turn")] public bool DeferFirstTurn { get; init; }
     [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
     [JsonPropertyName("model_id")] public string? ModelId { get; init; }

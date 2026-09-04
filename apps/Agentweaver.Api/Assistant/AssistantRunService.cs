@@ -106,7 +106,8 @@ public interface IAssistantRunService
         string? contextRunId,
         string? modelId,
         CancellationToken ct,
-        string? resumeFromRunId = null);
+        string? resumeFromRunId = null,
+        bool deferFirstTurn = false);
 
     /// <summary>Runs the next conversational turn on an existing operator run owned by the caller.</summary>
     Task<OperatorAssistantResponse> SendMessageAsync(
@@ -217,7 +218,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         string? contextRunId,
         string? modelId,
         CancellationToken ct,
-        string? resumeFromRunId = null)
+        string? resumeFromRunId = null,
+        bool deferFirstTurn = false)
     {
         ArgumentNullException.ThrowIfNull(caller);
 
@@ -378,7 +380,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         }, ct).ConfigureAwait(false);
 
         OperatorAssistantResponse? firstTurn = null;
-        if (!string.IsNullOrWhiteSpace(firstMessage))
+        if (!deferFirstTurn && !string.IsNullOrWhiteSpace(firstMessage))
             firstTurn = await RunTurnAsync(caller, key, firstMessage!, contextRunId, ct)
                 .ConfigureAwait(false);
 
@@ -1189,12 +1191,18 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     }
 
     /// <summary>Projects each streamed assistant/tool step onto the run event stream in order. Text
-    /// deltas are not persisted individually (the full assistant message is appended once the turn
-    /// completes); tool calls/results are appended as discrete durable events.</summary>
+    /// deltas are appended as they arrive, then the full assistant message settles the same message
+    /// once the turn completes; tool calls/results are appended as discrete durable events.</summary>
     private sealed class RunEventSink(AssistantRunService owner, string runId, string assistantMessageId, CancellationToken ct)
         : IOperatorAssistantTurnSink
     {
-        public ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken _) => ValueTask.CompletedTask;
+        public ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken _) =>
+            owner.AppendAsync(runId, EventTypes.AgentMessageDelta, new
+            {
+                messageId = assistantMessageId,
+                role = "assistant",
+                delta,
+            }, ct);
 
         public ValueTask OnToolCallAsync(string toolName, string? argumentsJson, CancellationToken _) =>
             owner.AppendAsync(runId, EventTypes.ToolCall, new
