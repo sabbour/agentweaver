@@ -334,7 +334,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         try
         {
             ProjectId? project = ProjectId.TryParse(projectId, out var pid) ? pid : null;
-            var modelSource = await ResolveAssistantModelSourceAsync(caller.User, ct).ConfigureAwait(false);
+            var modelSource = await ResolveAssistantModelSourceAsync(ct).ConfigureAwait(false);
             var run = new Run
             {
                 Id = runId,
@@ -427,8 +427,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     /// agent-host mode actually needs a redeemable capability and none is available.
     /// </para>
     /// </summary>
-    private async Task<ModelSource> ResolveAssistantModelSourceAsync(string userId, CancellationToken ct) =>
-        ToModelSource(await ResolveAssistantProviderAsync(userId, ct).ConfigureAwait(false));
+    private async Task<ModelSource> ResolveAssistantModelSourceAsync(CancellationToken ct) =>
+        ToModelSource(await ResolveAssistantProviderAsync(ct).ConfigureAwait(false));
 
     /// <summary>
     /// Returns how many of <paramref name="activeRuns"/> should still count against the caller's
@@ -508,13 +508,11 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     /// <summary>Resolves the full effective provider (kind AND binding/configuration identity) for an
     /// Assistant session at platform scope. See <see cref="ResolveAssistantModelSourceAsync"/> for why
     /// the scope is deliberately <c>projectId: null</c>.</summary>
-    private async Task<EffectiveModelProviderResult> ResolveAssistantProviderAsync(
-        string userId,
-        CancellationToken ct)
+    private async Task<EffectiveModelProviderResult> ResolveAssistantProviderAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var modelProviderResolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
-        return await modelProviderResolver.ResolveForSessionAsync(userId, ct).ConfigureAwait(false);
+        return await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false);
     }
 
     private static ModelSource ToModelSource(EffectiveModelProviderResult provider) =>
@@ -580,7 +578,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         if (run is null)
             return;
 
-        var provider = await ResolveAssistantProviderAsync(state.User, ct).ConfigureAwait(false);
+        var provider = await ResolveAssistantProviderAsync(ct).ConfigureAwait(false);
         var modelSource = ToModelSource(provider);
 
         // Null on the conversation's very first turn on this replica (a fresh start, or a rehydration
@@ -632,10 +630,9 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         // a failure always surfaces the platform-settings CTA, never a project-specific one. This is
         // the SAME scope ResolveAssistantModelSourceAsync selects the provider at, so selection and
         // validation cannot disagree.
-        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
-                run, ct, platformScoped: true, userScopedEntraObjectId: run.SubmittingUser)
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
                 .ConfigureAwait(false))
-            throw ModelProviderConnectionRequiredException.ForUser();
+            throw new ModelProviderConnectionRequiredException();
     }
 
     public Task<OperatorAssistantResponse> SendMessageAsync(
