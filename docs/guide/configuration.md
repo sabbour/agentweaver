@@ -125,6 +125,10 @@ human Entra subject as authorization begin.
 
 The API identity reads the Repo App PEM and webhook secrets through its configured secret
 store; in hosted deployments those names resolve only through the API's Key Vault access.
+The deployment supplies the logical PEM name `repo-app-private-key`. The production
+`KeyVaultSecretStore` maps that logical name to the physical Key Vault secret
+`ghtok-repo-app-private-key`; do not set the application configuration to the prefixed
+physical name because the store would sanitize it again.
 The PEM, App JWT, and installation access token are never configuration values, persisted
 records, logs, or API responses. Configure GitHub's single Repo App webhook to the
 App-level receiver implemented by the API; do not configure per-project webhook URLs.
@@ -133,7 +137,7 @@ App-level receiver implemented by the API; do not configure per-project webhook 
 | --- | --- | --- |
 | `Auth:RepoApp:AppId` | none | Numeric Repo App ID used as the App-JWT issuer |
 | `Auth:RepoApp:Slug` | none | Public GitHub App slug used to build the Project Settings installation deep link |
-| `Auth:RepoApp:PrivateKeySecretName` | none | Secret-store name of the Repo App PEM, readable only by the API |
+| `Auth:RepoApp:PrivateKeySecretName` | none | Logical secret-store name of the Repo App PEM. Hosted deployments set `repo-app-private-key`, which maps to physical Key Vault secret `ghtok-repo-app-private-key` |
 | `Auth:RepoApp:WebhookSecretName` | none | Secret-store name of the active webhook HMAC secret |
 | `Auth:RepoApp:PreviousWebhookSecretName` | none | Secret-store name of the prior HMAC secret during a rotation |
 | `Auth:RepoApp:PreviousWebhookSecretExpiresAt` | none | UTC expiration after which the previous secret is rejected |
@@ -148,6 +152,22 @@ permission expansion or reduction invalidates the affected unattended grant and 
 the App permissions and wait for the server to verify a new grant.
 Installation tokens are scoped to Agentweaver's server-declared unattended repository
 permissions and never inherit unrelated installation permissions.
+
+For Azure provisioning, pass the PEM by file so it never appears in a command argument
+or params-file value:
+
+```powershell
+npm run azure:provision-infra -- --repo-app-private-key-file C:\secure\agentweaver-repo-app.pem
+```
+
+You can also set `REPO_APP_PRIVATE_KEY_FILE` in the environment or params file. The path
+is resolved by the deployment process, and the file content is imported as
+`ghtok-repo-app-private-key`. During upgrades, if the canonical physical secret is
+missing but the legacy physical `repo-app-private-key` exists and is readable, the Azure
+pipeline copies it to the canonical name and preserves the legacy secret. Provisioning
+and deployment stop before applying manifests when neither secret exists or Key Vault
+access cannot be verified. `npm run azure:verify` checks the canonical physical secret
+again after deployment.
 
 ##### Required manual step: register the installation Setup URL
 

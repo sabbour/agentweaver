@@ -149,6 +149,7 @@ test("resolveVariables: applies env-var defaults matching 00-variables.sh", asyn
   assert.equal(vars.ENTRA_ENTERPRISE_APP_OBJECT_ID, "");
   assert.equal(vars.OAUTH_SIGNING_CERTIFICATE_NAME, "agentweaver-oauth-signing");
   assert.equal(vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "agentweaver-oauth-encryption");
+  assert.equal(vars.REPO_APP_PRIVATE_KEY_FILE, "");
 });
 
 test("resolveVariables: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID/ENTRA_ENTERPRISE_APP_OBJECT_ID env overrides beat the defaults", async () => {
@@ -161,6 +162,7 @@ test("resolveVariables: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID/ENTRA_ENTERPRI
       ENTRA_ENTERPRISE_APP_OBJECT_ID: "77777777-8888-9999-0000-111111111111",
       OAUTH_SIGNING_CERTIFICATE_NAME: "oauth-signing-next",
       OAUTH_ENCRYPTION_CERTIFICATE_NAME: "oauth-encryption-next",
+      REPO_APP_PRIVATE_KEY_FILE: "C:\\secure\\repo-app.pem",
     },
     repoRoot: FAKE_REPO_ROOT,
     resolveLive: false,
@@ -172,6 +174,7 @@ test("resolveVariables: AUTH_MODE/ENTRA_CLIENT_ID/ENTRA_TENANT_ID/ENTRA_ENTERPRI
   assert.equal(vars.ENTRA_ENTERPRISE_APP_OBJECT_ID, "77777777-8888-9999-0000-111111111111");
   assert.equal(vars.OAUTH_SIGNING_CERTIFICATE_NAME, "oauth-signing-next");
   assert.equal(vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME, "oauth-encryption-next");
+  assert.equal(vars.REPO_APP_PRIVATE_KEY_FILE, "C:\\secure\\repo-app.pem");
 });
 
 test("resolveVariables: forwards opt-in ACR CLI timeout settings", async () => {

@@ -82,7 +82,8 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
  * --params-file/--config <path>, --resource-group, --cluster-name,
  * --acr-name, --location, --monitoring-location, --node-vm-size, --keyvault-name, --postgres-server-name, --postgres-location, --postgres-ha-mode, --postgres-access-mode, --namespace,
  * --entra-client-id, --entra-tenant-id, --entra-enterprise-app-object-id,
- * --oauth-signing-certificate-name, --oauth-encryption-certificate-name, -h/--help.
+ * --oauth-signing-certificate-name, --oauth-encryption-certificate-name,
+ * --repo-app-private-key-file, -h/--help.
  */
 export function parseArgs(argv = []) {
   const flags = {};
@@ -210,6 +211,10 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--oauth-encryption-certificate-name");
       flags.OAUTH_ENCRYPTION_CERTIFICATE_NAME = value;
       i += consumed;
+    } else if (arg === "--repo-app-private-key-file" || arg.startsWith("--repo-app-private-key-file=")) {
+      const { value, consumed } = takeValue(i, "--repo-app-private-key-file");
+      flags.REPO_APP_PRIVATE_KEY_FILE = value;
+      i += consumed;
     } else {
       throw new Error(`Unknown argument: ${arg}. Run 'provision-infra --help' for usage.`);
     }
@@ -260,6 +265,8 @@ Flags:
                                Key Vault certificate name whose latest two usable versions sign tokens.
   --oauth-encryption-certificate-name <name>
                                Key Vault certificate name whose latest two usable versions encrypt protocol artifacts.
+  --repo-app-private-key-file <path>
+                               GitHub Repo App PEM file to import into the canonical Key Vault secret.
   -h, --help                  Show this help.
 
 Config precedence: flags > env > params-file > detected defaults > prompt.
@@ -522,6 +529,7 @@ function buildSchema({ prompt, az }) {
     ENTRA_ENTERPRISE_APP_OBJECT_ID: {},
     OAUTH_SIGNING_CERTIFICATE_NAME: { default: DEFAULTS.OAUTH_SIGNING_CERTIFICATE_NAME },
     OAUTH_ENCRYPTION_CERTIFICATE_NAME: { default: DEFAULTS.OAUTH_ENCRYPTION_CERTIFICATE_NAME },
+    REPO_APP_PRIVATE_KEY_FILE: {},
   };
 }
 
@@ -630,6 +638,10 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
   collected.ENTRA_TENANT_ID = await prompt.text("Microsoft Entra tenant (directory) ID");
   collected.ENTRA_ENTERPRISE_APP_OBJECT_ID = await prompt.text(
     "Microsoft Entra enterprise application (service principal) object ID (optional, enables a direct 'Manage users' deep link)",
+    { default: "" },
+  );
+  collected.REPO_APP_PRIVATE_KEY_FILE = await prompt.text(
+    "GitHub Repo App private-key PEM file (leave blank to reuse or migrate an existing Key Vault secret)",
     { default: "" },
   );
 
@@ -758,6 +770,7 @@ export async function run(opts = {}) {
     ENTRA_ENTERPRISE_APP_OBJECT_ID: config.ENTRA_ENTERPRISE_APP_OBJECT_ID,
     OAUTH_SIGNING_CERTIFICATE_NAME: config.OAUTH_SIGNING_CERTIFICATE_NAME,
     OAUTH_ENCRYPTION_CERTIFICATE_NAME: config.OAUTH_ENCRYPTION_CERTIFICATE_NAME,
+    REPO_APP_PRIVATE_KEY_FILE: config.REPO_APP_PRIVATE_KEY_FILE,
     IMAGE_API: config.IMAGE_API,
     IMAGE_FRONTEND: config.IMAGE_FRONTEND,
     IMAGE_MCP: config.IMAGE_MCP,
@@ -782,6 +795,7 @@ export async function run(opts = {}) {
     IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
     MONITORING_LOCATION: config.MONITORING_LOCATION,
     FORCE: Boolean(flags.FORCE),
+    REPO_APP_PRIVATE_KEY_FILE: config.REPO_APP_PRIVATE_KEY_FILE,
     repoRoot,
   };
 
@@ -809,6 +823,7 @@ export async function run(opts = {}) {
     IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
     MONITORING_LOCATION: config.MONITORING_LOCATION,
     FORCE: Boolean(flags.FORCE),
+    REPO_APP_PRIVATE_KEY_FILE: config.REPO_APP_PRIVATE_KEY_FILE,
     repoRoot,
   };
 

@@ -1,0 +1,180 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  ensureRepoAppPrivateKeySecret,
+  REPO_APP_PRIVATE_KEY_SECRET,
+  setSecretFileWithRetry,
+} from "../lib/repo-app-secret.mjs";
+
+function noopLog() {
+  return { info() {}, ok() {}, warn() {} };
+}
+
+function fakeExec(handler) {
+  const calls = [];
+  return {
+    calls,
+    async capture(cmd, args, opts) {
+      calls.push({ cmd, args, opts });
+      return handler(cmd, args, opts, calls) ?? { stdout: "", stderr: "", code: 0 };
+    },
+  };
+}
+
+function requestedSecret(args) {
+  const index = args.indexOf("--name");
+  return index >= 0 ? args[index + 1] : "";
+}
+
+test("Repo App secret contract keeps the application logical name distinct from the physical Key Vault name", () => {
+  assert.deepEqual(REPO_APP_PRIVATE_KEY_SECRET, {
+    logicalName: "repo-app-private-key",
+    physicalName: "ghtok-repo-app-private-key",
+    legacyPhysicalName: "repo-app-private-key",
+  });
+});
+
+test("ensureRepoAppPrivateKeySecret accepts an accessible canonical secret without mutation", async () => {
+  const exec = fakeExec((_cmd, args) => {
+    assert.equal(requestedSecret(args), REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+    return { stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "", code: 0 };
+  });
+
+  const result = await ensureRepoAppPrivateKeySecret(
+    { vaultName: "kv" },
+    { exec, log: noopLog() },
+  );
+
+  assert.equal(result.status, "available");
+  assert.equal(exec.calls.some((call) => call.args.includes("set")), false);
+  assert.equal(exec.calls.some((call) => call.args.includes("download")), false);
+});
+
+test("ensureRepoAppPrivateKeySecret migrates the legacy secret and preserves it", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-test-"));
+  let canonicalAvailable = false;
+  const exec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    const name = requestedSecret(args);
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.physicalName) {
+      return canonicalAvailable
+        ? { stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "", code: 0 }
+        : { stdout: "", stderr: "ERROR: (SecretNotFound) secret was not found in this key vault", code: 3 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName) {
+      return { stdout: "https://kv/secrets/repo-app-private-key/version", stderr: "", code: 0 };
+    }
+    if (operation === "download") {
+      const filePath = args[args.indexOf("--file") + 1];
+      fs.writeFileSync(filePath, "private-key-material");
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (operation === "set") {
+      const filePath = args[args.indexOf("--file") + 1];
+      assert.equal(fs.readFileSync(filePath, "utf8"), "private-key-material");
+      assert.equal(name, REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+      canonicalAvailable = true;
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  try {
+    const result = await ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv" },
+      { exec, log: noopLog(), scratchRoot },
+    );
+
+    assert.equal(result.status, "migrated");
+    assert.equal(exec.calls.some((call) => call.args.includes("delete")), false);
+    assert.deepEqual(fs.readdirSync(scratchRoot), []);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("ensureRepoAppPrivateKeySecret fails clearly when canonical and legacy secrets are missing", async () => {
+  const exec = fakeExec(() => ({
+    stdout: "",
+    stderr: "ERROR: (SecretNotFound) secret was not found in this key vault",
+    code: 3,
+  }));
+
+  await assert.rejects(
+    ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv" },
+      { exec, log: noopLog() },
+    ),
+    /REPO_APP_PRIVATE_KEY_FILE|--repo-app-private-key-file/,
+  );
+  assert.equal(exec.calls.some((call) => call.args.includes("set")), false);
+});
+
+test("ensureRepoAppPrivateKeySecret does not mask canonical access failures with legacy fallback", async () => {
+  const exec = fakeExec(() => ({
+    stdout: "",
+    stderr: "ERROR: (ForbiddenByRbac) caller is not authorized",
+    code: 1,
+  }));
+
+  await assert.rejects(
+    ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv" },
+      { exec, log: noopLog() },
+    ),
+    /canonical.*inaccessible/i,
+  );
+  assert.equal(exec.calls.length, 1);
+});
+
+test("ensureRepoAppPrivateKeySecret imports a configured PEM file directly to the canonical name", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-import-"));
+  const sourceFile = path.join(scratchRoot, "repo-app.pem");
+  fs.writeFileSync(sourceFile, "private-key-material");
+  const exec = fakeExec((_cmd, args) => {
+    if (args[2] === "set") {
+      assert.equal(requestedSecret(args), REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+      assert.equal(args[args.indexOf("--file") + 1], sourceFile);
+    }
+    return { stdout: "verified", stderr: "", code: 0 };
+  });
+
+  try {
+    const result = await ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv", sourceFile },
+      { exec, log: noopLog() },
+    );
+    assert.equal(result.status, "imported");
+    assert.equal(exec.calls.some((call) =>
+      requestedSecret(call.args) === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName), false);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("setSecretFileWithRetry retries bounded RBAC propagation failures", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-retry-"));
+  const sourceFile = path.join(scratchRoot, "repo-app.pem");
+  fs.writeFileSync(sourceFile, "private-key-material");
+  let attempts = 0;
+  const exec = fakeExec(() => {
+    attempts += 1;
+    return attempts === 1
+      ? { stdout: "", stderr: "ForbiddenByRbac", code: 1 }
+      : { stdout: "", stderr: "", code: 0 };
+  });
+
+  try {
+    await setSecretFileWithRetry("kv", "secret", sourceFile, {
+      exec,
+      log: noopLog(),
+      sleep: async () => {},
+    });
+    assert.equal(attempts, 2);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});

@@ -43,6 +43,7 @@ import * as azDefault from "../lib/az.mjs";
 import * as kustomizeDefault from "../lib/kustomize.mjs";
 import * as provisionMonitoringDefault from "./15-provision-monitoring.mjs";
 import * as genA2aMtlsCertsDefault from "./gen-a2a-mtls-certs.mjs";
+import { ensureRepoAppPrivateKeySecret as ensureRepoAppPrivateKeySecretDefault } from "../lib/repo-app-secret.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // scripts/azure/steps/30-deploy.mjs -> repo root is three levels up.
@@ -217,6 +218,7 @@ export async function run(cfg, opts = {}) {
     provisionMonitoring = provisionMonitoringDefault,
     genA2aMtlsCerts = genA2aMtlsCertsDefault,
     kustomize = kustomizeDefault,
+    ensureRepoAppPrivateKeySecret = ensureRepoAppPrivateKeySecretDefault,
   } = opts;
 
   const NAMESPACE = cfg.NAMESPACE;
@@ -263,6 +265,14 @@ export async function run(cfg, opts = {}) {
           "refusing to render/apply manifests against a nonexistent or mistyped vault.",
       );
     }
+
+    const repoAppPrivateKey = await ensureRepoAppPrivateKeySecret(
+      {
+        vaultName: cfg.KEYVAULT_NAME,
+        sourceFile: cfg.REPO_APP_PRIVATE_KEY_FILE,
+      },
+      { exec: { capture: execCapture }, log },
+    );
 
     // Derive compound variables from primitives so templates can reference them directly.
     const AGENTHOST_KEYVAULT_URI = cfg.AGENTHOST_KEYVAULT_URI || `https://${cfg.KEYVAULT_NAME}.vault.azure.net/`;
@@ -586,6 +596,7 @@ export async function run(cfg, opts = {}) {
       PREVIEW_TLS_SECRET,
       ZONE_SUFFIX,
       APPINSIGHTS_WORKSPACE_ID,
+      repoAppPrivateKey,
     };
   } finally {
     cleanupRenderedDir();

@@ -19,6 +19,12 @@ test("parseArgs accepts the optional Entra enterprise app object ID flag", () =>
     help: false,
   });
 
+  test("parseArgs accepts the Repo App private-key PEM file", () => {
+    const parsed = parseArgs(["--repo-app-private-key-file", "C:\\secure\\repo-app.pem"]);
+
+    assert.equal(parsed.flags.REPO_APP_PRIVATE_KEY_FILE, "C:\\secure\\repo-app.pem");
+  });
+
   test("parseArgs accepts OAuth Key Vault certificate family overrides", () => {
     const parsed = parseArgs([
       "--oauth-signing-certificate-name", "oauth-signing-next",
@@ -48,6 +54,7 @@ test("runInteractiveInstaller allows the optional Entra enterprise app object ID
     "client-id",
     "tenant-id",
     "",
+    "",
   ];
   const prompt = {
     select: async (_label, choices) => choices[0].value,
@@ -72,4 +79,5 @@ test("runInteractiveInstaller allows the optional Entra enterprise app object ID
   assert.equal(collected.ENTRA_CLIENT_ID, "client-id");
   assert.equal(collected.ENTRA_TENANT_ID, "tenant-id");
   assert.equal(collected.ENTRA_ENTERPRISE_APP_OBJECT_ID, "");
+  assert.equal(collected.REPO_APP_PRIVATE_KEY_FILE, "");
 });

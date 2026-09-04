@@ -232,6 +232,27 @@ test("run(): throws loudly (before applying any manifest) when KEYVAULT_NAME doe
   assert.equal(applied.length, 0, "must not apply any manifest before the Key Vault existence check passes");
 });
 
+test("run(): rejects a missing or inaccessible canonical Repo App private key before applying manifests", async () => {
+  for (const reason of ["missing", "inaccessible"]) {
+    const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes();
+    await assert.rejects(
+      () => run(CFG, {
+        run: execRun,
+        capture: execCapture,
+        log,
+        az,
+        fs: fsImpl,
+        repoRoot: DEFAULT_REPO_ROOT,
+        ensureRepoAppPrivateKeySecret: async () => {
+          throw new Error(`Canonical Repo App private-key secret is ${reason}`);
+        },
+      }),
+      new RegExp(reason),
+    );
+    assert.equal(appliedFilenames(calls).length, 0);
+  }
+});
+
 test("run(): rejects an empty managed domain before rendering or applying manifests", async () => {
   const { calls, writtenFiles, execRun, execCapture, log, az, fsImpl } = makeFakes({ domain: "" });
   await assert.rejects(

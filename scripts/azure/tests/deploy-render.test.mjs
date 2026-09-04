@@ -287,7 +287,8 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__CopilotApp__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__RepoApp__FrontendUrl\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: ENTRA_FRONTEND_URL\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /name: Auth__CopilotApp__Slug\s*\n\s*value: agentweaver-orchestrator-copilot/);
-  assert.match(builtYaml, /name: Auth__RepoApp__PrivateKeySecretName\s*\n\s*value: repo-app-private-key/);
+  assert.match(builtYaml, /name: Auth__RepoApp__PrivateKeySecretName\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: REPO_APP_PRIVATE_KEY_SECRET_NAME\s*\n\s*name: agentweaver-runtime-config/);
+  assert.match(builtYaml, /REPO_APP_PRIVATE_KEY_SECRET_NAME: repo-app-private-key/);
   assert.match(builtYaml, /name: Auth__CopilotApp__ClientId\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: copilot-app-client-id\s*\n\s*name: agentweaver-secrets/);
   assert.match(builtYaml, /name: Auth__RepoApp__AppId\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: repo-app-id\s*\n\s*name: agentweaver-secrets/);
   assert.match(builtYaml, /objectName: copilot-app-client-id[\s\S]*?objectName: copilot-app-client-secret[\s\S]*?objectName: repo-app-client-id[\s\S]*?objectName: repo-app-client-secret[\s\S]*?objectName: repo-app-id/);
