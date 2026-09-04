@@ -4,9 +4,9 @@ Coordinator orchestration is the Agentweaver experience for turning one plain-la
 
 Related experience docs: [Runs & board](./runs-board-watch.md), [MCP client](./mcp-client.md), [Projects](./projects.md), and [Review, workspace & merge](./review-workspace-merge.md). Related grounding references: [Coordinator reference](../reference/coordinator.md), [Coordinator internals](../deep-dive/coordinator-internals.md), [Orchestration engine](../deep-dive/orchestration.md), and [Team casting](../deep-dive/team-casting.md).
 
-![Coordinator orchestration experience: Plain-language goal, Start coordinator orchestration, Draft OutcomeSpec, Confirm gate, Request revision, Confirm OutcomeSpec, Create work plan, Dispatch ready children, Watch topology, Steer or recover, Collective assembly, Done](../diagrams/experience-coordinator-orchestration-fig1.png)
+![Coordinator orchestration experience: Plain-language goal, Start coordinator orchestration, Draft OutcomeSpec, Confirm gate, Request revision, Confirm OutcomeSpec, Create work plan, Dispatch ready children, Watch topology, Steer or recover, Collective assembly, Done](../diagrams/canonical-coordinator-journey.png)
 
-<!-- Rendered from ../diagrams/src/experience-coordinator-orchestration-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-coordinator-journey.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

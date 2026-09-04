@@ -73,19 +73,12 @@ Now the restart story:
 
 A graceful shutdown is even cleaner: on a stop signal a worker stops claiming new runs, releases (or lets expire) the leases it holds, and finishes or checkpoints whatever is in flight before exiting — which is why worker disruption budgets favor draining one pod at a time.
 
-```mermaid
-sequenceDiagram
-    participant W1 as Worker A (owns run)
-    participant DB as Postgres (lease)
-    participant W2 as Worker B
-    W1->>DB: renew heartbeat while working
-    Note over W1: pod restarts / crashes
-    W1--xDB: heartbeats stop
-    Note over DB: lease expires
-    W2->>DB: claim WHERE free OR expired
-    DB-->>W2: won — run re-leased to B
-    Note over W2: resumes from last checkpoint
-```
+![How runs survive replica restarts: Worker A (owns run), Postgres (lease), Worker B](../diagrams/experience-scaling-operations-fig3.png)
+
+<!-- Rendered from ../diagrams/src/experience-scaling-operations-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A subtle but important guarantee sits underneath this: a former owner that was paused or stuck cannot wake up later and corrupt a run that has since been re-leased. Each acquisition carries a token that only moves forward, and a stale token's writes are rejected — so the new owner is always the only one whose work counts.
 
@@ -108,13 +101,6 @@ When you operate a scaled Agentweaver, these are the things worth watching:
 ## The rollout, from an operator's seat
 
 You will not flip everything at once. The change arrives in phases, each reversible by a flag that defaults to today's behavior, so you can advance and roll back deliberately:
-
-![The rollout, from an operator's seat: P1 · Agent execution in pods, P2 · Postgres cutover, P3 · Web/worker split + leasing](../diagrams/experience-scaling-operations-fig2.png)
-
-<!-- Rendered from ../diagrams/src/experience-scaling-operations-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 - **P1** moves the heavy per-run execution into sandbox pods. It runs on the existing single pod and SQLite, and its whole purpose is to stop the out-of-memory crashes. Rollback is the `Sandbox:AgentExecutionMode` flag back to in-process.
 - **P2** cuts the data layer over to Postgres. Once reads and writes are verified you drop the single-writer disk, switch to a rolling update, and allow more than one replica. Rollback is the `Database:Provider` flag back to SQLite (take a backup first — this step is data-loss-aware).

@@ -1,0 +1,537 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Agentweaver Components",
+  "alt": "Agentweaver components grouped into client applications, the Agentweaver API control plane, the AgentHost sandbox pod, shared packages, and external dependencies",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "clients",
+      "label": "Client applications",
+      "tier": 1
+    },
+    {
+      "id": "api",
+      "label": "apps/Agentweaver.Api — control plane",
+      "tier": 1
+    },
+    {
+      "id": "agenthost",
+      "label": "apps/Agentweaver.AgentHost — sandbox pod",
+      "tier": 1
+    },
+    {
+      "id": "packages",
+      "label": "Shared packages",
+      "tier": 1
+    },
+    {
+      "id": "external",
+      "label": "External dependencies",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "WebSource",
+      "label": "apps/web",
+      "subLabel": "React UI, editor, board",
+      "icon": "window",
+      "badge": {
+        "text": "Client",
+        "tone": "teal"
+      },
+      "group": "clients"
+    },
+    {
+      "id": "WebHost",
+      "label": "apps/Agentweaver.Web",
+      "subLabel": "serves the compiled SPA",
+      "icon": "server",
+      "badge": {
+        "text": "Host",
+        "tone": "teal"
+      },
+      "group": "clients"
+    },
+    {
+      "id": "McpApp",
+      "label": "apps/Agentweaver.Mcp",
+      "subLabel": "MCP tools + broker-token validation",
+      "icon": "server",
+      "badge": {
+        "text": "Client API",
+        "tone": "lavender"
+      },
+      "group": "clients"
+    },
+    {
+      "id": "Auth",
+      "label": "Auth",
+      "subLabel": "Entra sessions, roles, capabilities",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      },
+      "group": "api"
+    },
+    {
+      "id": "OAuthEndpoints",
+      "label": "OAuth endpoints",
+      "subLabel": "authorize, token, consent, register",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      },
+      "group": "api"
+    },
+    {
+      "id": "Coordinator",
+      "label": "Coordinator",
+      "subLabel": "plan, dispatch, assemble, steer",
+      "icon": "bot",
+      "badge": {
+        "text": "Core",
+        "tone": "lavender"
+      },
+      "group": "api"
+    },
+    {
+      "id": "Workflows",
+      "label": "Workflows",
+      "subLabel": "loader, registry, selector, binder",
+      "icon": "route",
+      "badge": {
+        "text": "Workflow",
+        "tone": "green"
+      },
+      "group": "api"
+    },
+    {
+      "id": "Runs",
+      "label": "Runs",
+      "subLabel": "factory, watch loop, restart, gates",
+      "icon": "server",
+      "badge": {
+        "text": "Workflow",
+        "tone": "green"
+      },
+      "group": "api"
+    },
+    {
+      "id": "Git",
+      "label": "Git",
+      "subLabel": "worktrees, integration branches, locks",
+      "icon": "branch",
+      "badge": {
+        "text": "Workflow",
+        "tone": "green"
+      },
+      "group": "api"
+    },
+    {
+      "id": "Sandbox",
+      "label": "Sandbox",
+      "subLabel": "pod claims, routing, preview",
+      "icon": "box",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      },
+      "group": "api"
+    },
+    {
+      "id": "Projects",
+      "label": "Projects and catalog",
+      "subLabel": "teams, backlog, skills, memory",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "api"
+    },
+    {
+      "id": "Infrastructure",
+      "label": "Infrastructure",
+      "subLabel": "events, checkpoints, recovery, metrics",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "api"
+    },
+    {
+      "id": "ApiData",
+      "label": "Agentweaver.Api.Data",
+      "subLabel": "EF Core model + persistence records",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "api"
+    },
+    {
+      "id": "PostgresMigrations",
+      "label": "Api.Migrations.Postgres",
+      "subLabel": "PostgreSQL migration bundle",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "api"
+    },
+    {
+      "id": "AgentHost",
+      "label": "AgentHost A2A server",
+      "subLabel": "per-run setup, agent turns, approvals",
+      "icon": "server",
+      "badge": {
+        "text": "Runtime",
+        "tone": "marigold"
+      },
+      "group": "agenthost"
+    },
+    {
+      "id": "ExecSidecar",
+      "label": "Executor sidecar",
+      "subLabel": "bubblewrap process isolation",
+      "icon": "box",
+      "badge": {
+        "text": "Runtime",
+        "tone": "marigold"
+      },
+      "group": "agenthost"
+    },
+    {
+      "id": "AgentRuntime",
+      "label": "AgentRuntime",
+      "subLabel": "agents, executors, RAI, Scribe",
+      "icon": "bot",
+      "badge": {
+        "text": "Shared",
+        "tone": "lavender"
+      },
+      "group": "packages"
+    },
+    {
+      "id": "AgentTools",
+      "label": "AgentTools",
+      "subLabel": "tool registry + approval contracts",
+      "icon": "bot",
+      "badge": {
+        "text": "Shared",
+        "tone": "lavender"
+      },
+      "group": "packages"
+    },
+    {
+      "id": "SandboxExec",
+      "label": "SandboxExec",
+      "subLabel": "pod exec, bubblewrap, MXC, WSL",
+      "icon": "box",
+      "badge": {
+        "text": "Shared",
+        "tone": "marigold"
+      },
+      "group": "packages"
+    },
+    {
+      "id": "SandboxFs",
+      "label": "SandboxFs",
+      "subLabel": "path validation + workspace guards",
+      "icon": "box",
+      "badge": {
+        "text": "Shared",
+        "tone": "marigold"
+      },
+      "group": "packages"
+    },
+    {
+      "id": "Squad",
+      "label": "Squad",
+      "subLabel": "roles, teams, workflows",
+      "icon": "database",
+      "badge": {
+        "text": "Shared",
+        "tone": "teal"
+      },
+      "group": "packages"
+    },
+    {
+      "id": "Domain",
+      "label": "Domain",
+      "subLabel": "run types, event types, contracts",
+      "icon": "box",
+      "badge": {
+        "text": "Shared",
+        "tone": "neutral"
+      },
+      "group": "packages"
+    },
+    {
+      "id": "AgentsAI",
+      "label": "Agents.AI.Workflows",
+      "subLabel": "workflow graph + checkpoints",
+      "icon": "route",
+      "badge": {
+        "text": "Dependency",
+        "tone": "neutral"
+      },
+      "group": "external"
+    },
+    {
+      "id": "AgentGovernance",
+      "label": "AgentGovernance",
+      "subLabel": "policy evaluation + audit",
+      "icon": "key",
+      "badge": {
+        "text": "Dependency",
+        "tone": "neutral"
+      },
+      "group": "external"
+    },
+    {
+      "id": "OpenIddict",
+      "label": "OpenIddict",
+      "subLabel": "OAuth server + validation",
+      "icon": "key",
+      "badge": {
+        "text": "Dependency",
+        "tone": "neutral"
+      },
+      "group": "external"
+    },
+    {
+      "id": "ModelSdks",
+      "label": "Model SDKs",
+      "subLabel": "Copilot SDK + Extensions.AI",
+      "icon": "bot",
+      "badge": {
+        "text": "Dependency",
+        "tone": "neutral"
+      },
+      "group": "external"
+    },
+    {
+      "id": "Postgres",
+      "label": "PostgreSQL",
+      "subLabel": "Npgsql + EF Core persistence",
+      "icon": "database",
+      "badge": {
+        "text": "Dependency",
+        "tone": "neutral"
+      },
+      "group": "external"
+    },
+    {
+      "id": "SandboxApi",
+      "label": "Kubernetes Sandbox API",
+      "subLabel": "SandboxClaim, template, warm pool",
+      "icon": "box",
+      "badge": {
+        "text": "Dependency",
+        "tone": "neutral"
+      },
+      "group": "external"
+    },
+    {
+      "id": "MxcSdk",
+      "label": "Sabbour.Mxc.Sdk",
+      "subLabel": "local native sandbox backend",
+      "icon": "box",
+      "badge": {
+        "text": "Dependency",
+        "tone": "neutral"
+      },
+      "group": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "WebSource",
+      "to": "WebHost",
+      "label": "builds SPA"
+    },
+    {
+      "from": "WebSource",
+      "to": "Auth",
+      "label": "sign-in + session"
+    },
+    {
+      "from": "WebSource",
+      "to": "Runs",
+      "label": "REST + SSE"
+    },
+    {
+      "from": "McpApp",
+      "to": "OAuthEndpoints",
+      "label": "authorizes + validates"
+    },
+    {
+      "from": "McpApp",
+      "to": "Projects",
+      "label": "project + catalog tools"
+    },
+    {
+      "from": "McpApp",
+      "to": "Runs",
+      "label": "run + coordinator tools"
+    },
+    {
+      "from": "OAuthEndpoints",
+      "to": "Auth",
+      "label": "uses identity + consent"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Workflows",
+      "label": "selects then binds"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Runs",
+      "label": "starts child runs"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Git",
+      "label": "branches + merges"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Projects",
+      "label": "reads team + memory"
+    },
+    {
+      "from": "Runs",
+      "to": "Workflows",
+      "label": "builds run graph"
+    },
+    {
+      "from": "Sandbox",
+      "to": "AgentHost",
+      "label": "claims + configures pod"
+    },
+    {
+      "from": "Infrastructure",
+      "to": "ApiData",
+      "label": "persists events + checkpoints"
+    },
+    {
+      "from": "Projects",
+      "to": "ApiData",
+      "label": "persists project state"
+    },
+    {
+      "from": "Auth",
+      "to": "ApiData",
+      "label": "persists identity state"
+    },
+    {
+      "from": "AgentHost",
+      "to": "ExecSidecar",
+      "label": "submits all processes"
+    },
+    {
+      "from": "AgentHost",
+      "to": "AgentRuntime",
+      "label": "hosts agent runtime"
+    },
+    {
+      "from": "AgentHost",
+      "to": "AgentTools",
+      "label": "loads governed tools"
+    },
+    {
+      "from": "ExecSidecar",
+      "to": "SandboxExec",
+      "label": "executes through"
+    },
+    {
+      "from": "Workflows",
+      "to": "AgentRuntime",
+      "label": "binds executors"
+    },
+    {
+      "from": "Runs",
+      "to": "AgentRuntime",
+      "label": "runs workflow turns"
+    },
+    {
+      "from": "Git",
+      "to": "SandboxFs",
+      "label": "guards workspace paths"
+    },
+    {
+      "from": "Sandbox",
+      "to": "SandboxExec",
+      "label": "routes execution"
+    },
+    {
+      "from": "Projects",
+      "to": "Squad",
+      "label": "loads roles + workflows"
+    },
+    {
+      "from": "ApiData",
+      "to": "Domain",
+      "label": "stores domain records"
+    },
+    {
+      "from": "AgentRuntime",
+      "to": "AgentsAI",
+      "label": "builds workflow graph"
+    },
+    {
+      "from": "AgentRuntime",
+      "to": "AgentGovernance",
+      "label": "evaluates policy"
+    },
+    {
+      "from": "AgentRuntime",
+      "to": "ModelSdks",
+      "label": "makes model calls"
+    },
+    {
+      "from": "SandboxFs",
+      "to": "AgentGovernance",
+      "label": "uses policy kernel"
+    },
+    {
+      "from": "OAuthEndpoints",
+      "to": "OpenIddict",
+      "label": "built on"
+    },
+    {
+      "from": "ApiData",
+      "to": "OpenIddict",
+      "label": "stores OAuth records"
+    },
+    {
+      "from": "ApiData",
+      "to": "Postgres",
+      "label": "EF Core"
+    },
+    {
+      "from": "PostgresMigrations",
+      "to": "Postgres",
+      "label": "applies schema"
+    },
+    {
+      "from": "Sandbox",
+      "to": "SandboxApi",
+      "label": "creates claims"
+    },
+    {
+      "from": "SandboxExec",
+      "to": "MxcSdk",
+      "label": "local execution backend"
+    }
+  ]
+}

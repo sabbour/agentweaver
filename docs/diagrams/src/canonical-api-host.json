@@ -1,0 +1,145 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "API Host Composition and Readiness",
+  "alt": "API Host Composition and Readiness grouped into Client, Control plane, Execution plane, and External systems: Clients, Startup and readiness, Auth and middleware, Endpoint modules, Services and registries, Background workers, Stores and providers, External resources",
+  "direction": "LR",
+  "groups": [
+    {
+      "id": "client",
+      "label": "Client",
+      "tier": 1
+    },
+    {
+      "id": "control",
+      "label": "Control plane",
+      "tier": 1
+    },
+    {
+      "id": "execution",
+      "label": "Execution plane",
+      "tier": 1
+    },
+    {
+      "id": "external",
+      "label": "External systems",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Clients",
+      "label": "Clients",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "client"
+    },
+    {
+      "id": "Bootstrap",
+      "label": "Startup and readiness",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "Configuration, schema, recovery",
+      "group": "control"
+    },
+    {
+      "id": "Middleware",
+      "label": "Auth and middleware",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      },
+      "group": "control"
+    },
+    {
+      "id": "Endpoints",
+      "label": "Endpoint modules",
+      "icon": "route",
+      "badge": {
+        "text": "Gateway",
+        "tone": "teal"
+      },
+      "group": "control"
+    },
+    {
+      "id": "Services",
+      "label": "Services and registries",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "group": "control"
+    },
+    {
+      "id": "Workers",
+      "label": "Background workers",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "execution"
+    },
+    {
+      "id": "Stores",
+      "label": "Stores and providers",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "control"
+    },
+    {
+      "id": "Resources",
+      "label": "External resources",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Clients",
+      "to": "Bootstrap"
+    },
+    {
+      "from": "Bootstrap",
+      "to": "Middleware"
+    },
+    {
+      "from": "Middleware",
+      "to": "Endpoints"
+    },
+    {
+      "from": "Endpoints",
+      "to": "Services"
+    },
+    {
+      "from": "Services",
+      "to": "Stores"
+    },
+    {
+      "from": "Bootstrap",
+      "to": "Workers"
+    },
+    {
+      "from": "Workers",
+      "to": "Services"
+    },
+    {
+      "from": "Stores",
+      "to": "Resources"
+    }
+  ]
+}

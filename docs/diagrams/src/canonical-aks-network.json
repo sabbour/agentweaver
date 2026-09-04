@@ -1,0 +1,195 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "AKS Network Topology",
+  "alt": "AKS Network Topology: Gateway Pod, API Pod, MCP Pod, Frontend Pods, AgentHost sandbox pod, worker, api.github.com, Azure Key Vault, kube-dns, External Services",
+  "direction": "LR",
+  "groups": [
+    {
+      "id": "workloads",
+      "label": "Workloads — default-deny ingress + egress",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "GW",
+      "label": "Gateway Pod",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "label: gateway.networking.k8s.io/",
+      "meta": "gateway-name: agentweaver-gateway"
+    },
+    {
+      "id": "API",
+      "label": "API Pod",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "group": "workloads"
+    },
+    {
+      "id": "MCP",
+      "label": "MCP Pod",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "workloads"
+    },
+    {
+      "id": "FE",
+      "label": "Frontend Pods",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "workloads"
+    },
+    {
+      "id": "SB",
+      "label": "AgentHost sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "deny-all ingress",
+      "group": "workloads"
+    },
+    {
+      "id": "worker",
+      "label": "worker",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "GH",
+      "label": "api.github.com",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "subLabel": "github.com"
+    },
+    {
+      "id": "KV",
+      "label": "Azure Key Vault",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "DNS",
+      "label": "kube-dns",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "EXT",
+      "label": "External Services",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "GW",
+      "to": "API",
+      "label": ":8080 allowed"
+    },
+    {
+      "from": "GW",
+      "to": "MCP",
+      "label": ":8080 allowed"
+    },
+    {
+      "from": "GW",
+      "to": "FE",
+      "label": ":8080 allowed"
+    },
+    {
+      "from": "API",
+      "to": "MCP",
+      "label": ":8080 internal"
+    },
+    {
+      "from": "API",
+      "to": "SB",
+      "label": "A2A :8088 /configure guarded by NetworkPolicy"
+    },
+    {
+      "from": "worker",
+      "to": "SB",
+      "label": "A2A :8088 /configure guarded by NetworkPolicy"
+    },
+    {
+      "from": "API",
+      "to": "GH",
+      "label": ":443 HTTPS FQDN allowlist"
+    },
+    {
+      "from": "MCP",
+      "to": "GH",
+      "label": ":443 HTTPS FQDN allowlist"
+    },
+    {
+      "from": "API",
+      "to": "KV",
+      "label": "CSI driver for app secrets"
+    },
+    {
+      "from": "MCP",
+      "to": "KV",
+      "label": "CSI driver for app secrets"
+    },
+    {
+      "from": "SB",
+      "to": "KV",
+      "label": "workload identity runtime user-token fetch"
+    },
+    {
+      "from": "API",
+      "to": "DNS",
+      "label": "UDP/TCP :53"
+    },
+    {
+      "from": "MCP",
+      "to": "DNS",
+      "label": "UDP/TCP :53"
+    },
+    {
+      "from": "FE",
+      "to": "DNS",
+      "label": "UDP/TCP :53"
+    },
+    {
+      "from": "SB",
+      "to": "EXT",
+      "label": ":443 FQDN only api.github.com npmjs.org Azure AI"
+    },
+    {
+      "from": "SB",
+      "to": "DNS",
+      "label": "UDP/TCP :53"
+    }
+  ]
+}

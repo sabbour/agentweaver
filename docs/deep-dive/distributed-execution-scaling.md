@@ -41,13 +41,6 @@ The key insight is that **memory relief and isolation are the same move**. Reloc
 
 The current design combines pod-based agent execution, provider-aware persistence, and a web/worker split. `Sandbox:AgentExecutionMode`, `Database:Provider`, and `App:Role` select the runtime topology.
 
-![The phased rollout: P1 — Agent execution in pods, P2 — Azure PostgreSQL, P3 — Web/worker split + run leasing, stops OOM, horizontal scale](../diagrams/distributed-execution-scaling-fig2.png)
-
-<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ### P1 — agent execution in pods (the OOM fix)
 
 P1 relocates only the heavy execution into sandbox pods over a thin agent bridge (the `RemoteAgentProxy` → AgentHost A2A seam, enabled by `Sandbox:AgentExecutionMode=pod-per-run`). It keeps a **single** orchestrating process and the existing SQLite file. This is deliberate and safe: the pod is a *compute satellite*, never a database writer. The `RemoteAgentProxy` carries no `ICheckpointStore` and the pod opens no database connection, so every checkpoint and run-event write is proxied back through the one worker, which remains the sole owner of durable state. Because there is still exactly one writer, SQLite's single-writer invariant holds and nothing forces Postgres yet.
@@ -96,22 +89,12 @@ Leasing rests on a small set of per-row ideas:
 - **Heartbeat** — a liveness stamp the owner refreshes while it works, so stalls are visible across the fleet rather than only inside one process.
 - **A fencing token** — a number that increments on every successful acquisition. A worker must present its token when it writes; a stale (smaller) token is rejected. This stops a paused or zombie former owner from waking up and clobbering a run that has since been re-leased to someone else.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant A as Worker A
-    participant B as Worker B
-    participant DB as Postgres (run row)
-    A->>DB: UPDATE ... SET owner=A, token+1 WHERE owner IS NULL OR lease_expired
-    DB-->>A: rows = 1  (A wins)
-    B->>DB: UPDATE ... SET owner=B WHERE owner IS NULL OR lease_expired
-    DB-->>B: rows = 0  (already owned — B steps aside)
-    Note over A: A renews heartbeat while it works
-    A--xA: A crashes (stops renewing)
-    Note over DB: lease expires
-    B->>DB: UPDATE ... WHERE lease_expired
-    DB-->>B: rows = 1  (B re-claims — crash recovery)
-```
+![Durable run leasing: Worker A, Worker B, Postgres (run row)](../diagrams/distributed-execution-scaling-fig5.png)
+
+<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The lease *lifecycle* is owned by `RunWatchLoopService`: on claim it records the `(ownerId, fencingToken)`, runs a background renew loop at half the TTL (`LeaseTtl` = 5 minutes, renew every ~2.5 minutes), and releases on completion or drain. Terminal handlers and `FailRun` first re-check `IsLeaseOwnerAsync` so a worker whose lease was stolen does not finalize a run it no longer owns.
 
@@ -127,10 +110,10 @@ The live event stream is what makes a run watchable in real time. In a single pr
 
 `EfRunEventStream` is registered as the Postgres `IRunEventStream` implementation (`Program.cs:534`). Its append path writes through to `RunEvents` before acknowledging, using a serializable transaction and retrying sequence conflicts. Its subscribe path repeatedly loads rows with `Sequence > lastSeen`, yields them in order, and sleeps for `250 ms` only when no new row was emitted. That gives every replica the same live floor: it can stream any run as long as it can read the shared database. Source: `apps/Agentweaver.Api/Program.cs:534`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:89`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:97`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:114`.
 
-![Current mechanism: durable write-through + cursor polling: Worker replica, RunStreamEntry, EfRunEventStream, Shared RunEvents table, Web replica A, Web replica B, Browser / MCP watcher](../diagrams/distributed-execution-scaling-fig4.png)
+![Sequence showing a worker mirroring a run event into the shared RunEvents table, one web replica streaming it live, and another replica resuming after the browser reconnects with a cursor](../diagrams/distributed-execution-scaling-fig4.png)
 
 <!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig4.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Playwright (Fluent-styled sequence diagram).
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 

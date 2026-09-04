@@ -202,28 +202,12 @@ the UI — via the `start_preview` agent tool. The tool is produced by `Agentwea
 ([`AgentweaverApiTools.cs:245`](#source)), and the model supplies **only** the port. Because the `runId` is
 server-bound, the agent physically cannot target another run.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant Agent as Agent (in sandbox)
-    participant API as API (start_preview endpoint)
-    participant Gate as AgentPreviewGate
-    participant Op as Operator / auto-approve
-    participant Preview as SandboxPreviewService
-    Agent->>API: POST /api/runs/{runId}/sandbox/preview { target_port }
-    API->>API: IsOwnerOrServiceCaller (owner OR run's own agent)
-    API->>Gate: RequestApprovalAsync(runId, port)
-    alt auto-approve source on
-        Gate-->>API: Approved (immediate)
-    else human-gated
-        Gate->>Op: emit tool.approval_required (request_id)
-        Op-->>Gate: POST /tool-approvals (grant) — or timeout
-        Gate-->>API: Approved / DeniedOrTimedOut
-    end
-    API->>Preview: StartPreviewAsync(runId, port)  %% same path as operator route
-    Preview-->>API: preview_url
-    API-->>Agent: { preview_url, … }
-```
+![Agent-initiated preview (`start_preview`): Agent (in sandbox), API (start_preview endpoint), AgentPreviewGate, Operator / auto-approve, SandboxPreviewService](../diagrams/sandbox-browser-preview-fig2.png)
+
+<!-- Rendered from ../diagrams/src/sandbox-browser-preview-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 1. **The tool POSTs** `{ target_port }` to `POST /api/runs/{runId}/sandbox/preview`
    ([`SandboxEndpoints.cs:60`](#source)) and returns the response `preview_url` back to the agent.

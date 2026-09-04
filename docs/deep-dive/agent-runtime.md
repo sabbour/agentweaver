@@ -51,42 +51,12 @@ A run begins in the API layer, but its core shape is runtime-driven:
 5. **Start a workflow.** The workflow wraps the worker turn with surrounding nodes: review, merge, RAI, Scribe, and coordinator-specific paths when needed.
 6. **Watch and persist.** A watch loop listens to workflow and runtime events, translates them into UI-visible status, persists history, and handles terminal states.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant API as API endpoint
-    participant OR as Run orchestrator
-    participant CTX as Context compiler
-    participant WF as Workflow
-    participant EX as Agent turn executor
-    participant AG as Turn agent
-    participant SDK as Provider SDK
-    participant TOOL as Tool/governance plane
-    participant WT as Worktree operations
-    participant WATCH as Watch loop / event stream
+![The life of a run: API endpoint, Run orchestrator, Context compiler, Workflow, Agent turn executor, Turn agent, Provider SDK, Tool/governance plane, Worktree operations, Watch loop / event stream](../diagrams/agent-runtime-fig3.png)
 
-    API->>OR: Request run
-    OR->>OR: Reserve run + prepare worktree
-    OR->>CTX: Compile charter, decisions, memory, session context
-    CTX-->>OR: System prompt context
-    OR->>WF: Start workflow with AgentTurnInput
-    WF->>EX: Invoke worker node
-    EX->>AG: Setup run-scoped session, tools, permissions
-    EX->>AG: Run one turn with task
-    AG->>SDK: Stream model execution
-    SDK-->>AG: Text deltas
-    AG-->>WATCH: agent.message.delta
-    SDK-->>AG: Tool or permission request
-    AG->>TOOL: Evaluate policy and execute if allowed
-    TOOL-->>AG: Result or denial
-    AG-->>WATCH: tool.* / run.degraded / run.outcome
-    SDK-->>AG: Final assistant response
-    AG-->>WATCH: agent.turn.end
-    AG-->>EX: Assistant text
-    EX->>WT: Commit changes, compute diff, count steps
-    EX-->>WF: AgentTurnOutput
-    WF-->>WATCH: Review, merge, RAI, Scribe, terminal events
-```
+<!-- Rendered from ../diagrams/src/agent-runtime-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Why this shape?
 

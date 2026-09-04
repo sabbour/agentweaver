@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Builds docs/diagram-renderer (a small Vite + React Flow app, see that
 // folder's README) and uses Playwright to screenshot each
-// docs/diagrams/src/*.json graph-spec as a static PNG, replacing the old
+// docs/diagrams/src/*.json graph or sequence spec as a static PNG, replacing the old
 // mermaid-cli pipeline. See scripts/docs/render-diagrams.mjs for the
 // npm-facing entry point (render vs. --check) that calls into this module.
 
@@ -26,7 +26,7 @@ const DPR = 2; // export at 2x for crisp embeds on high-DPI displays
 async function listSpecNames() {
   const entries = await readdir(specsDir);
   return entries
-    .filter((f) => f.endsWith('.json') && !f.startsWith('graph-spec.schema'))
+    .filter((f) => f.endsWith('.json') && !f.endsWith('-spec.schema.json'))
     .map((f) => f.replace(/\.json$/, ''))
     .sort();
 }
@@ -87,8 +87,11 @@ async function captureAll(specNames) {
     const page = await browser.newPage({ deviceScaleFactor: DPR });
 
     for (const name of specNames) {
-      await page.goto(`http://127.0.0.1:${port}/?spec=${encodeURIComponent(name)}`);
-      await page.waitForSelector('#diagram-root[data-diagram-ready="true"]', { timeout: 15000 });
+      await page.goto(`http://127.0.0.1:${port}/?spec=${encodeURIComponent(name)}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      });
+      await page.waitForSelector('#diagram-root[data-diagram-ready="true"]', { timeout: 60000 });
       const el = await page.$('#diagram-root');
       const outPath = path.join(outDir, `${name}.png`);
       await el.screenshot({ path: outPath });

@@ -1,0 +1,84 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Memory, Decisions, and Context",
+  "alt": "Memory, Decisions, and Context: Active architectural + scope decisions, Agent core_context memories, High-importance learnings and patterns, Cross-team tagged memories, Current open session, Compiled prompt context",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "A",
+      "label": "Active architectural + scope decisions",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Agent core_context memories",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "C",
+      "label": "High-importance learnings and patterns",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "D",
+      "label": "Cross-team tagged memories",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "E",
+      "label": "Current open session",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "F",
+      "label": "Compiled prompt context",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B"
+    },
+    {
+      "from": "B",
+      "to": "C"
+    },
+    {
+      "from": "C",
+      "to": "D"
+    },
+    {
+      "from": "D",
+      "to": "E"
+    },
+    {
+      "from": "E",
+      "to": "F"
+    }
+  ]
+}

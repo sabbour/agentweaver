@@ -1,0 +1,193 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "MCP flow: assistant-driven work",
+  "alt": "MCP flow: assistant-driven work: User, MCP client, Agentweaver MCP server, Agentweaver backend",
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Client",
+      "label": "MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "MCP",
+      "label": "Agentweaver MCP server",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver backend",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Client",
+      "label": "Create a project and run this goal",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "MCP",
+      "label": "Authenticate and connect to /mcp",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "MCP",
+      "label": "project_list or project_create",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Forward caller identity and request",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "Project result",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "Client",
+      "label": "Tool result",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "MCP",
+      "label": "coordinator_start",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Start work",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "Run id and status",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "Client",
+      "label": "Tool result",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "MCP",
+      "label": "run_watch / run_status / orchestration_topology",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Read live or current state",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "Events, status, topology, artifacts",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "Client",
+      "label": "Tool result",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "review or decision needed",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Client",
+              "to": "User",
+              "label": "Ask for judgment",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "User",
+              "to": "Client",
+              "label": "Approve, reject, steer, or revise",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Client",
+              "to": "MCP",
+              "label": "run_review or coordinator_steer",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

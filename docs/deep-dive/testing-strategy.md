@@ -47,26 +47,12 @@ The main integration pattern is a custom `WebApplicationFactory<Program>`. Each 
 - development/test bypass flags where the test is not exercising GitHub org authorization;
 - service replacements for live external seams.
 
-```mermaid
-sequenceDiagram
-    participant Test
-    participant Factory as Test WebApplicationFactory
-    participant API as Real Program host
-    participant DB as Temp SQLite
-    participant Git as Temp worktree roots
-    participant Fakes as Deterministic seams
+![How API integration tests host the system: Test, Test WebApplicationFactory, Real Program host, Temp SQLite, Temp worktree roots, Deterministic seams](../diagrams/testing-strategy-fig4.png)
 
-    Test->>Factory: CreateClient()
-    Factory->>API: Configure app settings
-    Factory->>DB: Point Database:Path at unique file
-    Factory->>Git: Point worktrees/checkpoints at unique dirs
-    Factory->>Fakes: Replace external services only
-    API-->>Test: HttpClient against in-process routes
-    Test->>API: HTTP request with test bearer token
-    API->>DB: Real stores and transactions
-    API->>Git: Real git/worktree behavior when needed
-    API-->>Test: Real serialized response
-```
+<!-- Rendered from ../diagrams/src/testing-strategy-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This approach is important because middleware order and DI wiring are part of the contract. A project endpoint test is not merely testing a service method; it verifies that authentication, route binding, JSON naming, service registration, persistence, and response status codes all agree.
 
@@ -87,9 +73,9 @@ Where this lives: `tests/Agentweaver.Tests/Helpers`.
 
 Agentweaver tests use fakes deliberately, not casually. A fake is acceptable when it stands at a nondeterministic or external boundary and preserves the shape of the production contract. A fake is not used to skip the behavior being tested.
 
-![Fakes, fixtures, and real dependencies: Test case, Real API host, Real stores, Real workflow services, Real temp git repos, Real validators and policy code, Deterministic agent fake, In-memory GitHub token store, Fake HTTP handler, No-op project initializer](../diagrams/testing-strategy-fig2.png)
+![Fakes, fixtures, and real dependencies: Test case, Real API host, Real stores, Real workflow services, Real temp git repos, Real validators and policy code, Deterministic agent fake, In-memory GitHub token store, Fake HTTP handler, No-op project initializer](../diagrams/canonical-testing-boundary.png)
 
-<!-- Rendered from ../diagrams/src/testing-strategy-fig2.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-testing-boundary.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -236,13 +222,6 @@ Coordinator tests use the same idea. The drafter is deterministic, but the persi
 ## In-memory versus real dependencies
 
 The suite uses a simple decision rule:
-
-![In-memory versus real dependencies: Test needs a dependency, Is this dependency part of, Use the real dependency, Would real use require, Use deterministic fake/stub](../diagrams/testing-strategy-fig3.png)
-
-<!-- Rendered from ../diagrams/src/testing-strategy-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 Examples:
 

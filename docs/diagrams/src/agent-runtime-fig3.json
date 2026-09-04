@@ -1,0 +1,269 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "The life of a run",
+  "alt": "The life of a run: API endpoint, Run orchestrator, Context compiler, Workflow, Agent turn executor, Turn agent, Provider SDK, Tool/governance plane, Worktree operations, Watch loop / event stream",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "API",
+      "label": "API endpoint",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "OR",
+      "label": "Run orchestrator",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "CTX",
+      "label": "Context compiler",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "WF",
+      "label": "Workflow",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "EX",
+      "label": "Agent turn executor",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "AG",
+      "label": "Turn agent",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "SDK",
+      "label": "Provider SDK",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "TOOL",
+      "label": "Tool/governance plane",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "WT",
+      "label": "Worktree operations",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "WATCH",
+      "label": "Watch loop / event stream",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "API",
+      "to": "OR",
+      "label": "Request run",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "OR",
+      "to": "OR",
+      "label": "Reserve run + prepare worktree",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "OR",
+      "to": "CTX",
+      "label": "Compile charter, decisions, memory, session context",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "CTX",
+      "to": "OR",
+      "label": "System prompt context",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "OR",
+      "to": "WF",
+      "label": "Start workflow with AgentTurnInput",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "WF",
+      "to": "EX",
+      "label": "Invoke worker node",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "EX",
+      "to": "AG",
+      "label": "Setup run-scoped session, tools, permissions",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "EX",
+      "to": "AG",
+      "label": "Run one turn with task",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AG",
+      "to": "SDK",
+      "label": "Stream model execution",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "SDK",
+      "to": "AG",
+      "label": "Text deltas",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "AG",
+      "to": "WATCH",
+      "label": "agent.message.delta",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "SDK",
+      "to": "AG",
+      "label": "Tool or permission request",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "AG",
+      "to": "TOOL",
+      "label": "Evaluate policy and execute if allowed",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "TOOL",
+      "to": "AG",
+      "label": "Result or denial",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "AG",
+      "to": "WATCH",
+      "label": "tool.* / run.degraded / run.outcome",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "SDK",
+      "to": "AG",
+      "label": "Final assistant response",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "AG",
+      "to": "WATCH",
+      "label": "agent.turn.end",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "AG",
+      "to": "EX",
+      "label": "Assistant text",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "EX",
+      "to": "WT",
+      "label": "Commit changes, compute diff, count steps",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "EX",
+      "to": "WF",
+      "label": "AgentTurnOutput",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "WF",
+      "to": "WATCH",
+      "label": "Review, merge, RAI, Scribe, terminal events",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

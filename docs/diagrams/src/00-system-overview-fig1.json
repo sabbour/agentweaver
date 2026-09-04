@@ -1,8 +1,30 @@
 {
   "$schema": "./graph-spec.schema.json",
   "title": "Purpose and Mental Model",
-  "alt": "Purpose and Mental Model: Human operator / reviewer, MCP client, Web UI, Agentweaver API, Agent runtime, Sandboxed tools, Git repo, Durable events, Decisions + memory, Model providers",
+  "alt": "Purpose and Mental Model grouped into Client, Control plane, Execution plane, and External systems: Human operator / reviewer, MCP client, Web UI, Agentweaver API, Agent runtime, Sandboxed tools, Git repo, Durable events, Decisions + memory, Model providers",
   "direction": "LR",
+  "groups": [
+    {
+      "id": "client",
+      "label": "Client",
+      "tier": 1
+    },
+    {
+      "id": "control",
+      "label": "Control plane",
+      "tier": 1
+    },
+    {
+      "id": "execution",
+      "label": "Execution plane",
+      "tier": 1
+    },
+    {
+      "id": "external",
+      "label": "External systems",
+      "tier": 1
+    }
+  ],
   "nodes": [
     {
       "id": "Human",
@@ -11,7 +33,8 @@
       "badge": {
         "text": "Client",
         "tone": "lavender"
-      }
+      },
+      "group": "client"
     },
     {
       "id": "MCPClient",
@@ -21,7 +44,8 @@
         "text": "Client",
         "tone": "lavender"
       },
-      "subLabel": "Copilot CLI / VS Code / assistants"
+      "subLabel": "Copilot CLI / VS Code / assistants",
+      "group": "client"
     },
     {
       "id": "Web",
@@ -30,7 +54,8 @@
       "badge": {
         "text": "UI",
         "tone": "teal"
-      }
+      },
+      "group": "client"
     },
     {
       "id": "API",
@@ -40,7 +65,8 @@
         "text": "Service",
         "tone": "green"
       },
-      "subLabel": "control plane"
+      "subLabel": "control plane",
+      "group": "control"
     },
     {
       "id": "Runtime",
@@ -50,7 +76,8 @@
         "text": "Runtime",
         "tone": "green"
       },
-      "subLabel": "workflow agents"
+      "subLabel": "workflow agents",
+      "group": "execution"
     },
     {
       "id": "Sandbox",
@@ -60,7 +87,8 @@
         "text": "Runtime",
         "tone": "green"
       },
-      "subLabel": "files + shell"
+      "subLabel": "files + shell",
+      "group": "execution"
     },
     {
       "id": "Git",
@@ -70,7 +98,8 @@
         "text": "Git",
         "tone": "lavender"
       },
-      "subLabel": "worktrees + branches"
+      "subLabel": "worktrees + branches",
+      "group": "external"
     },
     {
       "id": "Events",
@@ -79,7 +108,8 @@
       "badge": {
         "text": "Data",
         "tone": "teal"
-      }
+      },
+      "group": "control"
     },
     {
       "id": "Memory",
@@ -88,7 +118,8 @@
       "badge": {
         "text": "Data",
         "tone": "teal"
-      }
+      },
+      "group": "control"
     },
     {
       "id": "Providers",
@@ -98,7 +129,8 @@
         "text": "Runtime",
         "tone": "green"
       },
-      "subLabel": "Copilot / Foundry paths"
+      "subLabel": "Copilot / Foundry paths",
+      "group": "external"
     }
   ],
   "edges": [

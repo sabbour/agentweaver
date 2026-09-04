@@ -1,0 +1,135 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "A2A turn transport",
+  "alt": "Sequence showing the orchestration graph invoking a RemoteAgentProxy, AgentHost executing one leaf agent turn in a sandbox pod, and streamed turn output returning to the worker",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "Workflow",
+      "label": "Orchestration graph",
+      "subLabel": "worker: gates · resume · assembly",
+      "icon": "server",
+      "badge": { "text": "Compute", "tone": "green" }
+    },
+    {
+      "id": "Proxy",
+      "label": "Remote agent proxy",
+      "subLabel": "worker: A2AAgent client",
+      "icon": "server",
+      "badge": { "text": "Compute", "tone": "green" }
+    },
+    {
+      "id": "Host",
+      "label": "AgentHost",
+      "subLabel": "sandbox pod: A2ATurnBridgeAgent",
+      "icon": "server",
+      "badge": { "text": "Compute", "tone": "green" }
+    },
+    {
+      "id": "Agent",
+      "label": "Leaf agent turn",
+      "subLabel": "model + tools / shell / files",
+      "icon": "bot",
+      "badge": { "text": "Runtime", "tone": "green" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Workflow",
+      "to": "Proxy",
+      "label": "invoke one agent turn"
+    },
+    {
+      "type": "activation",
+      "participant": "Proxy",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "Proxy",
+      "to": "Host",
+      "label": "A2A HTTP+JSON message:stream"
+    },
+    {
+      "type": "activation",
+      "participant": "Host",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "Host",
+      "to": "Agent",
+      "label": "execute leaf turn"
+    },
+    {
+      "type": "activation",
+      "participant": "Agent",
+      "action": "start"
+    },
+    {
+      "type": "fragment",
+      "operator": "loop",
+      "label": "while the turn produces output",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Agent",
+              "to": "Host",
+              "label": "token / tool / RunEvent update",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Host",
+              "to": "Proxy",
+              "label": "streamed A2A response",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "activation",
+      "participant": "Agent",
+      "action": "end"
+    },
+    {
+      "type": "message",
+      "from": "Host",
+      "to": "Proxy",
+      "label": "final turn result",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "activation",
+      "participant": "Host",
+      "action": "end"
+    },
+    {
+      "type": "message",
+      "from": "Proxy",
+      "to": "Workflow",
+      "label": "turn output stream complete",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "activation",
+      "participant": "Proxy",
+      "action": "end"
+    },
+    {
+      "type": "note",
+      "over": ["Workflow", "Proxy"],
+      "label": "The orchestration graph stays in the worker; only one leaf turn crosses A2A."
+    }
+  ]
+}

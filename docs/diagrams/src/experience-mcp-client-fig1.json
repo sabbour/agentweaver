@@ -1,0 +1,320 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Assistant operating pattern",
+  "alt": "Assistant operating pattern: User, MCP client assistant, Agentweaver MCP server, Agentweaver API/UI state, Coordinator run, Child agent runs",
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Actor",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Assistant",
+      "label": "MCP client assistant",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "MCP",
+      "label": "Agentweaver MCP server",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver API/UI state",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Coord",
+      "label": "Coordinator run",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Child",
+      "label": "Child agent runs",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Assistant",
+      "label": "Build the onboarding-auth feature end to end",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "project_list",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "List projects",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "Projects",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "project_create",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Create project",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "project_id",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "team_cast(confirm=true)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Cast and confirm team",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "Confirmed team",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "backlog_capture_task / backlog_decompose_spec",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Add or preview tasks",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "send_all_backlog_to_ready",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Promote tasks to Ready",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "coordinator_start",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Start orchestration",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Coord",
+      "label": "Draft outcome spec",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "coordinator_outcome_spec_get",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Read spec",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Assistant",
+      "label": "Draft spec for user confirmation",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Assistant",
+      "label": "Approved",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "coordinator_outcome_spec_confirm",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Resume coordinator",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Coord",
+      "to": "Child",
+      "label": "Dispatch subtasks",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "run_watch",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "Assistant",
+      "label": "Progress notifications and final state",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "run_show_artifacts / run_get_file",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Read review artifacts",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "User",
+      "label": "Summary and recommendation",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Assistant",
+      "label": "Approve",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Assistant",
+      "to": "MCP",
+      "label": "run_review(approved=true)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Merge/approve run",
+      "line": "solid",
+      "arrow": "filled"
+    }
+  ]
+}

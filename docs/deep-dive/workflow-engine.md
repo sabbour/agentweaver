@@ -121,9 +121,9 @@ Build & Test infrastructure failures are not authored `request-changes` verdicts
 
 The default workflow encodes the standard run pipeline. Its canonical source is the code-embedded `DefaultWorkflowTemplate` (id `default`), loaded once through the real loader as `BuiltInWorkflows.Default` (`BuiltInWorkflows.DefaultWorkflowId == "default"`). `DefaultWorkflowTemplate.TryMaterialize` can also write a copy to a project's `.agentweaver/workflows/default.yaml` so users can inspect or customize it. The pipeline is `agent -> rai -> review -> merge -> scribe` (with terminal sinks for safety-failed, declined, and done).
 
-![The Default Workflow: Agent work, RAI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done](../diagrams/workflow-engine-fig3.png)
+![The Default Workflow: Agent work, RAI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done](../diagrams/canonical-default-workflow.png)
 
-<!-- Rendered from ../diagrams/src/workflow-engine-fig3.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-default-workflow.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -195,9 +195,9 @@ This layered design lets the UI show useful authoring errors while preserving ru
 
 The invocation context is derived from run origin by `CoordinatorOrchestratorExecutor.ResolveInvocationKindAsync`. A `RunOrigin.BacklogPickup` run is treated as `WorkflowInvocationKind.Heartbeat`; other origins (and lookup failures) are treated as `WorkflowInvocationKind.Manual`.
 
-![Invocation Context: Run origin, Manual / interactive / other, BacklogPickup, Invocation: Manual, Invocation: Heartbeat, All valid available workflows, Future automation rules](../diagrams/workflow-engine-fig6.png)
+![Invocation Context: Run origin, Manual / interactive / other, BacklogPickup, Invocation: Manual, Invocation: Heartbeat, All valid available workflows, Future automation rules](../diagrams/canonical-workflow-invocation.png)
 
-<!-- Rendered from ../diagrams/src/workflow-engine-fig6.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-workflow-invocation.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -205,13 +205,6 @@ The invocation context is derived from run origin by `CoordinatorOrchestratorExe
 The important design property is that invocation kind does not filter workflow validity. The selector sees the project's valid available workflows regardless of whether the run started manually or from heartbeat pickup.
 
 All valid workflows in the project's available set are candidates. A backlog task can carry a `WorkflowOverrideId`. The override is honored only if the workflow exists, is valid, and can bind safely. Otherwise the system logs the mismatch and continues with normal selection or safe fallback behavior.
-
-![Invocation Context: Available valid workflows, Invocation kind, Available candidates, Valid override?, Use override, Any candidates?, Select among candidates, Fallback / fail-safe resolution](../diagrams/workflow-engine-fig7.png)
-
-<!-- Rendered from ../diagrams/src/workflow-engine-fig7.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 Rebuild guidance: treat invocation kind as observability and policy context, not as a candidate gate. If a selected id cannot resolve, validate, or bind, do not "helpfully" run it anyway.
 
@@ -294,32 +287,12 @@ The library is process-oriented. A workflow is named for what it does, not for t
 
 Workflow generation turns a natural-language process request into an unsaved YAML draft.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant User
-    participant Endpoint
-    participant Generator
-    participant Model as Copilot model
-    participant Loader
-    participant Binder
+![Workflow Generation: User, Endpoint, Generator, Copilot model, Loader, Binder](../diagrams/workflow-engine-fig11.png)
 
-    User->>Endpoint: describe desired workflow
-    Endpoint->>Generator: description + project roles
-    Generator->>Model: schema, rules, roles, examples, fenced description
-    Model-->>Generator: YAML candidate
-    Generator->>Loader: parse and structural validate
-    Generator->>Binder: bindability dry-run
-    alt valid
-        Generator-->>Endpoint: draft YAML
-    else invalid first pass
-        Generator->>Model: previous YAML + validation error
-        Model-->>Generator: corrected YAML
-        Generator->>Loader: validate again
-        Generator->>Binder: bindability dry-run
-        Generator-->>Endpoint: draft or failure
-    end
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig11.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Generation has these rules:
 
@@ -354,9 +327,9 @@ Blueprint generation can also invoke workflow generation when no library workflo
 
 Workflow selection chooses a process for a task. It runs inside `CoordinatorOrchestratorExecutor.SelectWorkflowAsync` and is intentionally conservative: deterministic rules narrow the space first (registry ordering, availability, overrides), and `WorkflowSelector.SelectAsync` only chooses among 2+ available definitions.
 
-![Selection Logic: Registry available set, Order default first, Use available workflow set, Apply valid backlog/user override, Available count, Use the only workflow, Build selector prompt, Model returns JSON id + rationale, Known id?, Selected workflow, Default fallback](../diagrams/workflow-engine-fig8.png)
+![Selection Logic: Registry available set, Order default first, Use available workflow set, Apply valid backlog/user override, Available count, Use the only workflow, Build selector prompt, Model returns JSON id + rationale, Known id?, Selected workflow, Default fallback](../diagrams/canonical-workflow-selection.png)
 
-<!-- Rendered from ../diagrams/src/workflow-engine-fig8.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-workflow-selection.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -438,9 +411,9 @@ Anything outside supported transition families is not "best effort." It is a bin
 
 Workflow definitions describe the process graph. Review policies describe required gates. Before runtime binding, the system composes the active review policy onto the selected workflow.
 
-![Review Policy Composition: Selected workflow, Active review policy, Compose required gates, Validate composed graph, Bind to executors](../diagrams/workflow-engine-fig10.png)
+![Review Policy Composition: Selected workflow, Active review policy, Compose required gates, Validate composed graph, Bind to executors](../diagrams/canonical-review-policy.png)
 
-<!-- Rendered from ../diagrams/src/workflow-engine-fig10.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-review-policy.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

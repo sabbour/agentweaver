@@ -1,0 +1,207 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Coordinator Collective Review",
+  "alt": "Coordinator Collective Review: Children, Coordinator, Assembly, RAI, Human, Dispatch, Merge, Scribe",
+  "participants": [
+    {
+      "id": "Children",
+      "label": "Children",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Coordinator",
+      "label": "Coordinator",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Assembly",
+      "label": "Assembly",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "RAI",
+      "label": "RAI",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Human",
+      "label": "Human",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Dispatch",
+      "label": "Dispatch",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Merge",
+      "label": "Merge",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Scribe",
+      "label": "Scribe",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Children",
+      "to": "Coordinator",
+      "label": "assemble-ready branches",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Assembly",
+      "label": "build integration branch",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Assembly",
+      "to": "RAI",
+      "label": "review aggregate diff",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "RAI",
+      "to": "Assembly",
+      "label": "pass or blocked",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Assembly",
+      "to": "Human",
+      "label": "collective review request",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "approved",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Human",
+              "to": "Assembly",
+              "label": "approve",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Merge",
+              "label": "merge integration branch",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Merge",
+              "to": "Scribe",
+              "label": "record outcome",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "request changes",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Human",
+              "to": "Assembly",
+              "label": "feedback + target files",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Assembly",
+              "label": "infer affected subtasks + dependents",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Dispatch",
+              "label": "reset selected subtasks and re-dispatch",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "declined",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Human",
+              "to": "Assembly",
+              "label": "decline",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Coordinator",
+              "label": "assembly_declined",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

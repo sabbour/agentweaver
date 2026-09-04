@@ -56,9 +56,9 @@ The policy composer performs a graph transform:
 
 If the workflow has no merge node, there is no irreversible merge action to gate, so the policy composition returns the workflow unchanged. That is a deliberate distinction: review policies gate merge; they are not a universal wrapper around every workflow shape.
 
-![Review Policy as a Safety Overlay: Producer, Existing pre-merge gates, Injected policy gates, Merge, Terminal](../diagrams/review-merge-fig2.png)
+![Review Policy as a Safety Overlay: Producer, Existing pre-merge gates, Injected policy gates, Merge, Terminal](../diagrams/canonical-review-policy.png)
 
-<!-- Rendered from ../diagrams/src/review-merge-fig2.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-review-policy.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -115,30 +115,12 @@ The important part is the pause. `awaiting_review` is not a UI-only label. It is
 
 Approve and request-changes both start from the same review gate, but they intentionally diverge.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant API
-    participant Pending as Pending Request Store
-    participant Workflow
-    participant Store as Run Store
-    participant Merge
-    participant Agent
+![Approve vs Request Changes: User, API, Pending Request Store, Workflow, Run Store, Merge, Agent](../diagrams/review-merge-fig5.png)
 
-    User->>API: approve
-    API->>Pending: atomically consume request
-    API->>Workflow: send approved decision
-    Workflow->>Merge: build MergeInput from stored tree
-    Merge->>Store: CAS awaiting_review/committing -> merging
-    Merge->>Merge: repository lock + git merge
-    Merge->>Store: merged or merge_failed
-
-    User->>API: request changes
-    API->>Pending: atomically consume request
-    API->>Store: CAS awaiting_review -> in_progress
-    API->>Workflow: send revise decision + feedback
-    Workflow->>Agent: resume/re-run producer with feedback
-```
+<!-- Rendered from ../diagrams/src/review-merge-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Approval does not edit files. It authorizes the existing reviewed tree to proceed toward merge. Request-changes does edit the future path: it carries reviewer feedback back into the producer's next turn and increments the revision loop.
 
@@ -180,35 +162,12 @@ The parent coordinator then performs one collective assembly pipeline:
 6. On request-changes, infer affected subtasks and re-dispatch them.
 7. On decline, terminalize the coordinator run as declined.
 
-```mermaid
-sequenceDiagram
-    participant Children
-    participant Coordinator
-    participant Assembly
-    participant RAI
-    participant Human
-    participant Dispatch
-    participant Merge
-    participant Scribe
+![Coordinator Collective Review: Children, Coordinator, Assembly, RAI, Human, Dispatch, Merge, Scribe](../diagrams/review-merge-fig6.png)
 
-    Children-->>Coordinator: assemble-ready branches
-    Coordinator->>Assembly: build integration branch
-    Assembly->>RAI: review aggregate diff
-    RAI-->>Assembly: pass or blocked
-    Assembly->>Human: collective review request
-    alt approved
-        Human-->>Assembly: approve
-        Assembly->>Merge: merge integration branch
-        Merge->>Scribe: record outcome
-    else request changes
-        Human-->>Assembly: feedback + target files
-        Assembly->>Assembly: infer affected subtasks + dependents
-        Assembly->>Dispatch: reset selected subtasks and re-dispatch
-    else declined
-        Human-->>Assembly: decline
-        Assembly-->>Coordinator: assembly_declined
-    end
-```
+<!-- Rendered from ../diagrams/src/review-merge-fig6.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This design avoids a misleading review experience. Reviewing child diffs independently can miss cross-child interactions. The meaningful artifact is the integrated whole, so the human sees and approves the combined output.
 

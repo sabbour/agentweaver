@@ -189,31 +189,12 @@ Conceptually, sign-in works like this:
 6. The auth gate asks the backend for GitHub auth status.
 7. If the backend says the user is signed in, the shell renders. Otherwise, local session state is cleared and the sign-in page renders.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant User
-    participant SPA as React SPA
-    participant API as Agentweaver API
-    participant GitHub
+![Authentication and Session Flow: User, React SPA, Agentweaver API, GitHub](../diagrams/frontend-fig6.png)
 
-    User->>SPA: Open app
-    SPA->>API: Check auth status after redirect handling
-    alt not signed in
-        SPA-->>User: Show sign-in page
-        User->>SPA: Click Sign in with GitHub
-        SPA->>API: Navigate to /auth/github/authorize
-        API->>GitHub: Start GitHub auth flow
-        GitHub-->>API: User authorizes
-        API-->>SPA: Redirect with auth success code
-    end
-    SPA->>API: Exchange code for session
-    API-->>SPA: Session token + login / cookie context
-    SPA->>SPA: Store token and login in sessionStorage, strip auth params from URL
-    SPA->>API: GET auth status
-    API-->>SPA: signed_in + login/avatar
-    SPA-->>User: Render AppShell
-```
+<!-- Rendered from ../diagrams/src/frontend-fig6.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The stored login is not just display data. The auth gate compares it with the backend-reported login. If the browser has a token for one user but the backend session reports another, the UI clears local session state rather than silently mixing identities.
 
@@ -274,31 +255,12 @@ A run can emit events such as:
 
 The stream hook uses `fetch`, not browser `EventSource`. That is intentional: authenticated streams need custom headers such as `Authorization`, and replay after reconnect benefits from `Last-Event-ID`.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant Page as Embedded run surface
-    participant Stream as useRunStream
-    participant API as Run stream endpoint
-    participant Reducer as Timeline/topology reducers
-    participant UI as Rendered panels
+![Live Run Timeline: Event-Sourced UI Projection: Embedded run surface, useRunStream, Run stream endpoint, Timeline/topology reducers, Rendered panels](../diagrams/frontend-fig7.png)
 
-    Page->>Stream: Start watching run id
-    Stream->>API: GET /api/runs/{id}/stream\nAccept: text/event-stream\nAuthorization + cookies\nLast-Event-ID when reconnecting
-    API-->>Stream: id/event/data frames
-    Stream->>Stream: Parse frame and JSON payload
-    Stream->>Stream: Drop duplicates by sequence
-    Stream-->>Page: Append event to event buffer
-    Page->>Reducer: Fold only new events
-    Reducer-->>UI: Timeline items, statuses, graph/topology state
-
-    alt stream ends with terminal event
-        Stream-->>Page: status = done
-    else stream disconnects early
-        Stream->>Stream: Backoff and reconnect
-        Stream->>API: Reopen with Last-Event-ID
-    end
-```
+<!-- Rendered from ../diagrams/src/frontend-fig7.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The hook keeps a bounded event buffer so a runaway stream does not grow the DOM forever. It recognizes terminal events so completed streams stop reconnecting. It uses reconnect backoff so transient network issues do not immediately fail the page.
 
@@ -328,9 +290,9 @@ Agentweaver solves this by layering data:
 3. **Deduplication** — avoid showing the same event twice, usually by sequence id.
 4. **Reducer fold** — derive display state from the merged event list.
 
-![Snapshot + Stream Synchronization: Open orchestration page, Read project/run route params, Load project/team/run metadata, Load REST seeds, Open SSE stream, Merge seed events before live events, Deduplicate by sequence/type, Fold through reducers, Render timeline, graph, status, approvals](../diagrams/frontend-fig4.png)
+![Snapshot + Stream Synchronization: Open orchestration page, Read project/run route params, Load project/team/run metadata, Load REST seeds, Open SSE stream, Merge seed events before live events, Deduplicate by sequence/type, Fold through reducers, Render timeline, graph, status, approvals](../diagrams/canonical-event-replay-tail.png)
 
-<!-- Rendered from ../diagrams/src/frontend-fig4.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-event-replay-tail.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -382,9 +344,9 @@ Conceptually:
 6. The coordinator stream re-projects the all-up lifecycle so the user can monitor and steer from one page.
 7. When children are ready, assembly/review/merge phases progress through coordinator events.
 
-![Coordinator Orchestration Flow: User goal, Coordinator run, Outcome spec, Work plan, Server-authored topology, Child run A, Child run B, Child run N, Coordinator event stream, All-up coordinator page, Steering / answers / approvals](../diagrams/frontend-fig5.png)
+![Coordinator Orchestration Flow: User goal, Coordinator run, Outcome spec, Work plan, Server-authored topology, Child run A, Child run B, Child run N, Coordinator event stream, All-up coordinator page, Steering / answers / approvals](../diagrams/canonical-coordinator-architecture.png)
 
-<!-- Rendered from ../diagrams/src/frontend-fig5.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-coordinator-architecture.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

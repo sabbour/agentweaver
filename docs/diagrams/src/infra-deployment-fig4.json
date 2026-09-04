@@ -1,0 +1,148 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Request routing logic",
+  "alt": "Request routing logic: Client, Gateway HTTPS listener, HTTPRoute selection, Kubernetes Service, Pod",
+  "participants": [
+    {
+      "id": "C",
+      "label": "Client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "G",
+      "label": "Gateway HTTPS listener",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "R",
+      "label": "HTTPRoute selection",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "S",
+      "label": "Kubernetes Service",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "P",
+      "label": "Pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "C",
+      "to": "G",
+      "label": "HTTPS request for configured host",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "G",
+      "to": "G",
+      "label": "Terminate TLS with managed cert",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "G",
+      "to": "R",
+      "label": "Evaluate routes for same host",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "/api, /auth, /oauth, AS/OIDC discovery",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "R",
+              "to": "S",
+              "label": "agentweaver-api:8080",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "S",
+              "to": "P",
+              "label": "API pod",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "/mcp or protected-resource metadata",
+          "steps": [
+            {
+              "type": "message",
+              "from": "R",
+              "to": "S",
+              "label": "agentweaver-mcp:8080",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "S",
+              "to": "P",
+              "label": "MCP pod",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "everything else",
+          "steps": [
+            {
+              "type": "message",
+              "from": "R",
+              "to": "S",
+              "label": "agentweaver-frontend:80",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "S",
+              "to": "P",
+              "label": "Frontend pod on 8080",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

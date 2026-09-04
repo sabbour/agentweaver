@@ -29,9 +29,9 @@ Where this lives: `packages/Agentweaver.AgentRuntime`, `packages/Agentweaver.Age
 
 Think of every agent action as passing through three concentric boundaries:
 
-![The core mental model: Model proposes tool call, Governance boundary, Tool boundary, Execution boundary, Workspace root, Network egress policy, No side effect, No file escape, No host escape](../diagrams/sandbox-fig1.png)
+![The core mental model: Model proposes tool call, Governance boundary, Tool boundary, Execution boundary, Workspace root, Network egress policy, No side effect, No file escape, No host escape](../diagrams/canonical-sandbox-boundary.png)
 
-<!-- Rendered from ../diagrams/src/sandbox-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-sandbox-boundary.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -168,36 +168,12 @@ Production command execution is built around Kubernetes sandbox claims rather th
 - A **SandboxClaim** asks the sandbox controller for one sandbox instance for a bounded TTL.
 - The executor waits until the claim is bound to a concrete pod, then uses Kubernetes pod exec to run the command.
 
-```mermaid
-sequenceDiagram
-    participant Agent as Agent run
-    participant API as Agentweaver API
-    participant Claim as SandboxClaim
-    participant Controller as Sandbox controller
-    participant Pool as Warm pool
-    participant Pod as Sandbox pod
-    participant Registry as Pod registry
+![Kubernetes sandbox lifecycle: claims over pods: Agent run, Agentweaver API, SandboxClaim, Sandbox controller, Warm pool, Sandbox pod, Pod registry](../diagrams/sandbox-fig3.png)
 
-    Agent->>API: run_command(command, workdir, timeout)
-    API->>API: choose claim name from run ID or random ID
-    API->>API: clamp command timeout below claim TTL
-    API->>API: verify workdir is under /workspace
-    API->>Claim: create SandboxClaim(warmPoolRef, lifecycle)
-    Claim->>Controller: request sandbox instance
-    Controller->>Pool: assign warm sandbox
-    Pool-->>Pod: bound pod is ready
-    Controller-->>Claim: Ready condition = True, status.sandbox.name
-    API->>Claim: poll until Ready condition True
-    API->>Registry: remember pod name for run previews
-    API->>Pod: exec /bin/sh -c command
-    Pod-->>API: stdout/stderr/status streams
-    API->>API: cap + redact output, parse exit code
-    alt ad-hoc command
-        API->>Claim: delete claim immediately
-    else run-scoped command
-        API->>Claim: retain until run cleanup or TTL
-    end
-```
+<!-- Rendered from ../diagrams/src/sandbox-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### The agent-sandbox controller (and where MXC fits)
 

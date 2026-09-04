@@ -111,28 +111,12 @@ Where this lives: `k8s/base/api-deployment.yaml`, `k8s/base/frontend-deployment.
 
 The public routing model is path-based. The Gateway terminates TLS once, then HTTPRoutes select the backend service.
 
-```mermaid
-sequenceDiagram
-  participant C as Client
-  participant G as Gateway HTTPS listener
-  participant R as HTTPRoute selection
-  participant S as Kubernetes Service
-  participant P as Pod
+![Request routing logic: Client, Gateway HTTPS listener, HTTPRoute selection, Kubernetes Service, Pod](../diagrams/infra-deployment-fig4.png)
 
-  C->>G: HTTPS request for configured host
-  G->>G: Terminate TLS with managed cert
-  G->>R: Evaluate routes for same host
-  alt /api, /auth, /oauth, AS/OIDC discovery
-    R->>S: agentweaver-api:8080
-    S->>P: API pod
-  else /mcp or protected-resource metadata
-    R->>S: agentweaver-mcp:8080
-    S->>P: MCP pod
-  else everything else
-    R->>S: agentweaver-frontend:80
-    S->>P: Frontend pod on 8080
-  end
-```
+<!-- Rendered from ../diagrams/src/infra-deployment-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The important design detail is **specific routes before the catch-all**. The frontend route matches `/`, so it is intentionally the fallback. More specific API and MCP routes must exist for protocol paths that should not be swallowed by the SPA host.
 

@@ -11,9 +11,9 @@ The engine is intentionally split into two layers:
 
 The split matters. Planning and decomposition need durable state, idempotency, and team-level reasoning. Individual run execution needs streaming, review gates, restart loops, and terminal status handling. Keeping those concerns separate lets Agentweaver recover from partial progress without re-asking the model to re-invent the plan.
 
-![Purpose & Mental Model: Human request or Ready backlog task, Coordinator orchestration, OutcomeSpec + WorkPlan DAG, Dispatch ready subtasks, Child runs, Collective assembly, Run workflow orchestration, Reviewed merged outcome + recorded learnings](../diagrams/orchestration-fig1.png)
+![Purpose & Mental Model: Human request or Ready backlog task, Coordinator orchestration, OutcomeSpec + WorkPlan DAG, Dispatch ready subtasks, Child runs, Collective assembly, Run workflow orchestration, Reviewed merged outcome + recorded learnings](../diagrams/canonical-coordinator-architecture.png)
 
-<!-- Rendered from ../diagrams/src/orchestration-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-coordinator-architecture.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -115,28 +115,12 @@ The coordinator flow has two phases:
 1. **Model-assisted planning phase** — draft and confirm the OutcomeSpec, select a workflow, decompose the work, and persist the WorkPlan.
 2. **Service-driven execution phase** — dispatch ready subtasks, watch child runs, assemble results, and advance the parent run through review and merge gates.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Coordinator
-    participant Store as Durable Store
-    participant Dispatcher
-    participant Child as Child Runs
-    participant Parent as Parent Run
+![Coordinator Control Flow: User, Coordinator, Durable Store, Dispatcher, Child Runs, Parent Run](../diagrams/orchestration-fig8.png)
 
-    User->>Coordinator: goal or backlog task
-    Coordinator->>Coordinator: draft OutcomeSpec
-    Coordinator-->>User: request confirmation or revision
-    User-->>Coordinator: confirm
-    Coordinator->>Store: persist confirmed OutcomeSpec
-    Coordinator->>Coordinator: select workflow and decompose DAG
-    Coordinator->>Store: persist WorkPlan + subtasks + dependencies
-    Dispatcher->>Store: read ready DAG frontier
-    Dispatcher->>Child: launch child runs
-    Child-->>Dispatcher: completed, failed, or assemble-ready
-    Dispatcher->>Store: update subtask statuses
-    Dispatcher->>Parent: hand off to assembly when all settle
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig8.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The coordinator is designed to be idempotent. If it is asked to orchestrate a run that already has a WorkPlan, it does not create a second plan. That invariant prevents duplicate child runs and conflicting DAGs.
 
@@ -193,50 +177,32 @@ A workflow definition answers:
 
 The default conceptual workflow is:
 
-![Workflow as Policy Graph: Agent work, Responsible AI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done](../diagrams/orchestration-fig4.png)
+![Workflow as Policy Graph: Agent work, Responsible AI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done](../diagrams/canonical-default-workflow.png)
 
-<!-- Rendered from ../diagrams/src/orchestration-fig4.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-default-workflow.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
 The important idea is that loops are first-class. Safety or review can return work to the producer. Merge can return to review if blocked. Terminal failures are explicit exits, not exceptions swallowed by the runtime.
 
-### Trigger Eligibility
+### Invocation context and event triggers
 
-Triggers protect workflows from being used in the wrong context.
-
-Agentweaver distinguishes these invocation modes conceptually:
-
-- **Manual** — a user starts a run directly.
-- **Heartbeat** — the background coordinator picks up ready backlog work.
-- **Event** — a workflow reacts to a named system event, such as a task becoming ready.
-
-Selection must filter by trigger before model selection or defaults are applied. A manual-only workflow should not run unattended from the heartbeat loop. A heartbeat-only workflow should not be chosen by a direct user run unless explicitly allowed.
-
-![Trigger Eligibility: Invocation context, Manual start?, Heartbeat pickup?, Manual workflows only, Heartbeat workflows + matching event workflows, Optional workflow override, Project default fallback, Selector if multiple eligible, Selected workflow](../diagrams/orchestration-fig5.png)
-
-<!-- Rendered from ../diagrams/src/orchestration-fig5.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-A backlog task may request a workflow override, but the override is only honored if it exists and is trigger-eligible. This preserves safety: metadata on a backlog item cannot force a manual-only workflow to run unattended.
+Manual and heartbeat origins are recorded as invocation context. They do not remove valid workflows from the selector candidate set. Event and schedule triggers are evaluated before the normal backlog and coordinator pickup path. A requested override is used only when it resolves to a valid, bindable workflow.
 
 ### Workflow Selection Logic
 
 The selection order is deliberately conservative:
 
 1. Load built-in, catalog/library, and project-authored workflows.
-2. Determine invocation kind from the run origin.
-3. Filter out trigger-ineligible workflows.
-4. Honor a valid override if present.
-5. Prefer the configured project default when eligible.
-6. If exactly one workflow remains, use it without model help.
-7. If several remain, ask the selector to choose the best process fit.
-8. If selector output is invalid or parsing fails, fall back safely rather than inventing a workflow id.
+2. Record invocation kind from the run origin.
+3. Honor a valid override if present.
+4. Prefer the configured project default when available.
+5. If exactly one workflow remains, use it without model help.
+6. If several remain, ask the selector to choose the best process fit.
+7. If selector output is invalid or parsing fails, fall back safely rather than inventing a workflow id.
 
-This pattern limits model authority. The model may choose among safe candidates, but it does not get to bypass trigger filtering or runtime binding.
+This pattern limits model authority. The model may choose among safe candidates, but it cannot bypass validation or runtime binding.
 
 ### Binding Declarative Nodes to Runtime Execution
 
@@ -316,27 +282,12 @@ The state machine is designed for externally visible gates. When a human review 
 
 ### Runtime Sequence
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Orchestrator
-    participant Factory as Workflow Factory
-    participant Executor as Agent Turn Executor
-    participant Agent as Worker Agent
-    participant Watch as Watch Loop
-    participant Stream as Event Stream / SSE
+![Runtime Sequence: Client, Orchestrator, Workflow Factory, Agent Turn Executor, Worker Agent, Watch Loop, Event Stream / SSE](../diagrams/orchestration-fig9.png)
 
-    Client->>Orchestrator: start or resume run
-    Orchestrator->>Orchestrator: prepare worktree and run record
-    Orchestrator->>Factory: resolve and bind workflow
-    Factory->>Executor: build executable graph
-    Executor->>Agent: setup and run turn
-    Agent-->>Stream: step and output events
-    Executor-->>Factory: turn output, diff, steps
-    Factory-->>Watch: workflow events
-    Watch->>Orchestrator: persist status transitions
-    Watch-->>Stream: review, merge, terminal events
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig9.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The watch loop translates live runtime events into persisted run state. This keeps state transitions centralized. The agent produces work; the workflow emits events; the watch loop decides what those events mean for durable status and client-visible stream completion.
 
@@ -349,9 +300,9 @@ Run events have two purposes:
 
 The conceptual design is replay-then-tail:
 
-![Event Streaming: Runtime events, Durable event log, Live bounded channel, SSE client, Last-Event-ID](../diagrams/orchestration-fig6.png)
+![Event Streaming: Runtime events, Durable event log, Live bounded channel, SSE client, Last-Event-ID](../diagrams/canonical-event-replay-tail.png)
 
-<!-- Rendered from ../diagrams/src/orchestration-fig6.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-event-replay-tail.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -403,27 +354,12 @@ The heartbeat loop is intentionally simple and repeatable:
 5. Start the reserved coordinator run with unattended confirmation.
 6. Run reconciliation to pick up stalled or partially-progressed coordinator work.
 
-```mermaid
-sequenceDiagram
-    participant Heartbeat
-    participant ProjectStore
-    participant Backlog
-    participant Pickup
-    participant Runs
-    participant Reconciler
+![Heartbeat Loop: Heartbeat, ProjectStore, Backlog, Pickup, Runs, Reconciler](../diagrams/orchestration-fig10.png)
 
-    Heartbeat->>ProjectStore: list active projects
-    loop each project
-        Heartbeat->>Heartbeat: verify workspace is usable
-        Heartbeat->>Backlog: read ready tasks, deterministic order
-        loop each ready task
-            Heartbeat->>Pickup: attempt pickup
-            Pickup->>Backlog: atomically claim task and reserve run
-            Pickup->>Runs: start coordinator run unattended
-        end
-        Heartbeat->>Reconciler: sweep coordinator progress
-    end
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig10.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Workflow overrides are allowed at the backlog task level, but they are still filtered by trigger eligibility. The pickup service may prepend or carry override intent into the coordinator goal, but it cannot bypass workflow safety rules.
 
@@ -475,20 +411,12 @@ The user action then chooses a path:
 - request changes and loop back to agent work,
 - or decline and terminate.
 
-```mermaid
-sequenceDiagram
-    participant Workflow
-    participant Watch
-    participant Store
-    participant Client
-    participant User
+![Human Review as a Pause Point: Workflow, Watch, Store, Client, User](../diagrams/orchestration-fig11.png)
 
-    Workflow->>Watch: human review requested
-    Watch->>Store: set run AwaitingReview
-    Watch-->>Client: emit review.requested and done
-    User->>Client: approve / request changes / decline
-    Client->>Workflow: resume selected edge
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig11.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This design keeps review durable and externally controllable. A browser tab can close while a run waits for review; the run state still tells the next client exactly what is needed.
 

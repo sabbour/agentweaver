@@ -1,0 +1,107 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Durable run leasing",
+  "alt": "Durable run leasing: Worker A, Worker B, Postgres (run row)",
+  "participants": [
+    {
+      "id": "A",
+      "label": "Worker A",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "B",
+      "label": "Worker B",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "DB",
+      "label": "Postgres (run row)",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "A",
+      "to": "DB",
+      "label": "UPDATE ... SET owner=A, token+1 WHERE owner IS NULL OR lease_expired",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "DB",
+      "to": "A",
+      "label": "rows = 1 (A wins)",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "B",
+      "to": "DB",
+      "label": "UPDATE ... SET owner=B WHERE owner IS NULL OR lease_expired",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "DB",
+      "to": "B",
+      "label": "rows = 0 (already owned — B steps aside)",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": [
+        "A"
+      ],
+      "label": "A renews heartbeat while it works"
+    },
+    {
+      "type": "message",
+      "from": "A",
+      "to": "A",
+      "label": "A crashes (stops renewing)",
+      "line": "dashed",
+      "arrow": "cross"
+    },
+    {
+      "type": "note",
+      "over": [
+        "DB"
+      ],
+      "label": "lease expires"
+    },
+    {
+      "type": "message",
+      "from": "B",
+      "to": "DB",
+      "label": "UPDATE ... WHERE lease_expired",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "DB",
+      "to": "B",
+      "label": "rows = 1 (B re-claims — crash recovery)",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

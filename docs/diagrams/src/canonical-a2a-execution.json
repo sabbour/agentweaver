@@ -1,0 +1,125 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Distributed A2A Execution Model",
+  "alt": "Distributed A2A Execution Model: MAF workflow graph, Watch loop, RemoteAgentProxy : AIAgent, RunStreamStore → SSE, AgentHost, CopilotAIAgent → Copilot SDK, tool / shell / file exec",
+  "direction": "LR",
+  "groups": [
+    {
+      "id": "Worker",
+      "label": "Worker process — MAF graph stays here",
+      "tier": 1
+    },
+    {
+      "id": "Pod",
+      "label": "Sandbox pod — Kata-isolated",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Graph",
+      "label": "MAF workflow graph",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "group": "Worker"
+    },
+    {
+      "id": "Watch",
+      "label": "Watch loop",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "WorkflowEvent + RequestPort HITL",
+      "group": "Worker"
+    },
+    {
+      "id": "Proxy",
+      "label": "RemoteAgentProxy : AIAgent",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "(A2AAgent client)",
+      "group": "Worker"
+    },
+    {
+      "id": "Stream",
+      "label": "RunStreamStore → SSE",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      },
+      "group": "Worker"
+    },
+    {
+      "id": "Host",
+      "label": "AgentHost",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "A2ATurnBridgeAgent (MapA2AHttpJson)",
+      "group": "Pod"
+    },
+    {
+      "id": "Copilot",
+      "label": "CopilotAIAgent → Copilot SDK",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "Pod"
+    },
+    {
+      "id": "Tools",
+      "label": "tool / shell / file exec",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "group": "Pod"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Graph",
+      "to": "Watch"
+    },
+    {
+      "from": "Graph",
+      "to": "Proxy"
+    },
+    {
+      "from": "Proxy",
+      "to": "Stream"
+    },
+    {
+      "from": "Host",
+      "to": "Copilot"
+    },
+    {
+      "from": "Copilot",
+      "to": "Tools"
+    },
+    {
+      "from": "Proxy",
+      "to": "Host",
+      "label": "A2A message:stream + Authorization: Bearer {per-run token}"
+    },
+    {
+      "from": "Host",
+      "to": "Proxy",
+      "label": "updates + token deltas + RunEvent DataParts"
+    }
+  ]
+}

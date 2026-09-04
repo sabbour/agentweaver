@@ -330,9 +330,9 @@ The compiler builds context in this order:
 
 This ordering is the most important conceptual rule. Decisions are first because they constrain all work. Session context is last because it is useful but should not override boundaries or durable agent knowledge.
 
-![Decisions, Memory, and Context Assembly: Accepted architectural/scope decisions, Agent core context, High-importance learnings and patterns, Current open session, Compiled prompt context](../diagrams/data-persistence-fig2.png)
+![Decisions, Memory, and Context Assembly: Accepted architectural/scope decisions, Agent core context, High-importance learnings and patterns, Current open session, Compiled prompt context](../diagrams/canonical-memory-context.png)
 
-<!-- Rendered from ../diagrams/src/data-persistence-fig2.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-memory-context.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

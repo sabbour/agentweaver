@@ -21,9 +21,9 @@ how the *team* coordinates. The third is how a *single* agent turn is *executed*
 Keeping them distinct is the most important idea in this document: **A2A is
 execution transport, not a way for two agents to talk.**
 
-![Purpose and mental model: Agent A turn, Agent B turn, Shared brain, Coordinator, Worker, Sandbox pod](../diagrams/agent-communication-fig1.png)
+![Purpose and mental model: Agent A turn, Agent B turn, Shared brain, Coordinator, Worker, Sandbox pod](../diagrams/canonical-agent-communication-shared.png)
 
-<!-- Rendered from ../diagrams/src/agent-communication-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-agent-communication-shared.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -95,13 +95,6 @@ and scope proposals are left for coordinator or human review. Rejected entries
 are retained, not deleted, so the record explains not just what the team accepted
 but what it declined.
 
-![Curating: the Scribe merges, conflict-free: Agent run, DecisionInboxEntry, Scribe / review, Decisions ledger, Rejected entry, MemoryContextCompiler, Future agent prompts](../diagrams/agent-communication-fig2.png)
-
-<!-- Rendered from ../diagrams/src/agent-communication-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 Because merges **add facts and change status** rather than rewriting history,
 independent agents can contribute concurrently without clobbering each other.
 Two agents proposing under the same natural name are de-collided into two
@@ -141,9 +134,9 @@ full decomposition logic is in the
 [Orchestration deep dive](./orchestration.md) and
 [Coordinator Internals](./coordinator-internals.md).
 
-![Decompose: goal → OutcomeSpec → WorkPlan DAG: Goal, OutcomeSpec, WorkPlan, Subtask 1, Subtask 2, Subtask 3, Coordinator](../diagrams/agent-communication-fig3.png)
+![Decompose: goal → OutcomeSpec → WorkPlan DAG: Goal, OutcomeSpec, WorkPlan, Subtask 1, Subtask 2, Subtask 3, Coordinator](../diagrams/canonical-agent-communication-handoff.png)
 
-<!-- Rendered from ../diagrams/src/agent-communication-fig3.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-agent-communication-handoff.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -204,10 +197,10 @@ uses `RemoteAgentProxy` outside that factory. The orchestration graph never cros
 turn's chat/output stream and nothing more. A2A is the sole worker→AgentHost wire
 transport for that seam.
 
-![Channel C — Direct transport (A2A): Orchestration graph, RemoteAgentProxy, AgentHost, Leaf agent turn](../diagrams/agent-communication-fig4.png)
+![Sequence showing the orchestration graph invoking a RemoteAgentProxy, AgentHost executing one leaf agent turn in a sandbox pod, and streamed turn output returning to the worker](../diagrams/canonical-agent-communication-a2a.png)
 
-<!-- Rendered from ../diagrams/src/agent-communication-fig4.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Rendered from ../diagrams/src/canonical-agent-communication-a2a.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram).
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
@@ -280,26 +273,12 @@ is the price of keeping policy deliberate.
 
 ## Putting it together
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant H as Human
-    participant C as Coordinator
-    participant W as Worker tier
-    participant P as Sandbox pod (A2A)
-    participant L as Shared brain
-    H->>C: goal
-    C->>C: draft OutcomeSpec, confirm, build WorkPlan DAG
-    C->>W: dispatch child subtask
-    W->>P: remote one agent turn (A2A)
-    P->>L: read decisions + memory (compiled into prompt)
-    P-->>W: turn output
-    P->>L: submit inbox proposal
-    W-->>C: assemble-ready result (up, not sideways)
-    C->>C: assemble + collective review
-    C->>L: promote accepted decisions (Scribe)
-    C-->>H: combined outcome
-```
+![Putting it together: Human, Coordinator, Worker tier, Sandbox pod (A2A), Shared brain](../diagrams/agent-communication-fig5.png)
+
+<!-- Rendered from ../diagrams/src/agent-communication-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The three channels never blur:
 

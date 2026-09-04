@@ -21,9 +21,9 @@ Domain internals are covered by the focused deep dives for [Auth & security](./a
 
 Agentweaver uses a **minimal API + endpoint modules + stores/services** architecture. The host is a thin, explicit composition root; endpoint modules are thin adapters; services and stores contain the actual behavior.
 
-![The Host in One Picture: Web UI / MCP / CLI, ASP.NET Core HTTP host, Cross-cutting middleware, Minimal API endpoint module, Application/domain service, Store or provider, SQLite / workspace files / GitHub / Kubernetes](../diagrams/api-core-fig1.png)
+![The Host in One Picture: Web UI / MCP / CLI, ASP.NET Core HTTP host, Cross-cutting middleware, Minimal API endpoint module, Application/domain service, Store or provider, SQLite / workspace files / GitHub / Kubernetes](../diagrams/canonical-api-host.png)
 
-<!-- Rendered from ../diagrams/src/api-core-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-api-host.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -59,13 +59,6 @@ The API cannot safely accept traffic until three things are true:
 
 Startup therefore behaves like a readiness gate, not just a web-server launch.
 
-![Problem solved: Create ASP.NET builder, Load config, logging, environment, Fail fast on unsafe production auth/OAuth settings, Register JSON, CORS, rate limiting, Register stores, services, providers, hosted workers, Build WebApplication, Ensure operational SQLite schema, Migrate EF memory database, Recover interrupted workflows and coordinator state, Warn or fail health for workspace mount problems, Install middleware, Map endpoint modules, …](../diagrams/api-core-fig2.png)
-
-<!-- Rendered from ../diagrams/src/api-core-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ### Why this order
 
 - **Security checks happen before service construction** so a bad production deployment dies obviously instead of exposing a partially running host.
@@ -91,13 +84,6 @@ Where this lives: `apps/Agentweaver.Api/Program.cs`; `apps/Agentweaver.Api/Infra
 ### Problem solved
 
 The host coordinates long-lived state: run streams, locks, registries, background services, SQLite stores, workspace providers, GitHub clients, sandbox routing, and EF contexts. Dependency injection makes those dependencies explicit and gives each category the right lifetime.
-
-![Problem solved: DI container, Process-wide singletons, SQLite stores, Workflow/review/runtime registries, Run stream stores and event streams, Merge/worktree coordination locks, Workspace and sandbox providers, Diagnostics and metrics services, Scoped services, EF MemoryDbContext, Memory context and post-run scribe work, Hosted background workers, …](../diagrams/api-core-fig3.png)
-
-<!-- Rendered from ../diagrams/src/api-core-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 ### Lifetime logic
 
@@ -176,25 +162,12 @@ The main route families are:
 
 A typical protected handler follows this flow:
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Middleware
-    participant Endpoint
-    participant Store as Store/Service
-    participant Durable as DB/Workspace
+![Handler pattern: Client, Middleware, Endpoint, Store/Service, DB/Workspace](../diagrams/api-core-fig7.png)
 
-    Client->>Middleware: HTTP request + bearer token
-    Middleware->>Middleware: authenticate and org-authorize
-    Middleware->>Endpoint: invoke route handler
-    Endpoint->>Endpoint: bind route/query/body DTOs
-    Endpoint->>Store: load project/run/resource
-    Store->>Durable: read current state
-    Durable-->>Store: state
-    Store-->>Endpoint: domain result
-    Endpoint->>Endpoint: enforce ownership/resource invariants
-    Endpoint-->>Client: DTO, empty success, 4xx, or problem response
-```
+<!-- Rendered from ../diagrams/src/api-core-fig7.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The exact service/store calls differ by feature, but the responsibilities stay stable:
 
@@ -223,10 +196,10 @@ Agent runs are long-lived and interactive. The UI needs low-latency updates whil
 
 Agentweaver uses a two-layer event model:
 
-![Problem solved: Run/orchestrator code emits event, Write event to SQLite first, Publish to bounded in-process channel, SSE live subscribers, Replay after reconnect or restart, SSE response](../diagrams/api-core-fig5.png)
+![Sequence showing a producer durably appending a run event before acknowledgement, publishing it to the live channel, and an SSE subscriber replaying from its cursor before tailing live events with durable recovery](../diagrams/canonical-durable-event-stream-sequence.png)
 
-<!-- Rendered from ../diagrams/src/api-core-fig5.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+<!-- Rendered from ../diagrams/src/canonical-durable-event-stream-sequence.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram).
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 

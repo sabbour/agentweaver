@@ -6,9 +6,9 @@ Scope: this page covers workflow definition management, backlog intake, Ready pi
 
 Related docs: [Overview](./00-overview.md), [Runs & board](./runs-board-watch.md), [Coordinator & orchestration](./coordinator-orchestration.md), [Operations](./operations.md), [Workflow generation](../workflow-generation.md), [Workflow selection](../workflow-selection.md), [Workflow library](../workflow-library.md), [Workflow binder](../workflow-binder.md), and [Workflow engine](../deep-dive/workflow-engine.md).
 
-![Workflows and backlog experience: Capture task, Backlog, Ready, Active, Human Review, Done, Problems](../diagrams/experience-workflows-backlog-fig1.png)
+![Workflows and backlog experience: Capture task, Backlog, Ready, Active, Human Review, Done, Problems](../diagrams/canonical-board-lifecycle.png)
 
-<!-- Rendered from ../diagrams/src/experience-workflows-backlog-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-board-lifecycle.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -102,9 +102,9 @@ If sync finds invalid workflows, they remain visible under **Invalid workflows**
 
 Workflow generation is draft-first. The user clicks **Generate workflow**, describes the pipeline, and receives YAML for review. Nothing is saved to `.agentweaver/workflows/` until the user saves.
 
-![Generating and saving workflows: Describe the workflow you need, workflow_generate, YAML draft, Review in editor, workflow_save, Registry refresh, Workflow appears on Workflows page](../diagrams/experience-workflows-backlog-fig2.png)
+![Generating and saving workflows: Describe the workflow you need, workflow_generate, YAML draft, Review in editor, workflow_save, Registry refresh, Workflow appears on Workflows page](../diagrams/canonical-workflow-authoring.png)
 
-<!-- Rendered from ../diagrams/src/experience-workflows-backlog-fig2.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-workflow-authoring.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -226,25 +226,12 @@ These are board buckets, not necessarily workflow nodes. Failed, blocked, declin
 
 Pickup turns Ready tasks into coordinator runs. The coordinator heartbeat scans eligible projects, reads top Ready tasks, claims them atomically, reserves a coordinator run, and starts that run unattended.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Board
-    participant Heartbeat
-    participant Pickup
-    participant Coordinator
+![Pickup and automation: User, Board, Heartbeat, Pickup, Coordinator](../diagrams/experience-workflows-backlog-fig3.png)
 
-    User->>Board: Move task to Ready
-    Heartbeat->>Board: Read top Ready tasks
-    Heartbeat->>Pickup: Try pickup task
-    Pickup->>Board: Atomic claim + reserve run
-    alt claim won
-        Pickup->>Coordinator: Start unattended coordinator run
-        Coordinator->>Board: Run appears in Active
-    else claim lost or project unavailable
-        Pickup-->>Board: Task remains or another run owns it
-    end
-```
+<!-- Rendered from ../diagrams/src/experience-workflows-backlog-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A project is eligible when it is active and its workspace is available. If the workspace is unavailable, Ready tasks remain untouched and preserve priority for a later heartbeat. Atomic claim means two ticks or instances cannot create duplicate runs for the same Ready task.
 

@@ -6,10 +6,10 @@ For the API contract see the [reference](../reference/repo-blueprint-suggestions
 
 ## End-to-end flow
 
-![End-to-end flow: User selects or pastes repo, Create project from GitHub, BlueprintEndpoints, GitHubRepoBlueprintSuggestionService, GitHub user token, GitHub REST API, Signals, Catalog mapper, BlueprintService.GetPredefined, SuggestBlueprintResponse, Switch to Templates tab](../diagrams/repo-blueprint-suggestions-fig1.png)
+![Sequence showing the create-project dialog requesting a blueprint suggestion, the API collecting GitHub repository signals and mapping them to the catalog, and the UI showing either the suggestion or its template fallback](../diagrams/repo-blueprint-suggestions-fig1.png)
 
 <!-- Rendered from ../diagrams/src/repo-blueprint-suggestions-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Playwright (Fluent-styled sequence diagram).
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
