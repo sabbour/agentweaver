@@ -24,7 +24,7 @@ const RECOVERY_IN_PROGRESS = /Conflict|already being recovered|recovery.*in prog
 const RECOVERY_POLL_ATTEMPTS = 60;
 const RECOVERY_POLL_INTERVAL_MS = 500;
 
-async function inspectKeyVaultSecretResult(vaultName, name, { exec = execDefault } = {}) {
+async function inspectActiveKeyVaultSecretResult(vaultName, name, { exec = execDefault } = {}) {
   const result = await exec.capture(
     "az",
     [
@@ -47,6 +47,41 @@ async function inspectKeyVaultSecretResult(vaultName, name, { exec = execDefault
     return { status: "missing", error: result.stderr || "" };
   }
   return { status: "inaccessible", error: result.stderr || "" };
+}
+
+async function inspectDeletedKeyVaultSecretResult(vaultName, name, { exec = execDefault } = {}) {
+  const result = await exec.capture(
+    "az",
+    [
+      "keyvault",
+      "secret",
+      "show-deleted",
+      "--vault-name",
+      vaultName,
+      "--name",
+      name,
+      "--query",
+      "recoveryId",
+      "--output",
+      "tsv",
+    ],
+    { allowFailure: true },
+  );
+  if (result.code === 0) return { status: "recoverable", error: "" };
+  if (SECRET_NOT_FOUND.test(result.stderr || "")) {
+    return { status: "missing", error: result.stderr || "" };
+  }
+  return { status: "inaccessible", error: result.stderr || "" };
+}
+
+async function inspectKeyVaultSecretResult(vaultName, name, { exec = execDefault } = {}) {
+  const active = await inspectActiveKeyVaultSecretResult(vaultName, name, { exec });
+  if (active.status !== "missing") return active;
+
+  const deleted = await inspectDeletedKeyVaultSecretResult(vaultName, name, { exec });
+  return deleted.status === "missing"
+    ? { status: "missing", error: active.error }
+    : deleted;
 }
 
 export async function inspectKeyVaultSecret(vaultName, name, opts = {}) {
@@ -84,7 +119,6 @@ async function recoverDeletedSecretAndWait(
     const recoveryError = recovered.stderr || "";
     if (
       recovered.code !== 0 &&
-      !SECRET_NOT_FOUND.test(recoveryError) &&
       !DELETED_BUT_RECOVERABLE.test(recoveryError) &&
       !RECOVERY_IN_PROGRESS.test(recoveryError)
     ) {
@@ -92,10 +126,10 @@ async function recoverDeletedSecretAndWait(
     }
   };
 
-  log.info(`  Recovering soft-deleted Key Vault secret '${name}' before replacing it...`);
+  log.info(`  Recovering soft-deleted Key Vault secret '${name}'...`);
   await requestRecovery();
   for (let attempt = 1; attempt <= maxPollAttempts; attempt++) {
-    const inspected = await inspectKeyVaultSecretResult(keyvaultName, name, { exec });
+    const inspected = await inspectActiveKeyVaultSecretResult(keyvaultName, name, { exec });
     if (inspected.status === "available") return;
     const retryable =
       inspected.status === "missing" ||
@@ -107,7 +141,6 @@ async function recoverDeletedSecretAndWait(
           `${inspected.error || "unknown Azure CLI error"}`,
       );
     }
-    await requestRecovery();
     if (attempt < maxPollAttempts) {
       await sleep(pollIntervalMs);
     }
@@ -252,6 +285,15 @@ export async function ensureRepoAppPrivateKeySecret(
     log.ok(`Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is accessible.`);
     return { status: "available", ...REPO_APP_PRIVATE_KEY_SECRET };
   }
+  if (canonical.status === "recoverable") {
+    await recoverDeletedSecretAndWait(
+      vaultName,
+      REPO_APP_PRIVATE_KEY_SECRET.physicalName,
+      { exec, log, sleep },
+    );
+    log.ok(`Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' recovered.`);
+    return { status: "recovered", ...REPO_APP_PRIVATE_KEY_SECRET };
+  }
   if (canonical.status === "inaccessible") {
     throw new Error(
       `Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is inaccessible. ` +
@@ -271,7 +313,7 @@ export async function ensureRepoAppPrivateKeySecret(
         "Verify the active Azure identity has Key Vault secret get permission.",
     );
   }
-  if (legacy.status === "missing") {
+  if (legacy.status !== "available") {
     throw new Error(
       `Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is missing and no ` +
         `legacy '${REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName}' secret is available to migrate. ` +
