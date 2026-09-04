@@ -378,31 +378,89 @@ public sealed class CoordinatorWorkflowFactory
         string? memoryContext,
         CancellationToken ct)
     {
-        using var draftCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var draftTask = _drafter.DraftAsync(input, charter, memoryContext, draftCts.Token);
-        var timeoutTask = Task.Delay(_outcomeSpecDraftTimeout, ct);
+        var draftCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var cleanupDeferred = false;
+        try
+        {
+            var draftTask = _drafter.DraftAsync(input, charter, memoryContext, draftCts.Token);
+            var timeoutTask = Task.Delay(_outcomeSpecDraftTimeout, ct);
 
-        if (await Task.WhenAny(draftTask, timeoutTask).ConfigureAwait(false) == draftTask)
-            return await draftTask.ConfigureAwait(false);
+            if (await Task.WhenAny(draftTask, timeoutTask).ConfigureAwait(false) == draftTask)
+                return await draftTask.ConfigureAwait(false);
 
-        ct.ThrowIfCancellationRequested();
-        await draftCts.CancelAsync().ConfigureAwait(false);
-        _ = draftTask.ContinueWith(
-            task => _logger.LogWarning(
-                task.Exception,
+            ct.ThrowIfCancellationRequested();
+            var cancellationTask = draftCts.CancelAsync();
+            cleanupDeferred = true;
+            _ = ObserveTimedOutDraftAsync(draftTask, cancellationTask, draftCts, input.RunId);
+
+            _logger.LogError(
+                "Outcome-spec drafting timed out after {TimeoutSeconds}s for coordinator run {RunId}",
+                _outcomeSpecDraftTimeout.TotalSeconds,
+                input.RunId);
+            throw new CoordinatorOutcomeSpecDraftTimeoutException(
+                input.RunId,
+                _outcomeSpecDraftTimeout);
+        }
+        finally
+        {
+            if (!cleanupDeferred)
+                draftCts.Dispose();
+        }
+    }
+
+    private async Task ObserveTimedOutDraftAsync(
+        Task<OutcomeSpecDraft> draftTask,
+        Task cancellationTask,
+        CancellationTokenSource draftCts,
+        string runId)
+    {
+        try
+        {
+            await Task.WhenAll(
+                ObserveTimedOutDraftCompletionAsync(draftTask, draftCts, runId),
+                ObserveDraftCancellationAsync(cancellationTask, runId)).ConfigureAwait(false);
+        }
+        finally
+        {
+            draftCts.Dispose();
+        }
+    }
+
+    private async Task ObserveTimedOutDraftCompletionAsync(
+        Task<OutcomeSpecDraft> draftTask,
+        CancellationTokenSource draftCts,
+        string runId)
+    {
+        try
+        {
+            await draftTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (draftCts.IsCancellationRequested)
+        {
+            // Expected after the deadline requests cancellation.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
                 "Outcome-spec drafter faulted after its timeout for coordinator run {RunId}",
-                input.RunId),
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+                runId);
+        }
+    }
 
-        _logger.LogError(
-            "Outcome-spec drafting timed out after {TimeoutSeconds}s for coordinator run {RunId}",
-            _outcomeSpecDraftTimeout.TotalSeconds,
-            input.RunId);
-        throw new CoordinatorOutcomeSpecDraftTimeoutException(
-            input.RunId,
-            _outcomeSpecDraftTimeout);
+    private async Task ObserveDraftCancellationAsync(Task cancellationTask, string runId)
+    {
+        try
+        {
+            await cancellationTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Outcome-spec draft cancellation callback failed for coordinator run {RunId}",
+                runId);
+        }
     }
 
     /// <summary>

@@ -589,8 +589,10 @@ by try/catch so one corrupt plan does not stop the sweep.
 Outcome-spec drafting has its own wall-clock bound because it includes provider setup and session
 creation before the normal streaming-turn watchdog begins. `Coordinator:OutcomeSpecDraftTimeoutSeconds`
 defaults to **120 seconds** and must be greater than zero. When it expires, the coordinator cancels
-the draft, transitions the durable run to `failed`, and emits `run.failed` with reason
-`outcome_spec_draft_timeout` instead of leaving the run indefinitely in `drafting`.
+the draft without waiting for provider cancellation callbacks, transitions the durable run to
+`failed`, and emits `run.failed` with reason `outcome_spec_draft_timeout` instead of leaving the run
+indefinitely in `drafting`. The abandoned draft and cancellation work remain observed, and their
+linked cancellation source is disposed after both settle.
 
 | Configuration key | Default | Effect |
 |---|---:|---|

@@ -21,14 +21,25 @@ namespace Agentweaver.Tests.Helpers;
 public sealed class FakeCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 {
     private readonly RunStreamStore _streamStore;
+    private readonly TaskCompletionSource<bool> _blockedCancellationStarted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> _releaseBlockedCancellation =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> _blockedDraftCompleted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public FakeCoordinatorSpecDrafter(RunStreamStore streamStore) => _streamStore = streamStore;
 
     public CoordinatorDraftInput? LastInput { get; private set; }
     public bool BlockUntilCancelled { get; set; }
+    public bool BlockCancellationCallback { get; set; }
     public bool CancellationObserved { get; private set; }
     public Exception? ExceptionToThrow { get; set; }
     public AgentProviderException? ProviderFailureToThrow { get; set; }
+    public Task BlockedCancellationStarted => _blockedCancellationStarted.Task;
+    public Task BlockedDraftCompleted => _blockedDraftCompleted.Task;
+
+    public void ReleaseBlockedCancellation() => _releaseBlockedCancellation.TrySetResult(true);
 
     public async Task<OutcomeSpecDraft> DraftAsync(
         CoordinatorDraftInput input, string charter, string? memoryContext, CancellationToken ct)
@@ -41,6 +52,29 @@ public sealed class FakeCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         }
         if (ExceptionToThrow is not null)
             throw ExceptionToThrow;
+        if (BlockCancellationCallback)
+        {
+            var cancellationDelivered = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var blockingRegistration = ct.Register(() =>
+            {
+                _blockedCancellationStarted.TrySetResult(true);
+                _releaseBlockedCancellation.Task.GetAwaiter().GetResult();
+            });
+            var deliveryRegistration = ct.Register(() => cancellationDelivered.TrySetResult(true));
+            try
+            {
+                await cancellationDelivered.Task.ConfigureAwait(false);
+                CancellationObserved = true;
+                throw new OperationCanceledException(ct);
+            }
+            finally
+            {
+                deliveryRegistration.Dispose();
+                blockingRegistration.Dispose();
+                _blockedDraftCompleted.TrySetResult(true);
+            }
+        }
         if (BlockUntilCancelled)
         {
             try
