@@ -1345,13 +1345,17 @@ function SpineEdge({
   label,
   data,
 }: EdgeProps) {
-  const spineData = data as { flowDirection?: 'horizontal' | 'vertical' } | undefined;
+  const spineData = data as {
+    flowDirection?: 'horizontal' | 'vertical';
+    gutterLaneOffset?: number;
+  } | undefined;
   const route = buildSteppedConnectorRoute({
     sourceX,
     sourceY,
     targetX,
     targetY,
     orientation: spineData?.flowDirection,
+    laneOffset: spineData?.gutterLaneOffset,
   });
   const markerIdValue = markerId('spine-arrow', id);
 

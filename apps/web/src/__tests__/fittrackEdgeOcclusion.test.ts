@@ -5,12 +5,9 @@
 //   Skyler and Hank are SIBLINGS at the same dependency rank (both depend on the design task via
 //   Jesse), and both fan into the RAI assembly gate.
 //
-// Yet in the DEFAULT 'LR' orientation the staircase stacks the two same-rank siblings (Skyler,
-// Hank) in ONE column, and places their shared downstream fan-in target (RAI) directly BELOW that
-// column. The real Skyler->RAI edge is then routed as a straight vertical bottom->top segment that
-// travels from Skyler's bottom DOWN THROUGH Hank's card to RAI — visually indistinguishable from a
-// phantom Skyler->Hank dependency. This test pins that geometry (so the layout can't silently drift
-// back into it) and asserts the corridor-occlusion condition the routing fix keys off of.
+// The banded-lane layout keeps the siblings in one rank band and advances the
+// shared downstream target into the next band. This prevents the real
+// Skyler->RAI edge from crossing Hank's card.
 import { describe, it, expect } from 'vitest';
 import type { Edge, Node } from '@xyflow/react';
 import {
@@ -110,28 +107,21 @@ describe('FitTrack run 41eb1aa4 graph — Skyler/Hank occlusion', () => {
     expect(rawEdges.some(([s, t]) => s === HANK && t === SKYLER)).toBe(false);
   });
 
-  it('LR (default): Skyler is directly above Hank, and RAI directly below — one shared column', () => {
+  it('LR (default): keeps sibling tasks in one band and RAI in the next band', () => {
     const { box } = layout('LR');
     const skyler = box(SKYLER);
     const hank = box(HANK);
     const rai = box(RAI);
 
-    // Same column: card-center X aligned within half a card width.
+    // Siblings share a rank column; the downstream target advances to a new column.
     expect(Math.abs(skyler.cx - hank.cx)).toBeLessThanOrEqual(SUBTASK_NODE_W / 2);
-    expect(Math.abs(hank.cx - rai.cx)).toBeLessThanOrEqual(SUBTASK_NODE_W / 2);
-    // Vertical stack order: Skyler above Hank above RAI.
+    expect(rai.x0).toBeGreaterThan(Math.max(skyler.x1, hank.x1));
     expect(skyler.cy).toBeLessThan(hank.cy);
-    expect(hank.cy).toBeLessThan(rai.cy);
-    // Hank's card literally lies between Skyler and RAI on Y.
-    expect(hank.y0).toBeGreaterThan(skyler.y1 - 1);
-    expect(hank.y1).toBeLessThan(rai.y0 + 1);
   });
 
-  it('LR: the real Skyler->RAI edge corridor is occluded by Hank (the reported "arrow into Hank")', () => {
+  it('LR: the real Skyler->RAI edge corridor is no longer occluded by Hank', () => {
     const { box } = layout('LR');
-    // Skyler->RAI must route through Hank's column position -> occluded.
-    expect(verticalCorridorBlocked(SKYLER, RAI, ids, box)).toBe(true);
-    // Hank->RAI is a clean adjacent segment -> NOT occluded (nothing between Hank and RAI).
+    expect(verticalCorridorBlocked(SKYLER, RAI, ids, box)).toBe(false);
     expect(verticalCorridorBlocked(HANK, RAI, ids, box)).toBe(false);
   });
 });
