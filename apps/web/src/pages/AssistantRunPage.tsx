@@ -140,6 +140,19 @@ interface PendingApproval {
   targetRunId: string;
 }
 
+interface OptimisticUserMessage {
+  id: string;
+  runId: string;
+  text: string;
+  normalizedText: string;
+  expectedServerOccurrence: number;
+  status: 'sending' | 'syncing';
+}
+
+function normalizeMessageText(text: string): string {
+  return text.trim();
+}
+
 /**
  * Derive the unresolved tool/shell approval requests from the operator run's event
  * stream. Approval-required events are matched against later resolution events
@@ -287,19 +300,14 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const routeRunId = searchParams.get('runId') ?? '';
 
-  // The operator run id is created lazily on the first composer submit; until then the
-  // stream stays disabled ('') and the page shows the empty invitation state. If the page
-  // loads with `?runId=...` already in the URL (a refresh, a bookmark, or the browser back
-  // button), resume that run instead of losing it — the conversation otherwise had no way
-  // to survive navigating away (#346 follow-up).
-  const [runId, setRunId] = useState<string>(() => searchParams.get('runId') ?? '');
+  // The URL is the conversation source of truth. AssistantRoute does not key this page by
+  // runId, so assigning the first run id connects the stream without remounting this
+  // component and discarding its optimistic message.
+  const runId = routeRunId;
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Optimistically-rendered user message, shown immediately on send and cleared once the
-  // server-confirmed copy shows up in the event stream (#item-1) — see the render + effect
-  // below.
-  const [pendingMessage, setPendingMessage] = useState<{ id: string; text: string } | null>(null);
+  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticUserMessage[]>([]);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -316,6 +324,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   // new conversation started later (e.g. via "New Session" from the Sessions page).
   const pendingResumeFromRunIdRef = useRef<string | null>(null);
   const sendingRef = useRef(false);
+  const optimisticMessageIdRef = useRef(0);
 
   // Populate (not submit) the composer with an example prompt — the user still reviews
   // and hits send themselves, matching the Composer's normal edit-then-submit flow rather
@@ -334,15 +343,6 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
 
   const { events, status: streamStatus } = useSeededRunStream(runId);
 
-  // Keep the URL in sync with the active run id so a refresh or shared link resumes the
-  // same conversation instead of dropping back to the empty invitation state.
-  useEffect(() => {
-    if (routeRunId === runId) return;
-    const next = new URLSearchParams(searchParams);
-    if (runId) next.set('runId', runId); else next.delete('runId');
-    setSearchParams(next, { replace: true });
-  }, [routeRunId, runId, searchParams, setSearchParams]);
-
   const timelineModel = useMemo(
     () => buildRunTimeline(events, { stripSerializedWorkPlan: false }),
     [events],
@@ -355,6 +355,23 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     const lastMessage = renderedMessages.at(-1);
     return `${renderedMessages.length}:${lastMessage?.role ?? ''}:${lastMessage?.text ?? ''}`;
   }, [renderedMessages]);
+  const serverUserMessageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const message of renderedMessages) {
+      if (message.role !== 'user') continue;
+      const normalizedText = normalizeMessageText(message.text);
+      counts.set(normalizedText, (counts.get(normalizedText) ?? 0) + 1);
+    }
+    return counts;
+  }, [renderedMessages]);
+  const visibleOptimisticMessages = useMemo(
+    () => optimisticMessages.filter((message) => (
+      message.runId === runId
+      && (serverUserMessageCounts.get(message.normalizedText) ?? 0)
+          < message.expectedServerOccurrence
+    )),
+    [optimisticMessages, runId, serverUserMessageCounts],
+  );
   const pendingApprovals = useMemo(
     () => (runId ? derivePendingApprovals(events, runId) : []),
     [events, runId],
@@ -376,29 +393,15 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     lastRenderedMessageSignatureRef.current = '';
   }, [runId]);
 
-  // Clear the optimistic pending message once its server-confirmed counterpart appears in
-  // the parsed timeline (a "user" role message with the same text) — the real message then
-  // renders through the normal RunTimeline path instead (#item-1).
-  useEffect(() => {
-    if (!pendingMessage) return;
-    const confirmed = timelineModel.steps.some((step) => step.messages.some(
-      (msg) => msg.role === 'user' && msg.text.trim() === pendingMessage.text.trim(),
-    ));
-    const syncPendingMessage = async () => {
-      if (confirmed) setPendingMessage(null);
-    };
-    void syncPendingMessage();
-  }, [pendingMessage, timelineModel]);
-
   // Always reveal the user's own just-sent optimistic message, even if they had scrolled up
   // to read history; once they're back at the bottom, assistant streaming can keep following.
   useEffect(() => {
-    if (!pendingMessage) return;
+    if (visibleOptimisticMessages.length === 0) return;
     shouldStickToBottomRef.current = true;
     requestAnimationFrame(() => {
       scrollLatestMessageIntoView('smooth');
     });
-  }, [pendingMessage, scrollLatestMessageIntoView]);
+  }, [scrollLatestMessageIntoView, visibleOptimisticMessages.length]);
 
   // Auto-scroll to the latest message once a resumed run's history has loaded (#item-9) —
   // without this, reopening `?runId=...` left the viewport scrolled to the top of a long
@@ -431,7 +434,29 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     setInput('');
     setBusy(true);
     setError(null);
-    setPendingMessage({ id: `pending-${Date.now()}`, text: message });
+    const normalizedText = normalizeMessageText(message);
+    const existingExpectedOccurrence = optimisticMessages
+      .filter((candidate) => (
+        candidate.runId === runId
+        && candidate.normalizedText === normalizedText
+      ))
+      .reduce(
+        (maximum, candidate) => Math.max(maximum, candidate.expectedServerOccurrence),
+        0,
+      );
+    const expectedServerOccurrence = Math.max(
+      serverUserMessageCounts.get(normalizedText) ?? 0,
+      existingExpectedOccurrence,
+    ) + 1;
+    const optimisticMessage: OptimisticUserMessage = {
+      id: `pending-${++optimisticMessageIdRef.current}`,
+      runId,
+      text: message,
+      normalizedText,
+      expectedServerOccurrence,
+      status: 'sending',
+    };
+    setOptimisticMessages((current) => [...current, optimisticMessage]);
     const isNewRun = !runId;
     try {
       if (isNewRun) {
@@ -444,7 +469,14 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         // Consumed (or not needed) — clear so it never leaks into a later, unrelated new
         // conversation (e.g. one started via "New Session" from the Sessions page).
         pendingResumeFromRunIdRef.current = null;
-        setRunId(created.run_id);
+        setOptimisticMessages((current) => current.map((candidate) => (
+          candidate.id === optimisticMessage.id
+            ? { ...candidate, runId: created.run_id }
+            : candidate
+        )));
+        const next = new URLSearchParams(searchParams);
+        next.set('runId', created.run_id);
+        setSearchParams(next, { replace: true });
         // Create the conversation first so React can bind its SSE stream while this request is
         // still running. Supplying the opening message to createAssistantRun would keep the run id
         // hidden until the entire model turn completed, making the first reply impossible to stream.
@@ -452,8 +484,15 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       } else {
         await apiClient.sendAssistantMessage(runId, { message });
       }
+      setOptimisticMessages((current) => current.map((candidate) => (
+        candidate.id === optimisticMessage.id
+          ? { ...candidate, status: 'syncing' }
+          : candidate
+      )));
     } catch (err) {
-      setPendingMessage(null);
+      setOptimisticMessages((current) => current.filter(
+        (candidate) => candidate.id !== optimisticMessage.id,
+      ));
       if (
         isNewRun &&
         err instanceof ApiError &&
@@ -476,7 +515,9 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         // the next submit auto-seeds a fresh run with whatever history we can recover, then
         // reset to the start state so the user can send that next message.
         pendingResumeFromRunIdRef.current = runId;
-        setRunId('');
+        const next = new URLSearchParams(searchParams);
+        next.delete('runId');
+        setSearchParams(next, { replace: true });
         setError('This conversation could not be found, so it can no longer be continued. Send your message again to start a new one that remembers this conversation.');
       } else if (
         !isNewRun &&
@@ -489,7 +530,9 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         // are dormant, not sealed, and wake transparently). Remember its id (same auto-seed
         // handoff as the run_not_found case above) and reset to the start state.
         pendingResumeFromRunIdRef.current = runId;
-        setRunId('');
+        const next = new URLSearchParams(searchParams);
+        next.delete('runId');
+        setSearchParams(next, { replace: true });
         setError('This conversation has ended and can no longer be continued. Send your message again to start a new one that remembers this conversation.');
       } else {
         setError(formatApiErrorMessage(err));
@@ -498,7 +541,16 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       sendingRef.current = false;
       setBusy(false);
     }
-  }, [busy, effectiveProjectId, input, runId]);
+  }, [
+    busy,
+    effectiveProjectId,
+    input,
+    optimisticMessages,
+    runId,
+    searchParams,
+    serverUserMessageCounts,
+    setSearchParams,
+  ]);
 
   return (
     <div className={styles.page} data-testid="assistant-run-page">
@@ -546,15 +598,24 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
             emptyHint="Messages, tool calls, and activity will appear here as the assistant responds."
           />
         )}
-        {pendingMessage && (
-          <div className={styles.pendingMessage} data-testid="assistant-pending-message">
+        {visibleOptimisticMessages.map((pendingMessage) => (
+          <div
+            className={styles.pendingMessage}
+            data-testid="assistant-pending-message"
+            key={pendingMessage.id}
+          >
             <div className={styles.pendingMessageRow}>
-              <Spinner size="extra-tiny" aria-label="Sending" />
+              <Spinner
+                size="extra-tiny"
+                aria-label={pendingMessage.status === 'sending' ? 'Sending' : 'Syncing'}
+              />
               <span className={styles.pendingMessageText}>{pendingMessage.text}</span>
             </div>
-            <span className={styles.pendingMessageStatus}>Sending…</span>
+            <span className={styles.pendingMessageStatus}>
+              {pendingMessage.status === 'sending' ? 'Sending…' : 'Sent · syncing…'}
+            </span>
           </div>
-        )}
+        ))}
         {pendingApprovals.length > 0 && (
           <div className={styles.approvals} data-testid="assistant-approvals">
             {pendingApprovals.map((approval) => (

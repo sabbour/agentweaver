@@ -19,6 +19,9 @@ Anything the Assistant does is something an external MCP client (Claude Desktop,
 ## Starting a session
 
 Open **Sessions** in the left nav (it's a collapsible top-level section, next to Projects) and click **New Session**. Type your first message — the assistant responds using whichever MCP tools are relevant, and the conversation becomes an entry in your session list.
+Your message remains visible while the new session connects and while persisted history is
+reconciled. When the server copy arrives, Agentweaver replaces the pending presentation without
+showing the message twice.
 
 The Assistant uses the same signed-in Agentweaver identity as the browser request. The API
 validates that identity and current project access, then issues a five-minute Agentweaver broker
