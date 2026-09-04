@@ -174,6 +174,109 @@ public sealed class EffectiveModelProviderResolverTests
             "platform-user"));
     }
 
+    [Fact]
+    public async Task Session_uses_platform_byok_before_personal_provider()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var secrets = new CountingSecretStore();
+        var platform = new ByokProviderConfigurationService(secrets);
+        var platformProvider = await platform.AddAsync(
+            new("", "Platform", "openai", "https://platform.example.com/v1", "platform-model", "key"),
+            CancellationToken.None);
+        await platform.SetActiveAsync(platformProvider.Id, CancellationToken.None);
+        var personal = new UserModelProviderSettingsService(db, secrets);
+        await personal.SetByokAsync(
+            "user",
+            new("", "Personal", "openai", "https://personal.example.com/v1", "personal-model", "key"),
+            CancellationToken.None);
+        var resolver = new EffectiveModelProviderResolver(
+            new GitHubConnectionsPersistenceStore(db), platform, secrets, personal);
+
+        var result = await resolver.ResolveForSessionAsync("user", CancellationToken.None);
+
+        result.Should().Be(new EffectiveModelProviderResult.Byok(
+            platformProvider.Id, platformProvider.Type));
+    }
+
+    [Fact]
+    public async Task Session_uses_personal_byok_when_platform_has_no_byok()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var secrets = new CountingSecretStore();
+        var personal = new UserModelProviderSettingsService(db, secrets);
+        var provider = await personal.SetByokAsync(
+            "user",
+            new("", "Personal", "openai", "https://personal.example.com/v1", "personal-model", "key"),
+            CancellationToken.None);
+        var resolver = new EffectiveModelProviderResolver(
+            new GitHubConnectionsPersistenceStore(db),
+            new ByokProviderConfigurationService(secrets),
+            secrets,
+            personal);
+
+        var result = await resolver.ResolveForSessionAsync("user", CancellationToken.None);
+
+        result.Should().Be(new EffectiveModelProviderResult.UserByok(
+            provider.Id, provider.Type, "user"));
+    }
+
+    [Fact]
+    public async Task Session_requires_personal_copilot_and_never_reuses_platform_copilot()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        db.PlatformDefaultCopilotBindings.Add(PlatformBinding());
+        await db.SaveChangesAsync();
+        var secrets = new CountingSecretStore();
+        await SetCredentialAsync(secrets, PlatformCredentialReference, githubLogin: "platform-user");
+        var resolver = new EffectiveModelProviderResolver(
+            new GitHubConnectionsPersistenceStore(db),
+            new ByokProviderConfigurationService(secrets),
+            secrets,
+            new UserModelProviderSettingsService(db, secrets));
+
+        var result = await resolver.ResolveForSessionAsync("user", CancellationToken.None);
+
+        result.Should().Be(new EffectiveModelProviderResult.Unavailable(
+            EffectiveModelProviderUnavailableReason.UserProviderRequired,
+            "Configure a personal model provider in Account settings to continue."));
+        secrets.ReadCount(PlatformCredentialReference).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Session_uses_only_the_callers_personal_copilot_binding()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        db.UserCopilotBindings.Add(new UserCopilotBindingRecord
+        {
+            Id = "user-binding",
+            EntraObjectId = "user",
+            CredentialReference = "copilot-app-user-credential",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var secrets = new CountingSecretStore();
+        await SetCredentialAsync(secrets, "copilot-app-user-credential", githubLogin: "personal-user");
+        var resolver = new EffectiveModelProviderResolver(
+            new GitHubConnectionsPersistenceStore(db),
+            new ByokProviderConfigurationService(secrets),
+            secrets,
+            new UserModelProviderSettingsService(db, secrets));
+
+        var result = await resolver.ResolveForSessionAsync("user", CancellationToken.None);
+
+        result.Should().Be(new EffectiveModelProviderResult.UserGitHubCopilot(
+            "user-binding", "personal-user", "user"));
+        (await resolver.ResolveForSessionAsync("other-user", CancellationToken.None))
+            .Should().BeOfType<EffectiveModelProviderResult.Unavailable>();
+    }
+
     private const string ProjectBindingId = "project-binding";
     private const string ProjectCredentialReference = "copilot-app-project-project-version";
     private const string PlatformCredentialReference = "copilot-app-platform-default-version";

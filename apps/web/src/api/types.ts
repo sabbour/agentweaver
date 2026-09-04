@@ -504,6 +504,18 @@ export interface ByokProviderRequest {
   azure_api_version?: string | null;
 }
 
+export interface UserAiAccessStatus {
+  effective_source: 'platform_byok' | 'user_byok' | 'user_github_copilot' | 'none';
+  platform_byok: Pick<ByokProviderConfig, 'name' | 'type' | 'model'> | null;
+  preference: 'byok' | 'github_copilot';
+  personal_byok: Omit<ByokProviderConfig, 'is_active'> | null;
+  copilot: {
+    connected: boolean;
+    github_login: string | null;
+    reconnect_required: boolean;
+  };
+}
+
 export interface GitHubRepositorySelectionCandidate {
   full_name: string;
   owner_login: string;

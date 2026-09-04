@@ -341,6 +341,7 @@ builder.Services.AddScoped<CopilotCredentialRefreshService>(sp => new(
 builder.Services.AddScoped<GitHubCapabilityBroker>();
 builder.Services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
 builder.Services.AddScoped<EffectiveModelProviderResolver>();
+builder.Services.AddScoped<UserModelProviderSettingsService>();
 builder.Services.AddScoped<Agentweaver.Api.Auth.GenerationModelProviderExecutor>();
 builder.Services.AddScoped<BrowserEntraSessionService>();
 builder.Services.AddHttpContextAccessor();
@@ -1252,6 +1253,7 @@ else
     applicationEndpoints.MapAuthEndpoints();
     applicationEndpoints.MapByokProviderSettingsEndpoints();
     applicationEndpoints.MapPlatformDefaultCopilotBindingEndpoints();
+    applicationEndpoints.MapUserModelProviderEndpoints();
     applicationEndpoints.MapGitHubRepositorySelectionEndpoints();
     applicationEndpoints.MapDecisionsEndpoints();
     applicationEndpoints.MapMemoryEndpoints();

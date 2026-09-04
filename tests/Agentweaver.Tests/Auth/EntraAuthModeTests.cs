@@ -87,7 +87,7 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
     }
 
     [Fact]
-    public async Task AuthSession_ReportsAiConfiguredFalse_WhenNoByokOrPlatformDefaultBindingExists()
+    public async Task AuthSession_AllowsContributorToConfigurePersonalProvider_WhenNoPlatformProviderExists()
     {
         using (var scope = _factory.Services.CreateScope())
         {
@@ -103,7 +103,8 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeFalse();
+        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeTrue(
+            "non-admin users must enter the app to configure their own provider");
     }
 
     [Fact]
@@ -160,7 +161,7 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
     }
 
     [Fact]
-    public async Task AuthSession_ReportsAiConfiguredFalse_WhenPlatformDefaultBindingSecretIsMissing()
+    public async Task AuthSession_AllowsContributorToConfigurePersonalProvider_WhenPlatformBindingIsUnusable()
     {
         using (var scope = _factory.Services.CreateScope())
         {
@@ -187,7 +188,8 @@ public sealed class EntraAuthModeTests : IClassFixture<EntraWebApplicationFactor
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeFalse();
+        json.RootElement.GetProperty("ai_configured").GetBoolean().Should().BeTrue(
+            "an unusable platform provider must not block a user from configuring personal access");
     }
 
     [Fact]

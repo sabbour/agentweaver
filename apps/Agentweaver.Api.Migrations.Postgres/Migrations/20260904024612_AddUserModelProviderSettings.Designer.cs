@@ -3,35 +3,43 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
-namespace Agentweaver.Api.Migrations
+namespace Agentweaver.Api.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260904024612_AddUserModelProviderSettings")]
+    partial class AddUserModelProviderSettings
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
+            modelBuilder
+                .HasAnnotation("ProductVersion", "10.0.10")
+                .HasAnnotation("Relational:MaxIdentifierLength", 63);
+
+            NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.BrowserEntraSession", b =>
                 {
                     b.Property<string>("Id")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("PlatformRoles")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -43,20 +51,20 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.EntraOAuthState", b =>
                 {
                     b.Property<string>("State")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("CodeVerifier")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Nonce")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ReturnHandle")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("State");
 
@@ -68,38 +76,38 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.OAuthAuthorizationTransaction", b =>
                 {
                     b.Property<string>("HandleHash")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("BrowserSessionId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ClientId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ClientState")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("CodeChallenge")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("ConsumedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("RedirectUri")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Scope")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Subject")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("HandleHash");
 
@@ -112,25 +120,25 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("uuid");
 
                     b.Property<string>("ClientId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("RevokedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Scopes")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Subject")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
@@ -144,21 +152,21 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("uuid");
 
                     b.Property<string>("ClientId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("DisabledAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset>("RegisteredAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("SourceHash")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -173,14 +181,14 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.OAuthMaintenanceLease", b =>
                 {
                     b.Property<string>("Name")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("LeaseExpiresAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Owner")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Name");
 
@@ -191,28 +199,28 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("uuid");
 
                     b.Property<string>("AuthorizationId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ClientId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("RevocationReason")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("RevokedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Subject")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -225,18 +233,18 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.WebSessionExchangeCode", b =>
                 {
                     b.Property<string>("Code")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("AccessToken")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Login")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Code");
 
@@ -249,41 +257,43 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<string>("AggregateTreeHash")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("CoordinatorFailedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("CoordinatorFailureReason")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("CoordinatorRunId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("DecisionJson")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("DecisionSubmittedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("IntegrationBranch")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("OwnerUser")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Reviewer")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
@@ -296,28 +306,28 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Diagnostics.HeartbeatStatusRecord", b =>
                 {
                     b.Property<string>("PodName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int>("ActedCount")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<long>("DurationMs")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("bigint");
 
                     b.Property<bool>("Enabled")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("boolean");
 
                     b.Property<string>("Error")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int>("ErrorCount")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<int>("IntervalSeconds")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset>("LastTickUtc")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("PodName");
 
@@ -328,63 +338,65 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<string>("AgentName")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("ApprovedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ApprovedBy")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Content")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Importance")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SessionId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SourceIdentity")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SourceKind")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasDefaultValue("legacy");
 
                     b.Property<string>("SourceRunId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Tags")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("TrustState")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasDefaultValue("legacy");
 
                     b.Property<string>("Type")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
@@ -398,57 +410,57 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.AutomationActivationRecord", b =>
                 {
                     b.Property<string>("Id")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("id");
 
                     b.Property<DateTimeOffset>("ActivatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("activated_at");
 
                     b.Property<string>("AutomationKey")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("automation_key");
 
                     b.Property<string>("ByokProviderId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_provider_id");
 
                     b.Property<string>("CopilotBindingGrantDigest")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("copilot_binding_grant_digest");
 
                     b.Property<string>("CopilotBindingId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("copilot_binding_id");
 
                     b.Property<long?>("InstallationId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
                     b.Property<DateTimeOffset?>("InvalidatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("invalidated_at");
 
                     b.Property<int>("ModelProviderSource")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("model_provider_source");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<string>("RepositoryGrantDigest")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("repository_grant_digest");
 
                     b.Property<long?>("RepositoryId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
                     b.Property<int>("Status")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("status");
 
                     b.HasKey("Id");
@@ -469,58 +481,58 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.AutomationInvocationRecord", b =>
                 {
                     b.Property<string>("Id")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("id");
 
                     b.Property<string>("ActivationId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("activation_id");
 
                     b.Property<string>("BacklogTaskId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("backlog_task_id");
 
                     b.Property<DateTimeOffset?>("CompletedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
 
                     b.Property<string>("DeliveryId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("delivery_id");
 
                     b.Property<string>("EventName")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("event_name");
 
                     b.Property<long?>("InstallationId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
                     b.Property<string>("OccurrenceKey")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("occurrence_key");
 
                     b.Property<int>("Outcome")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("outcome");
 
                     b.Property<string>("PendingBacklogTaskId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("pending_backlog_task_id");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<DateTimeOffset>("ReceivedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("received_at");
 
                     b.Property<long?>("RepositoryId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
                     b.HasKey("Id");
@@ -551,11 +563,11 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.AutomationProjectGuardRecord", b =>
                 {
                     b.Property<string>("ProjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<bool>("RepositoryAttached")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("boolean")
                         .HasColumnName("repository_attached");
 
                     b.HasKey("ProjectId");
@@ -563,74 +575,408 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("automation_project_guards", (string)null);
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.BacklogTaskDependencyRecord", b =>
+                {
+                    b.Property<string>("TaskId")
+                        .HasColumnType("text")
+                        .HasColumnName("task_id");
+
+                    b.Property<string>("DependsOnTaskId")
+                        .HasColumnType("text")
+                        .HasColumnName("depends_on_task_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.HasKey("TaskId", "DependsOnTaskId");
+
+                    b.HasIndex("DependsOnTaskId")
+                        .HasDatabaseName("IX_backlog_task_dependencies_prerequisite");
+
+                    b.HasIndex("ProjectId", "TaskId")
+                        .HasDatabaseName("IX_backlog_task_dependencies_project_task");
+
+                    b.ToTable("backlog_task_dependencies", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.BacklogTaskRecord", b =>
+                {
+                    b.Property<string>("TaskId")
+                        .HasColumnType("text")
+                        .HasColumnName("task_id");
+
+                    b.Property<DateTimeOffset?>("ArchivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archived_at");
+
+                    b.Property<string>("CapturedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("captured_by");
+
+                    b.Property<string>("CapturedByUserId")
+                        .HasColumnType("text")
+                        .HasColumnName("captured_by_user_id");
+
+                    b.Property<DateTimeOffset?>("ClaimedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("claimed_at");
+
+                    b.Property<DateTimeOffset?>("CommittedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("committed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<bool>("IsAutomationInvocationPending")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("automation_invocation_pending");
+
+                    b.Property<string>("OrderKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("order_key");
+
+                    b.Property<string>("ParentPrdRunId")
+                        .HasColumnType("text")
+                        .HasColumnName("parent_prd_run_id");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("PromotionKey")
+                        .HasColumnType("text")
+                        .HasColumnName("promotion_key");
+
+                    b.Property<string>("PromotionReason")
+                        .HasColumnType("text")
+                        .HasColumnName("promotion_reason");
+
+                    b.Property<string>("RunId")
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("SourceFilePath")
+                        .HasColumnType("text")
+                        .HasColumnName("source_file_path");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("state");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("title");
+
+                    b.Property<string>("WorkflowOverrideId")
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_override_id");
+
+                    b.HasKey("TaskId");
+
+                    b.HasIndex("RunId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_backlog_tasks_run")
+                        .HasFilter("run_id IS NOT NULL");
+
+                    b.HasIndex("ParentPrdRunId", "PromotionKey")
+                        .IsUnique()
+                        .HasDatabaseName("IX_backlog_tasks_parent_promotion_key")
+                        .HasFilter("parent_prd_run_id IS NOT NULL AND promotion_key IS NOT NULL");
+
+                    b.HasIndex("ProjectId", "State", "OrderKey")
+                        .IsUnique()
+                        .HasDatabaseName("IX_backlog_tasks_orderkey_unique")
+                        .HasFilter("state IN ('backlog','ready') AND archived_at IS NULL");
+
+                    b.ToTable("backlog_tasks", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.BlueprintPackageAcquisitionRecord", b =>
+                {
+                    b.Property<string>("OwnerId")
+                        .HasColumnType("text")
+                        .HasColumnName("owner_id");
+
+                    b.Property<string>("PackageId")
+                        .HasColumnType("text")
+                        .HasColumnName("package_id");
+
+                    b.Property<string>("CanonicalVersionKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("canonical_version_key");
+
+                    b.Property<int>("Ordinal")
+                        .HasColumnType("integer")
+                        .HasColumnName("ordinal");
+
+                    b.Property<DateTimeOffset?>("AcquiredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("acquired_at");
+
+                    b.Property<string>("CanonicalVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("canonical_version");
+
+                    b.Property<string>("Producer")
+                        .HasColumnType("text")
+                        .HasColumnName("producer");
+
+                    b.Property<string>("Repository")
+                        .HasColumnType("text")
+                        .HasColumnName("repository");
+
+                    b.Property<string>("RequestedRef")
+                        .HasColumnType("text")
+                        .HasColumnName("requested_ref");
+
+                    b.Property<string>("Revision")
+                        .HasColumnType("text")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("source");
+
+                    b.HasKey("OwnerId", "PackageId", "CanonicalVersionKey", "Ordinal");
+
+                    b.ToTable("blueprint_package_acquisitions", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.BlueprintPackageLibraryRecord", b =>
+                {
+                    b.Property<string>("OwnerId")
+                        .HasColumnType("text")
+                        .HasColumnName("owner_id");
+
+                    b.Property<string>("PackageId")
+                        .HasColumnType("text")
+                        .HasColumnName("package_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.HasKey("OwnerId", "PackageId");
+
+                    b.ToTable("blueprint_package_library", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.BlueprintPackagePayloadRecord", b =>
+                {
+                    b.Property<string>("OwnerId")
+                        .HasColumnType("text")
+                        .HasColumnName("owner_id");
+
+                    b.Property<string>("PackageId")
+                        .HasColumnType("text")
+                        .HasColumnName("package_id");
+
+                    b.Property<string>("CanonicalVersionKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("canonical_version_key");
+
+                    b.Property<string>("Path")
+                        .HasColumnType("text")
+                        .HasColumnName("path");
+
+                    b.Property<byte[]>("Bytes")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("bytes");
+
+                    b.Property<string>("CanonicalVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("canonical_version");
+
+                    b.HasKey("OwnerId", "PackageId", "CanonicalVersionKey", "Path");
+
+                    b.ToTable("blueprint_package_payloads", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.BlueprintPackageVersionRecord", b =>
+                {
+                    b.Property<string>("OwnerId")
+                        .HasColumnType("text")
+                        .HasColumnName("owner_id");
+
+                    b.Property<string>("PackageId")
+                        .HasColumnType("text")
+                        .HasColumnName("package_id");
+
+                    b.Property<string>("CanonicalVersionKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("canonical_version_key");
+
+                    b.Property<string>("CanonicalVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("canonical_version");
+
+                    b.Property<string>("ContainerSha256")
+                        .HasColumnType("text")
+                        .HasColumnName("container_sha256");
+
+                    b.Property<string>("ContentDigest")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("content_digest");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("PayloadSetDigest")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("payload_set_digest");
+
+                    b.Property<byte[]>("RawManifest")
+                        .IsRequired()
+                        .HasColumnType("bytea")
+                        .HasColumnName("raw_manifest");
+
+                    b.Property<string>("RawManifestSha256")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("raw_manifest_sha256");
+
+                    b.HasKey("OwnerId", "PackageId", "CanonicalVersionKey");
+
+                    b.ToTable("blueprint_package_versions", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.CastProposalRecord", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("Owner")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("owner");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProposalJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("proposal_json");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId")
+                        .HasDatabaseName("IX_cast_proposals_project_id");
+
+                    b.ToTable("cast_proposals", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.Decision", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<string>("AgentName")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("ApprovedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ApprovedBy")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Content")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Rationale")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SourceIdentity")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SourceKind")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasDefaultValue("legacy");
 
                     b.Property<string>("SourceRunId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int?>("SupersededById")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<string>("Tags")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Title")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("TrustState")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasDefaultValue("legacy");
 
                     b.Property<string>("Type")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
@@ -647,62 +993,64 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<string>("AgentName")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Content")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<int?>("DecisionId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset?>("MergedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Rationale")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Slug")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SourceIdentity")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SourceKind")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasDefaultValue("legacy");
 
                     b.Property<string>("SourceRunId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Title")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Type")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
@@ -719,15 +1067,15 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.DismissedNotification", b =>
                 {
                     b.Property<string>("User")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("user");
 
                     b.Property<string>("NotificationId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("notification_id");
 
                     b.Property<DateTimeOffset>("DismissedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("dismissed_at");
 
                     b.HasKey("User", "NotificationId");
@@ -738,43 +1086,43 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubAppAuthorizationRecord", b =>
                 {
                     b.Property<string>("Id")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("id");
 
                     b.Property<int>("AppKind")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("app_kind");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
                     b.Property<string>("CredentialReference")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_reference");
 
                     b.Property<string>("CredentialVersion")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_version");
 
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<string>("GrantDigest")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("grant_digest");
 
                     b.Property<int>("Purpose")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("purpose");
 
                     b.Property<DateTimeOffset?>("RevokedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("revoked_at");
 
                     b.HasKey("Id");
@@ -788,53 +1136,55 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("id");
 
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
                     b.Property<int>("Action")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("action");
 
                     b.Property<int>("ActorKind")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("actor_kind");
 
                     b.Property<int?>("AppKind")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("app_kind");
 
                     b.Property<int?>("CapabilityPurpose")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("capability_purpose");
 
                     b.Property<string>("CorrelationId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("correlation_id");
 
                     b.Property<string>("EntraObjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<string>("GrantDigest")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("grant_digest");
 
                     b.Property<DateTimeOffset>("OccurredAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("occurred_at");
 
                     b.Property<int>("Outcome")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("outcome");
 
                     b.Property<int>("ReasonCode")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("reason_code");
 
                     b.Property<string>("ResourceId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("resource_id");
 
                     b.HasKey("Id");
@@ -847,64 +1197,64 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubAuthorizationRecord", b =>
                 {
                     b.Property<string>("State")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("state");
 
                     b.Property<int>("AppKind")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("app_kind");
 
                     b.Property<string>("BrowserSessionId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("browser_session_id");
 
                     b.Property<string>("CallbackCookieHash")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("callback_cookie_hash");
 
                     b.Property<DateTimeOffset?>("CompletedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<long>("ExpiresAtUnixMilliseconds")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("expires_at_unix_ms");
 
                     b.Property<string>("ExternalTransactionId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("external_transaction_id");
 
                     b.Property<string>("PkceVerifierProtected")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("pkce_verifier_protected");
 
                     b.Property<string>("ProjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<int>("Purpose")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("purpose");
 
                     b.Property<string>("ReturnRouteKey")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("return_route_key");
 
                     b.Property<int>("Status")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("status");
 
                     b.HasKey("State");
@@ -925,23 +1275,23 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubInstallationRecord", b =>
                 {
                     b.Property<long>("InstallationId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
                     b.Property<int>("AppKind")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("app_kind");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
                     b.Property<string>("ProjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<DateTimeOffset?>("RevokedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("revoked_at");
 
                     b.HasKey("InstallationId");
@@ -954,24 +1304,24 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubLifecycleDeliveryRecord", b =>
                 {
                     b.Property<string>("DeliveryId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("delivery_id");
 
                     b.Property<string>("EventName")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("event_name");
 
                     b.Property<long?>("InstallationId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
                     b.Property<DateTimeOffset>("ReceivedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("received_at");
 
                     b.Property<long?>("RepositoryId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
                     b.HasKey("DeliveryId");
@@ -982,34 +1332,34 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubRepositoryGrantRecord", b =>
                 {
                     b.Property<long>("InstallationId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
                     b.Property<long>("RepositoryId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
                     b.Property<string>("FullNameDisplay")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("full_name_display");
 
                     b.Property<DateTimeOffset>("GrantedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("granted_at");
 
                     b.Property<string>("PermissionDigest")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("permission_digest");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<DateTimeOffset?>("RevokedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("revoked_at");
 
                     b.HasKey("InstallationId", "RepositoryId");
@@ -1025,33 +1375,33 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubRepositorySelectionCodeRecord", b =>
                 {
                     b.Property<string>("CodeHash")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("code_hash");
 
                     b.Property<long?>("ConsumedAtUnixMilliseconds")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("consumed_at_unix_ms");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<long>("ExpiresAtUnixMilliseconds")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("expires_at_unix_ms");
 
                     b.Property<string>("RepoAppAuthorizationId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("repo_app_authorization_id");
 
                     b.Property<long>("RepositoryId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
                     b.HasKey("CodeHash");
@@ -1066,18 +1416,18 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.IntegrationBuildLockRecord", b =>
                 {
                     b.Property<string>("ProjectId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("AcquiredAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("OwnerPodId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("OwnerToken")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("ProjectId");
 
@@ -1088,50 +1438,52 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<bool>("AllowTaskPromotion")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("boolean");
 
                     b.Property<string>("Assumptions")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ClarifyingQuestions")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ConfirmedBy")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("CoordinatorRunId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("DesiredOutcome")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Goal")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Scope")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
@@ -1143,39 +1495,39 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.PlatformDefaultCopilotBindingRecord", b =>
                 {
                     b.Property<string>("Id")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("id");
 
                     b.Property<DateTimeOffset>("BoundAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("bound_at");
 
                     b.Property<string>("CredentialReference")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_reference");
 
                     b.Property<string>("CredentialVersion")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_version");
 
                     b.Property<DateTimeOffset?>("DeactivatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("deactivated_at");
 
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<string>("GrantDigest")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("grant_digest");
 
                     b.Property<int>("Status")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("status");
 
                     b.HasKey("Id");
@@ -1186,44 +1538,44 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.ProjectCopilotBindingRecord", b =>
                 {
                     b.Property<string>("Id")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("id");
 
                     b.Property<DateTimeOffset>("BoundAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("bound_at");
 
                     b.Property<string>("CredentialReference")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_reference");
 
                     b.Property<string>("CredentialVersion")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_version");
 
                     b.Property<DateTimeOffset?>("DeactivatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("deactivated_at");
 
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<string>("GrantDigest")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("grant_digest");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<int>("Status")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("status");
 
                     b.HasKey("Id");
@@ -1239,58 +1591,58 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.ProjectModelProviderCapabilityRecord", b =>
                 {
                     b.Property<string>("CapabilityRef")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("capability_ref");
 
                     b.Property<DateTimeOffset?>("ClaimLeaseExpiresAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("claim_lease_expires_at");
 
                     b.Property<DateTimeOffset?>("ConsumedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("consumed_at");
 
                     b.Property<string>("CredentialReference")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_reference");
 
                     b.Property<string>("CredentialVersion")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_version");
 
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("expires_at");
 
                     b.Property<string>("GrantDigest")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("grant_digest");
 
                     b.Property<DateTimeOffset>("IssuedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("issued_at");
 
                     b.Property<string>("ProjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<int>("Purpose")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasDefaultValue(0)
                         .HasColumnName("purpose");
 
                     b.Property<string>("SourceBindingId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("source_binding_id");
 
                     b.HasKey("CapabilityRef");
@@ -1307,116 +1659,195 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.ProjectRecord", b =>
                 {
                     b.Property<string>("ProjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<string>("ActiveReviewPolicyName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("active_review_policy_name");
 
                     b.Property<string>("AllowedWorkflowIds")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("allowed_workflow_ids");
 
                     b.Property<string>("BlueprintGenerationModel")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("blueprint_generation_model");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
 
                     b.Property<string>("DefaultBranch")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("main")
+                        .HasColumnName("default_branch");
 
                     b.Property<string>("DefaultModelCopilot")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("default_model_copilot");
 
                     b.Property<string>("DefaultModelFoundry")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("default_model_foundry");
 
                     b.Property<string>("DefaultProvider")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("default_provider");
 
                     b.Property<string>("DefaultWorkflowId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("default_workflow_id");
 
                     b.Property<int>("MaxReadyPerHeartbeat")
-                        .HasColumnType("INTEGER");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(3)
+                        .HasColumnName("max_ready_per_heartbeat");
 
                     b.Property<string>("Name")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("name");
 
                     b.Property<string>("OriginKind")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("origin_kind");
 
                     b.Property<string>("OutcomeSpecGenerationModel")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("outcome_spec_generation_model");
 
                     b.Property<string>("Owner")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("owner");
 
                     b.Property<bool>("PickupAutoApproveTools")
-                        .HasColumnType("INTEGER");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("pickup_auto_approve_tools");
 
                     b.Property<bool>("PickupAutopilot")
-                        .HasColumnType("INTEGER");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("pickup_autopilot");
 
                     b.Property<int>("PreviewApprovalTimeoutMinutes")
-                        .HasColumnType("INTEGER");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(30)
+                        .HasColumnName("preview_approval_timeout_minutes");
 
                     b.Property<string>("SandboxProfile")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("sandbox_profile");
 
                     b.Property<string>("SourceBlueprintId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("source_blueprint_id");
 
                     b.Property<string>("SourceBlueprintType")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("source_blueprint_type");
 
                     b.Property<string>("SourceRepository")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("source_repository");
 
                     b.Property<string>("State")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("active")
+                        .HasColumnName("state");
 
                     b.Property<long>("TeamRevision")
-                        .HasColumnType("INTEGER");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("team_revision");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
 
                     b.Property<string>("WebhookSecret")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("webhook_secret");
 
                     b.Property<string>("WorkflowGenerationModel")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_generation_model");
 
                     b.Property<string>("WorkingDirectory")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text")
+                        .HasColumnName("working_directory");
 
                     b.HasKey("ProjectId");
 
+                    b.HasIndex("State")
+                        .HasDatabaseName("IX_projects_state");
+
                     b.ToTable("projects", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.ProjectRoleAssignmentRecord", b =>
+                {
+                    b.Property<string>("ProjectId")
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("PrincipalId")
+                        .HasColumnType("text")
+                        .HasColumnName("principal_id");
+
+                    b.Property<DateTimeOffset>("GrantedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("granted_at");
+
+                    b.Property<string>("GrantedBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("granted_by");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("role");
+
+                    b.HasKey("ProjectId", "PrincipalId");
+
+                    b.HasIndex("PrincipalId")
+                        .HasDatabaseName("IX_project_role_assignments_principal_id");
+
+                    b.HasIndex("ProjectId", "Role")
+                        .HasDatabaseName("IX_project_role_assignments_project_role");
+
+                    b.ToTable("project_role_assignments", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.RunAuthorshipCapability", b =>
                 {
                     b.Property<string>("RunId")
                         .HasMaxLength(128)
-                        .HasColumnType("TEXT")
+                        .HasColumnType("character varying(128)")
                         .HasColumnName("run_id");
 
                     b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("expires_at");
 
                     b.Property<byte[]>("TokenHash")
                         .IsRequired()
-                        .HasColumnType("BLOB")
+                        .HasColumnType("bytea")
                         .HasColumnName("token_hash");
 
                     b.HasKey("RunId");
@@ -1429,69 +1860,69 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.RunGitHubCapabilitySnapshotRecord", b =>
                 {
                     b.Property<string>("SnapshotRef")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("snapshot_ref");
 
                     b.Property<int>("AppKind")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("app_kind");
 
                     b.Property<DateTimeOffset>("CapturedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("captured_at");
 
                     b.Property<string>("CredentialReference")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_reference");
 
                     b.Property<string>("CredentialVersion")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_version");
 
                     b.Property<string>("EntraObjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<string>("GrantDigest")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("grant_digest");
 
                     b.Property<long?>("InstallationId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
                     b.Property<string>("ProjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<int>("Purpose")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("purpose");
 
                     b.Property<long?>("RepositoryId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
                     b.Property<string>("RunId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("run_id");
 
                     b.Property<DateTimeOffset?>("SnapshotExpiresAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("snapshot_expires_at");
 
                     b.Property<string>("SourceAuthorizationId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("source_authorization_id");
 
                     b.Property<string>("SourceBindingId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("source_binding_id");
 
                     b.Property<int>("SourceKind")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("source_kind");
 
                     b.HasKey("SnapshotRef");
@@ -1511,51 +1942,51 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.RunGitHubIdentitySnapshotRecord", b =>
                 {
                     b.Property<string>("RunId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("run_id");
 
                     b.Property<int>("AppKind")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("app_kind");
 
                     b.Property<DateTimeOffset>("CapturedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("captured_at");
 
                     b.Property<string>("CredentialReference")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_reference");
 
                     b.Property<string>("CredentialVersion")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_version");
 
                     b.Property<string>("EntraObjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<string>("GrantDigest")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("grant_digest");
 
                     b.Property<long?>("InstallationId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("project_id");
 
                     b.Property<int>("Purpose")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("purpose");
 
                     b.Property<long?>("RepositoryId")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
                     b.HasKey("RunId");
@@ -1565,38 +1996,269 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("run_github_identity_snapshots", (string)null);
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.RunRecord", b =>
+                {
+                    b.Property<string>("RunId")
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("AgentCharter")
+                        .HasColumnType("text")
+                        .HasColumnName("agent_charter");
+
+                    b.Property<string>("AgentName")
+                        .HasColumnType("text")
+                        .HasColumnName("agent_name");
+
+                    b.Property<int>("ApprovalGeneration")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("approval_generation");
+
+                    b.Property<DateTimeOffset?>("ArchivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archived_at");
+
+                    b.Property<int>("Attempt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("attempt");
+
+                    b.Property<string>("Diff")
+                        .HasColumnType("text")
+                        .HasColumnName("diff");
+
+                    b.Property<DateTimeOffset?>("EndedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ended_at");
+
+                    b.Property<long>("FencingToken")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("fencing_token");
+
+                    b.Property<DateTimeOffset?>("HeartbeatAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("heartbeat_at");
+
+                    b.Property<DateTimeOffset?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_expires_at");
+
+                    b.Property<string>("MergeConflicts")
+                        .HasColumnType("text")
+                        .HasColumnName("merge_conflicts");
+
+                    b.Property<string>("MergedCommitHash")
+                        .HasColumnType("text")
+                        .HasColumnName("merged_commit_hash");
+
+                    b.Property<string>("ModelId")
+                        .HasColumnType("text")
+                        .HasColumnName("model_id");
+
+                    b.Property<string>("ModelSource")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("model_source");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("interactive")
+                        .HasColumnName("origin");
+
+                    b.Property<string>("OriginatingBranch")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("originating_branch");
+
+                    b.Property<string>("OwnerId")
+                        .HasColumnType("text")
+                        .HasColumnName("owner_id");
+
+                    b.Property<string>("ParentRunId")
+                        .HasColumnType("text")
+                        .HasColumnName("parent_run_id");
+
+                    b.Property<string>("ProjectId")
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("RepositoryPath")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("repository_path");
+
+                    b.Property<string>("Result")
+                        .HasColumnType("text")
+                        .HasColumnName("result");
+
+                    b.Property<string>("RetriedFrom")
+                        .HasColumnType("text")
+                        .HasColumnName("retried_from");
+
+                    b.Property<DateTimeOffset?>("ReviewReadyAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("review_ready_at");
+
+                    b.Property<string>("ReviewedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("reviewed_by");
+
+                    b.Property<string>("SandboxBackend")
+                        .HasColumnType("text")
+                        .HasColumnName("sandbox_backend");
+
+                    b.Property<string>("SandboxClaimName")
+                        .HasColumnType("text")
+                        .HasColumnName("sandbox_claim_name");
+
+                    b.Property<string>("SandboxNamespace")
+                        .HasColumnType("text")
+                        .HasColumnName("sandbox_namespace");
+
+                    b.Property<string>("SandboxPodName")
+                        .HasColumnType("text")
+                        .HasColumnName("sandbox_pod_name");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("SubmittingUser")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("submitting_user");
+
+                    b.Property<string>("SubtaskId")
+                        .HasColumnType("text")
+                        .HasColumnName("subtask_id");
+
+                    b.Property<string>("Task")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("task");
+
+                    b.Property<string>("TreeHash")
+                        .HasColumnType("text")
+                        .HasColumnName("tree_hash");
+
+                    b.Property<string>("WorkflowRunId")
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_run_id");
+
+                    b.Property<string>("WorkflowSelectionReason")
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_selection_reason");
+
+                    b.Property<string>("WorktreeBranch")
+                        .HasColumnType("text")
+                        .HasColumnName("worktree_branch");
+
+                    b.Property<string>("WorktreePath")
+                        .HasColumnType("text")
+                        .HasColumnName("worktree_path");
+
+                    b.HasKey("RunId");
+
+                    b.HasIndex("WorkflowRunId")
+                        .HasDatabaseName("IX_runs_workflow_run_id");
+
+                    b.HasIndex("Origin", "Status")
+                        .HasDatabaseName("IX_runs_origin_status");
+
+                    b.HasIndex("ParentRunId", "SubtaskId")
+                        .HasDatabaseName("IX_runs_parent_subtask");
+
+                    b.HasIndex("ProjectId", "Status")
+                        .HasDatabaseName("IX_runs_project_status");
+
+                    b.ToTable("runs", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.RunRevisionRecord", b =>
+                {
+                    b.Property<string>("RunId")
+                        .HasColumnType("text")
+                        .HasColumnName("run_id");
+
+                    b.Property<int>("RevisionNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("revision_number");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("PreviousTreeHash")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("previous_tree_hash");
+
+                    b.Property<string>("RawComment")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("raw_comment");
+
+                    b.Property<string>("ReviewerUser")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("reviewer_user");
+
+                    b.Property<string>("SanitizedComment")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("sanitized_comment");
+
+                    b.HasKey("RunId", "RevisionNumber");
+
+                    b.ToTable("run_revisions", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.SessionContext", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<string>("ActiveIssues")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("EndedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("FocusArea")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SerializedState")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SessionId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("StartedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Summary")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -1608,64 +2270,219 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("SessionContexts");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.SkillAssignmentRecord", b =>
+                {
+                    b.Property<string>("ProjectId")
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("SkillId")
+                        .HasColumnType("text")
+                        .HasColumnName("skill_id");
+
+                    b.Property<string>("AgentName")
+                        .HasColumnType("text")
+                        .HasColumnName("agent_name");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.HasKey("ProjectId", "SkillId", "AgentName");
+
+                    b.HasIndex("ProjectId", "AgentName")
+                        .HasDatabaseName("IX_skill_assignments_agent");
+
+                    b.ToTable("skill_assignments", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.SkillMarketplaceSourceRecord", b =>
+                {
+                    b.Property<string>("SourceId")
+                        .HasColumnType("text")
+                        .HasColumnName("source_id");
+
+                    b.Property<string>("Branch")
+                        .HasColumnType("text")
+                        .HasColumnName("branch");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<string>("ParseStrategy")
+                        .HasColumnType("text")
+                        .HasColumnName("parse_strategy");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("Repository")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("repository");
+
+                    b.Property<string>("Subpath")
+                        .HasColumnType("text")
+                        .HasColumnName("subpath");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("SourceId");
+
+                    b.HasIndex("ProjectId");
+
+                    b.ToTable("skill_marketplace_sources", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.SkillRecord", b =>
+                {
+                    b.Property<string>("SkillId")
+                        .HasColumnType("text")
+                        .HasColumnName("skill_id");
+
+                    b.Property<string>("ContentHash")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("content_hash");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Instructions")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("instructions");
+
+                    b.Property<string>("MarketplaceName")
+                        .HasColumnType("text")
+                        .HasColumnName("marketplace_name");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("Provenance")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("provenance");
+
+                    b.Property<string>("Resources")
+                        .HasColumnType("text")
+                        .HasColumnName("resources");
+
+                    b.Property<string>("SourceLocation")
+                        .HasColumnType("text")
+                        .HasColumnName("source_location");
+
+                    b.Property<string>("SourceRepository")
+                        .HasColumnType("text")
+                        .HasColumnName("source_repository");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("active")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("SkillId");
+
+                    b.HasAlternateKey("ProjectId", "SkillId")
+                        .HasName("AK_skills_project_id_skill_id");
+
+                    b.ToTable("skills", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.SteeringDirective", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<int?>("ActionAttempt")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<string>("CoordinatorRunId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("CreatedBy")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("DecidedAction")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("ExecStartedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("ExecutionAttempts")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<string>("Instruction")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Kind")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("RelayedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Severity")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Source")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("TargetChildRunId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("TargetScopeJson")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("TreeHash")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -1678,30 +2495,32 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<int>("ActionAttempt")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<int>("CheckpointWatermark")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset?>("ConfirmedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("EffectState")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("RunId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int>("SteeringDirectiveId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
@@ -1715,81 +2534,83 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<string>("AgentCharter")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("AssignedAgent")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ChildRunId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("DeclaredOutputPathsJson")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int>("InfrastructureRetryCount")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset?>("InfrastructureRetryEligibleAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("IsolationStrategy")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int?>("LastResetAttempt")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<int?>("LastResetDirectiveId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<string>("LockedOutAgents")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Phase")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("PriorChildRunId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int>("RecoveryAttempts")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<string>("RecoveryGuidance")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Scope")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("SelectedModelId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("SteeringRetentionUntil")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Title")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("WorkPlanId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
@@ -1802,13 +2623,15 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<int>("DependsOnSubtaskId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<int>("SubtaskId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
@@ -1822,39 +2645,39 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.UserCopilotBindingRecord", b =>
                 {
                     b.Property<string>("Id")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("id");
 
                     b.Property<DateTimeOffset>("BoundAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("bound_at");
 
                     b.Property<string>("CredentialReference")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_reference");
 
                     b.Property<string>("CredentialVersion")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("credential_version");
 
                     b.Property<DateTimeOffset?>("DeactivatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("deactivated_at");
 
                     b.Property<string>("EntraObjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<string>("GrantDigest")
                         .IsRequired()
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("grant_digest");
 
                     b.Property<int>("Status")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("status");
 
                     b.HasKey("Id");
@@ -1870,51 +2693,51 @@ namespace Agentweaver.Api.Migrations
             modelBuilder.Entity("Agentweaver.Api.Memory.UserModelProviderSettingsRecord", b =>
                 {
                     b.Property<string>("EntraObjectId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("entra_object_id");
 
                     b.Property<string>("ByokAzureApiVersion")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_azure_api_version");
 
                     b.Property<string>("ByokBaseUrl")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_base_url");
 
                     b.Property<string>("ByokCredentialReference")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_credential_reference");
 
                     b.Property<string>("ByokHeadersJson")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_headers_json");
 
                     b.Property<string>("ByokModel")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_model");
 
                     b.Property<string>("ByokName")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_name");
 
                     b.Property<string>("ByokProviderId")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_provider_id");
 
                     b.Property<string>("ByokType")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_type");
 
                     b.Property<string>("ByokWireApi")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("text")
                         .HasColumnName("byok_wire_api");
 
                     b.Property<int>("Preference")
-                        .HasColumnType("INTEGER")
+                        .HasColumnType("integer")
                         .HasColumnName("preference");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT")
+                        .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
 
                     b.HasKey("EntraObjectId");
@@ -1926,58 +2749,60 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<string>("AssemblyStage")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset?>("AssemblyStartedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("AssemblyStatusReason")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("AssemblyTerminalStage")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("CoordinatorPodId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("CoordinatorRunId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("HumanReviewRoundTrips")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<string>("IntegrationBranch")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("IsolationSummary")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int>("OutcomeSpecId")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<string>("ProjectId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int>("SteeringIterations")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("WorkflowId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -1988,22 +2813,106 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("WorkPlans");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.WorkflowCheckpointRecord", b =>
+                {
+                    b.Property<string>("StoreName")
+                        .HasColumnType("text")
+                        .HasColumnName("store_name");
+
+                    b.Property<string>("SessionId")
+                        .HasColumnType("text")
+                        .HasColumnName("session_id");
+
+                    b.Property<string>("CheckpointId")
+                        .HasColumnType("text")
+                        .HasColumnName("checkpoint_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("HasParentMetadata")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("has_parent_metadata");
+
+                    b.Property<string>("ParentCheckpointId")
+                        .HasColumnType("text")
+                        .HasColumnName("parent_checkpoint_id");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("StoreName", "SessionId", "CheckpointId");
+
+                    b.HasIndex("StoreName", "SessionId")
+                        .HasDatabaseName("IX_workflow_checkpoints_store_session");
+
+                    b.ToTable("workflow_checkpoints", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.WorkflowRunRecord", b =>
+                {
+                    b.Property<string>("WorkflowRunId")
+                        .HasColumnType("text")
+                        .HasColumnName("workflow_run_id");
+
+                    b.Property<string>("OrchestrationWorktreePath")
+                        .HasColumnType("text")
+                        .HasColumnName("orchestration_worktree_path");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("SubmittingUser")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("submitting_user");
+
+                    b.Property<string>("Task")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("task");
+
+                    b.HasKey("WorkflowRunId");
+
+                    b.HasIndex("ProjectId")
+                        .HasDatabaseName("IX_workflow_runs_project_id");
+
+                    b.ToTable("workflow_runs", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Runs.CoordinatorDeferredDecisionRecord", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("DecisionJson")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("RunId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -2017,25 +2926,27 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
                     b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("ExpiresAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("OwnerUser")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("RequestJson")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("RunId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -2051,25 +2962,27 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("EventType")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("PayloadJson")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("RunId")
                         .IsRequired()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<int>("Sequence")
-                        .HasColumnType("INTEGER");
+                        .HasColumnType("integer");
 
                     b.HasKey("Id");
 
@@ -2085,58 +2998,58 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<string>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ApplicationType")
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("ClientId")
                         .HasMaxLength(100)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(100)");
 
                     b.Property<string>("ClientSecret")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ClientType")
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("ConcurrencyToken")
                         .IsConcurrencyToken()
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("ConsentType")
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("DisplayName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("DisplayNames")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("JsonWebKeySet")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Permissions")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("PostLogoutRedirectUris")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Properties")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("RedirectUris")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Requirements")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Settings")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -2150,36 +3063,36 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<string>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ApplicationId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ConcurrencyToken")
                         .IsConcurrencyToken()
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("CreationDate")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Properties")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Scopes")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("Subject")
                         .HasMaxLength(400)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(400)");
 
                     b.Property<string>("Type")
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.HasKey("Id");
 
@@ -2192,34 +3105,34 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<string>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ConcurrencyToken")
                         .IsConcurrencyToken()
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("Description")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Descriptions")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("DisplayName")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("DisplayNames")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Name")
                         .HasMaxLength(200)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(200)");
 
                     b.Property<string>("Properties")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Resources")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 
@@ -2233,49 +3146,49 @@ namespace Agentweaver.Api.Migrations
                 {
                     b.Property<string>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ApplicationId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("AuthorizationId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("ConcurrencyToken")
                         .IsConcurrencyToken()
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("CreationDate")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("ExpirationDate")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Payload")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<string>("Properties")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("text");
 
                     b.Property<DateTime?>("RedemptionDate")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ReferenceId")
                         .HasMaxLength(100)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(100)");
 
                     b.Property<string>("Status")
                         .HasMaxLength(50)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(50)");
 
                     b.Property<string>("Subject")
                         .HasMaxLength(400)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(400)");
 
                     b.Property<string>("Type")
                         .HasMaxLength(150)
-                        .HasColumnType("TEXT");
+                        .HasColumnType("character varying(150)");
 
                     b.HasKey("Id");
 
@@ -2407,6 +3320,44 @@ namespace Agentweaver.Api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("FK_run_github_identity_snapshots_projects_project_id");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.SkillAssignmentRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_skill_assignments_projects_project_id");
+
+                    b.HasOne("Agentweaver.Api.Memory.SkillRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId", "SkillId")
+                        .HasPrincipalKey("ProjectId", "SkillId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_skill_assignments_skills_project_id_skill_id");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.SkillMarketplaceSourceRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_skill_marketplace_sources_projects_project_id");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.SkillRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("FK_skills_projects_project_id");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.Subtask", b =>

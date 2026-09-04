@@ -1,7 +1,7 @@
 namespace Agentweaver.Api.Memory;
 
 public enum GitHubAppKind { Repo, Copilot }
-public enum GitHubAuthorizationPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot, PlatformDefaultCopilot, UnattendedRepositoryInstallation }
+public enum GitHubAuthorizationPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot, PlatformDefaultCopilot, UnattendedRepositoryInstallation, UserCopilot }
 public enum GitHubCapabilityPurpose { InteractiveRepository, InteractiveCopilot, UnattendedRepository, UnattendedCopilot }
 public enum GitHubCapabilitySnapshotSourceKind { UserAuthorization, RepositoryGrant, CopilotBinding }
 public enum GitHubAuthorizationStatus { Pending, Redeeming, Completed, Failed, Expired }
@@ -163,6 +163,40 @@ public sealed class PlatformDefaultCopilotBindingRecord
     public GitHubBindingStatus Status { get; set; }
     public DateTimeOffset BoundAt { get; set; }
     public DateTimeOffset? DeactivatedAt { get; set; }
+}
+
+public sealed class UserCopilotBindingRecord
+{
+    public string Id { get; set; } = "";
+    public string EntraObjectId { get; set; } = "";
+    public string CredentialReference { get; set; } = "";
+    public string CredentialVersion { get; set; } = "";
+    public string GrantDigest { get; set; } = "";
+    public GitHubBindingStatus Status { get; set; }
+    public DateTimeOffset BoundAt { get; set; }
+    public DateTimeOffset? DeactivatedAt { get; set; }
+}
+
+public enum UserModelProviderPreference
+{
+    GitHubCopilot,
+    Byok,
+}
+
+public sealed class UserModelProviderSettingsRecord
+{
+    public string EntraObjectId { get; set; } = "";
+    public UserModelProviderPreference Preference { get; set; }
+    public string? ByokProviderId { get; set; }
+    public string? ByokName { get; set; }
+    public string? ByokType { get; set; }
+    public string? ByokBaseUrl { get; set; }
+    public string? ByokModel { get; set; }
+    public string? ByokWireApi { get; set; }
+    public string? ByokHeadersJson { get; set; }
+    public string? ByokAzureApiVersion { get; set; }
+    public string? ByokCredentialReference { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
 }
 
 public sealed class AutomationActivationRecord

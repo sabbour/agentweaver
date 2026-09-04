@@ -137,12 +137,13 @@ internal sealed record RepoAppInstallationAuthorizationTransaction(
     string CallbackCookieHash,
     string? BrowserSessionId);
 internal sealed record PlatformDefaultCopilotAuthorizationTransaction(string State, string EntraObjectId, long ExpiresAtUnixMilliseconds, string ReturnRouteKey, string PkceVerifierProtected, string CallbackCookieHash, string? BrowserSessionId);
+internal sealed record UserCopilotAuthorizationTransaction(string State, string EntraObjectId, long ExpiresAtUnixMilliseconds, string ReturnRouteKey, string PkceVerifierProtected, string CallbackCookieHash, string? BrowserSessionId);
 internal sealed record RepoAppCredentialReference(
     string Id,
     string CredentialReference,
     string CredentialVersion,
     DateTimeOffset CreatedAt);
-internal sealed record PlatformDefaultCopilotAuthorizationCompletion(
+internal sealed record CopilotAuthorizationCompletion(
     bool Completed,
     RepoAppCredentialReference? ReplacedCredential);
 internal sealed record CopilotBindingSnapshotSource(
@@ -396,6 +397,23 @@ public sealed class GitHubConnectionsPersistenceStore(
                         x.Purpose == GitHubAuthorizationPurpose.PlatformDefaultCopilot &&
                         x.ProjectId == null)
             .Select(x => new PlatformDefaultCopilotAuthorizationTransaction(
+                x.State,
+                x.EntraObjectId,
+                x.ExpiresAtUnixMilliseconds,
+                x.ReturnRouteKey,
+                x.PkceVerifierProtected,
+                x.CallbackCookieHash,
+                x.BrowserSessionId))
+            .SingleOrDefaultAsync(ct);
+    internal Task<UserCopilotAuthorizationTransaction?> GetUserCopilotAuthorizationTransactionAsync(
+        string state,
+        CancellationToken ct = default) =>
+        db.GitHubAuthorizations.AsNoTracking()
+            .Where(x => x.State == state &&
+                        x.AppKind == GitHubAppKind.Copilot &&
+                        x.Purpose == GitHubAuthorizationPurpose.UserCopilot &&
+                        x.ProjectId == null)
+            .Select(x => new UserCopilotAuthorizationTransaction(
                 x.State,
                 x.EntraObjectId,
                 x.ExpiresAtUnixMilliseconds,
@@ -832,7 +850,7 @@ public sealed class GitHubConnectionsPersistenceStore(
             catch (DbUpdateException) { await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false); db.ChangeTracker.Clear(); return false; }
         }
 
-    internal async Task<PlatformDefaultCopilotAuthorizationCompletion> CompletePlatformDefaultCopilotAuthorizationAsync(
+    internal async Task<CopilotAuthorizationCompletion> CompletePlatformDefaultCopilotAuthorizationAsync(
         string state,
         PlatformDefaultCopilotBindingRecord binding,
         GitHubAuditRecord audit,
@@ -851,6 +869,7 @@ public sealed class GitHubConnectionsPersistenceStore(
         {
             db.PlatformDefaultCopilotBindings.Add(binding);
         }
+
         else
         {
             if (existing.Status == GitHubBindingStatus.Active &&
@@ -892,6 +911,87 @@ public sealed class GitHubConnectionsPersistenceStore(
                 return new(false, null);
             }
 
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await tx.CommitAsync(ct).ConfigureAwait(false);
+            return new(true, replacedCredential);
+        }
+        catch (DbUpdateException)
+        {
+            await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            return new(false, null);
+        }
+    }
+
+    internal async Task<CopilotAuthorizationCompletion> CompleteUserCopilotAuthorizationAsync(
+        string state,
+        UserCopilotBindingRecord binding,
+        GitHubAuditRecord audit,
+        CancellationToken ct = default)
+    {
+        EnsureSafe(binding);
+        EnsureSafe(audit);
+        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        var now = DateTimeOffset.UtcNow;
+        var existing = await db.UserCopilotBindings
+            .SingleOrDefaultAsync(x => x.EntraObjectId == binding.EntraObjectId, ct)
+            .ConfigureAwait(false);
+        RepoAppCredentialReference? replacedCredential = null;
+        if (existing is null)
+        {
+            db.UserCopilotBindings.Add(binding);
+        }
+        else
+        {
+            if (existing.Status == GitHubBindingStatus.Active &&
+                existing.DeactivatedAt is null &&
+                (!string.Equals(existing.CredentialReference, binding.CredentialReference, StringComparison.Ordinal) ||
+                 !string.Equals(existing.CredentialVersion, binding.CredentialVersion, StringComparison.Ordinal)))
+            {
+                replacedCredential = new RepoAppCredentialReference(
+                    existing.Id, existing.CredentialReference, existing.CredentialVersion, existing.BoundAt);
+            }
+            existing.CredentialReference = binding.CredentialReference;
+            existing.CredentialVersion = binding.CredentialVersion;
+            existing.GrantDigest = binding.GrantDigest;
+            existing.Status = binding.Status;
+            existing.BoundAt = binding.BoundAt;
+            existing.DeactivatedAt = binding.DeactivatedAt;
+        }
+
+        var providerSettings = await db.UserModelProviderSettings
+            .SingleOrDefaultAsync(x => x.EntraObjectId == binding.EntraObjectId, ct)
+            .ConfigureAwait(false);
+        if (providerSettings is null)
+        {
+            db.UserModelProviderSettings.Add(new UserModelProviderSettingsRecord
+            {
+                EntraObjectId = binding.EntraObjectId,
+                Preference = UserModelProviderPreference.GitHubCopilot,
+                UpdatedAt = now,
+            });
+        }
+        else
+        {
+            providerSettings.Preference = UserModelProviderPreference.GitHubCopilot;
+            providerSettings.UpdatedAt = now;
+        }
+
+        db.GitHubAuditRecords.Add(audit);
+        try
+        {
+            var claimed = await db.GitHubAuthorizations
+                .Where(x => x.State == state && x.Status == GitHubAuthorizationStatus.Redeeming)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.Status, GitHubAuthorizationStatus.Completed)
+                    .SetProperty(x => x.CompletedAt, now), ct)
+                .ConfigureAwait(false);
+            if (claimed != 1)
+            {
+                await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                db.ChangeTracker.Clear();
+                return new(false, null);
+            }
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             await tx.CommitAsync(ct).ConfigureAwait(false);
             return new(true, replacedCredential);
@@ -978,6 +1078,38 @@ public sealed class GitHubConnectionsPersistenceStore(
         return binding;
     }
 
+    internal async Task<RepoAppCredentialReference?> RevokeUserCopilotBindingAsync(
+        string entraObjectId,
+        GitHubAuditRecord audit,
+        CancellationToken ct = default)
+    {
+        EnsureSafe(audit);
+        await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        var binding = await db.UserCopilotBindings
+            .Where(x => x.EntraObjectId == entraObjectId &&
+                        x.Status == GitHubBindingStatus.Active &&
+                        x.DeactivatedAt == null)
+            .Select(x => new RepoAppCredentialReference(x.Id, x.CredentialReference, x.CredentialVersion, x.BoundAt))
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (binding is null)
+        {
+            await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            return null;
+        }
+        var now = DateTimeOffset.UtcNow;
+        db.GitHubAuditRecords.Add(audit);
+        await db.UserCopilotBindings
+            .Where(x => x.Id == binding.Id && x.Status == GitHubBindingStatus.Active)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, GitHubBindingStatus.Revoked)
+                .SetProperty(x => x.DeactivatedAt, now), ct)
+            .ConfigureAwait(false);
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return binding;
+    }
+
     /// <summary>
     /// Returns the project's own active GitHub Copilot binding, if any, regardless of which caller
     /// bound it. Used by <see cref="EffectiveModelProviderResolver"/> to decide whether a project's
@@ -1005,6 +1137,17 @@ public sealed class GitHubConnectionsPersistenceStore(
                 x.Id, x.CredentialReference, x.CredentialVersion, x.BoundAt))
             .SingleOrDefaultAsync(ct);
 
+    internal Task<RepoAppCredentialReference?> GetActiveUserCopilotBindingAsync(
+        string entraObjectId,
+        CancellationToken ct = default) =>
+        db.UserCopilotBindings.AsNoTracking()
+            .Where(x => x.EntraObjectId == entraObjectId &&
+                        x.Status == GitHubBindingStatus.Active &&
+                        x.DeactivatedAt == null)
+            .Select(x => new RepoAppCredentialReference(
+                x.Id, x.CredentialReference, x.CredentialVersion, x.BoundAt))
+            .SingleOrDefaultAsync(ct);
+
     internal async Task<IReadOnlyList<RepoAppCredentialReference>> ListActiveCopilotBindingsAsync(
         string? excludeBindingId,
         CancellationToken ct = default)
@@ -1025,7 +1168,15 @@ public sealed class GitHubConnectionsPersistenceStore(
                 x.Id, x.CredentialReference, x.CredentialVersion, x.BoundAt))
             .ToListAsync(ct)
             .ConfigureAwait(false);
-        return projectBindings.Concat(platformBindings).ToArray();
+        var userBindings = await db.UserCopilotBindings.AsNoTracking()
+            .Where(x => x.Status == GitHubBindingStatus.Active &&
+                        x.DeactivatedAt == null &&
+                        x.Id != excludeBindingId)
+            .Select(x => new RepoAppCredentialReference(
+                x.Id, x.CredentialReference, x.CredentialVersion, x.BoundAt))
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        return projectBindings.Concat(platformBindings).Concat(userBindings).ToArray();
     }
 
     /// <summary>
@@ -1468,6 +1619,15 @@ public sealed class GitHubConnectionsPersistenceStore(
                                    x.GrantDigest == snapshot.GrantDigest &&
                                    x.Status == GitHubBindingStatus.Active &&
                                    x.DeactivatedAt == null, ct).ConfigureAwait(false)
+                : snapshot.ProjectId is null &&
+                  snapshot.SourceBindingId!.StartsWith("user-", StringComparison.Ordinal)
+                    ? await db.UserCopilotBindings.AsNoTracking()
+                        .AnyAsync(x => x.Id == snapshot.SourceBindingId &&
+                                       x.CredentialReference == snapshot.CredentialReference &&
+                                       x.CredentialVersion == snapshot.CredentialVersion &&
+                                       x.GrantDigest == snapshot.GrantDigest &&
+                                       x.Status == GitHubBindingStatus.Active &&
+                                       x.DeactivatedAt == null, ct).ConfigureAwait(false)
                 : await db.ProjectCopilotBindings.AsNoTracking()
                     .AnyAsync(x => x.Id == snapshot.SourceBindingId &&
                                    x.ProjectId == snapshot.ProjectId &&
@@ -1788,7 +1948,7 @@ public sealed class GitHubConnectionsPersistenceStore(
                 snapshot.RunId == runId &&
                 snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot, ct)
             .ConfigureAwait(false);
-        if (MatchesPlatformDefaultBinding(existing, binding))
+        if (MatchesUnscopedCopilotBinding(existing, binding))
             return existing;
 
         if (existing is not null)
@@ -1830,7 +1990,7 @@ public sealed class GitHubConnectionsPersistenceStore(
                 snapshot.RunId == runId &&
                 snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot, ct)
             .ConfigureAwait(false);
-        return MatchesPlatformDefaultBinding(refreshed, binding)
+        return MatchesUnscopedCopilotBinding(refreshed, binding)
             ? refreshed
             : null;
     }
@@ -1869,7 +2029,116 @@ public sealed class GitHubConnectionsPersistenceStore(
         }, ct).ConfigureAwait(false);
     }
 
-    private static bool MatchesPlatformDefaultBinding(
+    internal async Task<bool> TryCaptureUserUnattendedCopilotSnapshotAsync(
+        string runId,
+        string entraObjectId,
+        CancellationToken ct = default)
+    {
+        var binding = await db.UserCopilotBindings.AsNoTracking()
+            .Where(x => x.EntraObjectId == entraObjectId &&
+                        x.Status == GitHubBindingStatus.Active &&
+                        x.DeactivatedAt == null)
+            .Select(x => new CopilotBindingSnapshotSource(
+                x.Id, x.CredentialReference, x.CredentialVersion, x.GrantDigest))
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (binding is null)
+            return false;
+
+        return await TryInsertCapabilitySnapshotAsync(new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value,
+            RunId = runId,
+            Purpose = GitHubCapabilityPurpose.UnattendedCopilot,
+            AppKind = GitHubAppKind.Copilot,
+            SourceKind = GitHubCapabilitySnapshotSourceKind.CopilotBinding,
+            ProjectId = null,
+            SourceBindingId = binding.Id,
+            CredentialReference = binding.CredentialReference,
+            CredentialVersion = binding.CredentialVersion,
+            GrantDigest = binding.GrantDigest,
+            CapturedAt = DateTimeOffset.UtcNow,
+        }, ct).ConfigureAwait(false);
+    }
+
+    internal async Task<RunGitHubCapabilitySnapshotRecord?> RefreshUserUnattendedCopilotSnapshotAsync(
+        string runId,
+        string entraObjectId,
+        CancellationToken ct = default)
+    {
+        var binding = await db.UserCopilotBindings.AsNoTracking()
+            .Where(x => x.EntraObjectId == entraObjectId &&
+                        x.Status == GitHubBindingStatus.Active &&
+                        x.DeactivatedAt == null)
+            .Select(x => new CopilotBindingSnapshotSource(
+                x.Id, x.CredentialReference, x.CredentialVersion, x.GrantDigest))
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+
+        if (binding is null)
+        {
+            await db.RunGitHubCapabilitySnapshots
+                .Where(snapshot =>
+                    snapshot.RunId == runId &&
+                    snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot)
+                .ExecuteDeleteAsync(ct)
+                .ConfigureAwait(false);
+            return null;
+        }
+
+        var existing = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+            .SingleOrDefaultAsync(snapshot =>
+                snapshot.RunId == runId &&
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot, ct)
+            .ConfigureAwait(false);
+        if (MatchesUnscopedCopilotBinding(existing, binding))
+            return existing;
+
+        if (existing is not null)
+        {
+            await db.RunGitHubCapabilitySnapshots
+                .Where(snapshot =>
+                    snapshot.RunId == runId &&
+                    snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot)
+                .ExecuteDeleteAsync(ct)
+                .ConfigureAwait(false);
+        }
+
+        var inserted = await TryInsertCapabilitySnapshotAsync(new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value,
+            RunId = runId,
+            Purpose = GitHubCapabilityPurpose.UnattendedCopilot,
+            AppKind = GitHubAppKind.Copilot,
+            SourceKind = GitHubCapabilitySnapshotSourceKind.CopilotBinding,
+            ProjectId = null,
+            SourceBindingId = binding.Id,
+            CredentialReference = binding.CredentialReference,
+            CredentialVersion = binding.CredentialVersion,
+            GrantDigest = binding.GrantDigest,
+            CapturedAt = DateTimeOffset.UtcNow,
+        }, ct).ConfigureAwait(false);
+
+        if (inserted)
+        {
+            return await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+                .SingleAsync(snapshot =>
+                    snapshot.RunId == runId &&
+                    snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot, ct)
+                .ConfigureAwait(false);
+        }
+
+        var refreshed = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+            .SingleOrDefaultAsync(snapshot =>
+                snapshot.RunId == runId &&
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot, ct)
+            .ConfigureAwait(false);
+        return MatchesUnscopedCopilotBinding(refreshed, binding)
+            ? refreshed
+            : null;
+    }
+
+    private static bool MatchesUnscopedCopilotBinding(
         RunGitHubCapabilitySnapshotRecord? snapshot,
         CopilotBindingSnapshotSource binding) =>
         snapshot is not null &&
@@ -2207,6 +2476,16 @@ public sealed class GitHubConnectionsPersistenceStore(
                 binding.DeactivatedAt == null, ct).ConfigureAwait(false);
         }
 
+        if (string.IsNullOrWhiteSpace(projectId) &&
+            bindingId.StartsWith("user-", StringComparison.Ordinal))
+        {
+            return await db.UserCopilotBindings.AsNoTracking().AnyAsync(binding =>
+                binding.Id == bindingId &&
+                binding.GrantDigest == grantDigest &&
+                binding.Status == GitHubBindingStatus.Active &&
+                binding.DeactivatedAt == null, ct).ConfigureAwait(false);
+        }
+
         if (string.IsNullOrWhiteSpace(projectId))
             return false;
 
@@ -2322,7 +2601,9 @@ public sealed class GitHubConnectionsPersistenceStore(
                 snapshot.RepositoryId is null &&
                 (string.Equals(snapshot.SourceBindingId, PlatformDefaultCopilotBindingRecord.SingletonId, StringComparison.Ordinal)
                     ? snapshot.ProjectId is null || !string.IsNullOrWhiteSpace(snapshot.ProjectId)
-                    : !string.IsNullOrWhiteSpace(snapshot.ProjectId)) &&
+                    : snapshot.SourceBindingId.StartsWith("user-", StringComparison.Ordinal)
+                        ? snapshot.ProjectId is null
+                        : !string.IsNullOrWhiteSpace(snapshot.ProjectId)) &&
                 snapshot.CredentialReference is not null &&
                 snapshot.CredentialVersion is not null,
             _ => false,

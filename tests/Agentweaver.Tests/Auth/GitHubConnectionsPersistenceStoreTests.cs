@@ -966,6 +966,80 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     }
 
     [Fact]
+    public async Task CapabilitySnapshotLifecycle_UserScopedRunRefreshesOnlyTheUsersBinding()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var secrets = new SeededCopilotCredentialStore();
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "platform-version",
+            GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        db.UserCopilotBindings.Add(new UserCopilotBindingRecord
+        {
+            Id = "user-binding",
+            EntraObjectId = "entra",
+            CredentialReference = "copilot-app-user-version",
+            CredentialVersion = "user-version",
+            GrantDigest = "user-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence, secrets);
+        var run = RunForSnapshotLifecycle(projectId: null);
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
+            run, CancellationToken.None, platformScoped: true, userScopedEntraObjectId: "entra"))
+            .Should().BeTrue();
+        (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString())).Should().ContainSingle(snapshot =>
+            snapshot.SourceBindingId == "user-binding" &&
+            snapshot.CredentialVersion == "user-version");
+
+        await secrets.SetSecretAsync(
+            "copilot-app-user-version-2",
+            JsonSerializer.Serialize(new
+            {
+                status = "signed-in",
+                accessToken = "user-token-2",
+                expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                githubLogin = "user-2",
+            }));
+        var binding = await db.UserCopilotBindings.SingleAsync();
+        binding.CredentialReference = "copilot-app-user-version-2";
+        binding.CredentialVersion = "user-version-2";
+        binding.GrantDigest = "user-digest-2";
+        binding.BoundAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
+            run, CancellationToken.None, platformScoped: true, userScopedEntraObjectId: "entra"))
+            .Should().BeTrue("the personal snapshot must refresh when that user's binding changes");
+        (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString())).Should().ContainSingle(snapshot =>
+            snapshot.SourceBindingId == "user-binding" &&
+            snapshot.CredentialVersion == "user-version-2");
+
+        var revokedAt = DateTimeOffset.UtcNow;
+        await db.UserCopilotBindings.ExecuteUpdateAsync(update => update
+            .SetProperty(userBinding => userBinding.Status, GitHubBindingStatus.Revoked)
+            .SetProperty(userBinding => userBinding.DeactivatedAt, revokedAt));
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
+            run, CancellationToken.None, platformScoped: true, userScopedEntraObjectId: "entra"))
+            .Should().BeFalse("a personal session must never fall back to the platform Copilot credential");
+        (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString())).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenGitHubOriginProjectHasNoHistoryAtAll()
     {
         // Smith's proven defect: a GitHub-origin project that has never recorded ANY GitHub App
@@ -1167,6 +1241,7 @@ public sealed class GitHubConnectionsPersistenceStoreTests
         {
             ["copilot-app-project-project-version"] = Credential("project-token", "project-user"),
             ["copilot-app-platform-default-version"] = Credential("platform-token", "platform-user"),
+            ["copilot-app-user-version"] = Credential("user-token", "user"),
         };
 
         public Task<SecretGetResult> GetSecretAsync(string key, CancellationToken ct = default) =>

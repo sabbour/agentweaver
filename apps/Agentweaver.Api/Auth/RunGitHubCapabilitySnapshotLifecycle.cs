@@ -106,7 +106,10 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
     /// continues to require ITS OWN project-bound capability snapshot.
     /// </param>
     internal async Task<bool> PrepareForUnattendedCopilotLaunchAsync(
-        Run run, CancellationToken ct, bool platformScoped = false)
+        Run run,
+        CancellationToken ct,
+        bool platformScoped = false,
+        string? userScopedEntraObjectId = null)
     {
         RunGitHubCapabilitySnapshotRecord? copilotSnapshot;
         if (run.ProjectId is { } && !platformScoped)
@@ -120,9 +123,11 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
         }
         else
         {
-            copilotSnapshot = await persistence
-                .RefreshPlatformDefaultUnattendedCopilotSnapshotAsync(run.Id.ToString(), ct)
-                .ConfigureAwait(false);
+            copilotSnapshot = !string.IsNullOrWhiteSpace(userScopedEntraObjectId)
+                ? await persistence.RefreshUserUnattendedCopilotSnapshotAsync(
+                    run.Id.ToString(), userScopedEntraObjectId, ct).ConfigureAwait(false)
+                : await persistence.RefreshPlatformDefaultUnattendedCopilotSnapshotAsync(
+                    run.Id.ToString(), ct).ConfigureAwait(false);
             if (copilotSnapshot is null)
                 return false;
         }

@@ -23,6 +23,8 @@ public static class EffectiveModelProviderProvenance
     public const string KindByok = "byok";
     public const string KindProjectGitHubCopilot = "project_github_copilot";
     public const string KindPlatformGitHubCopilot = "platform_github_copilot";
+    public const string KindUserGitHubCopilot = "user_github_copilot";
+    public const string KindUserByok = "user_byok";
     public const string KindUnavailable = "unavailable";
 
     /// <summary>
@@ -31,14 +33,18 @@ public static class EffectiveModelProviderProvenance
     /// closed still reports the provider family it was fenced against.
     /// </summary>
     public static ModelSource ToModelSource(this EffectiveModelProviderResult result) =>
-        result is EffectiveModelProviderResult.Byok ? ModelSource.Byok : ModelSource.GitHubCopilot;
+        result is EffectiveModelProviderResult.Byok or EffectiveModelProviderResult.UserByok
+            ? ModelSource.Byok
+            : ModelSource.GitHubCopilot;
 
     /// <summary>The stable provider-kind discriminator for <paramref name="result"/>.</summary>
     public static string ProviderKind(this EffectiveModelProviderResult result) => result switch
     {
         EffectiveModelProviderResult.Byok => KindByok,
+        EffectiveModelProviderResult.UserByok => KindUserByok,
         EffectiveModelProviderResult.ProjectGitHubCopilot => KindProjectGitHubCopilot,
         EffectiveModelProviderResult.PlatformGitHubCopilot => KindPlatformGitHubCopilot,
+        EffectiveModelProviderResult.UserGitHubCopilot => KindUserGitHubCopilot,
         _ => KindUnavailable,
     };
 
@@ -49,20 +55,28 @@ public static class EffectiveModelProviderProvenance
     public static string? ProviderId(this EffectiveModelProviderResult result) => result switch
     {
         EffectiveModelProviderResult.Byok byok => byok.ProviderId,
+        EffectiveModelProviderResult.UserByok byok => byok.ProviderId,
         EffectiveModelProviderResult.ProjectGitHubCopilot project => project.BindingId,
         EffectiveModelProviderResult.PlatformGitHubCopilot platform => platform.BindingId,
+        EffectiveModelProviderResult.UserGitHubCopilot user => user.BindingId,
         _ => null,
     };
 
     /// <summary>The BYOK provider type (<c>openai</c>/<c>azure</c>/<c>anthropic</c>), else null.</summary>
     public static string? ProviderType(this EffectiveModelProviderResult result) =>
-        result is EffectiveModelProviderResult.Byok byok ? byok.ProviderType : null;
+        result switch
+        {
+            EffectiveModelProviderResult.Byok byok => byok.ProviderType,
+            EffectiveModelProviderResult.UserByok byok => byok.ProviderType,
+            _ => null,
+        };
 
     /// <summary>The GitHub account login backing a Copilot binding, else null.</summary>
     public static string? GitHubLogin(this EffectiveModelProviderResult result) => result switch
     {
         EffectiveModelProviderResult.ProjectGitHubCopilot project => project.GitHubLogin,
         EffectiveModelProviderResult.PlatformGitHubCopilot platform => platform.GitHubLogin,
+        EffectiveModelProviderResult.UserGitHubCopilot user => user.GitHubLogin,
         _ => null,
     };
 

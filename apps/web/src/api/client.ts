@@ -21,6 +21,7 @@ import type {
   ByokProviderConfig,
   ByokProviderListResponse,
   ByokProviderRequest,
+  UserAiAccessStatus,
   Blueprint,
   BlueprintSkillDefaultsPreviewResponse,
   BoardDto,
@@ -587,6 +588,30 @@ export class AgentweaverApiClient {
 
   deactivateByokProviders(): Promise<void> {
     return this.request<void>('POST', '/admin/byok-providers/deactivate');
+  }
+
+  getUserAiAccess(): Promise<UserAiAccessStatus> {
+    return this.request<UserAiAccessStatus>('GET', '/account/ai-access');
+  }
+
+  setUserByokProvider(req: ByokProviderRequest): Promise<Omit<ByokProviderConfig, 'is_active'>> {
+    return this.request<Omit<ByokProviderConfig, 'is_active'>>('PUT', '/account/ai-access/byok', req);
+  }
+
+  removeUserByokProvider(): Promise<void> {
+    return this.request<void>('DELETE', '/account/ai-access/byok');
+  }
+
+  setUserAiPreference(preference: 'github-copilot' | 'byok'): Promise<void> {
+    return this.request<void>('POST', `/account/ai-access/preference/${preference}`);
+  }
+
+  beginUserCopilotAuthorization(): Promise<{ authorization_url: string }> {
+    return this.request<{ authorization_url: string }>('POST', '/account/ai-access/copilot/begin');
+  }
+
+  disconnectUserCopilot(): Promise<void> {
+    return this.request<void>('POST', '/account/ai-access/copilot/disconnect');
   }
 
   beginPlatformDefaultCopilotAuthorization(): Promise<{
