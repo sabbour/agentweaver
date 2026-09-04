@@ -188,6 +188,26 @@ The exact service/store calls differ by feature, but the responsibilities stay s
 
 Where this lives: `apps/Agentweaver.Api/Endpoints/`; `apps/Agentweaver.Api/Workflows/`; `apps/Agentweaver.Api/ReviewPolicies/`; `apps/Agentweaver.Api/Diagnostics/`; `apps/Agentweaver.Api/Metrics/`.
 
+### Effective model-provider context
+
+Before a first-party UI starts a generative action, it calls
+`POST /api/ai/execution-context` with the operation name and, for project-scoped work, the
+project id. The endpoint does not accept prompts and does not start execution. It resolves the
+same project, platform, or user provider context used by the execution layer and returns a redacted
+`effective_model_provider` object for an accessible **Expected provider** hint.
+
+The contract distinguishes where the action was resolved from where the provider is configured.
+For example, a workflow-generation action in a project can return
+`resolution_scope: "project"`, `provider_scope: "platform"`, and `provider_kind: "byok"` when
+the project inherits deployment-wide BYOK. `provider_key` is an opaque comparison value and must
+never be displayed.
+
+Run-associated execution persists `run.model_provider_resolved`. `GET /api/runs/{id}` projects the
+latest durable event as `effective_model_provider`; it returns `null` when no resolution was
+recorded and never invents provider identity from the coarse `Run.ModelSource` field. Assistant
+creation and every Assistant turn emit the event so a provider switch is visible even when the
+conversation keeps the same run id.
+
 ## Streaming and Durable Run Events
 
 ### Problem solved

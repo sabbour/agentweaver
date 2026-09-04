@@ -47,6 +47,9 @@ public sealed class AssistantRunEndpointsTests
         var runId = body.GetProperty("run_id").GetString();
         runId.Should().NotBeNullOrWhiteSpace();
         body.GetProperty("status").GetString().Should().Be("in_progress");
+        var provider = body.GetProperty("effective_model_provider");
+        provider.GetProperty("provider_kind").GetString().Should().Be("unavailable");
+        provider.GetProperty("resolution_scope").GetString().Should().Be("platform");
 
         // The conversation is persisted as a lightweight operator run in the real run store.
         var runStore = factory.Services.GetRequiredService<IRunStore>();
@@ -56,6 +59,14 @@ public sealed class AssistantRunEndpointsTests
         run.SubmittingUser.Should().Be(AgentweaverWebApplicationFactory.TestUser);
         run.ParentRunId.Should().BeNull("an operator run has no parent and no work plan");
         run.Status.Should().Be(RunStatus.InProgress);
+
+        var events = await GetEventsAsync(client, runId!);
+        events.Should().Contain(e => e.Type == EventTypes.RunModelProviderResolved,
+            "Assistant creation must publish the provider context before any optional opening turn");
+
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+        detail.GetProperty("effective_model_provider").GetProperty("provider_kind").GetString()
+            .Should().Be("unavailable");
     }
 
     [Fact]

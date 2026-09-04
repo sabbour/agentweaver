@@ -68,6 +68,7 @@ public static class AssistantEndpoints
                 {
                     RunId = result.RunId.ToString(),
                     Status = result.Status.ToApiString(),
+                    EffectiveModelProvider = result.EffectiveModelProvider,
                     Message = result.FirstTurn?.Message,
                     ToolsInvoked = result.FirstTurn?.ToolNamesInvoked,
                 }, statusCode: StatusCodes.Status201Created);
