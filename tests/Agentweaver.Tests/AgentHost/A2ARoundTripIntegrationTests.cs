@@ -559,6 +559,7 @@ public sealed class A2ARoundTripIntegrationTests
             text.Should().Be("done: please run the tool");
 
             received.Select(r => r.Type).Should().Contain(EventTypes.ToolCall)
+                .And.Contain(EventTypes.AgentMessageDelta)
                 .And.Contain(EventTypes.ToolApprovalRequired)
                 .And.Contain(EventTypes.ToolApprovalResolved)
                 .And.Contain(EventTypes.McpBrokerTokenRefreshRequired)
@@ -568,6 +569,8 @@ public sealed class A2ARoundTripIntegrationTests
 
             var resolved = received.First(r => r.Type == EventTypes.ToolApprovalResolved);
             JsonSerializer.Serialize(resolved.Payload).Should().Contain("\"approved\":true");
+            JsonSerializer.Serialize(received.First(r => r.Type == EventTypes.AgentMessageDelta).Payload)
+                .Should().Contain("done: please run the tool");
             JsonSerializer.Serialize(received.First(r => r.Type == EventTypes.McpBrokerTokenRefreshRequired).Payload)
                 .Should().NotContain("broker-token-renewed");
         }
@@ -894,7 +897,10 @@ public sealed class A2ARoundTripIntegrationTests
             if (sink is not null)
                 await sink.OnToolResultAsync(ToolName, success: approved, ct).ConfigureAwait(false);
 
-            return new OperatorAssistantResponse($"done: {request.Message}", new[] { ToolName });
+            var reply = $"done: {request.Message}";
+            if (sink is not null)
+                await sink.OnAssistantTextDeltaAsync(reply, ct).ConfigureAwait(false);
+            return new OperatorAssistantResponse(reply, new[] { ToolName });
         }
     }
 

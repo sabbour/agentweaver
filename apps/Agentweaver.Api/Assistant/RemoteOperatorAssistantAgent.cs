@@ -266,7 +266,7 @@ public sealed class RemoteOperatorAssistantAgent(
     /// <c>run.failed</c> remains on the internal A2A path only: persisting it on the public operator
     /// conversation stream would incorrectly terminalize an otherwise retryable conversation.
     /// </summary>
-    private async Task DrainAsync(
+    internal async Task DrainAsync(
         string runId,
         ChannelReader<RunEvent> reader,
         IOperatorAssistantTurnSink? sink,
@@ -282,6 +282,11 @@ public sealed class RemoteOperatorAssistantAgent(
 
             switch (runEvent.Type)
             {
+                case EventTypes.AgentMessageDelta:
+                    if (TryGetString(payload, "delta", out var delta) && sink is not null)
+                        await sink.OnAssistantTextDeltaAsync(delta, ct).ConfigureAwait(false);
+                    break;
+
                 case EventTypes.ToolCall:
                     if (TryGetString(payload, "name", out var callName))
                     {

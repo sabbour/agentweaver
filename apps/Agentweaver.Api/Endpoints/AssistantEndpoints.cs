@@ -61,7 +61,8 @@ public static class AssistantEndpoints
                     request.RunId,
                     request.ModelId,
                     ct,
-                    resumeFromRunId: request.ResumeFromRunId).ConfigureAwait(false);
+                    resumeFromRunId: request.ResumeFromRunId,
+                    deferFirstTurn: request.DeferFirstTurn).ConfigureAwait(false);
 
                 return Results.Json(new StartAssistantRunResponse
                 {

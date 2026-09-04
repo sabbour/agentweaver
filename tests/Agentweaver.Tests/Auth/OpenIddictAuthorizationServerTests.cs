@@ -169,6 +169,62 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
     }
 
     [Fact]
+    public async Task Authorization_ConsentPageShowsClientPermissionsAndSignedInIdentity()
+    {
+        const string redirectUri = "http://127.0.0.1:49161/callback";
+        const string subject = "consent-page-user";
+        using var registration = await _client.PostAsJsonAsync("/oauth/register", new
+        {
+            client_name = "Desktop MCP client",
+            redirect_uris = new[] { redirectUri },
+            scope = "mcp:invoke offline_access",
+        });
+        var clientId = (await registration.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("client_id").GetString()!;
+        var sessionId = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.BrowserEntraSessions.Add(new BrowserEntraSession
+            {
+                Id = sessionId,
+                EntraObjectId = subject,
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var query = QueryString.Create(new Dictionary<string, string?>
+        {
+            ["client_id"] = clientId,
+            ["redirect_uri"] = redirectUri,
+            ["response_type"] = "code",
+            ["scope"] = "mcp:invoke offline_access",
+            ["code_challenge"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ["code_challenge_method"] = "S256",
+            ["resource"] = "http://localhost:5000/mcp",
+        });
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/oauth/authorize" + query);
+        request.Headers.Add("Cookie", $"{BrowserEntraSessionService.CookieName}={sessionId}");
+        using var response = await _client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var policy = response.Headers.GetValues("Content-Security-Policy").Single();
+        var html = await response.Content.ReadAsStringAsync();
+        html.Should().Contain("<title>Authorize Desktop MCP client | Agentweaver</title>");
+        html.Should().Contain("Requesting application");
+        html.Should().Contain($"Client ID: {clientId}");
+        html.Should().Contain("Use Agentweaver MCP tools");
+        html.Should().Contain("Stay connected");
+        html.Should().Contain($"<strong>{subject}</strong>");
+        html.Should().Contain("value=\"approve\">Allow</button>");
+        html.Should().Contain("value=\"deny\">Deny</button>");
+        var styleNonce = Regex.Match(html, "<style nonce=\"([^\"]+)\">").Groups[1].Value;
+        styleNonce.Should().NotBeNullOrWhiteSpace();
+        policy.Should().Contain($"style-src 'nonce-{styleNonce}'");
+    }
+
+    [Fact]
     public async Task Token_RequiresExactlyCanonicalResource()
     {
         var clientId = await RegisterClientAsync("http://127.0.0.1:49160/callback");

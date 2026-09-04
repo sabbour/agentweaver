@@ -4,10 +4,13 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Domain;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Agentweaver.Tests.Assistant;
 
@@ -175,6 +178,31 @@ public sealed class RemoteOperatorAssistantAgentTests
         lifecycle.Refreshes.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task DrainAsync_ForwardsAgentMessageDeltasToTheRunSink()
+    {
+        var lifecycle = new RecordingPodLifecycle();
+        var agent = NewAgent(lifecycle);
+        var channel = Channel.CreateUnbounded<RunEvent>();
+        await channel.Writer.WriteAsync(new RunEvent(
+            1,
+            EventTypes.AgentMessageDelta,
+            JsonSerializer.SerializeToElement(new { delta = "partial reply" })));
+        channel.Writer.Complete();
+        var sink = new RecordingSink();
+
+        await agent.DrainAsync(
+            "conversation-streaming",
+            channel.Reader,
+            sink,
+            [],
+            Request("conversation-streaming", "broker-token"),
+            lifecycle,
+            CancellationToken.None);
+
+        sink.Deltas.Should().Equal("partial reply");
+    }
+
     private static OperatorAssistantRequest Request(
         string conversationId,
         string mcpBrokerToken,
@@ -245,5 +273,32 @@ public sealed class RemoteOperatorAssistantAgentTests
     {
         public HttpClient CreateClient(string name) =>
             throw new InvalidOperationException("HTTP should not be reached when endpoint resolution fails.");
+    }
+
+    private sealed class RecordingSink : IOperatorAssistantTurnSink
+    {
+        public List<string> Deltas { get; } = [];
+
+        public ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct)
+        {
+            Deltas.Add(delta);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask OnToolCallAsync(string toolName, string? argumentsJson, CancellationToken ct) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnToolResultAsync(string toolName, bool success, CancellationToken ct) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnMcpBrokerTokenRefreshRequiredAsync(CancellationToken ct) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask<bool> OnApprovalRequiredAsync(
+            string requestId,
+            string toolName,
+            string? argumentsJson,
+            CancellationToken ct) =>
+            ValueTask.FromResult(true);
     }
 }

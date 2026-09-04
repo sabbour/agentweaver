@@ -875,6 +875,97 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     }
 
     [Fact]
+    public async Task CapabilitySnapshotLifecycle_PlatformScopedRunRechecksWhenPlatformBindingIsConfiguredLater()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var secrets = new SeededCopilotCredentialStore();
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence, secrets);
+        var run = RunForSnapshotLifecycle(projectId: null);
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeFalse(
+            "a session opened before any platform provider exists must fail closed");
+        (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString())).Should().BeEmpty(
+            "a failed platform-scoped launch must not pin a fake snapshot for a provider that does not exist");
+
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "platform-version",
+            GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeTrue(
+            "the same session must pick up a platform binding that is configured later");
+        (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString())).Should().ContainSingle(snapshot =>
+            snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+            snapshot.SourceBindingId == PlatformDefaultCopilotBindingRecord.SingletonId &&
+            snapshot.ProjectId == null &&
+            snapshot.CredentialReference == "copilot-app-platform-default-version" &&
+            snapshot.CredentialVersion == "platform-version" &&
+            snapshot.GrantDigest == "platform-digest");
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_PlatformScopedRunRefreshesAStalePlatformSnapshot()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        await using var db = new MemoryDbContext(options);
+        var secrets = new SeededCopilotCredentialStore();
+        db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+        {
+            Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            EntraObjectId = "platform-admin",
+            CredentialReference = "copilot-app-platform-default-version",
+            CredentialVersion = "platform-version",
+            GrantDigest = "platform-digest",
+            Status = GitHubBindingStatus.Active,
+            BoundAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var lifecycle = CreateLifecycle(db, persistence, secrets);
+        var run = RunForSnapshotLifecycle(projectId: null);
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeTrue();
+
+        await secrets.SetSecretAsync(
+            "copilot-app-platform-default-version-2",
+            JsonSerializer.Serialize(new
+            {
+                status = "signed-in",
+                accessToken = "platform-token-2",
+                expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                githubLogin = "platform-user-2",
+            }));
+        var binding = await db.PlatformDefaultCopilotBindings.SingleAsync();
+        binding.CredentialReference = "copilot-app-platform-default-version-2";
+        binding.CredentialVersion = "platform-version-2";
+        binding.GrantDigest = "platform-digest-2";
+        binding.BoundAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+
+        (await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, CancellationToken.None)).Should().BeTrue(
+            "the run-bound platform snapshot must be refreshed when the platform binding changes");
+        (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString())).Should().ContainSingle(snapshot =>
+            snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+            snapshot.SourceBindingId == PlatformDefaultCopilotBindingRecord.SingletonId &&
+            snapshot.ProjectId == null &&
+            snapshot.CredentialReference == "copilot-app-platform-default-version-2" &&
+            snapshot.CredentialVersion == "platform-version-2" &&
+            snapshot.GrantDigest == "platform-digest-2");
+    }
+
+    [Fact]
     public async Task CapabilitySnapshotLifecycle_RootChildRetryAndResumeDenyWhenGitHubOriginProjectHasNoHistoryAtAll()
     {
         // Smith's proven defect: a GitHub-origin project that has never recorded ANY GitHub App

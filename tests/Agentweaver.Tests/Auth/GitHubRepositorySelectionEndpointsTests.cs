@@ -300,7 +300,7 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                 Content = new StringContent(
                     request.RequestUri!.AbsolutePath switch
                     {
-                        "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/installation/repositories","permissions":{"administration":"write"}}]}""",
+                        "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/user/installations/72/repositories","permissions":{"administration":"write"}}]}""",
                         "/app/installations/72/access_tokens" => """{"token":"ghs_installation_token","expires_at":"2030-01-01T00:00:00Z"}""",
                         "/installation/repositories" => """{"repositories":[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
                         "/user/repos" when request.Method == HttpMethod.Post => """{"full_name":"octo/new-repo","clone_url":"https://github.com/octo/new-repo.git"}""",

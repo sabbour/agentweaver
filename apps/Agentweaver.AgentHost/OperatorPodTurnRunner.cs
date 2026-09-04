@@ -126,7 +126,9 @@ internal sealed class OperatorPodTurnRunner : IPodTurnRunner
         string runId,
         ILogger logger) : IOperatorAssistantTurnSink
     {
-        public ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct) => ValueTask.CompletedTask;
+        public ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct) =>
+            writer.WriteAsync(
+                new RunEvent(0, EventTypes.AgentMessageDelta, new { delta }), ct);
 
         public ValueTask OnToolCallAsync(string toolName, string? argumentsJson, CancellationToken ct) =>
             writer.WriteAsync(

@@ -34,11 +34,12 @@ internal sealed class GitHubRepositorySelectionClient(
             if (installationToken is null)
                 return null;
 
+            var repositoriesUrl = GetInstallationRepositoriesUrl(installation);
             for (var page = 1; page <= MaximumPages; page++)
             {
                 using var request = CreateRequest(
                     HttpMethod.Get,
-                    AppendPagination(installation.RepositoriesUrl, page),
+                    AppendPagination(repositoriesUrl, page),
                     installationToken.Value);
                 using var response = await httpClientFactory.CreateClient("github")
                     .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
@@ -216,6 +217,26 @@ internal sealed class GitHubRepositorySelectionClient(
     {
         var separator = repositoriesUrl.Contains('?', StringComparison.Ordinal) ? "&" : "?";
         return $"{repositoriesUrl}{separator}per_page={PageSize}&page={page}";
+    }
+
+    private static string GetInstallationRepositoriesUrl(GitHubAccessibleInstallation installation)
+    {
+        if (!Uri.TryCreate(installation.RepositoriesUrl, UriKind.Absolute, out var uri))
+            return installation.RepositoriesUrl;
+
+        var normalizedPath = uri.AbsolutePath.TrimEnd('/');
+        var userInstallationSuffix = $"/user/installations/{installation.Id}/repositories";
+        if (!normalizedPath.EndsWith(userInstallationSuffix, StringComparison.OrdinalIgnoreCase))
+            return installation.RepositoriesUrl;
+
+        var pathPrefix = normalizedPath[..^userInstallationSuffix.Length];
+        var builder = new UriBuilder(uri)
+        {
+            Path = $"{pathPrefix}/installation/repositories",
+            Query = string.Empty,
+            Fragment = string.Empty,
+        };
+        return builder.Uri.AbsoluteUri.TrimEnd('/');
     }
 
     private sealed record GitHubAccessibleInstallation(
