@@ -73,7 +73,11 @@ Optional flags include `--skip-postgres`, `--image-tag <tag>`,
 `--oauth-encryption-certificate-name <name>`. Use
 `--repo-app-private-key-file <path>` or `REPO_APP_PRIVATE_KEY_FILE` to import
 the GitHub Repo App PEM without placing its contents in a command argument or
-params-file value. The runtime loads the newest two usable
+params-file value. Treat `REPO_APP_PRIVATE_KEY_FILE` as one-shot input: after
+the canonical import succeeds, unset it in the environment. Remove it from
+every params file used for the import. Then delete the PEM. Otherwise a future
+deploy reloads the stale path before checking the valid canonical secret. The
+runtime loads the newest two usable
 versions under each certificate name; create a new version under the same name for
 rotation overlap.
 
@@ -86,7 +90,8 @@ secret store maps that name to physical Key Vault secret
 create-only write across deployment runners. If only the legacy secret exists,
 deployment stops with an explicit download-and-file-import command. The file import
 intentionally replaces the canonical value and must run from one serialized operator
-or CI step. See
+or CI step. Any environment or params-file `REPO_APP_PRIVATE_KEY_FILE` setting must be
+removed after that import succeeds. Remove the setting before you delete the PEM. See
 [Configuration](./configuration#repo-app-installation-and-webhook) for the migration
 commands. Deployment also stops before applying manifests when neither secret exists or
 Key Vault access cannot be verified.
