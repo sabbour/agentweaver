@@ -24,6 +24,7 @@ import {
   FIXED_CARD_H,
   COMPACT_NODE_W,
   FIXED_NODE_W,
+  graphNodeSize,
   WORKFLOW_DEFINITION_NODE_W,
   WORKFLOW_FIT_VIEW_OPTIONS,
   layoutWorkflowDefinitionNodes,
@@ -63,7 +64,6 @@ import {
   Panel,
   Position,
   ReactFlow,
-  useEdges,
   useNodes,
   type Edge,
   type EdgeProps,
@@ -1225,70 +1225,62 @@ const LOOPBACK_STROKE        = 'var(--colorNeutralStroke1)';
 const LOOPBACK_STROKE_ACTIVE = 'var(--colorNeutralForeground1)';
 const LOOPBACK_TEXT_COLOR    = 'var(--colorNeutralForeground2)';
 const RETURN_RAIL_GAP        = 36;
-const RETURN_RAIL_STAGGER    = 26;
 
 function markerId(prefix: string, id: string): string {
   return `${prefix}-${String(id).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 }
 
 export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: EdgeProps) {
-  const allEdges = useEdges();
   const allNodes = useNodes();
   const activeEdgeId = useContext(ActiveEdgeContext);
 
-  const myEdge   = allEdges.find(e => e.id === id);
-  const sourceId = myEdge?.source ?? '';
-  const targetId = myEdge?.target ?? '';
-  const loopbackData = data as { returnSide?: 'left' | 'right' } | undefined;
+  const loopbackData = data as {
+    returnSide?: 'left' | 'right' | 'top' | 'bottom';
+    returnLaneOffset?: number;
+  } | undefined;
 
-  const sourceNode = allNodes.find(n => n.id === sourceId);
-  const targetNode = allNodes.find(n => n.id === targetId);
-
-  const siblings = allEdges
-    .filter(e => e.type === 'loopback')
-    .sort((a, b) => {
-      const ax = allNodes.find(n => n.id === a.source)?.position.x ?? 0;
-      const bx = allNodes.find(n => n.id === b.source)?.position.x ?? 0;
-      return ax - bx;
-    });
-
-  const myIndex   = siblings.findIndex(e => e.id === id);
-  const sourceRight = (sourceNode?.position.x ?? sourceX) + (sourceNode?.measured?.width ?? NODE_W);
-  const targetRight = (targetNode?.position.x ?? targetX) + (targetNode?.measured?.width ?? NODE_W);
-  const returningLeft = loopbackData?.returnSide === 'right'
-    ? true
-    : loopbackData?.returnSide === 'left'
-      ? false
-      : targetRight <= sourceRight;
   const nodeBounds = allNodes.reduce(
     (bounds, node) => {
-      const width = node.measured?.width ?? NODE_W;
+      const { width, height } = graphNodeSize(node);
       return {
         minX: Math.min(bounds.minX, node.position.x),
         maxX: Math.max(bounds.maxX, node.position.x + width),
+        minY: Math.min(bounds.minY, node.position.y),
+        maxY: Math.max(bounds.maxY, node.position.y + height),
       };
     },
-    { minX: Math.min(sourceX, targetX), maxX: Math.max(sourceX, targetX) },
+    {
+      minX: Math.min(sourceX, targetX),
+      maxX: Math.max(sourceX, targetX),
+      minY: Math.min(sourceY, targetY),
+      maxY: Math.max(sourceY, targetY),
+    },
   );
-  const sameSideBefore = siblings.slice(0, Math.max(0, myIndex)).filter((edge) => {
-    const s = allNodes.find(n => n.id === edge.source);
-    const t = allNodes.find(n => n.id === edge.target);
-    if (!s || !t) return returningLeft;
-    const sRight = s.position.x + (s.measured?.width ?? NODE_W);
-    const tRight = t.position.x + (t.measured?.width ?? NODE_W);
-    return (tRight <= sRight) === returningLeft;
-  }).length;
-  const railX = returningLeft
-    ? nodeBounds.maxX + RETURN_RAIL_GAP + sameSideBefore * RETURN_RAIL_STAGGER
-    : nodeBounds.minX - RETURN_RAIL_GAP - sameSideBefore * RETURN_RAIL_STAGGER;
-  const route = roundedOrthogonalPath([
-    { x: sourceX, y: sourceY },
-    { x: railX, y: sourceY },
-    { x: railX, y: targetY },
-    { x: targetX, y: targetY },
-  ], 10);
-  const labelX = railX;
-  const labelY = (sourceY + targetY) / 2;
+  const side = loopbackData?.returnSide ?? 'top';
+  const laneOffset = loopbackData?.returnLaneOffset ?? 0;
+  const horizontalRail = side === 'top' || side === 'bottom';
+  const rail = side === 'top'
+    ? nodeBounds.minY - RETURN_RAIL_GAP - laneOffset
+    : side === 'bottom'
+      ? nodeBounds.maxY + RETURN_RAIL_GAP + laneOffset
+      : side === 'left'
+        ? nodeBounds.minX - RETURN_RAIL_GAP - laneOffset
+        : nodeBounds.maxX + RETURN_RAIL_GAP + laneOffset;
+  const route = roundedOrthogonalPath(horizontalRail
+    ? [
+        { x: sourceX, y: sourceY },
+        { x: sourceX, y: rail },
+        { x: targetX, y: rail },
+        { x: targetX, y: targetY },
+      ]
+    : [
+        { x: sourceX, y: sourceY },
+        { x: rail, y: sourceY },
+        { x: rail, y: targetY },
+        { x: targetX, y: targetY },
+      ], 10);
+  const labelX = horizontalRail ? (sourceX + targetX) / 2 : rail;
+  const labelY = horizontalRail ? rail : (sourceY + targetY) / 2;
   const markerIdValue = markerId('lb-arrow', id);
   const isActive = id === activeEdgeId;
   const stroke   = isActive ? LOOPBACK_STROKE_ACTIVE : LOOPBACK_STROKE;
