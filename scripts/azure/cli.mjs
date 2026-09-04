@@ -197,16 +197,38 @@ export async function run(argv = [], opts = {}) {
   return mod.run({ argv: rest, log });
 }
 
-/* c8 ignore start -- process.argv entry point, not exercised by unit tests */
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  run(process.argv.slice(2)).catch((err) => {
+/**
+ * Executes the CLI command and maps an explicit unsuccessful command result
+ * to a non-zero process exit code.
+ */
+export async function main(argv = process.argv.slice(2), opts = {}) {
+  const {
+    processImpl = process,
+    log = logDefault,
+    ...runOpts
+  } = opts;
+
+  try {
+    const result = await run(argv, { ...runOpts, log });
+    if (result?.ok === false) {
+      processImpl.exitCode = 1;
+    }
+    return result;
+  } catch (err) {
     // Expected failures (missing prereqs, bad args, etc.) should read like a
     // normal CLI error, not a Node stack trace. Full stack is still
     // available via DEBUG=1 / AGENTWEAVER_DEBUG=1, matching log.debug()'s
     // existing gating convention.
-    const showStack = Boolean(process.env.DEBUG || process.env.AGENTWEAVER_DEBUG);
-    logDefault.error((showStack && err?.stack) || err?.message || String(err));
-    process.exitCode = 1;
-  });
+    const env = processImpl.env ?? process.env;
+    const showStack = Boolean(env.DEBUG || env.AGENTWEAVER_DEBUG);
+    log.error((showStack && err?.stack) || err?.message || String(err));
+    processImpl.exitCode = 1;
+    return undefined;
+  }
+}
+
+/* c8 ignore start -- process.argv entry point */
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main();
 }
 /* c8 ignore stop */
