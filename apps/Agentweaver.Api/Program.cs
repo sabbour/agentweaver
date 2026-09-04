@@ -902,6 +902,13 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
             .AddCore(options => options.UseEntityFrameworkCore().UseDbContext<MemoryDbContext>())
             .AddServer(options =>
             {
+                options.RemoveEventHandler(
+                    OpenIddict.Server.OpenIddictServerHandlers.Authentication
+                        .ValidateClientRedirectUri.Descriptor);
+                options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateAuthorizationRequestContext>(
+                    handler => handler.UseScopedHandler<OAuthAuthorizationRedirectUriValidationHandler>()
+                        .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Authentication
+                            .ValidateClientRedirectUri.Descriptor.Order));
                 options.AddEventHandler<OpenIddict.Server.OpenIddictServerEvents.ValidateAuthorizationRequestContext>(
                     handler => handler.UseScopedHandler<OAuthDynamicClientExpirationHandler>()
                         .SetOrder(OpenIddict.Server.OpenIddictServerHandlers.Authentication.ValidateAuthentication.Descriptor.Order - 500));
