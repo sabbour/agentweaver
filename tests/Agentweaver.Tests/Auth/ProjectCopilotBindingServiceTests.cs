@@ -143,6 +143,40 @@ public sealed class ProjectCopilotBindingServiceTests
     }
 
     [Fact]
+    public async Task Complete_ReplacesAnActiveBindingWhoseCredentialSecretIsMissing()
+    {
+        await using var db = await OpenDatabaseAsync();
+        var roles = new MutableRoles();
+        var secrets = new InMemorySecretStore();
+        var project = ProjectId.New();
+        await SeedProjectAsync(db, project);
+        roles.SetOwner(project, "owner");
+        await new GitHubConnectionsPersistenceStore(db).ReplaceCopilotBindingAsync(
+            Binding(project, "missing-secret", "version-one"));
+        var service = CreateService(
+            db,
+            roles,
+            secrets,
+            """{"access_token":"ghu_provider","refresh_token":"refresh-secret"}""");
+        var begin = await service.BeginAsync(Human("owner"), HumanPrincipal(), project, $"/projects/{project}/settings?section=unattended");
+
+        (await service.CompleteAsync(
+            Human("owner"), HumanPrincipal(), project, Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Should().Be(CopilotBindingOutcome.Success);
+
+        db.ChangeTracker.Clear();
+        var bindings = await db.ProjectCopilotBindings
+            .Where(binding => binding.ProjectId == project.ToString())
+            .ToListAsync();
+        bindings.Should().HaveCount(2);
+        bindings.Single(binding => binding.CredentialReference == "missing-secret").Status
+            .Should().Be(GitHubBindingStatus.Inactive);
+        var replacement = bindings.Single(binding => binding.Status == GitHubBindingStatus.Active);
+        replacement.CredentialReference.Should().NotBe("missing-secret");
+        (await secrets.GetSecretAsync(replacement.CredentialReference)).Found.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Complete_WhenCredentialReadBackCannotBeVerified_FailsWithoutCreatingAnActiveBinding()
     {
         await using var db = await OpenDatabaseAsync();
