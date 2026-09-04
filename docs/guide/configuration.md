@@ -85,11 +85,17 @@ and JWKS.
 
 Anonymous dynamic registration accepts public native clients only. It permits
 tightly formed reverse-domain private-use callbacks and HTTP callbacks on literal
-`127.0.0.1` or `[::1]`; it never accepts HTTPS callbacks. HTTPS redirect
-registration is available only through the explicitly administered static-client
-configuration. Hostnames such as `localhost`, alternate numeric loopback forms,
+`127.0.0.1`; it never accepts HTTPS callbacks. HTTPS redirect registration is
+available only through the explicitly administered static-client configuration and
+requires a CSP-compatible DNS or IPv4 origin. DNS names are validated after IDN
+conversion and cannot contain empty, underscore, wildcard, or trailing-dot labels.
+IPv6 literal callback hosts are rejected because strict browser CSP cannot safely
+express them. Hostnames such as `localhost`, alternate numeric loopback forms,
 wildcards, prefix matching, fragments, userinfo, client secrets, and metadata URL
-fetching are rejected.
+fetching are rejected. A native client may register an IPv4 loopback callback without
+a port and use a fresh ephemeral port in the authorization request as defined by RFC
+8252; OpenIddict validates that substitution before Agentweaver derives the consent
+page's callback CSP source from the validated request.
 
 #### Repo App user authorization
 

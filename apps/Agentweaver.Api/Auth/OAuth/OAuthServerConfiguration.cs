@@ -219,6 +219,7 @@ public static class OAuthRedirectUriValidator
     {
         if (string.IsNullOrWhiteSpace(value)
             || value.Length > 2048
+            || value.Any(char.IsWhiteSpace)
             || value.Contains('*', StringComparison.Ordinal)
             || !Uri.TryCreate(value, UriKind.Absolute, out var uri)
             || !uri.IsWellFormedOriginalString()
@@ -230,7 +231,7 @@ public static class OAuthRedirectUriValidator
         {
             if (!allowHttps)
                 return false;
-            return !string.IsNullOrWhiteSpace(uri.Host);
+            return IsCspCompatibleHttpsHost(uri);
         }
 
         if (!IsNativePrivateUseScheme(uri.Scheme) && uri.Scheme != Uri.UriSchemeHttp)
@@ -240,10 +241,38 @@ public static class OAuthRedirectUriValidator
             return string.IsNullOrEmpty(uri.Host)
                 && uri.AbsolutePath is not "" and not "/";
 
-        if (!IsLiteralLoopback(uri.Host) || !HasLiteralLoopbackAuthority(value))
+        if (!string.Equals(uri.Host, "127.0.0.1", StringComparison.Ordinal)
+            || !HasLiteralIpv4LoopbackAuthority(value))
             return false;
 
         return allowDynamicLoopbackPort || !uri.IsDefaultPort;
+    }
+
+    private static bool IsCspCompatibleHttpsHost(Uri uri)
+    {
+        if (uri.HostNameType == UriHostNameType.IPv4)
+            return true;
+        if (uri.HostNameType != UriHostNameType.Dns)
+            return false;
+
+        string asciiHost;
+        try
+        {
+            asciiHost = uri.IdnHost;
+        }
+        catch (UriFormatException)
+        {
+            return false;
+        }
+
+        if (asciiHost.Length is 0 or > 253 || asciiHost[^1] == '.')
+            return false;
+
+        return asciiHost.Split('.').All(label =>
+            label.Length is > 0 and <= 63
+            && char.IsAsciiLetterOrDigit(label[0])
+            && char.IsAsciiLetterOrDigit(label[^1])
+            && label.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'));
     }
 
     private static bool IsNativePrivateUseScheme(string scheme)
@@ -261,16 +290,9 @@ public static class OAuthRedirectUriValidator
                 && label.All(c => char.IsAsciiLetterOrDigit(c) || c is '+' or '-'));
     }
 
-    private static bool IsLiteralLoopback(string host) =>
-        string.Equals(host, "127.0.0.1", StringComparison.Ordinal)
-        || string.Equals(host, "[::1]", StringComparison.Ordinal)
-        || string.Equals(host, "::1", StringComparison.Ordinal);
-
-    private static bool HasLiteralLoopbackAuthority(string value) =>
+    private static bool HasLiteralIpv4LoopbackAuthority(string value) =>
         value.StartsWith("http://127.0.0.1:", StringComparison.Ordinal)
-        || value.StartsWith("http://127.0.0.1/", StringComparison.Ordinal)
-        || value.StartsWith("http://[::1]:", StringComparison.Ordinal)
-        || value.StartsWith("http://[::1]/", StringComparison.Ordinal);
+        || value.StartsWith("http://127.0.0.1/", StringComparison.Ordinal);
 }
 
 public sealed record OAuthCertificateSet(
