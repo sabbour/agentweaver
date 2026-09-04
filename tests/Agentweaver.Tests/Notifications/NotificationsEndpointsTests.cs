@@ -105,6 +105,22 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
         await db.SaveChangesAsync();
     }
 
+    private async Task InsertToolApprovalContextEventAsync(
+        string runId, string requestId, string toolName = "coordinator_start", DateTime? createdAt = null)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = 1,
+            EventType = "tool.approval_context",
+            PayloadJson = $$"""{"RequestId":"{{requestId}}","ToolName":"{{toolName}}","Url":"https://example.com"}""",
+            CreatedAt = createdAt ?? DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
     private async Task InsertToolResultEventAsync(string runId, string callId)
     {
         using var scope = _factory.Services.CreateScope();
@@ -526,6 +542,42 @@ public sealed class NotificationsEndpointsTests : IClassFixture<ProjectsWebAppli
 
         forRun.Should().ContainSingle();
         forRun[0].GetProperty("type").GetString().Should().Be("tool_approval");
+    }
+
+    [Fact]
+    public async Task GetNotifications_SurfacesPendingDurableToolApprovalContext()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project Durable Context");
+        var run = await InsertInProgressRunAsync(projectId, "Start a coordinator run", "Operator");
+        await InsertToolApprovalContextEventAsync(run.Id.ToString(), "toolu_ctx_01pending", "coordinator_start");
+
+        var response = await _client.GetAsync("/api/notifications");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notification = body.GetProperty("notifications").EnumerateArray()
+            .Single(n => n.GetProperty("run_id").GetString() == run.Id.ToString());
+
+        notification.GetProperty("type").GetString().Should().Be("tool_approval");
+        notification.GetProperty("id").GetString().Should().Be($"tool_approval:{run.Id}:toolu_ctx_01pending");
+    }
+
+    [Fact]
+    public async Task GetNotifications_OperatorToolApproval_UsesAssistantSessionCta()
+    {
+        var projectId = await CreateBlankProjectAsync("Notif Project Assistant Session");
+        var run = await InsertInProgressRunAsync(projectId, "Start a coordinator run", "Operator");
+        await InsertToolApprovalContextEventAsync(run.Id.ToString(), "toolu_ctx_01assistant", "coordinator_start");
+
+        var response = await _client.GetAsync("/api/notifications");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var notification = body.GetProperty("notifications").EnumerateArray()
+            .Single(n => n.GetProperty("run_id").GetString() == run.Id.ToString());
+
+        notification.GetProperty("cta_path").GetString()
+            .Should().Be($"/assistant?runId={run.Id}&project={projectId}");
     }
 
     [Fact]

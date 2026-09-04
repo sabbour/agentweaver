@@ -1616,8 +1616,8 @@ export interface OverviewDto {
 
 // ── #247 — Global notification center ─────────────────────────────────────────
 // GET /api/notifications — the signed-in user's pending Human Review and Tool Approval requests
-// across every project/run they own. The server includes a path for non-run notifications; run
-// notification routes are rebuilt from project_id + run_id so they always target that exact run.
+// across every project/run they own. The server emits the exact CTA path to open, including
+// assistant-session approvals that must resume /assistant rather than a project orchestration page.
 export interface NotificationDto {
   id: string;
   // Widened with `(string & {})` so the union still autocompletes known values while

@@ -465,6 +465,33 @@ describe('AssistantRunPage', () => {
     });
   });
 
+  it('renders the native approval gate for a durable tool.approval_context event', async () => {
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [
+        {
+          sequence: 1,
+          type: 'tool.approval_context',
+          payload: { RequestId: 'req-ctx-1', ToolName: 'coordinator_start', Url: 'https://example.test/start' },
+        },
+      ],
+    };
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+
+    typeAndSend('start a run');
+    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+
+    expect(await screen.findByTestId('assistant-approval-gate')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Allow tool' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }));
+    await waitFor(() => {
+      expect(apiClient.approveTool).toHaveBeenCalledWith('assistant-run-1', 'req-ctx-1', 'once');
+    });
+  });
+
   it('shows operator_run_limit message on 429 from createAssistantRun', async () => {
     const err = new ApiError(429, JSON.stringify({ error: 'operator_run_limit', message: 'Limit reached.' }));
     vi.mocked(apiClient.createAssistantRun).mockRejectedValue(err);
