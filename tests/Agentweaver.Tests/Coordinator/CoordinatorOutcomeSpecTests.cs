@@ -162,8 +162,11 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
 
         run.Should().NotBeNull();
         run!.Status.Should().Be("failed");
+        var cancellationDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!drafter.CancellationObserved && DateTime.UtcNow < cancellationDeadline)
+            await Task.Delay(25);
         drafter.CancellationObserved.Should().BeTrue(
-            "the coordinator deadline must cancel provider setup/session work before failing the run");
+            "the coordinator deadline must still cancel provider setup/session work after failing the run");
 
         var spec = await GetOutcomeSpecAsync(_owner, runId);
         spec.Should().NotBeNull();
@@ -176,6 +179,72 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var failedEvent = events.Should().NotBeNull().And.Subject
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("reason").GetString()
+            .Should().Be("outcome_spec_draft_timeout");
+    }
+
+    [Fact]
+    public async Task Start_DraftCancellationCallbackBlocks_FailsPromptlyAtDeadlineAndCleansUp()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.BlockCancellationCallback = true;
+
+        var deadlineStopwatch = Stopwatch.StartNew();
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "A blocked provider cancellation callback must not delay terminal failure");
+
+        try
+        {
+            await drafter.BlockedCancellationStarted.WaitAsync(TimeSpan.FromSeconds(5));
+            var terminalizationStopwatch = Stopwatch.StartNew();
+
+            RunResponse? run = null;
+            var terminalDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (DateTime.UtcNow < terminalDeadline)
+            {
+                run = await GetRunAsync(_owner, runId);
+                if (run?.Status == "failed")
+                    break;
+                await Task.Delay(25);
+            }
+
+            run.Should().NotBeNull();
+            run!.Status.Should().Be("failed",
+                "terminalization must not await a provider cancellation callback that is still blocked");
+            terminalizationStopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+            deadlineStopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(4),
+                "the test host configures a one-second drafting deadline");
+        }
+        finally
+        {
+            drafter.ReleaseBlockedCancellation();
+        }
+
+        await drafter.BlockedDraftCompleted.WaitAsync(TimeSpan.FromSeconds(5));
+        drafter.CancellationObserved.Should().BeTrue();
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        List<RunEventRecord> durableFailures = [];
+        var persistenceDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < persistenceDeadline)
+        {
+            durableFailures = await db.RunEvents.AsNoTracking()
+                .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+                .OrderBy(e => e.Sequence)
+                .ToListAsync();
+            if (durableFailures.Count > 0)
+                break;
+            await Task.Delay(50);
+        }
+
+        var failedEvent = durableFailures.Should().ContainSingle(
+            "deadline cleanup must not emit a second terminal event")
+            .Subject;
+        var payload = JsonSerializer.Deserialize<JsonElement>(failedEvent.PayloadJson);
+        payload.GetProperty("reason").GetString()
             .Should().Be("outcome_spec_draft_timeout");
     }
 
