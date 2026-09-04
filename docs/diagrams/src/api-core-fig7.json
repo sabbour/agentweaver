@@ -1,0 +1,135 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Handler pattern",
+  "alt": "Handler pattern: Client, Middleware, Endpoint, Store/Service, DB/Workspace",
+  "participants": [
+    {
+      "id": "Client",
+      "label": "Client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Middleware",
+      "label": "Middleware",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Endpoint",
+      "label": "Endpoint",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Store",
+      "label": "Store/Service",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Durable",
+      "label": "DB/Workspace",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "Middleware",
+      "label": "HTTP request + bearer token",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Middleware",
+      "to": "Middleware",
+      "label": "authenticate and org-authorize",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Middleware",
+      "to": "Endpoint",
+      "label": "invoke route handler",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Endpoint",
+      "to": "Endpoint",
+      "label": "bind route/query/body DTOs",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Endpoint",
+      "to": "Store",
+      "label": "load project/run/resource",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Store",
+      "to": "Durable",
+      "label": "read current state",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Durable",
+      "to": "Store",
+      "label": "state",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Store",
+      "to": "Endpoint",
+      "label": "domain result",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Endpoint",
+      "to": "Endpoint",
+      "label": "enforce ownership/resource invariants",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Endpoint",
+      "to": "Client",
+      "label": "DTO, empty success, 4xx, or problem response",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

@@ -1,0 +1,144 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "How API integration tests host the system",
+  "alt": "How API integration tests host the system: Test, Test WebApplicationFactory, Real Program host, Temp SQLite, Temp worktree roots, Deterministic seams",
+  "participants": [
+    {
+      "id": "Test",
+      "label": "Test",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Factory",
+      "label": "Test WebApplicationFactory",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Real Program host",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "DB",
+      "label": "Temp SQLite",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Git",
+      "label": "Temp worktree roots",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Fakes",
+      "label": "Deterministic seams",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Test",
+      "to": "Factory",
+      "label": "CreateClient()",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Factory",
+      "to": "API",
+      "label": "Configure app settings",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Factory",
+      "to": "DB",
+      "label": "Point Database:Path at unique file",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Factory",
+      "to": "Git",
+      "label": "Point worktrees/checkpoints at unique dirs",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Factory",
+      "to": "Fakes",
+      "label": "Replace external services only",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Test",
+      "label": "HttpClient against in-process routes",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Test",
+      "to": "API",
+      "label": "HTTP request with test bearer token",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "DB",
+      "label": "Real stores and transactions",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Git",
+      "label": "Real git/worktree behavior when needed",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Test",
+      "label": "Real serialized response",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

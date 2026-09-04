@@ -364,38 +364,12 @@ The three CRDs (API group `extensions.agents.x-k8s.io`; `KubernetesSandboxExecut
   (the pool to bind), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and
   `spec.env[]` for static values only on the AgentHost path (paths, port, and mTLS settings). `RunId`, `TurnBearerToken`, and the immutable `CopilotCredential` are delivered after binding by `POST /configure`. The controller adopts a warm pod and signals readiness via a `Ready` condition.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant Exec as KubernetesSandboxExecutor
-    participant Claim as SandboxClaim (CR)
-    participant Ctrl as agent-sandbox controller
-    participant Pool as SandboxWarmPool
-    participant Pod as Kata sandbox pod
-    participant Reg as PodNameRegistry
-    Exec->>Claim: CreateClaimAsync(warmPoolRef, lifecycle)
-    Claim->>Ctrl: reconcile new claim
-    Ctrl->>Pool: adopt a warm pod
-    Pool-->>Pod: pod assigned to claim
-    Ctrl-->>Claim: Ready condition = True,<br/>status.sandbox.name = pod
-    loop poll every 2s
-        Exec->>Claim: WaitForBoundAsync (read status)
-    end
-    Claim-->>Exec: Ready True → pod name
-    Exec->>Reg: Register(runId, podName)
-    opt AgentHost pod-per-run
-        Exec->>Exec: Generate 256-bit turn bearer token
-        Exec->>Reg: RegisterTurnToken(runId, token)
-        Exec->>Pod: GetPodIpAsync → status.podIP
-        Exec->>Pod: POST /configure(runId, token, copilotCredential, workingDirectory)
-        Pod->>Pod: TryConfigure once + SetupAsync in workingDirectory
-        loop poll /healthz until 200 (≤90s)
-            Exec->>Pod: GET http[s]://podIP:8088/healthz
-        end
-        Exec->>Reg: RegisterAgentEndpoint(http[s]://podIP:8088/a2a/agent)
-    end
-    Note over Exec,Ctrl: claim delete (ad-hoc) or TTL →<br/>controller GCs pod + service
-```
+![How the controller provisions a run's pod: KubernetesSandboxExecutor, SandboxClaim (CR), agent-sandbox controller, SandboxWarmPool, Kata sandbox pod, PodNameRegistry](../diagrams/sandbox-pod-execution-fig6.png)
+
+<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig6.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The executor reads the pod name from `status.sandbox.name` (the agent-sandbox controller's shape) once the
 claim's `Ready` condition is `True`. For pod-per-run AgentHost pods it then polls the pod's `status.podIP` to
@@ -682,36 +656,12 @@ resolves the pod origin, loads the per-run credential, and forwards the decision
 terminal result is mapped to HTTP 200 and the API emits `tool.approval_resolved`; `unknown`, `pending`,
 and unreachable results map to 404, 409, and 503 respectively.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant User as Operator
-    participant API as Run approval endpoint
-    participant Events as Persisted run events
-    participant Durable as DurableToolApprovalGate
-    participant Client as AgentHostApprovalHttpClient
-    participant Host as AgentHost pod
-    participant Local as In-memory IToolApprovalGate
-    User->>API: POST coordinator or child run decision
-    API->>Durable: resolve posted run + request
-    opt coordinator does not own request
-        API->>Events: find coordinator.child_approval_required
-        Events-->>API: owning childRunId
-    end
-    API->>Durable: grant/deny owning child
-    alt durable gate resolves
-        Durable-->>API: terminal state
-    else Unknown and pod-per-run
-        API->>Client: childRunId + per-run bearer
-        Client->>Host: POST /tool-approvals or /tool-denials
-        Host->>Local: grant/deny request
-        Local-->>Host: approved / denied / expired
-        Host-->>Client: terminal response
-        Client-->>API: resolved state
-        API->>API: emit tool.approval_resolved
-    end
-    API-->>User: 200 terminal result
-```
+![Returning tool-approval decisions to AgentHost: Operator, Run approval endpoint, Persisted run events, DurableToolApprovalGate, AgentHostApprovalHttpClient, AgentHost pod, In-memory IToolApprovalGate](../diagrams/sandbox-pod-execution-fig7.png)
+
+<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig7.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 | Source | Role |
 | --- | --- |

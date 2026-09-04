@@ -1,0 +1,94 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Durable events plus live fan-out",
+  "alt": "Durable events plus live fan-out: Workflow step, Shared RunEvents table, Any web replica, UI / MCP client",
+  "participants": [
+    {
+      "id": "Step",
+      "label": "Workflow step",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Store",
+      "label": "Shared RunEvents table",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Web",
+      "label": "Any web replica",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "UI",
+      "label": "UI / MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Step",
+      "to": "Store",
+      "label": "append event with ordered sequence",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Store",
+      "to": "Step",
+      "label": "persisted",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "UI",
+      "to": "Web",
+      "label": "SSE with Last-Event-ID cursor",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Web",
+      "to": "Store",
+      "label": "read Sequence > cursor",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Store",
+      "to": "Web",
+      "label": "ordered events",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Web",
+      "to": "UI",
+      "label": "SSE frames",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

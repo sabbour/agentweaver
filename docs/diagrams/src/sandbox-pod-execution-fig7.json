@@ -1,0 +1,212 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Returning tool-approval decisions to AgentHost",
+  "alt": "Returning tool-approval decisions to AgentHost: Operator, Run approval endpoint, Persisted run events, DurableToolApprovalGate, AgentHostApprovalHttpClient, AgentHost pod, In-memory IToolApprovalGate",
+  "participants": [
+    {
+      "id": "User",
+      "label": "Operator",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Run approval endpoint",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Events",
+      "label": "Persisted run events",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Durable",
+      "label": "DurableToolApprovalGate",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Client",
+      "label": "AgentHostApprovalHttpClient",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Host",
+      "label": "AgentHost pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Local",
+      "label": "In-memory IToolApprovalGate",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "API",
+      "label": "POST coordinator or child run decision",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Durable",
+      "label": "resolve posted run + request",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "opt",
+      "label": "coordinator does not own request",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "API",
+              "to": "Events",
+              "label": "find coordinator.child_approval_required",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Events",
+              "to": "API",
+              "label": "owning childRunId",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Durable",
+      "label": "grant/deny owning child",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "durable gate resolves",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Durable",
+              "to": "API",
+              "label": "terminal state",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "Unknown and pod-per-run",
+          "steps": [
+            {
+              "type": "message",
+              "from": "API",
+              "to": "Client",
+              "label": "childRunId + per-run bearer",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Client",
+              "to": "Host",
+              "label": "POST /tool-approvals or /tool-denials",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Host",
+              "to": "Local",
+              "label": "grant/deny request",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Local",
+              "to": "Host",
+              "label": "approved / denied / expired",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Host",
+              "to": "Client",
+              "label": "terminal response",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Client",
+              "to": "API",
+              "label": "resolved state",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "API",
+              "to": "API",
+              "label": "emit tool.approval_resolved",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "User",
+      "label": "200 terminal result",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

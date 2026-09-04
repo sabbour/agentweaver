@@ -105,25 +105,12 @@ Two facts make resume robust:
 
 On process restart, the `WorkflowRestartService` reconciles interrupted runs. A run recorded as awaiting review is resumed from its latest checkpoint: it rebuilds the workflow shape, calls MAF's resume-from-checkpoint, and restarts the watch loop so the run lands back at its suspended gate. If no checkpoint exists, a stale review is failed closed, while a still-valid one re-emits a synthetic `review.requested` after revalidating the worktree. Coordinator runs still in their spec phase are recovered the same way through the `CoordinatorWorkflowFactory`, which resumes the suspended confirmation gate from its own checkpoint.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Graph as MAF workflow
-    participant Port as review-gate RequestPort
-    participant Watch as Watch loop
-    participant Store as Checkpoint store (Postgres workflow_checkpoints)
-    participant Human as Reviewer
+![The file store's startup safety net (dev / fallback only): MAF workflow, review-gate RequestPort, Watch loop, Checkpoint store (Postgres workflow_checkpoints), Reviewer](../diagrams/agent-framework-fig3.png)
 
-    Graph->>Port: route AgentTurnOutput → WorkflowReviewRequest
-    Port-->>Watch: RequestInfoEvent (status PendingRequests)
-    Watch->>Store: checkpoint (superstep state + serialized session)
-    Watch-->>Human: review.requested (live stream closes at gate)
-    Note over Graph,Store: process may restart here — and resume on EITHER replica
-    Human->>Watch: approve / request-changes / decline
-    Watch->>Store: load latest checkpoint (runId = session id)
-    Watch->>Graph: resume, deliver WorkflowReviewDecision into the port
-    Graph->>Graph: continue from the gate (merge / revise / terminal)
-```
+<!-- Rendered from ../diagrams/src/agent-framework-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Where Agentweaver deliberately does NOT use MAF (decision D3)
 

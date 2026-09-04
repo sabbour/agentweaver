@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { DiagramCanvas } from './DiagramCanvas';
-import type { GraphSpec } from './types';
+import { SequenceCanvas } from './SequenceCanvas';
+import type { DiagramSpec } from './types';
 
 // The capture script (scripts/docs/capture-diagrams.mjs) copies each
 // docs/diagrams/src/<name>.json into public/specs/<name>.json before
@@ -21,8 +22,8 @@ async function main() {
     root.render(<div>Spec not found: {specName}</div>);
     return;
   }
-  const spec = (await res.json()) as GraphSpec;
-  root.render(<DiagramCanvas spec={spec} />);
+  const spec = (await res.json()) as DiagramSpec;
+  root.render(spec.kind === 'sequence' ? <SequenceCanvas spec={spec} /> : <DiagramCanvas spec={spec} />);
 }
 
 main();

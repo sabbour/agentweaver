@@ -3,10 +3,10 @@
 // build + Playwright capture logic lives in scripts/docs/capture-diagrams.mjs
 // so it can be unit-imported/tested separately from CLI arg handling.
 //
-// docs/diagrams/src/*.json graph specifications are the source of truth for
-// the reusable static diagrams embedded across the documentation. Add a new
-// specification only when an existing canonical diagram cannot be reused, then
-// rerun this script. No per-diagram renderer code is required.
+// docs/diagrams/src/*.json graph and sequence specs are the content source of
+// truth for reusable static diagrams embedded across the documentation. Add a
+// new specification only when an existing canonical diagram cannot be reused,
+// then rerun this script. No per-diagram renderer code is required.
 //
 // Usage:
 //   node scripts/docs/render-diagrams.mjs           # render + commit PNG + hash

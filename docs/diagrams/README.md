@@ -49,7 +49,7 @@ graph-spec gets repeatable, card-safe routing with no per-diagram tuning.
 ## How it works
 
 ```
-docs/diagrams/src/<name>.json     -- plain node/edge/group graph data (source of truth)
+docs/diagrams/src/<name>.json     -- graph or sequence data (source of truth)
 docs/diagram-renderer/            -- Vite + React Flow + Fluent-styled card app (see below)
 scripts/docs/capture-diagrams.mjs -- builds the app, Playwright-screenshots each spec
 scripts/docs/render-diagrams.mjs  -- npm-facing CLI: render (default) or --check (CI)
@@ -59,8 +59,8 @@ docs/diagrams/<name>.hash.txt     -- sha256 of the spec's canonical JSON at rend
 ```
 
 To add a diagram, first determine whether an existing canonical diagram can be reused.
-If a new concept is necessary, add one `docs/diagrams/src/<name>.json` graph-spec (see
-`docs/diagrams/src/graph-spec.schema.json` for the schema), run
+If a new concept is necessary, add one `docs/diagrams/src/<name>.json` graph or
+sequence spec (see `graph-spec.schema.json` and `sequence-spec.schema.json`), run
 `npm run docs:render-diagrams`, and commit the new `.png` + `.hash.txt`. No
 per-diagram code is needed anywhere in the pipeline.
 
@@ -69,13 +69,15 @@ The built-in workflow graph-specs are generated from
 those JSON files first with `node scripts/docs/workflows-to-graphspec.mjs`,
 then run `npm run docs:render-diagrams`.
 
-## Migrating Mermaid flowcharts into this pipeline
+## Migrating Mermaid diagrams into this pipeline
 
 Docs that still embed raw ```mermaid ``` fences can be migrated onto this
 pipeline with `scripts/docs/migrate-mermaid.mjs`, which:
 
-* extracts each Mermaid block, and for **flowchart/graph** blocks converts it
-  to a graph-spec JSON (`scripts/docs/mermaid-to-graphspec.mjs`) written to
+* extracts each Mermaid block; **flowchart/graph** blocks become graph-spec JSON
+  through `scripts/docs/mermaid-to-graphspec.mjs`, while **sequenceDiagram**
+  blocks become sequence-spec JSON through
+  `scripts/docs/mermaid-to-sequencespec.mjs`, written to
   `docs/diagrams/src/<dir>-<doc>-figN.json` (directory-scoped so same-named
   docs in different folders — e.g. `deep-dive/agent-communication.md` and
   `experience/agent-communication.md` — don't collide on a shared basename;
@@ -86,12 +88,15 @@ pipeline with `scripts/docs/migrate-mermaid.mjs`, which:
   assignments (client/svc/core/data/ext/runtime/evt), node shapes (`[( )]`
   cylinder, `{ }` decision, `([ ])` terminal, …) and nested `subgraph`
   clusters — into card icons/badges and graph-spec groups;
-* leaves **non-flowchart** Mermaid (`sequenceDiagram`, `stateDiagram`,
-  `classDiagram`, `erDiagram`) untouched — those are not representable by the
-  node/edge/group graph-spec and keep rendering via `vitepress-plugin-mermaid`.
+* maps sequence participants to the same Fluent icon/title/badge cards, and
+  preserves ordered calls and returns, self-messages, activation bars,
+  notes, automatic numbering, and `alt`/`opt`/`loop` combined fragments;
+* leaves unsupported Mermaid types (`stateDiagram`, `classDiagram`,
+  `erDiagram`, and others) untouched for `vitepress-plugin-mermaid`.
 
 ```
 node scripts/docs/migrate-mermaid.mjs --dir docs/deep-dive   # migrate a folder
+node scripts/docs/migrate-mermaid.mjs --dir docs/deep-dive --sequence-only
 node scripts/docs/migrate-mermaid.mjs --dir docs/deep-dive --dry   # preview only
 ```
 

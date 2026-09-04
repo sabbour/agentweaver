@@ -191,36 +191,12 @@ The tool catalog is broad because it mirrors the product model. It contains 79 t
 
 An assistant typically uses MCP in a loop like this:
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Client as MCP client
-    participant MCP as Agentweaver MCP server
-    participant API as Agentweaver backend
+![MCP flow: assistant-driven work: User, MCP client, Agentweaver MCP server, Agentweaver backend](../diagrams/experience-00-overview-fig3.png)
 
-    User->>Client: "Create a project and run this goal"
-    Client->>MCP: Authenticate and connect to /mcp
-    Client->>MCP: project_list or project_create
-    MCP->>API: Forward caller identity and request
-    API-->>MCP: Project result
-    MCP-->>Client: Tool result
-
-    Client->>MCP: coordinator_start
-    MCP->>API: Start work
-    API-->>MCP: Run id and status
-    MCP-->>Client: Tool result
-
-    Client->>MCP: run_watch / run_status / orchestration_topology
-    MCP->>API: Read live or current state
-    API-->>MCP: Events, status, topology, artifacts
-    MCP-->>Client: Tool result
-
-    alt review or decision needed
-        Client->>User: Ask for judgment
-        User->>Client: Approve, reject, steer, or revise
-        Client->>MCP: run_review or coordinator_steer
-    end
-```
+<!-- Rendered from ../diagrams/src/experience-00-overview-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The assistant can perform long chains quickly: create a project, apply a blueprint, cast a team, capture backlog, start a coordinator, poll topology, inspect artifacts, and submit memory. The human still owns judgment points: confirming outcome specs, approving risky actions, reviewing output, and deciding whether a team decision should become durable memory.
 

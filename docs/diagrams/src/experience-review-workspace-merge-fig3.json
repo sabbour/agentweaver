@@ -1,0 +1,158 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "`run_get_file`",
+  "alt": "`run_get_file`: MCP reviewer, Agentweaver MCP, Agentweaver API, Local git repository",
+  "participants": [
+    {
+      "id": "Reviewer",
+      "label": "MCP reviewer",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "MCP",
+      "label": "Agentweaver MCP",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver API",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Git",
+      "label": "Local git repository",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Reviewer",
+      "to": "MCP",
+      "label": "run_status / run_watch",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "read run state",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "awaiting_review",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Reviewer",
+      "to": "MCP",
+      "label": "run_show_artifacts",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "GET changed files",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "changed-file list",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Reviewer",
+      "to": "MCP",
+      "label": "run_get_file(path)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "GET file diff/content metadata",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "diff or binary marker",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Reviewer",
+      "to": "MCP",
+      "label": "run_review(approved: true)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "POST review decision",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Git",
+      "label": "verify tree hash + merge locally",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Git",
+      "to": "API",
+      "label": "merge result",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "merged / merge_failed / conflict",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

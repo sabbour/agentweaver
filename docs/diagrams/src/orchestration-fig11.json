@@ -1,0 +1,95 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Human Review as a Pause Point",
+  "alt": "Human Review as a Pause Point: Workflow, Watch, Store, Client, User",
+  "participants": [
+    {
+      "id": "Workflow",
+      "label": "Workflow",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Watch",
+      "label": "Watch",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Store",
+      "label": "Store",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Client",
+      "label": "Client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Workflow",
+      "to": "Watch",
+      "label": "human review requested",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Watch",
+      "to": "Store",
+      "label": "set run AwaitingReview",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Watch",
+      "to": "Client",
+      "label": "emit review.requested and done",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Client",
+      "label": "approve / request changes / decline",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "Workflow",
+      "label": "resume selected edge",
+      "line": "solid",
+      "arrow": "filled"
+    }
+  ]
+}

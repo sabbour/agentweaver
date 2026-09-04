@@ -115,28 +115,12 @@ The coordinator flow has two phases:
 1. **Model-assisted planning phase** — draft and confirm the OutcomeSpec, select a workflow, decompose the work, and persist the WorkPlan.
 2. **Service-driven execution phase** — dispatch ready subtasks, watch child runs, assemble results, and advance the parent run through review and merge gates.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Coordinator
-    participant Store as Durable Store
-    participant Dispatcher
-    participant Child as Child Runs
-    participant Parent as Parent Run
+![Coordinator Control Flow: User, Coordinator, Durable Store, Dispatcher, Child Runs, Parent Run](../diagrams/orchestration-fig8.png)
 
-    User->>Coordinator: goal or backlog task
-    Coordinator->>Coordinator: draft OutcomeSpec
-    Coordinator-->>User: request confirmation or revision
-    User-->>Coordinator: confirm
-    Coordinator->>Store: persist confirmed OutcomeSpec
-    Coordinator->>Coordinator: select workflow and decompose DAG
-    Coordinator->>Store: persist WorkPlan + subtasks + dependencies
-    Dispatcher->>Store: read ready DAG frontier
-    Dispatcher->>Child: launch child runs
-    Child-->>Dispatcher: completed, failed, or assemble-ready
-    Dispatcher->>Store: update subtask statuses
-    Dispatcher->>Parent: hand off to assembly when all settle
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig8.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The coordinator is designed to be idempotent. If it is asked to orchestrate a run that already has a WorkPlan, it does not create a second plan. That invariant prevents duplicate child runs and conflicting DAGs.
 
@@ -298,27 +282,12 @@ The state machine is designed for externally visible gates. When a human review 
 
 ### Runtime Sequence
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Orchestrator
-    participant Factory as Workflow Factory
-    participant Executor as Agent Turn Executor
-    participant Agent as Worker Agent
-    participant Watch as Watch Loop
-    participant Stream as Event Stream / SSE
+![Runtime Sequence: Client, Orchestrator, Workflow Factory, Agent Turn Executor, Worker Agent, Watch Loop, Event Stream / SSE](../diagrams/orchestration-fig9.png)
 
-    Client->>Orchestrator: start or resume run
-    Orchestrator->>Orchestrator: prepare worktree and run record
-    Orchestrator->>Factory: resolve and bind workflow
-    Factory->>Executor: build executable graph
-    Executor->>Agent: setup and run turn
-    Agent-->>Stream: step and output events
-    Executor-->>Factory: turn output, diff, steps
-    Factory-->>Watch: workflow events
-    Watch->>Orchestrator: persist status transitions
-    Watch-->>Stream: review, merge, terminal events
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig9.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The watch loop translates live runtime events into persisted run state. This keeps state transitions centralized. The agent produces work; the workflow emits events; the watch loop decides what those events mean for durable status and client-visible stream completion.
 
@@ -385,27 +354,12 @@ The heartbeat loop is intentionally simple and repeatable:
 5. Start the reserved coordinator run with unattended confirmation.
 6. Run reconciliation to pick up stalled or partially-progressed coordinator work.
 
-```mermaid
-sequenceDiagram
-    participant Heartbeat
-    participant ProjectStore
-    participant Backlog
-    participant Pickup
-    participant Runs
-    participant Reconciler
+![Heartbeat Loop: Heartbeat, ProjectStore, Backlog, Pickup, Runs, Reconciler](../diagrams/orchestration-fig10.png)
 
-    Heartbeat->>ProjectStore: list active projects
-    loop each project
-        Heartbeat->>Heartbeat: verify workspace is usable
-        Heartbeat->>Backlog: read ready tasks, deterministic order
-        loop each ready task
-            Heartbeat->>Pickup: attempt pickup
-            Pickup->>Backlog: atomically claim task and reserve run
-            Pickup->>Runs: start coordinator run unattended
-        end
-        Heartbeat->>Reconciler: sweep coordinator progress
-    end
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig10.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Workflow overrides are allowed at the backlog task level, but they are still filtered by trigger eligibility. The pickup service may prepend or carry override intent into the coordinator goal, but it cannot bypass workflow safety rules.
 
@@ -457,20 +411,12 @@ The user action then chooses a path:
 - request changes and loop back to agent work,
 - or decline and terminate.
 
-```mermaid
-sequenceDiagram
-    participant Workflow
-    participant Watch
-    participant Store
-    participant Client
-    participant User
+![Human Review as a Pause Point: Workflow, Watch, Store, Client, User](../diagrams/orchestration-fig11.png)
 
-    Workflow->>Watch: human review requested
-    Watch->>Store: set run AwaitingReview
-    Watch-->>Client: emit review.requested and done
-    User->>Client: approve / request changes / decline
-    Client->>Workflow: resume selected edge
-```
+<!-- Rendered from ../diagrams/src/orchestration-fig11.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This design keeps review durable and externally controllable. A browser tab can close while a run waits for review; the run state still tells the next client exactly what is needed.
 

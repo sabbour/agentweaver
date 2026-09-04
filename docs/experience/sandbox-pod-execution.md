@@ -99,23 +99,12 @@ the button is not shown. The flow a user follows:
    `DELETE` on that session, tearing the tunnel down. You can run more than one preview at a time (up to a
    per-run cap), each its own port and entry, and stop them individually.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant U as User
-    participant UI as CoordinatorRunPage (preview dialog)
-    participant API as API
-    participant Pod as Run's sandbox pod
-    U->>UI: click Preview (K8s sandbox + active run), pick port
-    UI->>API: POST /sandbox/port-forward { target_port }
-    API->>Pod: kubectl port-forward :target_port
-    API-->>UI: { session_id, local_port, target_port, pod_name, started_at }
-    UI-->>U: "Preview active for port {target_port} on pod {pod_name}"
-    Note over UI,U: iframe shown only if preview_url present;<br/>otherwise "no proxied preview URL"
-    U->>UI: stop preview
-    UI->>API: DELETE /sandbox/port-forward/{sessionId}
-    API->>Pod: tear down tunnel
-```
+![Sandbox preview: reaching a server inside the pod: User, CoordinatorRunPage (preview dialog), API, Run's sandbox pod](../diagrams/experience-sandbox-pod-execution-fig2.png)
+
+<!-- Rendered from ../diagrams/src/experience-sandbox-pod-execution-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 When to use it:
 
@@ -167,22 +156,12 @@ a pod during the wait. Its **orchestration loop stays in the worker** the whole 
 turns ever occupy a pod — so the coordinator's timeline and steering controls are always live even when
 no coordinator pod exists.
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant Run as Run (worker-owned)
-    participant Pod as Sandbox pod
-    U->>Run: submit work
-    Run->>Pod: claim warm pod + /configure (agent turn)
-    Pod-->>U: live tokens + pod pill 'pod-A'
-    Run-->>U: reach review gate (pause)
-    Run->>Pod: checkpoint + release pod
-    Note over U,Run: human reviews — no pod held
-    U->>Run: approve / request changes
-    Run->>Pod: re-claim warm pod + /configure + rehydrate
-    Pod-->>U: live again + pod pill 'pod-B'
-    Run-->>U: run completes
-```
+![Suspend and resume, from the user's view: User, Run (worker-owned), Sandbox pod](../diagrams/experience-sandbox-pod-execution-fig3.png)
+
+<!-- Rendered from ../diagrams/src/experience-sandbox-pod-execution-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A debug/low-latency option exists for operators (`Sandbox:ReleasePodOnSuspend = false`) that keeps the
 pod warm across a suspension; with it on, the pod name would stay stable across a pause, at the cost of
