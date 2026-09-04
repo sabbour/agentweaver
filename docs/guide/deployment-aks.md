@@ -81,10 +81,15 @@ rotation overlap.
 
 The API receives logical secret name `repo-app-private-key`; its production
 secret store maps that name to physical Key Vault secret
-`ghtok-repo-app-private-key`. When the canonical secret is absent, deployment
-migrates a readable legacy physical `repo-app-private-key` and preserves the
-legacy secret. It stops before applying manifests when neither secret exists
-or Key Vault access cannot be verified.
+`ghtok-repo-app-private-key`. Deployment never writes the readable legacy physical
+`repo-app-private-key` automatically because Key Vault secret set cannot protect a
+create-only write across deployment runners. If only the legacy secret exists,
+deployment stops with an explicit download-and-file-import command. The file import
+intentionally replaces the canonical value and must run from one serialized operator
+or CI step. See
+[Configuration](./configuration#repo-app-installation-and-webhook) for the migration
+commands. Deployment also stops before applying manifests when neither secret exists or
+Key Vault access cannot be verified.
 
 ### Image-build progress and optional Azure CLI limits
 
