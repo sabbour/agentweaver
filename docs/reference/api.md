@@ -571,8 +571,8 @@ Response `204 No Content`.
 
 Authorization:
 
-- Platform administrators may delete any run, including one whose persisted project no longer exists.
-- The submitting user may delete their own personal session created by the Assistant endpoints even if its incidental project no longer exists or the user's project role was revoked. Sessions are recognized by their server-authored durable `run.started` event.
+- Human platform administrators may delete any run, including one whose persisted project no longer exists. Dedicated internal-service credentials cannot delete runs.
+- The submitting user may delete their own personal session created by the Assistant endpoints even if its incidental project no longer exists or the user's project role was revoked. Sessions are recognized only when the first durable event is the server-authored sequence-1 `run.started` marker with the run's matching `runId`, `agentName: "Operator"`, and `kind: "operator"` values.
 - Other project-owned runs require current project Contributor access.
 
 Errors: `400` invalid run id; `404` run not found; `403` caller lacks deletion authority; `500` fetch or delete failed.
