@@ -11,7 +11,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class MetricsEndpoints
 {
-    public static void MapMetricsEndpoints(this WebApplication app)
+    public static void MapMetricsEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/projects/{id}/dashboard", async (
             HttpContext httpContext,
@@ -114,7 +114,7 @@ public static class MetricsEndpoints
             DashboardReadService dashboard,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             return Results.Ok(await dashboard.GetOverviewAsync(caller, ct).ConfigureAwait(false));
         });
 

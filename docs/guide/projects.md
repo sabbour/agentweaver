@@ -105,7 +105,9 @@ reason code. It never reveals repository names, installation IDs, permission map
 credentials. Its **GitHub Copilot account** control shows the effective background AI source:
 the verified login bound to this project, the platform-default GitHub Copilot account, or the
 deployment's custom-key mode when BYOK is active. A Project Owner can start the separate
-Copilot App binding when that is the missing prerequisite. When readiness reports
+Copilot App binding when that is the missing prerequisite. If a project binding is stale or its
+credential is missing, select **Reconnect GitHub Copilot** to repeat the same authorization flow
+and replace the broken binding. When readiness reports
 `repo_app_installation_required` and the deployment configures a Repo App slug, the page also
 shows a direct **Install GitHub Repo App** link.
 

@@ -1,14 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { guardedUrl } from '../lib/browser.mjs';
+import { closeBrowserResources, guardedUrl, openBrowserSession } from '../lib/browser.mjs';
 
-test('browser target boundary permits staging and blocks production before launch', () => {
+test('browser target boundary accepts arbitrary HTTPS hosts', () => {
   assert.equal(guardedUrl('https://agentweaver.foo.staging.example.com', '/projects', {}).pathname, '/projects');
-  assert.throws(() => guardedUrl('https://agentweaver.example.com', '/', {}), /refusing non-staging target/);
-  assert.equal(
-    guardedUrl('https://agentweaver.example.com', '/', { allowProd: true, confirmProduction: true }).hostname,
-    'agentweaver.example.com',
+  assert.equal(guardedUrl('https://agentweaver.example.com', '/', {}).hostname, 'agentweaver.example.com');
+  assert.throws(() => guardedUrl('http://agentweaver.example.com', '/', {}), /HTTPS/);
+});
+
+test('browser navigation preserves same-origin query strings and fragments', () => {
+  const target = guardedUrl(
+    'https://agentweaver.example.com',
+    '/projects?tab=runs#active',
+    {},
   );
+  assert.equal(target.toString(), 'https://agentweaver.example.com/projects?tab=runs#active');
 });
 
 test('browser target boundary blocks cross-origin navigation', () => {
@@ -66,11 +72,11 @@ test('browser target boundary permits the whole GitHub origin in login mode', ()
   // blocked when the flag is absent -- this is the actual security boundary.
   assert.throws(
     () => guardedUrl(baseUrl, 'https://github.com/login/oauth/authorize?client_id=test', {}),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
   assert.throws(
     () => guardedUrl(baseUrl, 'https://github.com/sessions/two-factor', {}),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
 
   // The flag only ever widens the allowlist to the real github.com origin --
@@ -81,7 +87,7 @@ test('browser target boundary permits the whole GitHub origin in login mode', ()
   );
   assert.throws(
     () => guardedUrl(baseUrl, 'https://github.com.evil.example.com/login', { allowIdentityProviderNavigation: true }),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
 });
 
@@ -102,11 +108,11 @@ test('browser target boundary permits configured Entra and Microsoft-account ori
   );
   assert.throws(
     () => guardedUrl(baseUrl, 'https://contoso.b2clogin.com/contoso.onmicrosoft.com/oauth2/v2.0/authorize', identityProviderOptions),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
   assert.throws(
     () => guardedUrl(baseUrl, 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize', {}),
-    /refusing non-staging target/,
+    /cross-origin/,
   );
 });
 
@@ -121,30 +127,146 @@ test('browser target boundary honors a custom configured Entra authority origin 
     guardedUrl(baseUrl, 'https://contoso.b2clogin.com/contoso.onmicrosoft.com/oauth2/v2.0/authorize', identityProviderOptions).origin,
     'https://contoso.b2clogin.com',
   );
+  assert.throws(
+    () => guardedUrl(baseUrl, 'http://contoso.example/authorize', {
+      allowIdentityProviderNavigation: true,
+      identityProviderOrigins: ['http://contoso.example/authorize'],
+    }),
+    /HTTPS is required/,
+  );
 });
 
-test('browser target boundary permits only generated previews in preview mode', () => {
+test('browser target boundary rejects generated previews because authenticated automation is same-origin', () => {
   const baseUrl = 'https://agentweaver.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io';
   const previewUrl = 'https://swift-falcon-amber-abcdefghijklmnopqrstuvwxyz-preview.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io';
 
-  assert.equal(
-    guardedUrl(baseUrl, previewUrl, { allowAgentweaverPreviewNavigation: true }).hostname,
-    new URL(previewUrl).hostname,
+  assert.throws(() => guardedUrl(baseUrl, previewUrl, {}), /cross-origin/);
+});
+
+test('browser close attempts context and browser independently and preserves both failures', async () => {
+  const calls = [];
+  const contextError = new Error('context close failed');
+  const browserError = new Error('browser close failed');
+  await assert.rejects(
+    closeBrowserResources(
+      { close: async () => { calls.push('context'); throw contextError; } },
+      { close: async () => { calls.push('browser'); throw browserError; } },
+    ),
+    (error) => {
+      assert(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [contextError, browserError]);
+      assert.equal(error.cause, contextError);
+      return true;
+    },
   );
-  assert.throws(
-    () => guardedUrl(baseUrl, previewUrl, {}),
-    /cross-origin/,
-  );
-  assert.throws(
-    () => guardedUrl(baseUrl, 'https://evil-preview.6a63b4fb256d5a00017339af.westus2.staging.aksapp.io', {
-      allowAgentweaverPreviewNavigation: true,
+  assert.deepEqual(calls, ['context', 'browser']);
+});
+
+function startupFailureFixture(stage, { failBrowserClose = false } = {}) {
+  const calls = [];
+  const startupError = new Error(`${stage} startup failed`);
+  const browserCloseError = new Error('browser cleanup failed');
+  const page = {
+    close: async () => { calls.push('page.close'); },
+  };
+  const context = {
+    addInitScript: async () => {
+      calls.push('context.addInitScript');
+      if (stage === 'init-script') throw startupError;
+    },
+    newPage: async () => {
+      calls.push('context.newPage');
+      if (stage === 'page-creation') throw startupError;
+      return page;
+    },
+    route: async () => {
+      calls.push('context.route');
+      if (stage === 'routing') throw startupError;
+    },
+    close: async () => { calls.push('context.close'); },
+  };
+  const browser = {
+    newContext: async () => {
+      calls.push('browser.newContext');
+      if (stage === 'context-creation') throw startupError;
+      return context;
+    },
+    close: async () => {
+      calls.push('browser.close');
+      if (failBrowserClose) throw browserCloseError;
+    },
+  };
+  const dependencies = {
+    chromium: {
+      launch: async () => {
+        calls.push('chromium.launch');
+        return browser;
+      },
+    },
+    loadStorageStateForOriginImpl: async () => {
+      calls.push('loadStorageState');
+      if (stage === 'storage-state') throw startupError;
+      return { cookies: [], origins: [] };
+    },
+    loadSessionStorageSeedImpl: async () => ({
+      origin: 'https://agentweaver.example.com',
+      entries: {},
     }),
-    /cross-origin/,
+  };
+  return { browserCloseError, calls, dependencies, startupError };
+}
+
+for (const [stage, expectedCleanup] of Object.entries({
+  'storage-state': ['browser.close'],
+  'context-creation': ['browser.close'],
+  'page-creation': ['context.close', 'browser.close'],
+  'init-script': ['context.close', 'browser.close'],
+  routing: ['page.close', 'context.close', 'browser.close'],
+})) {
+  test(`browser startup cleans acquired resources after ${stage} failure`, async () => {
+    const fixture = startupFailureFixture(stage);
+    await assert.rejects(
+      openBrowserSession({
+        baseUrl: 'https://agentweaver.example.com',
+        storageState: 'fixture.storageState.json',
+        headless: true,
+      }, fixture.dependencies),
+      (error) => {
+        assert(error instanceof AggregateError);
+        assert.equal(error.cause, fixture.startupError);
+        assert.deepEqual(error.errors, [fixture.startupError]);
+        assert.deepEqual(error.termination, {
+          browserLaunchAttempted: true,
+          browserLaunched: true,
+          browserCloseAttempted: true,
+          browserClosed: true,
+          browserClosureProven: true,
+        });
+        return true;
+      },
+    );
+    assert.deepEqual(fixture.calls.slice(-expectedCleanup.length), expectedCleanup);
+    assert.equal(fixture.calls.includes('browser.close'), true);
+  });
+}
+
+test('browser startup preserves the primary and cleanup failures when closure is unproven', async () => {
+  const fixture = startupFailureFixture('routing', { failBrowserClose: true });
+  await assert.rejects(
+    openBrowserSession({
+      baseUrl: 'https://agentweaver.example.com',
+      storageState: 'fixture.storageState.json',
+      headless: true,
+    }, fixture.dependencies),
+    (error) => {
+      assert(error instanceof AggregateError);
+      assert.equal(error.cause, fixture.startupError);
+      assert.deepEqual(error.errors, [fixture.startupError, fixture.browserCloseError]);
+      assert.equal(error.termination.browserCloseAttempted, true);
+      assert.equal(error.termination.browserClosed, false);
+      assert.equal(error.termination.browserClosureProven, false);
+      return true;
+    },
   );
-  assert.throws(
-    () => guardedUrl(baseUrl, 'https://swift-falcon-amber-abcdefghijklmnopqrstuvwxyz-preview.other.staging.example.com', {
-      allowAgentweaverPreviewNavigation: true,
-    }),
-    /cross-origin/,
-  );
+  assert.deepEqual(fixture.calls.slice(-3), ['page.close', 'context.close', 'browser.close']);
 });

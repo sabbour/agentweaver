@@ -311,7 +311,7 @@ export function run(cmd, args = [], opts = {}) {
  *
  * @param {string} cmd
  * @param {string[]} args
- * @param {{ cwd?: string, env?: Record<string,string>, json?: boolean, dryRun?: boolean, trim?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number }} [opts]
+ * @param {{ cwd?: string, env?: Record<string,string>, json?: boolean, dryRun?: boolean, trim?: boolean, allowFailure?: boolean, azSafeEnv?: boolean, timeoutMs?: number, input?: string|Buffer }} [opts]
  * @returns {Promise<{ stdout: string, stderr: string, code: number, json?: unknown }>}
  */
 export function capture(cmd, args = [], opts = {}) {
@@ -346,7 +346,7 @@ export function capture(cmd, args = [], opts = {}) {
         ...plan.spawnOpts,
         cwd: opts.cwd,
         env,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       });
     } catch (err) {
       finish(() => reject(new ExecError(`Failed to spawn '${redact(cmd)}': ${redact(err.message)}`, { command: displayLine })));
@@ -363,6 +363,7 @@ export function capture(cmd, args = [], opts = {}) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
+    if (opts.input !== undefined) child.stdin.end(opts.input);
     child.on("error", (err) => {
       if (opts.allowFailure) {
         // Matches the non-zero-exit-code allowFailure path below: a missing

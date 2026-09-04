@@ -71,6 +71,8 @@ public sealed class SqliteToPostgresMigrator
         List<GitHubRepositoryGrantRecord> grants;
         List<ProjectCopilotBindingRecord> bindings;
         List<PlatformDefaultCopilotBindingRecord> platformBindings;
+        List<UserCopilotBindingRecord> userBindings;
+        List<UserModelProviderSettingsRecord> userProviderSettings;
         List<AutomationActivationRecord> activations;
         List<AutomationInvocationRecord> invocations;
         List<GitHubLifecycleDeliveryRecord> lifecycleDeliveries;
@@ -86,6 +88,12 @@ public sealed class SqliteToPostgresMigrator
             bindings = await source.ProjectCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             platformBindings = await HasTableAsync(source, "platform_default_copilot_bindings", ct).ConfigureAwait(false)
                 ? await source.PlatformDefaultCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
+                : [];
+            userBindings = await HasTableAsync(source, "user_copilot_bindings", ct).ConfigureAwait(false)
+                ? await source.UserCopilotBindings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
+                : [];
+            userProviderSettings = await HasTableAsync(source, "user_model_provider_settings", ct).ConfigureAwait(false)
+                ? await source.UserModelProviderSettings.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
                 : [];
             activations = await source.AutomationActivations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             invocations = await source.AutomationInvocations.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
@@ -104,7 +112,8 @@ public sealed class SqliteToPostgresMigrator
             return;
         }
 
-        if (authorizations.Count + installations.Count + grants.Count + bindings.Count + platformBindings.Count + activations.Count +
+        if (authorizations.Count + installations.Count + grants.Count + bindings.Count + platformBindings.Count +
+            userBindings.Count + userProviderSettings.Count + activations.Count +
             invocations.Count + lifecycleDeliveries.Count + snapshots.Count + capabilitySnapshots.Count +
             appAuthorizations.Count + audits.Count == 0)
             return;
@@ -153,11 +162,17 @@ public sealed class SqliteToPostgresMigrator
                     destination.PlatformDefaultCopilotBindings.Add(item);
                     continue;
                 }
-
                 if (!PlatformBindingsMatch(item, existing))
                     throw new InvalidOperationException(
                         "GitHub connections persistence transfer aborted: immutable platform-default Copilot binding conflict.");
             }
+            foreach (var item in userBindings)
+                if (!await destination.UserCopilotBindings.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
+                    destination.UserCopilotBindings.Add(item);
+            foreach (var item in userProviderSettings)
+                if (!await destination.UserModelProviderSettings.AnyAsync(
+                        x => x.EntraObjectId == item.EntraObjectId, ct).ConfigureAwait(false))
+                    destination.UserModelProviderSettings.Add(item);
             foreach (var item in activations)
                 if (!await destination.AutomationActivations.AnyAsync(x => x.Id == item.Id, ct).ConfigureAwait(false))
                     destination.AutomationActivations.Add(item);

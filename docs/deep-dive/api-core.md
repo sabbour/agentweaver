@@ -135,7 +135,7 @@ The first custom gate treats most `/api/*` routes as bearer-token protected. Hea
 
 ### Organization gate
 
-The second custom gate runs after token validation. It checks whether the caller is allowed by the configured GitHub organization/team policy. It also has its own exempt prefixes for health, auth bootstrap, MCP/OAuth discovery, and related public protocol routes.
+The second custom gate runs after token validation. It checks the caller's Entra platform and project access. It also has exempt prefixes for health, auth bootstrap, MCP/OAuth discovery, and related public protocol routes.
 
 ### Rate limiting
 
@@ -161,9 +161,9 @@ The main route families are:
 |---|---|---|
 | Health/readiness | `/health`, `/api/health`, `/api/ping`, `/healthz/workspace` | Return cheap public liveness/readiness answers for load balancers and operators. |
 | Diagnostics/metrics/system | `/api/diagnostics*`, `/api/overview`, `/api/projects/{id}/dashboard`, `/api/system/runtime` | Return protected operational projections assembled from live stores and host state. |
-| Auth and OAuth | `/auth/github/*`, `/api/auth/*`, `/.well-known/*`, `/oauth/*` | Bootstrap GitHub auth, expose OAuth/OIDC metadata, exchange tokens, and manage sessions. |
+| Auth and OAuth | `/api/auth/*`, `/.well-known/*`, `/oauth/*` | Bootstrap Entra authentication, expose OAuth/OIDC metadata, exchange tokens, and manage sessions. |
 | Projects/workspaces | `/api/projects*`, `/api/projects/{id}/workspace*` | Create/list/update projects and expose workspace refs, trees, and file content through project ownership checks. |
-| Runs | `/api/runs*`, `/api/projects/{id}/runs*` | Start work, read run state, stream events, inspect files/diffs/history, retry, archive, or delete. |
+| Runs | `/api/runs*`, `/api/projects/{id}/runs*`, `/api/projects/{id}/orchestrations` | Read run state, stream events, inspect files/diffs/history, retry, archive, delete, or start coordinator work. |
 | Human-in-the-loop actions | `/api/runs/{id}/review`, `/commit`, `/request-changes`, approvals/denials/questions/autopilot | Convert user decisions into run lifecycle transitions. |
 | Sandbox | `/api/sandbox-policy`, `/api/runs/{id}/sandbox/port-forward*` | Read/update project-scoped sandbox policy and manage sandbox port-forward sessions. |
 | Workflow and review policy definitions | `/api/projects/{id}/workflows*`, `/api/projects/{id}/review-policies*` | Manage project-defined workflow and review policy configuration. |

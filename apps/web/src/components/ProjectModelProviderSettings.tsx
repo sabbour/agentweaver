@@ -1,5 +1,6 @@
 import { apiClient } from '../api/apiClient';
-import { formatModelProviderErrorMessage } from '../api/errors';
+import { ApiError } from '../api/client';
+import { formatModelProviderErrorMessage, parseApiBody } from '../api/errors';
 import {
   Button,
   Dialog,
@@ -54,7 +55,9 @@ export function ProjectModelProviderSettings({
     } catch (err) {
       if (generation !== refreshGeneration.current) return;
       setConnection(null);
-      setLoadError(formatModelProviderErrorMessage(err, CONNECTION_LOAD_ERROR));
+      const reconnectRequired = err instanceof ApiError
+        && parseApiBody(err.body).error === 'project_model_provider_reconnect_required';
+      setLoadError(reconnectRequired ? null : formatModelProviderErrorMessage(err, CONNECTION_LOAD_ERROR));
     } finally {
       if (generation === refreshGeneration.current) setLoading(false);
     }
@@ -120,33 +123,42 @@ export function ProjectModelProviderSettings({
         : noConnectionMessage;
 
   const trigger = canManageProjectConnection ? (
-    <Button appearance={connected && !repairRequired ? 'secondary' : 'primary'} onClick={() => setOpen(true)}>
-      {triggerLabel}
+    <Button
+      appearance={connected && !repairRequired ? 'secondary' : 'primary'}
+      disabled={repairRequired && connecting}
+      onClick={() => repairRequired ? void connect() : setOpen(true)}
+    >
+      {repairRequired ? (connecting ? 'Opening GitHub' : 'Reconnect GitHub Copilot') : triggerLabel}
     </Button>
   ) : undefined;
 
   return (
     <>
       {showConnectionStatus && (
-        <SetupReadiness
-          compact
-          model={{
-            title: 'Model provider',
-            description: GITHUB_APPS_EXPLANATION,
-            loading,
-            loadingLabel: 'Loading model provider status',
-            error: loadError,
-            items: [{
-              id: 'project-model-provider',
-              title: 'AI access',
-              description: readinessDescription,
-              requirement: 'required',
-              status: readinessStatus,
-            }],
-          }}
-          onRetry={() => void refreshConnection()}
-          primaryAction={trigger}
-        />
+        <>
+          <SetupReadiness
+            compact
+            model={{
+              title: 'Model provider',
+              description: GITHUB_APPS_EXPLANATION,
+              loading,
+              loadingLabel: 'Loading model provider status',
+              error: loadError,
+              items: [{
+                id: 'project-model-provider',
+                title: 'AI access',
+                description: readinessDescription,
+                requirement: 'required',
+                status: readinessStatus,
+              }],
+            }}
+            onRetry={() => void refreshConnection()}
+            primaryAction={trigger}
+          />
+          {!open && connectionError && (
+            <MessageBar intent="error"><MessageBarBody>{connectionError}</MessageBarBody></MessageBar>
+          )}
+        </>
       )}
       {!showConnectionStatus && trigger}
       <Dialog open={open} onOpenChange={(_, data) => setOpen(data.open)}>

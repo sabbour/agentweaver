@@ -26,9 +26,11 @@ If Edge is already running with `--remote-debugging-port=9222`, use `--cdp` inst
 See `scripts/ui-harness/SKILL.md` for full options and what is saved.
 
 The local git-ignored `.auth/staging.storageState.json` is reused headlessly. Expiry stops
-with `AUTH_EXPIRED`; the harness never automates reauthentication. Targets are
-restricted to localhost/staging unless both `--allow-prod` and `--confirm-production`
-are explicitly supplied. Storage state is never logged or attached to evidence.
+with `AUTH_EXPIRED`; the harness never automates reauthentication. Any HTTPS host is
+accepted (HTTP is loopback-only), with normal TLS validation. Automated navigation and
+requests are same-origin; only the explicit headful login flow may visit configured
+identity-provider origins. Storage state is origin-filtered and never logged or attached
+to evidence.
 
 `init` owns one headless browser worker per session. Separate action invocations reuse
 that worker's page, so navigation and browser state survive a documented
@@ -36,6 +38,14 @@ that worker's page, so navigation and browser state survive a documented
 sessions remain isolated, and `finish` closes the worker and deletes its private
 recovery state. An abandoned worker is recovered from the last completed action without
 opening a CDP or remote-debugging endpoint.
+
+Persisted snapshots, actions, errors, screenshot metadata, and normalized artifacts keep
+URLs only as origin plus pathname; userinfo, query strings, and fragments remain
+in-memory only as required for the live page. Action arguments are sealed for the
+session worker while crossing the private file transport. `finish` closes the
+browser/runtime and removes harness-owned session state before writing evidence, so
+artifact failures cannot strand local resources. If forced termination cannot be
+confirmed, retry metadata remains instead of being deleted prematurely.
 
 ## Pointer drag
 

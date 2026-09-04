@@ -1320,10 +1320,10 @@ function buildTurns(events: RunStreamEvent[]): ConversationTurn[] {
       pendingTools.set(call.callId, call);
       continue;
     }
-    if (evt.type === 'tool.approval_required' || evt.type === 'shell.approval_required') {
+    if (evt.type === 'tool.approval_required' || evt.type === 'tool.approval_context' || evt.type === 'shell.approval_required') {
       // Shell approvals may only have commandHash (no requestId); look up by either.
-      const requestId = readString(evt.payload, ['requestId', 'request_id'])
-        ?? readString(evt.payload, ['commandHash', 'command_hash'])
+      const requestId = readString(evt.payload, ['requestId', 'request_id', 'RequestId'])
+        ?? readString(evt.payload, ['commandHash', 'command_hash', 'CommandHash'])
         ?? '';
       const resolvedScope = requestId ? (resolvedApprovals.get(requestId) ?? null) : null;
       ensureTurn().approvals.push({
@@ -1570,8 +1570,13 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
       return `Tool approval required from ${subtaskDescription(p, subtasks)}: ${tool}${message ? ` — ${message}` : ''}`;
     }
     case 'tool.approval_required': {
-      const tool = readString(p, ['toolName', 'tool_name']) ?? 'tool';
+      const tool = readString(p, ['toolName', 'tool_name', 'ToolName']) ?? 'tool';
       const message = readString(p, ['message', 'url', 'intention']);
+      return `Tool approval required: ${tool}${message ? ` — ${message}` : ''}`;
+    }
+    case 'tool.approval_context': {
+      const tool = readString(p, ['toolName', 'tool_name', 'ToolName']) ?? 'tool';
+      const message = readString(p, ['message', 'url', 'intention', 'Url']);
       return `Tool approval required: ${tool}${message ? ` — ${message}` : ''}`;
     }
     case 'shell.approval_required': {
@@ -1635,6 +1640,7 @@ function coordinatorEventIntent(evt: RunStreamEvent): string {
     case 'coordinator.child_question': return 'Question from child';
     case 'coordinator.child_approval_required':
     case 'tool.approval_required':
+    case 'tool.approval_context':
     case 'shell.approval_required': return 'Approval required';
     case 'coordinator.child_approval_resolved': return 'Approval resolved';
     case 'coordinator.autopilot_answered': return 'Autopilot answered';
@@ -1719,12 +1725,13 @@ function buildCoordinatorTurns(events: RunStreamEvent[]): ConversationTurn[] {
   for (const evt of events) {
     const line = coordinatorActivityLine(evt, subtasks, gateLabelBySequence);
     if (!line) continue;
-    const requestId = readString(evt.payload, ['requestId', 'request_id'])
-      ?? readString(evt.payload, ['commandHash', 'command_hash'])
+    const requestId = readString(evt.payload, ['requestId', 'request_id', 'RequestId'])
+      ?? readString(evt.payload, ['commandHash', 'command_hash', 'CommandHash'])
       ?? '';
     const resolvedScope = requestId ? (resolvedApprovals.get(requestId) ?? null) : null;
     const isApprovalRequest = evt.type === 'coordinator.child_approval_required'
       || evt.type === 'tool.approval_required'
+      || evt.type === 'tool.approval_context'
       || evt.type === 'shell.approval_required';
     const approvals = isApprovalRequest
       ? [{ event: evt, isResolved: resolvedScope !== null, resolvedScope }]

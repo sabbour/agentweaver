@@ -14,7 +14,9 @@ public static class HumanEntraSubjectAuthorization
 {
     public static HumanEntraSubjectState Evaluate(CallerContext caller, ClaimsPrincipal principal) =>
         !string.IsNullOrWhiteSpace(caller.EntraObjectId) &&
-        !principal.HasClaim("agentweaver_internal", "true")
+        !principal.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.InternalServiceKey)
             ? HumanEntraSubjectState.Allowed
             : HumanEntraSubjectState.HumanEntraSubjectRequired;
 }

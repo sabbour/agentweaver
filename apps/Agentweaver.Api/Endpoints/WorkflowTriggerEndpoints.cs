@@ -17,7 +17,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class WorkflowTriggerEndpoints
 {
-    public static void MapWorkflowTriggerEndpoints(this WebApplication app)
+    public static void MapWorkflowTriggerEndpoints(this IEndpointRouteBuilder app)
     {
         // POST /api/projects/{projectId}/workflow-events — fire an event trigger (issue #53).
         app.MapPost("/api/projects/{projectId}/workflow-events", async (

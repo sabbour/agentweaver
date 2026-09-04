@@ -163,7 +163,8 @@ One static `SecretProviderClass` object syncs app secrets from Key Vault into th
 |-----------------|------------------------------|----------|
 | `mcp-api-key` | `mcp-api-key` | API authentication and worker loopback calls → `Auth__ApiKey` |
 
-The MCP pod mounts no secrets; MCP auth relies only on OAuth (Agentweaver-minted JWT + transitional GitHub passthrough).
+The MCP pod mounts no secrets; MCP auth accepts only Agentweaver-minted broker JWTs with
+the exact `/mcp` audience and `mcp:invoke` scope.
 
 Secrets are read at pod startup via a shell wrapper in the container `command` — they are sourced from files, not injected as Kubernetes Secret refs. The CSI volume mount on `/mnt/secrets-store` is required to trigger synchronization; without it the files are never written.
 

@@ -34,10 +34,23 @@ namespace Agentweaver.Api.Assistant;
 /// </para>
 ///
 /// <para>
-/// Each turn is fully self-contained (the caller always replays the bounded conversation history), so
-/// the pod is claimed fresh and released after every turn rather than held for the conversation's
-/// whole lifetime — reusing <see cref="IAgentHostPodLifecycle"/>'s existing launch/release lifecycle
-/// exactly as coordinator subtasks do, with no new pod/claim bookkeeping.
+/// The pod is HELD for the conversation, not for a single turn. Claiming a warm pod and running its
+/// one-shot <c>/configure</c> (which itself runs <c>CopilotAIAgent.SetupAsync</c> and starts a
+/// Copilot/BYOK client from scratch) costs ~8s, and the surrounding claim-bind + readiness gate adds
+/// several more — so releasing the pod in a per-turn <c>finally</c>, as this agent originally did,
+/// paid that entire cold start again on EVERY message (measured live at 15-20s of silence per turn).
+/// The pod is therefore released only when the turn FAILS; a successful turn leaves the claim in
+/// place so the next message re-binds the very same, already-configured pod. Because <c>/configure</c>
+/// is one-shot, the current short-lived MCP broker token is renewed over the authenticated
+/// API-to-pod control plane before every turn and again immediately before every MCP tool call, so
+/// a held pod never serves MCP calls with a stale credential.
+/// </para>
+///
+/// <para>
+/// Holding cannot leak pods: <c>AssistantRunService</c> releases the pod once the conversation has
+/// been quiet for <c>Assistant:PodIdleTimeout</c> and again when the conversation is parked as
+/// dormant, and <c>AgentHostReaperService</c> reaps any claim whose run is no longer active as the
+/// cross-replica backstop.
 /// </para>
 /// </summary>
 public sealed class RemoteOperatorAssistantAgent(
@@ -61,6 +74,12 @@ public sealed class RemoteOperatorAssistantAgent(
     {
         ArgumentNullException.ThrowIfNull(request);
         var runId = request.ConversationId;
+        if (string.IsNullOrWhiteSpace(request.McpBrokerToken))
+            throw new InvalidOperationException(
+                "The operator assistant AgentHost requires a per-turn MCP broker token.");
+        if (request.RenewMcpBrokerTokenAsync is null)
+            throw new InvalidOperationException(
+                "The operator assistant AgentHost requires a server-side MCP broker token renewal callback.");
 
         // IAgentHostPodLifecycle is only registered in-cluster (mirrors every other pod-per-run
         // consumer, e.g. KubernetesPodAgentEndpointResolver's optional podLifecycle) so DI validation
@@ -85,8 +104,10 @@ public sealed class RemoteOperatorAssistantAgent(
                 new AgentHostLaunchContext(
                     SharedWorkingDirectory: null,
                     Purpose: AgentHostPurpose.OperatorAssistant,
-                    CallerBearerToken: request.CallerBearerToken),
+                    McpBrokerToken: request.McpBrokerToken,
+                    HolderToken: request.PodHolderToken),
                 ct).ConfigureAwait(false);
+            await RefreshMcpBrokerTokenAsync(request, podLifecycle, ct).ConfigureAwait(false);
         }
         catch (ModelProviderConnectionRequiredException)
         {
@@ -137,12 +158,23 @@ public sealed class RemoteOperatorAssistantAgent(
                 ct: ct,
                 userId: request.CallerUser).ConfigureAwait(false);
 
-            var drainTask = DrainAsync(runId, channel.Reader, sink, invokedTools, ct);
+            using var turnCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var drainTask = DrainAsync(
+                runId, channel.Reader, sink, invokedTools, request, podLifecycle, turnCts.Token);
 
             string text;
             try
             {
-                text = await proxy.RunTurnAsync(taskJson, isRevision: false, ct).ConfigureAwait(false);
+                var turnTask = proxy.RunTurnAsync(taskJson, isRevision: false, turnCts.Token);
+                var completed = await Task.WhenAny(turnTask, drainTask).ConfigureAwait(false);
+                if (completed == drainTask)
+                {
+                    turnCts.Cancel();
+                    await drainTask.ConfigureAwait(false);
+                    throw new InvalidOperationException(
+                        "The operator assistant AgentHost event stream ended before the model turn completed.");
+                }
+                text = await turnTask.ConfigureAwait(false);
             }
             finally
             {
@@ -159,20 +191,36 @@ public sealed class RemoteOperatorAssistantAgent(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // A failed turn may have left the pod half-configured or wedged, so it must NOT be
+            // carried into the next message — release it here (the success path deliberately does
+            // not, so the conversation keeps its warm, already-configured pod).
+            await TryReleaseAgentHostPodAsync(podLifecycle, runId).ConfigureAwait(false);
             throw ClassifyOrWrap(ex, runId, "Operator assistant turn failed on the AgentHost pod");
+        }
+        catch (OperationCanceledException)
+        {
+            await TryReleaseAgentHostPodAsync(podLifecycle, runId).ConfigureAwait(false);
+            throw;
         }
         finally
         {
             await ((IAsyncDisposable)proxy).DisposeAsync().ConfigureAwait(false);
-            try
-            {
-                await podLifecycle.ReleaseAgentHostPodAsync(runId, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(
-                    ex, "RemoteOperatorAssistantAgent: failed to release AgentHost pod for run {RunId} (best-effort).", runId);
-            }
+        }
+    }
+
+    /// <summary>Best-effort pod release used on the failure paths only; a release failure must never
+    /// mask the original turn error. The idle/dormancy sweeps in <see cref="AssistantRunService"/> and
+    /// the <c>AgentHostReaperService</c> are the backstops for anything missed here.</summary>
+    private async Task TryReleaseAgentHostPodAsync(IAgentHostPodLifecycle podLifecycle, string runId)
+    {
+        try
+        {
+            await podLifecycle.ReleaseAgentHostPodAsync(runId, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex, "RemoteOperatorAssistantAgent: failed to release AgentHost pod for run {RunId} (best-effort).", runId);
         }
     }
 
@@ -199,7 +247,11 @@ public sealed class RemoteOperatorAssistantAgent(
         // Operator/Assistant turns are personal sessions, not project-scoped work: run.ProjectId
         // (when present) is only incidental UI context, so credential resolution must always go
         // through the PLATFORM-level Copilot connection rather than that project's own (possibly
-        // broken/missing) binding. A failure always surfaces the platform-settings CTA.
+        // broken/missing) binding. A failure always surfaces the platform-settings CTA. This is the
+        // SAME scope AssistantRunService selects the session's provider at (its
+        // ResolveAssistantModelSourceAsync resolves at platform scope too, and re-resolves each
+        // turn), so selection and validation cannot disagree — and because run.ModelSource is read
+        // fresh from the store above, a mid-conversation provider switch is honoured here too.
         if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct, platformScoped: true)
                 .ConfigureAwait(false))
             throw new ModelProviderConnectionRequiredException();
@@ -210,13 +262,17 @@ public sealed class RemoteOperatorAssistantAgent(
     /// re-projected through the caller's own sink (so they persist with the CORRECT conversational
     /// message id, exactly as the retired in-process path did); the three tool-approval event types
     /// are appended to the run's event stream verbatim, because the pod's own approval gate — not
-    /// this process's — is what the operator's grant/deny decision ultimately resolves.
+    /// this process's — is what the operator's grant/deny decision ultimately resolves. Structured
+    /// <c>run.failed</c> remains on the internal A2A path only: persisting it on the public operator
+    /// conversation stream would incorrectly terminalize an otherwise retryable conversation.
     /// </summary>
-    private async Task DrainAsync(
+    internal async Task DrainAsync(
         string runId,
         ChannelReader<RunEvent> reader,
         IOperatorAssistantTurnSink? sink,
         List<string> invokedTools,
+        OperatorAssistantRequest request,
+        IAgentHostPodLifecycle podLifecycle,
         CancellationToken ct)
     {
         await foreach (var runEvent in reader.ReadAllAsync(ct).ConfigureAwait(false))
@@ -226,6 +282,11 @@ public sealed class RemoteOperatorAssistantAgent(
 
             switch (runEvent.Type)
             {
+                case EventTypes.AgentMessageDelta:
+                    if (TryGetString(payload, "delta", out var delta) && sink is not null)
+                        await sink.OnAssistantTextDeltaAsync(delta, ct).ConfigureAwait(false);
+                    break;
+
                 case EventTypes.ToolCall:
                     if (TryGetString(payload, "name", out var callName))
                     {
@@ -248,8 +309,26 @@ public sealed class RemoteOperatorAssistantAgent(
                 case EventTypes.ToolApprovalResolved:
                     await eventStream.AppendAsync(runId, runEvent, ct).ConfigureAwait(false);
                     break;
+
+                case EventTypes.McpBrokerTokenRefreshRequired:
+                    await RefreshMcpBrokerTokenAsync(request, podLifecycle, ct).ConfigureAwait(false);
+                    break;
             }
         }
+    }
+
+    private static async Task RefreshMcpBrokerTokenAsync(
+        OperatorAssistantRequest request,
+        IAgentHostPodLifecycle podLifecycle,
+        CancellationToken ct)
+    {
+        var issuer = request.RenewMcpBrokerTokenAsync
+            ?? throw new InvalidOperationException("The MCP broker token renewal callback is unavailable.");
+        var token = await issuer(ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(token))
+            throw new InvalidOperationException("MCP broker token renewal returned an empty credential.");
+        await podLifecycle.RefreshAgentHostMcpBrokerTokenAsync(request.ConversationId, token, ct)
+            .ConfigureAwait(false);
     }
 
     private static bool TryGetString(JsonElement payload, string propertyName, out string value)
@@ -266,8 +345,9 @@ public sealed class RemoteOperatorAssistantAgent(
         return false;
     }
 
-    private static Exception ClassifyOrWrap(Exception ex, string runId, string fallbackMessage) =>
-        AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId)
+    internal static Exception ClassifyOrWrap(Exception ex, string runId, string fallbackMessage) =>
+        ClassifyProxyFailure(ex, runId)
+        ?? AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId)
         ?? new AgentProviderException(
             ModelSource.GitHubCopilot,
             AgentProviderFailureKind.ProviderUnavailable,
@@ -275,4 +355,47 @@ public sealed class RemoteOperatorAssistantAgent(
             $"Run {runId}: {fallbackMessage}: {ex.Message}",
             isRetryable: true,
             ex);
+
+    internal static AgentProviderException? ClassifyProxyFailure(Exception ex, string runId)
+    {
+        if (ex is not WorkflowAgentInfrastructureException infrastructure)
+            return null;
+
+        if (TryMapFailureKind(infrastructure.Reason, out var failureKind))
+        {
+            return new AgentProviderException(
+                ModelSource.GitHubCopilot,
+                failureKind,
+                infrastructure.Reason,
+                infrastructure.Message,
+                infrastructure.IsRetryable ?? failureKind is AgentProviderFailureKind.ProviderUnavailable or AgentProviderFailureKind.RateLimited,
+                infrastructure);
+        }
+
+        return null;
+    }
+
+    internal static bool TryMapFailureKind(string errorCode, out AgentProviderFailureKind failureKind)
+    {
+        switch (errorCode)
+        {
+            case "github_copilot_auth_required":
+                failureKind = AgentProviderFailureKind.Authorization;
+                return true;
+            case "github_copilot_model_unavailable":
+            case "github_copilot_runtime_not_configured":
+                failureKind = AgentProviderFailureKind.Configuration;
+                return true;
+            case "github_copilot_rate_limited":
+                failureKind = AgentProviderFailureKind.RateLimited;
+                return true;
+            case "github_copilot_models_unavailable":
+            case "github_copilot_provider_unavailable":
+                failureKind = AgentProviderFailureKind.ProviderUnavailable;
+                return true;
+            default:
+                failureKind = default;
+                return false;
+        }
+    }
 }

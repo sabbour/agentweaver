@@ -54,20 +54,17 @@ public sealed class GenerationModelProviderExecutor(
             throw new GitHubCopilotUnauthorizedException(
                 "GitHub Copilot requires the authenticated caller's identity to issue a capability.");
 
-        // Platform-scoped generation (no project yet) still needs an opaque scope key to bind the
-        // capability to; the platform binding's own well-known singleton id is a safe, stable choice
-        // since it is never a real project id and every redemption path already special-cases it.
-        var scopeId = projectId?.ToString() ?? PlatformDefaultCopilotBindingRecord.SingletonId;
+        var scopeProjectId = projectId?.ToString();
         var now = DateTimeOffset.UtcNow;
         var capability = await persistence.TryIssueProjectCopilotCapabilityAsync(
-            purpose, scopeId, entraObjectId, now, now.Add(CapabilityLifetime), ct).ConfigureAwait(false);
+            purpose, scopeProjectId, entraObjectId, now, now.Add(CapabilityLifetime), ct).ConfigureAwait(false);
         if (capability is null)
             throw new GitHubCopilotUnauthorizedException(
-                "GitHub Copilot requires a live project-bound or platform-default capability.");
+                "GitHub Copilot requires a live project-scoped or platform-default capability.");
 
         return new GenerationExecutionPlan(
             ModelSource.GitHubCopilot,
-            new CopilotOperationCapability(capability.Value, scopeId, entraObjectId, purpose));
+            new CopilotOperationCapability(capability.Value, scopeProjectId, entraObjectId, purpose));
     }
 }
 

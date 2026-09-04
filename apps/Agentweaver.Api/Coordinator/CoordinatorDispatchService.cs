@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
@@ -846,12 +847,17 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (childBaseBranch is null)
             return null;
 
+        // A child run is served by the SAME effective model provider as its coordinator, but the
+        // durable source must reflect the resolver's actual result — a hardcoded literal made every
+        // BYOK child run persist (and render) as GitHub Copilot.
+        var effectiveProvider = await ResolveEffectiveProviderAsync(context.ProjectId, ct).ConfigureAwait(false);
+
         var childRun = new Run
         {
             Id = childRunId,
             RepositoryPath = context.RepositoryPath,
             OriginatingBranch = childBaseBranch,
-            ModelSource = ModelSource.GitHubCopilot,
+            ModelSource = effectiveProvider.ToModelSource(),
             Task = childTask,
             SubmittingUser = context.SubmittingUser,
             Status = RunStatus.InProgress,
@@ -924,6 +930,19 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             EmitSubtask(context, workPlanId, running, EventTypes.SubtaskRunning, seq.Next());
 
         return childRunId.ToString();
+    }
+
+    /// <summary>
+    /// Resolves the effective model provider for <paramref name="projectId"/> through the single
+    /// shared <see cref="EffectiveModelProviderResolver"/>, so each dispatched child run persists the
+    /// provider that actually serves its model turns.
+    /// </summary>
+    private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderAsync(
+        ProjectId? projectId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
+        return await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
     }
 
     private async Task ApplyChildResultAsync(

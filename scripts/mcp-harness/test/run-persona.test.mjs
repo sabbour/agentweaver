@@ -20,6 +20,7 @@ import {
   prepareJudgeEvidence,
   finalizeVerdict,
 } from '../run-persona.mjs';
+import { serializeTranscriptLine } from '../lib/transcript.mjs';
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const execFile = promisify(execFileCallback);
@@ -33,15 +34,13 @@ async function scratchDir() {
 
 test('parseArgs maps the api-parity CLI shape', () => {
   const args = parseArgs([
-    '--scenario', 'priya', '--target', 'http://localhost:5000/mcp', '--token', 't',
+    '--scenario', 'priya', '--target', 'http://localhost:5000/mcp',
     '--project-id', 'proj-1', '--batch-id', 'b1', '--seed', 's1', '--out', 'v.json',
     '--transcript', 'tr.jsonl', '--dump-evidence', 'evidence.json', '--prompt-out', 'prompt.txt',
     '--server-command', 'dotnet', '--server-args', '["run"]',
-    '--allow-prod', '--i-understand-prod',
   ]);
   assert.equal(args.scenario, 'priya');
   assert.equal(args.target, 'http://localhost:5000/mcp');
-  assert.equal(args.token, 't');
   assert.equal(args.projectId, 'proj-1');
   assert.equal(args.batchId, 'b1');
   assert.equal(args.seed, 's1');
@@ -51,8 +50,6 @@ test('parseArgs maps the api-parity CLI shape', () => {
   assert.equal(args.promptOut, 'prompt.txt');
   assert.equal(args.serverCommand, 'dotnet');
   assert.equal(args.serverArgs, '["run"]');
-  assert.equal(args.allowProd, true);
-  assert.equal(args.confirmProduction, true);
 });
 
 test('parseArgs accepts --persona and --base-url aliases', () => {
@@ -61,29 +58,34 @@ test('parseArgs accepts --persona and --base-url aliases', () => {
   assert.equal(args.target, 'stdio');
 });
 
+test('retired credential argv options are rejected without echoing their values', () => {
+  const canary = 'secret-canary-argv-55';
+  const retiredOption = `--${'to'}${'ken'}`;
+  assert.throws(
+    () => parseArgs([`${retiredOption}=${canary}`]),
+    (error) => error.message.includes(retiredOption) && !error.message.includes(canary),
+  );
+});
+
 test('resolveTransport treats stdio as a sentinel and any URL as http', () => {
   assert.deepEqual(resolveTransport({ target: 'stdio' }), { mode: 'stdio', target: 'stdio' });
   assert.deepEqual(resolveTransport({}), { mode: 'stdio', target: 'stdio' });
   assert.deepEqual(resolveTransport({ target: 'http://localhost:5000/mcp' }), { mode: 'http', target: 'http://localhost:5000/mcp' });
 });
 
-test('checkTargetAllowed exempts stdio and enforces the guard for http', () => {
+test('checkTargetAllowed exempts stdio and validates transport and exact MCP path for http', () => {
   assert.equal(checkTargetAllowed({ mode: 'stdio', target: 'stdio' }, {}), null);
   assert.equal(checkTargetAllowed({ mode: 'http', target: 'http://localhost:5000/mcp' }, {}), null);
-  assert.equal(checkTargetAllowed({ mode: 'http', target: 'https://mcp.staging.example.test/mcp' }, {}), null);
-  const prod = checkTargetAllowed({ mode: 'http', target: 'https://prod.example.test/mcp' }, {});
-  assert.match(prod, /--allow-prod/);
-  assert.equal(
-    checkTargetAllowed({ mode: 'http', target: 'https://prod.example.test/mcp' }, { allowProd: true, confirmProduction: true }),
-    null,
-  );
+  assert.equal(checkTargetAllowed({ mode: 'http', target: 'https://arbitrary.example.test/mcp' }, {}), null);
+  assert.match(checkTargetAllowed({ mode: 'http', target: 'http://remote.example.test/mcp' }, {}), /HTTPS/);
+  assert.match(checkTargetAllowed({ mode: 'http', target: 'https://remote.example.test/mcp/' }, {}), /exactly/);
 });
 
 test('buildSessionId and buildTranscriptPath are deterministic for a fixed clock', () => {
   const now = new Date('2026-07-15T03:20:11.500Z');
   const sessionId = buildSessionId({ scenario: 'priya', now });
   assert.equal(sessionId, 'priya-live-2026-07-15T03-20-11-500Z');
-  const transcriptPath = buildTranscriptPath({ sessionId, dir: '/tmp/transcripts' });
+  const transcriptPath = buildTranscriptPath({ sessionId, dir: path.join(TEST_DIR, 'transcripts') });
   assert.equal(path.basename(transcriptPath), 'priya-live-2026-07-15T03-20-11-500Z.jsonl');
 });
 
@@ -92,7 +94,7 @@ test('buildDispatchPrompt embeds the charter, brief, target and transcript path,
   const prompt = buildDispatchPrompt({
     persona,
     transport: { mode: 'http', target: 'https://mcp.staging.example.test/mcp' },
-    token: 'secret-token',
+    tokenAvailable: true,
     transcriptPath: '/repo/scripts/mcp-harness/transcripts/priya-live-x.jsonl',
     projectId: 'proj-1',
     goal: 'inspect a triage plan and push back twice',
@@ -106,6 +108,7 @@ test('buildDispatchPrompt embeds the charter, brief, target and transcript path,
   assert.match(prompt, /tools\/list/);
   // The token value itself must not be echoed into the dispatch prompt.
   assert.doesNotMatch(prompt, /secret-token/);
+  assert.match(prompt, /AGENTWEAVER_TOKEN/);
 });
 
 test('buildDispatchPrompt tells a stdio driver no token is needed', () => {
@@ -175,6 +178,65 @@ test('parseTranscriptJsonl normalizes turns and tolerates blank lines and bad JS
   assert.equal(turns[1].outcome.ok, false);
 });
 
+test('dispatch and normalized transcript artifacts never contain bearer or query canaries', () => {
+  const canary = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+  const prompt = buildDispatchPrompt({
+    persona: { id: 'priya', name: 'Priya', text: 'brief' },
+    transport: { mode: 'http', target: 'https://example.test/mcp' },
+    tokenAvailable: true,
+    transcriptPath: '/repo/transcript.jsonl',
+  });
+  const parsed = parseTranscriptJsonl(JSON.stringify({
+    turn: 1,
+    thought: `Bearer ${canary}`,
+    request: {
+      tool: 'run_status',
+      arguments: { url: `https://example.test/path?${canary}=${canary}` },
+    },
+    response: { rawContent: `Bearer ${canary}`, error: { token: canary } },
+  }));
+  assert.doesNotMatch(prompt, new RegExp(canary));
+  assert.doesNotMatch(JSON.stringify(parsed), new RegExp(canary));
+});
+
+test('MCP prompt, JSONL, normalized evidence, and Judge input recursively redact secrets', () => {
+  const canary = 'secret-canary-nested-42';
+  const secretUrl = `https://user:${canary}@example.test/path?key=${canary}#${canary}`;
+  const exchange = {
+    thought: `observed Bearer ${canary}`,
+    request: {
+      headers: { Authorization: `Bearer ${canary}` },
+      arguments: { callbackUrl: secretUrl },
+    },
+    response: {
+      structuredContent: { nested: [{ token: canary }, { url: secretUrl }] },
+      rawContent: `token=${canary}; request failed at ${secretUrl}`,
+      error: new Error(`Bearer ${canary}`),
+    },
+  };
+  const line = serializeTranscriptLine(exchange);
+  const driverPrompt = buildDispatchPrompt({
+    persona: { id: 'priya', name: 'Priya', text: 'brief' },
+    transport: { mode: 'http', target: secretUrl },
+    tokenAvailable: true,
+    transcriptPath: '/repo/transcript.jsonl',
+  });
+  const prepared = prepareJudgeEvidence({
+    transcriptText: line,
+    persona: { name: 'Priya', text: 'brief', adapter: { content: 'adapter' }, content: 'core' },
+    metadata: {
+      batchId: 'b1', scenarioId: 'priya', inputSeed: 's1', adapterVersion: 'a1',
+      personaCoreVersion: 'p1', targetRevision: secretUrl, surface: 'mcp',
+      runId: 'r1', timestamp: '2026-09-03T00:00:00.000Z',
+    },
+  });
+  for (const artifact of [line, driverPrompt, JSON.stringify(prepared.normalized), prepared.prompt]) {
+    assert.doesNotMatch(artifact, new RegExp(canary));
+    assert.doesNotMatch(artifact, /[?#]secret-canary/i);
+  }
+  assert.match(line, /https:\/\/example\.test\/path/);
+});
+
 test('runCapabilityCheck fails closed without a client and runs the contract with one', async () => {
   const none = await runCapabilityCheck({});
   assert.equal(none.available, false);
@@ -192,6 +254,7 @@ test('runCapabilityCheck fails closed without a client and runs the contract wit
       { name: 'project_github_capability_status' },
       { name: 'project_list' },
       { name: 'project_create', inputSchema: { type: 'object', required: ['name', 'working_directory'], properties: { name: { type: 'string' }, working_directory: { type: 'string' } } } },
+      { name: 'project_delete', inputSchema: { type: 'object', required: ['project_id'], properties: { project_id: { type: 'string' } } } },
       { name: 'diagnostics_get' },
       { name: 'coordinator_outcome_spec_confirm', inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } } } },
     ]),

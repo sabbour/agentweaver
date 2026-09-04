@@ -16,6 +16,12 @@ namespace Agentweaver.AgentRuntime;
 /// context for the next turn.</summary>
 public sealed record ConsoleFacadeHistoryMessage(string Role, string Text);
 
+/// <param name="PodHolderToken">
+/// Optional fencing token identifying the owner of this conversation's held AgentHost pod. It is
+/// stamped on the pod's claim at launch so a later release from that owner can prove the claim is
+/// still the one it created, instead of one another API replica has since put in its place under the
+/// same deterministic, run-derived name.
+/// </param>
 public sealed record OperatorAssistantRequest(
     string ConversationId,
     string Message,
@@ -25,8 +31,10 @@ public sealed record OperatorAssistantRequest(
     string? RunId,
     string? ModelId,
     string AgentDefinition,
-    string CallerBearerToken,
-    IReadOnlyList<ConsoleFacadeHistoryMessage> History);
+    string McpBrokerToken,
+    IReadOnlyList<ConsoleFacadeHistoryMessage> History,
+    Func<CancellationToken, Task<string>>? RenewMcpBrokerTokenAsync = null,
+    string? PodHolderToken = null);
 
 public sealed record OperatorAssistantResponse(string Message, IReadOnlyList<string> ToolNamesInvoked);
 
@@ -74,6 +82,19 @@ public interface IOperatorAssistantTurnSink
     /// A null sink cannot gate, so gated tools run ungated only in the no-sink (non-projected) case.
     /// </summary>
     ValueTask<bool> OnApprovalRequiredAsync(string requestId, string toolName, string? argumentsJson, CancellationToken ct);
+
+    /// <summary>
+    /// Renews the server-held MCP broker credential immediately before a tool invocation. The token
+    /// itself never crosses this callback or the run event stream.
+    /// </summary>
+    ValueTask OnMcpBrokerTokenRefreshRequiredAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Projects a structured terminal provider failure onto the caller's run/event stream before the
+    /// turn exception propagates.
+    /// </summary>
+    ValueTask OnRunFailedAsync(AgentProviderException providerFailure, CancellationToken ct) =>
+        ValueTask.CompletedTask;
 }
 
 public interface IOperatorAssistantAgent
@@ -93,8 +114,8 @@ public interface IOperatorAssistantAgent
 ///   2. There is no regex pre-router: the LLM routes via MCP tool descriptions.
 ///
 /// The regex router and the existing facade are intentionally left untouched — this is an additive
-/// spike that proves the MCP tool-adapter path works end to end. Per-call caller bearer passthrough
-/// is preserved: the caller's token is forwarded to the MCP server on every tools/call.
+/// spike that proves the MCP tool-adapter path works end to end. The API-issued, short-lived broker
+/// token is forwarded to the MCP server on every tools/call.
 /// </summary>
 public sealed class OperatorAssistantAgent(
     GitHubCopilotClientFactory factory,
@@ -133,137 +154,211 @@ public sealed class OperatorAssistantAgent(
         var modelSource = byokProvider is null ? ModelSource.GitHubCopilot : ModelSource.Byok;
 
         if (byokProvider is null && string.IsNullOrWhiteSpace(request.RunId))
-            throw new AgentProviderException(
+        {
+            var providerFailure = new AgentProviderException(
                 ModelSource.GitHubCopilot,
                 AgentProviderFailureKind.Authorization,
                 "github_copilot_auth_required",
                 "Operator assistant cannot start without a run-bound Copilot capability snapshot.",
                 isRetryable: false);
+            await EmitProviderFailureAsync(providerFailure, sink, ct).ConfigureAwait(false);
+            throw providerFailure;
+        }
 
         // Connect to the real MCP server as the caller and adapt its tools to AIFunctions.
         await using var mcpSession = await mcpToolProvider
-            .ConnectAsync(request.CallerBearerToken, ct)
+            .ConnectAsync(request.McpBrokerToken, ct)
             .ConfigureAwait(false);
         var toolDeclarations = BuildToolDeclarations(mcpSession, sink, ct);
         logger.LogInformation(
             "Operator assistant connected to MCP server: {ToolCount} tools available for conversation {ConversationId}",
             toolDeclarations.Count, request.ConversationId);
 
-        await using var client = byokProvider is null
-            ? await factory.CreateClientAsync(request.RunId!, request.ModelId, ct).ConfigureAwait(false)
+        var client = byokProvider is null
+            ? await InvokeProviderOperationAsync(
+                token => factory.CreateClientAsync(request.RunId!, request.ModelId, token),
+                modelSource,
+                sink,
+                ct,
+                (ex, providerFailure) => logger.LogWarning(
+                    ex,
+                    "Operator assistant provider failure while creating client: {Code}",
+                    providerFailure.ErrorCode)).ConfigureAwait(false)
             : factory.CreateByokClient();
-        try
+        await using var ownedClient = client;
         {
-            await client.StartAsync(ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (AgentProviderException.Classify(modelSource, ex, "operator") is { } providerFailure)
-        {
-            logger.LogWarning(ex, "Operator assistant provider failure while starting client: {Code}", providerFailure.ErrorCode);
-            throw providerFailure;
-        }
+            await InvokeProviderOperationAsync(
+                token => client.StartAsync(token),
+                modelSource,
+                sink,
+                ct,
+                (ex, providerFailure) => logger.LogWarning(
+                    ex,
+                    "Operator assistant provider failure while starting client: {Code}",
+                    providerFailure.ErrorCode)).ConfigureAwait(false);
 
-        var sessionConfig = BuildSessionConfig(
-            request.ConversationId,
-            BuildSystemPrompt(request),
-            toolDeclarations,
-            request.ModelId,
-            byokProvider);
+            var sessionConfig = BuildSessionConfig(
+                request.ConversationId,
+                BuildSystemPrompt(request),
+                toolDeclarations,
+                request.ModelId,
+                byokProvider);
 
-        var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: "Agentweaver Operator", description: null);
-        AgentSession session;
-        try
-        {
-            session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (AgentProviderException.Classify(modelSource, ex, "operator") is { } providerFailure)
-        {
-            logger.LogWarning(ex, "Operator assistant provider failure while creating session: {Code}", providerFailure.ErrorCode);
-            throw providerFailure;
-        }
+            var agent = client.AsAIAgent(sessionConfig, ownsClient: false, id: null, name: "Agentweaver Operator", description: null);
+            AgentSession session;
+            session = await InvokeProviderOperationAsync(
+                token => agent.CreateSessionAsync(token).AsTask(),
+                modelSource,
+                sink,
+                ct,
+                (ex, providerFailure) => logger.LogWarning(
+                    ex,
+                    "Operator assistant provider failure while creating session: {Code}",
+                    providerFailure.ErrorCode)).ConfigureAwait(false);
 
-        var messages = BuildMessages(request);
-        var answer = new StringBuilder();
-        var streamedMessageIds = new HashSet<string>(StringComparer.Ordinal);
-        var anyDeltaForNullId = false;
-        var invokedTools = new List<string>();
+            var messages = BuildMessages(request);
+            var answer = new StringBuilder();
+            var streamedMessageIds = new HashSet<string>(StringComparer.Ordinal);
+            var anyDeltaForNullId = false;
+            var invokedTools = new List<string>();
 
-        try
-        {
-            await foreach (var chunk in agent.RunStreamingAsync(messages, session, options: null, ct).WithCancellation(ct))
+            try
             {
-                if (chunk is null) continue;
-
-                var delta = chunk.Text;
-                if (!string.IsNullOrEmpty(delta))
+                await foreach (var chunk in agent.RunStreamingAsync(messages, session, options: null, ct).WithCancellation(ct))
                 {
-                    answer.Append(delta);
-                    if (chunk.MessageId is not null)
-                        streamedMessageIds.Add(chunk.MessageId);
-                    else
-                        anyDeltaForNullId = true;
+                    if (chunk is null) continue;
 
-                    if (sink is not null)
-                        await sink.OnAssistantTextDeltaAsync(delta, ct).ConfigureAwait(false);
-                }
-
-                // Surface the actual tool activity (not the whole tool catalog) so callers can
-                // project a faithful per-step transcript onto the run event stream.
-                if (chunk.Contents is not null)
-                {
-                    foreach (var content in chunk.Contents)
+                    var delta = chunk.Text;
+                    if (!string.IsNullOrEmpty(delta))
                     {
-                        switch (content)
+                        answer.Append(delta);
+                        if (chunk.MessageId is not null)
+                            streamedMessageIds.Add(chunk.MessageId);
+                        else
+                            anyDeltaForNullId = true;
+
+                        if (sink is not null)
+                            await sink.OnAssistantTextDeltaAsync(delta, ct).ConfigureAwait(false);
+                    }
+
+                    // Surface the actual tool activity (not the whole tool catalog) so callers can
+                    // project a faithful per-step transcript onto the run event stream.
+                    if (chunk.Contents is not null)
+                    {
+                        foreach (var content in chunk.Contents)
                         {
-                            case FunctionCallContent call:
-                                invokedTools.Add(call.Name);
-                                if (sink is not null)
-                                {
-                                    var argsJson = call.Arguments is null
-                                        ? null
-                                        : JsonSerializer.Serialize(call.Arguments, JsonOptions);
-                                    await sink.OnToolCallAsync(call.Name, argsJson, ct).ConfigureAwait(false);
-                                }
-                                break;
-                            case FunctionResultContent result:
-                                if (sink is not null)
-                                {
-                                    var toolName = ResolveToolName(result, invokedTools);
-                                    var success = result.Exception is null;
-                                    await sink.OnToolResultAsync(toolName, success, ct).ConfigureAwait(false);
-                                }
-                                break;
+                            switch (content)
+                            {
+                                case FunctionCallContent call:
+                                    invokedTools.Add(call.Name);
+                                    if (sink is not null)
+                                    {
+                                        var argsJson = call.Arguments is null
+                                            ? null
+                                            : JsonSerializer.Serialize(call.Arguments, JsonOptions);
+                                        await sink.OnToolCallAsync(call.Name, argsJson, ct).ConfigureAwait(false);
+                                    }
+                                    break;
+                                case FunctionResultContent result:
+                                    if (sink is not null)
+                                    {
+                                        var toolName = ResolveToolName(result, invokedTools);
+                                        var success = result.Exception is null;
+                                        await sink.OnToolResultAsync(toolName, success, ct).ConfigureAwait(false);
+                                    }
+                                    break;
+                            }
                         }
                     }
-                }
 
-                var final = ExtractFinalMessageContent(chunk);
-                if (!string.IsNullOrEmpty(final))
-                {
-                    var alreadyStreamed = chunk.MessageId is not null
-                        ? streamedMessageIds.Contains(chunk.MessageId)
-                        : anyDeltaForNullId;
-                    if (!alreadyStreamed)
-                        answer.Append(final);
+                    var final = ExtractFinalMessageContent(chunk);
+                    if (!string.IsNullOrEmpty(final))
+                    {
+                        var alreadyStreamed = chunk.MessageId is not null
+                            ? streamedMessageIds.Contains(chunk.MessageId)
+                            : anyDeltaForNullId;
+                        if (!alreadyStreamed)
+                            answer.Append(final);
+                    }
                 }
             }
-        }
-        catch (Exception ex) when (AgentProviderException.Classify(modelSource, ex, "operator") is { } providerFailure)
-        {
-            logger.LogWarning(ex, "Operator assistant provider failure: {Code}", providerFailure.ErrorCode);
-            throw providerFailure;
-        }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                if (AgentProviderException.Classify(modelSource, ex, "operator") is not { } providerFailure)
+                    throw;
 
-        var text = answer.ToString().Trim();
-        if (string.IsNullOrWhiteSpace(text))
-            text = "I could not produce an operator response. Try rephrasing the request with a project or run context.";
+                logger.LogWarning(ex, "Operator assistant provider failure: {Code}", providerFailure.ErrorCode);
+                await EmitProviderFailureAsync(providerFailure, sink, ct).ConfigureAwait(false);
+                throw providerFailure;
+            }
 
-        return new OperatorAssistantResponse(text, invokedTools);
+            var text = answer.ToString().Trim();
+            if (string.IsNullOrWhiteSpace(text))
+                text = "I could not produce an operator response. Try rephrasing the request with a project or run context.";
+
+            return new OperatorAssistantResponse(text, invokedTools);
+        }
     }
 
     private static string ResolveToolName(FunctionResultContent result, IReadOnlyList<string> invokedTools) =>
         !string.IsNullOrEmpty(result.CallId)
             ? invokedTools.LastOrDefault() ?? result.CallId
             : invokedTools.LastOrDefault() ?? "tool";
+
+    internal static async Task InvokeProviderOperationAsync(
+        Func<CancellationToken, Task> operation,
+        ModelSource modelSource,
+        IOperatorAssistantTurnSink? sink,
+        CancellationToken ct,
+        Action<Exception, AgentProviderException>? onProviderFailure = null)
+    {
+        try
+        {
+            await operation(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (AgentProviderException.Classify(modelSource, ex, "operator") is not { } providerFailure)
+                throw;
+
+            onProviderFailure?.Invoke(ex, providerFailure);
+            await EmitProviderFailureAsync(providerFailure, sink, ct).ConfigureAwait(false);
+            throw providerFailure;
+        }
+    }
+
+    internal static async Task<T> InvokeProviderOperationAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        ModelSource modelSource,
+        IOperatorAssistantTurnSink? sink,
+        CancellationToken ct,
+        Action<Exception, AgentProviderException>? onProviderFailure = null)
+    {
+        try
+        {
+            return await operation(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            if (AgentProviderException.Classify(modelSource, ex, "operator") is not { } providerFailure)
+                throw;
+
+            onProviderFailure?.Invoke(ex, providerFailure);
+            await EmitProviderFailureAsync(providerFailure, sink, ct).ConfigureAwait(false);
+            throw providerFailure;
+        }
+    }
+
+    internal static async ValueTask EmitProviderFailureAsync(
+        AgentProviderException providerFailure,
+        IOperatorAssistantTurnSink? sink,
+        CancellationToken ct)
+    {
+        if (sink is null)
+            return;
+
+        await sink.OnRunFailedAsync(providerFailure, ct).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Adapts every MCP tool to the <see cref="AIFunctionDeclaration"/> form used by SessionConfig.Tools,
@@ -284,11 +379,12 @@ public sealed class OperatorAssistantAgent(
             // stuck tool call can never wedge the whole turn. Consequential tools are additionally
             // wrapped in the human-approval gate; the deadline applies to the actual tool call, not to
             // the (separately time-boxed) approval wait.
-            AIFunction bounded = new DeadlineAIFunction(tool, ToolInvocationTimeout);
-            if (sink is not null && OperatorToolApprovalPolicy.RequiresApproval(tool.Name))
-                declarations.Add(new ApprovalGatingAIFunction(bounded, sink, ct));
-            else
-                declarations.Add(bounded);
+            declarations.Add(WrapTool(
+                tool,
+                sink,
+                OperatorToolApprovalPolicy.RequiresApproval(tool.Name),
+                ToolInvocationTimeout,
+                ct));
         }
         return declarations;
     }
@@ -298,6 +394,28 @@ public sealed class OperatorAssistantAgent(
     /// session. Not for production call sites.</summary>
     internal static AIFunction CreateDeadlineToolForTests(AIFunction inner, TimeSpan timeout) =>
         new DeadlineAIFunction(inner, timeout);
+
+    internal static AIFunction CreateRenewableToolForTests(
+        AIFunction inner,
+        IOperatorAssistantTurnSink sink,
+        bool requiresApproval,
+        CancellationToken ct) =>
+        WrapTool(inner, sink, requiresApproval, TimeSpan.FromMinutes(1), ct);
+
+    private static AIFunction WrapTool(
+        AIFunction tool,
+        IOperatorAssistantTurnSink? sink,
+        bool requiresApproval,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        AIFunction wrapped = new DeadlineAIFunction(tool, timeout);
+        if (sink is not null)
+            wrapped = new BrokerTokenRefreshingAIFunction(wrapped, sink, ct);
+        return sink is not null && requiresApproval
+            ? new ApprovalGatingAIFunction(wrapped, sink, ct)
+            : wrapped;
+    }
 
     /// <summary>
     /// Wraps an MCP <see cref="AIFunction"/> so its invocation is abandoned once
@@ -332,6 +450,33 @@ public sealed class OperatorAssistantAgent(
                        "aborted to keep the conversation responsive. It may still be taking effect in the background — " +
                        "do not assume it failed; tell the user it timed out and offer to check its status.";
             }
+        }
+    }
+
+    /// <summary>
+    /// Refreshes the short-lived MCP credential immediately before every call. For consequential
+    /// tools this wrapper sits inside the approval wrapper, so renewal happens after approval and
+    /// directly before the post-approval request.
+    /// </summary>
+    private sealed class BrokerTokenRefreshingAIFunction(
+        AIFunction inner,
+        IOperatorAssistantTurnSink sink,
+        CancellationToken turnCt) : AIFunction
+    {
+        public override string Name => inner.Name;
+        public override string Description => inner.Description;
+        public override IReadOnlyDictionary<string, object?> AdditionalProperties => inner.AdditionalProperties;
+        public override JsonElement JsonSchema => inner.JsonSchema;
+        public override JsonElement? ReturnJsonSchema => inner.ReturnJsonSchema;
+        public override MethodInfo? UnderlyingMethod => inner.UnderlyingMethod;
+        public override JsonSerializerOptions JsonSerializerOptions => inner.JsonSerializerOptions;
+
+        protected override async ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments, CancellationToken cancellationToken)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(turnCt, cancellationToken);
+            await sink.OnMcpBrokerTokenRefreshRequiredAsync(linked.Token).ConfigureAwait(false);
+            return await inner.InvokeAsync(arguments, linked.Token).ConfigureAwait(false);
         }
     }
 
@@ -493,7 +638,7 @@ public sealed class OperatorAssistantAgent(
             RunId: runId,
             ModelId: null,
             AgentDefinition: agentDefinition,
-            CallerBearerToken: "test",
+            McpBrokerToken: "test",
             History: []), mcpToolCount);
 
     private static string BuildSystemPrompt(OperatorAssistantRequest request, int mcpToolCount = 0)

@@ -457,7 +457,7 @@ public sealed class A2ARoundTripIntegrationTests
             Purpose: AgentHostPurpose.OperatorAssistant,
             ProjectId: "proj-1",
             AgentName: "Operator",
-            CallerBearerToken: "entra-platform-token-xyz")).Should().BeTrue();
+            McpBrokerToken: "broker-token-xyz")).Should().BeTrue();
 
         var approvalGate = new InMemoryToolApprovalGate();
         var fakeAssistant = new GatedFakeOperatorAssistantAgent();
@@ -492,6 +492,16 @@ public sealed class A2ARoundTripIntegrationTests
             await using var proxy = new RemoteAgentProxy(
                 resolver, httpFactory, NullLoggerFactory.Instance, RemoteApiBaseUrl);
             var workerEvents = Channel.CreateUnbounded<RunEvent>();
+            var received = new List<RunEvent>();
+            var drainTask = Task.Run(async () =>
+            {
+                await foreach (var evt in workerEvents.Reader.ReadAllAsync(TestCt))
+                {
+                    received.Add(evt);
+                    if (evt.Type == EventTypes.McpBrokerTokenRefreshRequired)
+                        runtimeState.TryRefreshMcpBrokerToken("broker-token-renewed").Should().BeTrue();
+                }
+            });
             await proxy.SetupAsync(
                 workingDirectory: "",
                 repositoryPath: "",
@@ -528,35 +538,41 @@ public sealed class A2ARoundTripIntegrationTests
             await grantTask;
 
             workerEvents.Writer.Complete();
-            var received = new List<RunEvent>();
-            await foreach (var evt in workerEvents.Reader.ReadAllAsync(TestCt))
-                received.Add(evt);
+            await drainTask;
 
             // The request the OperatorAssistantAgent-shaped fake actually received came entirely
             // through the existing /configure contract (AgentHostRuntimeState), not a new channel.
             fakeAssistant.LastRequest.Should().NotBeNull();
             fakeAssistant.LastRequest!.ConversationId.Should().Be("run-operator-roundtrip-1");
             fakeAssistant.LastRequest.CallerUser.Should().Be("user-1");
-            fakeAssistant.LastRequest.CallerBearerToken.Should().Be("entra-platform-token-xyz",
-                "MCP calls must preserve the platform caller credential rather than substituting the linked GitHub/Copilot token");
-            fakeAssistant.LastRequest.CallerBearerToken.Should().NotBe("gh-oauth-token-abc");
+            fakeAssistant.LastRequest.McpBrokerToken.Should().Be("broker-token-xyz",
+                "MCP calls must receive only the API-issued broker token");
+            fakeAssistant.LastRequest.McpBrokerToken.Should().NotBe("gh-oauth-token-abc");
             fakeAssistant.LastRequest.ProjectId.Should().Be("proj-1");
             fakeAssistant.LastRequest.Message.Should().Be("please run the tool");
             fakeAssistant.LastRequest.AgentDefinition.Should().Be("You are the operator.");
 
             // The tool call was genuinely gated: it only "ran" (per the fake) after the grant.
             fakeAssistant.ToolRanAfterApproval.Should().BeTrue();
+            fakeAssistant.TokenRefreshCompleted.Should().BeTrue();
+            runtimeState.McpBrokerToken.Should().Be("broker-token-renewed");
             text.Should().Be("done: please run the tool");
 
             received.Select(r => r.Type).Should().Contain(EventTypes.ToolCall)
+                .And.Contain(EventTypes.AgentMessageDelta)
                 .And.Contain(EventTypes.ToolApprovalRequired)
                 .And.Contain(EventTypes.ToolApprovalResolved)
+                .And.Contain(EventTypes.McpBrokerTokenRefreshRequired)
                 .And.Contain(EventTypes.ToolResult)
                 .And.Contain(EventTypes.AgentTurnEnd,
                     "the operator turn must also emit the definitive completion marker so the worker never reports a phantom-incomplete failure");
 
             var resolved = received.First(r => r.Type == EventTypes.ToolApprovalResolved);
             JsonSerializer.Serialize(resolved.Payload).Should().Contain("\"approved\":true");
+            JsonSerializer.Serialize(received.First(r => r.Type == EventTypes.AgentMessageDelta).Payload)
+                .Should().Contain("done: please run the tool");
+            JsonSerializer.Serialize(received.First(r => r.Type == EventTypes.McpBrokerTokenRefreshRequired).Payload)
+                .Should().NotContain("broker-token-renewed");
         }
         finally
         {
@@ -579,7 +595,7 @@ public sealed class A2ARoundTripIntegrationTests
             PreviewRunnerCredential: null,
             SharedWorkingDirectory: null,
             Purpose: AgentHostPurpose.OperatorAssistant,
-            CallerBearerToken: "platform-caller-token"));
+            McpBrokerToken: "broker-token"));
 
         var runner = new OperatorPodTurnRunner(
             new GatedFakeOperatorAssistantAgent(),
@@ -594,6 +610,29 @@ public sealed class A2ARoundTripIntegrationTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*without a sink*");
+    }
+
+    [Fact]
+    public async Task RotatingMcpBearerHandler_UsesLatestInMemoryTokenAcrossRequests()
+    {
+        var runtimeState = new AgentHostRuntimeState();
+        runtimeState.TryConfigure(new AgentHostRunConfiguration(
+            RunId: "run-rotating-bearer",
+            UserId: "user-1",
+            TurnBearerToken: "turn-token",
+            CopilotCredential: null,
+            PreviewRunnerCredential: null,
+            SharedWorkingDirectory: null,
+            Purpose: AgentHostPurpose.OperatorAssistant,
+            McpBrokerToken: "broker-token-v1")).Should().BeTrue();
+        var recorder = new RecordingAuthorizationHandler();
+        using var client = new HttpClient(new agenthost::RotatingMcpBearerHandler(runtimeState, recorder));
+
+        using var firstResponse = await client.GetAsync("http://mcp.test/mcp", TestCt);
+        runtimeState.TryRefreshMcpBrokerToken("broker-token-v2").Should().BeTrue();
+        using var secondResponse = await client.GetAsync("http://mcp.test/mcp", TestCt);
+
+        recorder.Authorizations.Should().Equal("Bearer broker-token-v1", "Bearer broker-token-v2");
     }
 
     private static CancellationToken TestCt =>
@@ -830,6 +869,7 @@ public sealed class A2ARoundTripIntegrationTests
         public OperatorAssistantRequest? LastRequest { get; private set; }
         public string? LastRequestId { get; private set; }
         public bool ToolRanAfterApproval { get; private set; }
+        public bool TokenRefreshCompleted { get; private set; }
 
         public async Task<OperatorAssistantResponse> RunTurnAsync(
             OperatorAssistantRequest request,
@@ -846,12 +886,34 @@ public sealed class A2ARoundTripIntegrationTests
                 || await sink.OnApprovalRequiredAsync(LastRequestId, ToolName, argumentsJson: null, ct)
                     .ConfigureAwait(false);
 
+            if (approved && sink is not null)
+            {
+                await sink.OnMcpBrokerTokenRefreshRequiredAsync(ct).ConfigureAwait(false);
+                TokenRefreshCompleted = true;
+            }
+
             ToolRanAfterApproval = approved;
 
             if (sink is not null)
                 await sink.OnToolResultAsync(ToolName, success: approved, ct).ConfigureAwait(false);
 
-            return new OperatorAssistantResponse($"done: {request.Message}", new[] { ToolName });
+            var reply = $"done: {request.Message}";
+            if (sink is not null)
+                await sink.OnAssistantTextDeltaAsync(reply, ct).ConfigureAwait(false);
+            return new OperatorAssistantResponse(reply, new[] { ToolName });
+        }
+    }
+
+    private sealed class RecordingAuthorizationHandler : HttpMessageHandler
+    {
+        public List<string?> Authorizations { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Authorizations.Add(request.Headers.Authorization?.ToString());
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
         }
     }
 }

@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { collectVerdictPaths, loadVerdicts } from '../harness-judge/meta-aggregate.mjs';
+import { redact } from '../harness-shared/redaction.mjs';
+import { networkTargetEvidence } from '../harness-shared/target-guard.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SURFACES = ['api', 'ui', 'mcp'];
@@ -17,7 +19,7 @@ export function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
-    if (!value.startsWith('--')) throw new Error(`unexpected argument: ${value}`);
+    if (!value.startsWith('--')) throw new Error('unexpected positional argument');
     const key = value.slice(2);
     if (!argv[index + 1] || argv[index + 1].startsWith('--')) throw new Error(`missing value for --${key}`);
     args[key] = argv[++index];
@@ -43,6 +45,17 @@ function replaceTokens(part, tokens) {
   return part.replace(/\{(batchId|scenarioId|verdictDir)\}/g, (_, key) => tokens[key]);
 }
 
+function rejectArgvSecrets(command, surface) {
+  const containsCredential = command.some((part) =>
+    /^--(?:authorization|api[-_]?key|secret|password|to[k]en)(?:=|$)/i.test(part)
+    || /^[A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)=/i.test(part)
+    || /\bAuthorization\s*:/i.test(part)
+    || /^\s*Bearer\s+/i.test(part));
+  if (containsCredential) {
+    throw new Error(`--${surface}-command must not carry authentication in argv; use AGENTWEAVER_TOKEN in the transient launcher environment`);
+  }
+}
+
 export function buildCommands(args, tokens) {
   const configured = {
     // Default targets the one remaining fixed, one-shot API check: the structural
@@ -66,8 +79,82 @@ export function buildCommands(args, tokens) {
   return selected.map((surface) => {
     const command = configured[surface];
     if (!command) throw new Error(`--${surface}-command is required when ${surface} is selected`);
+    rejectArgvSecrets(command, surface);
     return { surface, command: command.map((part) => replaceTokens(part, tokens)) };
   });
+}
+
+const SENSITIVE_ARG = /^--(?:authorization|api[-_]?key|secret|password|storage-state)$/i;
+
+export function sanitizeCommand(command) {
+  return command.map((part, index) => {
+    if (index > 0 && SENSITIVE_ARG.test(command[index - 1])) return '[REDACTED]';
+    if (/^[A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)=/i.test(part)) {
+      return `${part.slice(0, part.indexOf('=') + 1)}[REDACTED]`;
+    }
+    if (/^--(?:authorization|api[-_]?key|secret|password|storage-state)=/i.test(part)) {
+      return `${part.slice(0, part.indexOf('=') + 1)}[REDACTED]`;
+    }
+    return redact(part);
+  });
+}
+
+export function sanitizeEnvironment(environment) {
+  return redact(environment);
+}
+
+function option(command, names) {
+  const index = command.findIndex((part) => names.includes(part));
+  return index >= 0 ? command[index + 1] : null;
+}
+
+function commandPreflight(surface, command, environment) {
+  const explicitTarget = option(command, ['--target', '--base-url']);
+  const target = explicitTarget ?? (surface === 'mcp' && environment.AGENTWEAVER_BASE_URL
+    ? `${environment.AGENTWEAVER_BASE_URL.replace(/\/+$/, '')}/mcp`
+    : environment.AGENTWEAVER_BASE_URL ?? null);
+  let evidence;
+  try {
+    evidence = target
+      ? networkTargetEvidence(target, {
+        surface,
+        authSource: environment.AGENTWEAVER_TOKEN ? 'environment' : surface === 'ui' ? 'playwright-storage-state' : 'none',
+        exactPath: surface === 'mcp' && target !== 'stdio' ? '/mcp' : undefined,
+      })
+      : {
+        surface, transport: 'unspecified', targetOrigin: null, targetPath: null,
+        authSource: 'none', tlsMode: 'system-default',
+      };
+  } catch (error) {
+    evidence = {
+      surface, transport: 'invalid', targetOrigin: null, targetPath: null,
+      authSource: 'none', tlsMode: 'system-default', validationError: error.message,
+    };
+  }
+
+  return {
+    ...evidence,
+    projectId: option(command, ['--project-id']),
+    runId: null,
+    cleanupIntent: surface === 'mcp' ? 'surface-owned cleanup policy' : 'surface runner cleanup policy',
+    cleanupResult: 'delegated-to-surface',
+  };
+}
+
+function requireExplicitRemoteAuth(commands, environment) {
+  for (const { surface, command } of commands) {
+    if (surface !== 'api' && surface !== 'mcp') continue;
+    const explicitTarget = option(command, ['--target', '--base-url']);
+    const target = explicitTarget ?? environment.AGENTWEAVER_BASE_URL ?? null;
+    const remote = surface === 'api' ? Boolean(target) : Boolean(target && target !== 'stdio');
+    const provider = surface === 'api' && option(command, ['--auth-provider']);
+    if (remote && !provider && !environment.AGENTWEAVER_TOKEN) {
+      throw new Error(
+        `${surface} remote flow requires AGENTWEAVER_TOKEN in the transient launcher environment` +
+        (surface === 'api' ? ' (or an explicitly selected secure auth provider)' : ''),
+      );
+    }
+  }
 }
 
 export function spawnCommand(command, options = {}) {
@@ -101,28 +188,43 @@ export async function runCombined(args, dependencies = {}) {
 
   await makeDir(verdictDir, { recursive: true });
   const childEnvironment = {
-    ...process.env,
+    ...(dependencies.env ?? process.env),
     AGENTWEAVER_BATCH_ID: batchId,
     AGENTWEAVER_SCENARIO_ID: scenarioId,
     AGENTWEAVER_VERDICT_DIR: verdictDir,
   };
-  const results = await Promise.all(commands.map(async ({ surface, command }) => ({
-    surface, command, ...(await run(command, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' })),
-  })));
+  requireExplicitRemoteAuth(commands, childEnvironment);
+  const results = await Promise.all(commands.map(async ({ surface, command }) => {
+    const outcome = await run(command, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' });
+    return {
+      surface,
+      command: sanitizeCommand(command),
+      code: outcome.code ?? null,
+      signal: outcome.signal ?? null,
+      error: redact(outcome.error ?? null),
+    };
+  }));
 
   const verdicts = readVerdicts().filter((verdict) => verdict.batchId === batchId && verdict.scenarioId === scenarioId);
   const missingSurfaces = commands
     .filter(({ surface }) => !verdicts.some((verdict) => verdict.surface === surface))
     .map(({ surface }) => surface);
   const aggregateCommand = ['node', 'scripts/harness-judge/meta-aggregate.mjs', verdictDir, '--json', aggregateReport];
-  const aggregation = await run(aggregateCommand, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' });
+  const aggregationOutcome = await run(aggregateCommand, { cwd: ROOT, env: childEnvironment, stdio: 'inherit' });
+  const aggregation = {
+    code: aggregationOutcome.code ?? null,
+    signal: aggregationOutcome.signal ?? null,
+    error: redact(aggregationOutcome.error ?? null),
+  };
   const report = {
     batchId, scenarioId, verdictDir, aggregateReport, processes: results, aggregation,
     verdictCount: verdicts.length, missingSurfaces,
+    preflight: commands.map(({ surface, command }) => commandPreflight(surface, command, childEnvironment)),
   };
+  const safeReport = redact(report);
   await makeDir(path.dirname(reportPathFor(args, verdictDir)), { recursive: true });
-  await save(reportPathFor(args, verdictDir), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  return report;
+  await save(reportPathFor(args, verdictDir), `${JSON.stringify(safeReport, null, 2)}\n`, 'utf8');
+  return safeReport;
 }
 
 function usage() {
@@ -135,7 +237,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     if (report.processes.some((result) => result.code !== 0) || report.missingSurfaces.length || report.aggregation.code !== 0) process.exitCode = 1;
   } catch (error) {
-    console.error(`${error.message}\n${usage()}`);
+    console.error(`${redact(error.message)}\n${usage()}`);
     process.exitCode = 2;
   }
 }

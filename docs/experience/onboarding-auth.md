@@ -102,12 +102,18 @@ An MCP client connects to Agentweaver either locally or over HTTP:
 
 | Client mode | What the user points at | What authenticates the call |
 |---|---|---|
-| Local STDIO | A command that starts the Agentweaver MCP app with `--stdio` | The process forwards the configured per-user token `AGENTWEAVER_TOKEN` (your own bearer, e.g. `gh auth token`) to the Agentweaver API, so calls are attributed to the real user and project ownership is enforced. `AGENTWEAVER_API_KEY` is an internal-only fallback that bypasses ownership checks and must not be used by human/stdio clients (#474); the server will refuse to start if only the shared key is provided, unless explicitly opted in via `AGENTWEAVER_ALLOW_SHARED_KEY`. |
+| Local STDIO | A command that starts the Agentweaver MCP app with `--stdio` | The process requires `AGENTWEAVER_TOKEN` to contain an Agentweaver broker token for the exact MCP resource and `mcp:invoke`; the API validates it again and enforces project authorization. |
 | Hosted HTTP | The Agentweaver MCP URL ending in `/mcp` | Each request sends `Authorization: Bearer <token>` and the MCP server validates it before invoking tools. |
 
 For a hosted MCP client, the user experience is normally discovery-driven. The user adds the Agentweaver MCP server URL to the client. The client tries to call `/mcp`. If it has no bearer token, the server responds with `401` and a `WWW-Authenticate` challenge that points to OAuth Protected Resource metadata. The client fetches that metadata, learns the MCP resource and authorization server issuer, fetches Authorization Server metadata, then runs a PKCE authorization-code flow.
 
-The OAuth-capable client may also dynamically register its redirect URI. Local native clients usually register or use loopback redirect URIs such as `http://127.0.0.1:<port>/callback` or `http://localhost:<port>/callback`. Agentweaver allows loopback HTTP redirect URIs for native clients and HTTPS redirect URIs that match configured allowlisted prefixes. It rejects fragments and embedded user info.
+The OAuth-capable client may also dynamically register its redirect URI. Local native clients use
+literal loopback redirect URIs such as `http://127.0.0.1:<port>/callback` or
+`http://[::1]:<port>/callback`. Agentweaver rejects hostnames, fragments, and embedded user info.
+Hosted Claude connectors use the fixed public client ID `agentweaver-claude`
+instead of dynamic registration. That client accepts only
+`https://claude.ai/api/mcp/auth_callback`, has no secret, and requires S256
+PKCE.
 
 For loopback redirect URIs, registered URI matching ignores the port when the scheme, host, and path match. This follows RFC 8252: native clients often bind a fresh local port for each sign-in attempt. Token redemption still binds to the exact redirect URI used in the authorization request, so the authorization code cannot be moved to a different redirect target.
 
@@ -209,15 +215,21 @@ In **Create project from GitHub**, select **Authorize repository access**. If au
 
 ### MCP client gets `Bearer token required`
 
-The MCP client called hosted `/mcp` without a bearer token. OAuth-aware clients should follow the `WWW-Authenticate` challenge to the protected-resource metadata, discover the Authorization Server, and run the OAuth flow. Non-interactive clients should be configured with an automation key.
+The MCP client called hosted `/mcp` without a bearer token. OAuth-aware clients should follow the
+`WWW-Authenticate` challenge to protected-resource metadata, discover the Authorization Server,
+and run the OAuth flow. Stdio clients must be configured with an Agentweaver broker token.
 
 ### MCP client gets `invalid_token`
 
-The bearer token was present but failed every accepted path. For Agentweaver JWTs, check that the MCP URL, issuer, and audience all describe the same public host and resource, and that the token has not expired or been revoked. For raw GitHub tokens, check that the transition path is enabled and that GitHub still accepts the token. For automation keys, check that the key is configured in the MCP server's accepted key registry.
+The bearer token is not a valid Agentweaver broker token. Check the exact issuer and
+`<public-origin>/mcp` audience, keyed RS256 signature, lifetime, subject, and `mcp:invoke` scope.
+Raw Entra, GitHub, and API-key credentials are not accepted.
 
 ### Local MCP redirect fails on loopback
 
-Use a loopback HTTP redirect URI such as `http://127.0.0.1:<port>/callback`, `http://localhost:<port>/callback`, or `http://[::1]:<port>/callback`. Agentweaver accepts loopback redirect URIs for native clients and matches registered loopback redirects while ignoring port when scheme, host, and path are the same. The client must still redeem the authorization code with the exact redirect URI from the authorization request.
+Use a literal loopback HTTP redirect URI such as `http://127.0.0.1:<port>/callback` or
+`http://[::1]:<port>/callback`. The client must redeem the authorization code with the exact
+redirect URI from the authorization request.
 
 ### Organization access is denied
 

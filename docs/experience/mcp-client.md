@@ -4,9 +4,9 @@
 The Agentweaver MCP server is **experimental**. Tool names, parameters, and behavior may change without notice. Pin to a known revision if you depend on the current surface.
 :::
 
-Agentweaver's MCP server turns the whole product into tools an AI assistant can call for you. Instead of driving only the web UI, you can connect Claude Desktop, GitHub Copilot, or any MCP-capable assistant and ask it to create projects, cast teams, manage backlog, start coordinator work, watch runs, review artifacts, and approve outcomes. This doc explains the experience first, then gives a complete tool catalog for assistant-driven use.
+Agentweaver's MCP server turns the whole product into tools an AI assistant can call for you. Instead of driving only the web UI, you can connect Claude Desktop, VS Code, GitHub Copilot CLI, or GitHub Copilot desktop and ask it to create projects, cast teams, manage backlog, start coordinator work, watch runs, review artifacts, and approve outcomes. This doc explains the experience first, then gives a complete tool catalog for assistant-driven use.
 
-Related context: [Overview](./00-overview.md), [Onboarding & auth](./onboarding-auth.md), [Projects](../guide/projects.md), [Teams](../guide/teams.md), [Board](../guide/board.md), [Runs](../guide/runs.md), [Review](../guide/review.md), [Workflows](../guide/workflows.md), [Coordinator reference](../reference/coordinator.md), [MCP reference](../reference/mcp.md), and [MCP OAuth](../mcp-oauth.md).
+Related context: [Overview](./00-overview.md), [Connect an MCP client](../guide/mcp-cli.md), [Onboarding & auth](./onboarding-auth.md), [Projects](../guide/projects.md), [Teams](../guide/teams.md), [Board](../guide/board.md), [Runs](../guide/runs.md), [Review](../guide/review.md), [Workflows](../guide/workflows.md), [Coordinator reference](../reference/coordinator.md), [MCP reference](../reference/mcp.md), and [MCP OAuth](../mcp-oauth.md).
 
 ## Who this is for
 
@@ -21,28 +21,37 @@ Agentweaver exposes the MCP server in two modes:
 - **STDIO transport** for local MCP clients that launch the server as a command. The command starts the `Agentweaver.Mcp` app with `--stdio`; the server forwards tool calls to the Agentweaver API configured by `AGENTWEAVER_API_URL`.
 - **HTTP MCP transport** at `/mcp` for hosted or shared clients. The HTTP transport runs statelessly so the caller's inbound bearer token is available during each tool invocation and can be forwarded to the backend API.
 
-A client configuration is conceptually one of these shapes:
+For hosted use, copy the exact `https://<deployment-origin>/mcp` URL from
+**Account settings → MCP clients**. The client discovers OAuth and handles
+browser sign-in, consent, PKCE, and token refresh. Claude Desktop additionally
+uses the fixed public client ID `agentweaver-claude` from its connector's
+Advanced settings; the client secret stays empty. No authorization header or
+manually copied credential belongs in the client configuration.
 
-| Client mode | What the client points at | Auth shape |
+| Client mode | What the client points at | Authorization experience |
 |---|---|---|
-| Local STDIO | A command such as `dotnet run --project apps/Agentweaver.Mcp -- --stdio` | Environment includes `AGENTWEAVER_API_URL` and `AGENTWEAVER_TOKEN` (your own per-user bearer, e.g. `gh auth token`), which is forwarded to the backend so project ownership is enforced. The shared `AGENTWEAVER_API_KEY` is an internal-only fallback that bypasses ownership checks and must not be used by human/stdio clients (#474); the server will refuse to start if only the shared key is provided, unless explicitly opted in via `AGENTWEAVER_ALLOW_SHARED_KEY`. |
-| Hosted HTTP | The MCP server URL ending in `/mcp` | Each request sends `Authorization: Bearer <token>`. The server validates it, stores the resolved caller identity, and forwards the same bearer token to the Agentweaver API. |
+| Hosted HTTP | The exact MCP server URL ending in `/mcp`; Claude also uses `agentweaver-claude` as its OAuth Client ID | The client uses OAuth discovery and opens the Agentweaver browser sign-in and consent flow. |
+| Local STDIO | A trusted local development command | A repository maintainer supplies `AGENTWEAVER_TOKEN` through the process environment for local testing only. |
 
 The HTTP server also exposes:
 
 - `GET /healthz` for unauthenticated liveness checks.
-- `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-protected-resource/mcp` so interactive MCP clients can discover the authorization server, resource value, supported bearer method, and `mcp:invoke` scope.
+- `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-protected-resource/mcp` so interactive MCP clients can discover the same-origin authorization server, exact resource, and `mcp:invoke` scope.
 
-For the complete interactive setup flow, see [Onboarding & auth](./onboarding-auth.md).
+For the complete interactive setup flow, see
+[Connect an MCP client](../guide/mcp-cli.md).
 
 ### Authentication experience
 
-The user sees a normal bearer-token experience, with two accepted token paths:
+Interactive clients discover the OAuth resource metadata, run authorization code + PKCE through
+Agentweaver, and receive a short-lived broker access token. OpenIddict validation uses remote
+OIDC discovery/JWKS and requires the configured issuer, exact `<issuer>/mcp` audience, keyed
+RS256 signature, valid lifetime, subject, and `mcp:invoke` scope. There is no direct-Entra,
+raw-GitHub, or API-key compatibility path.
 
-1. **Agentweaver JWTs.** Interactive clients can discover the OAuth resource metadata, run the OAuth authorization-code flow with PKCE through Agentweaver, and receive a short-lived Agentweaver access token. The MCP server validates this JWT offline against the authorization server JWKS, requiring the expected issuer, audience (`<issuer>/mcp` unless configured otherwise), expiry, and RS256 signature.
-2. **Transitional raw GitHub tokens.** When enabled, the MCP server can validate a raw GitHub bearer token by calling GitHub's user API and caching the result briefly. This keeps older client setups working while interactive clients move to Agentweaver-minted tokens.
-
-If a hosted MCP request has no bearer token, the server returns `401` with a `WWW-Authenticate` challenge that advertises the OAuth protected-resource metadata URL. If a token is present but invalid, the challenge includes `invalid_token`. Health and OAuth metadata discovery stay reachable without a bearer token.
+A missing token receives a `401` challenge with exact `resource_metadata` and `scope` parameters
+and no error. Invalid credentials add `error="invalid_token"`; an otherwise valid token without
+the scope adds `error="insufficient_scope"`. Health and protected-resource discovery remain public.
 
 ## What an MCP-driven session feels like
 
@@ -222,11 +231,10 @@ Purpose: run multi-agent orchestration with an explicit outcome-spec confirmatio
 
 ### Runs
 
-Purpose: submit, observe, inspect, retry, archive, and approve or reject agent runs.
+Purpose: observe, inspect, retry, archive, and approve or reject coordinator and child runs.
 
 | Tool | What it does for the user |
 |---|---|
-| `run_submit` | Starts a new agent run for a project, optionally targeting an agent, base branch, or model source. |
 | `run_status` | Gets the current status and details for a run. |
 | `run_watch` | Streams live progress until completion, then returns final run state. It reports agent messages, tool calls/results, status updates, completion, and review requests. |
 | `run_review` | Approves or rejects a run that is awaiting review. |

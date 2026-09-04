@@ -28,6 +28,7 @@ spec:
         azure.workload.identity/use: "true"
       annotations:
         secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
+        agentweaver.io/oauth-runtime-config-checksum: "placeholder"
     spec:
       # Assistant-chat-termination fix: operator assistant turns can legitimately run
       # 60-100+s across multiple MCP tool calls. The default 30s terminationGracePeriodSeconds
@@ -182,6 +183,26 @@ spec:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
                   key: ENTRA_FRONTEND_URL
+            - name: Auth__OAuth__PublicOrigin
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_PUBLIC_ORIGIN
+            - name: Auth__OAuth__ForwardedHeaders__TrustedNetworks
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_TRUSTED_PROXY_NETWORKS
+            - name: Auth__OAuth__Certificates__SigningName
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_SIGNING_CERTIFICATE_NAME
+            - name: Auth__OAuth__Certificates__EncryptionName
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: OAUTH_ENCRYPTION_CERTIFICATE_NAME
             # GitHub Copilot App OAuth credentials. Its private key must remain unset:
             # this App uses the OAuth flow and is intentionally distinct from the Repo App.
             - name: Auth__CopilotApp__ClientId
@@ -244,10 +265,6 @@ spec:
                   key: repo-app-id
             - name: Auth__RepoApp__PrivateKeySecretName
               value: repo-app-private-key
-            # Backward-compat: allow raw GitHub tokens while clients migrate to the new flow.
-            # Flip to "false" once all MCP clients are using Agentweaver-minted tokens.
-            - name: Auth__Mcp__AllowGitHubPassthrough
-              value: "true"
             # GitHub Repo App / Copilot App connection credentials persist in Key Vault so the
             # API can read them back for on-behalf-of calls. Requires "Key Vault Secrets Officer"
             # on agentweaver-api-identity (granted by scripts/aks/15-setup-identity.sh).

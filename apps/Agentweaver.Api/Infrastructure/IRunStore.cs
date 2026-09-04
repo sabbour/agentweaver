@@ -60,6 +60,17 @@ public interface IRunStore
     Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default);
 
     /// <summary>
+    /// Repoints a run at a different <see cref="ModelSource"/>. Used by long-lived Assistant/Operator
+    /// sessions, whose effective model provider is re-resolved at the start of every turn (a platform
+    /// provider switch must take effect on the next message rather than being pinned for the life of
+    /// the conversation). Project-scoped orchestration runs never call this: their provider is fixed
+    /// for the whole run. The default implementation throws so the two production stores (SQLite, EF)
+    /// must provide it; test fakes that never call it are exempt.
+    /// </summary>
+    Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not implement UpdateModelSourceAsync.");
+
+    /// <summary>
     /// Returns the non-archived runs submitted by <paramref name="submittingUser"/>, newest-first
     /// (by StartedAt), optionally restricted to a single <paramref name="agentName"/> (e.g. the
     /// operator-assistant sentinel) and capped at <paramref name="limit"/>. Used to list a caller's

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Threading.Channels;
 using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Logging;
 
@@ -84,7 +85,7 @@ internal sealed class OperatorPodTurnRunner : IPodTurnRunner
             RunId: _runtimeState.RunId,
             ModelId: null,
             AgentDefinition: envelope.AgentDefinition,
-            CallerBearerToken: _runtimeState.CallerBearerToken ?? string.Empty,
+            McpBrokerToken: _runtimeState.McpBrokerToken ?? string.Empty,
             History: envelope.History);
 
         // Fail closed rather than silently degrading to an ungated turn: OperatorAssistantAgent only
@@ -98,7 +99,8 @@ internal sealed class OperatorPodTurnRunner : IPodTurnRunner
             ?? throw new InvalidOperationException(
                 "OperatorPodTurnRunner: no turn stream writer attached — refusing to run the operator " +
                 "turn without a sink, since that would let consequential MCP tool calls run ungated.");
-        var sink = new PodOperatorAssistantTurnSink(writer, _approvalGate, _runtimeState.RunId, _logger);
+        var sink = new PodOperatorAssistantTurnSink(
+            writer, _approvalGate, _runtimeState, _runtimeState.RunId, _logger);
 
         var response = await _assistant.RunTurnAsync(request, sink, cancellationToken).ConfigureAwait(false);
 
@@ -120,10 +122,13 @@ internal sealed class OperatorPodTurnRunner : IPodTurnRunner
     private sealed class PodOperatorAssistantTurnSink(
         ChannelWriter<RunEvent> writer,
         IToolApprovalGate approvalGate,
+        AgentHostRuntimeState runtimeState,
         string runId,
         ILogger logger) : IOperatorAssistantTurnSink
     {
-        public ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct) => ValueTask.CompletedTask;
+        public ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct) =>
+            writer.WriteAsync(
+                new RunEvent(0, EventTypes.AgentMessageDelta, new { delta }), ct);
 
         public ValueTask OnToolCallAsync(string toolName, string? argumentsJson, CancellationToken ct) =>
             writer.WriteAsync(
@@ -132,6 +137,26 @@ internal sealed class OperatorPodTurnRunner : IPodTurnRunner
         public ValueTask OnToolResultAsync(string toolName, bool success, CancellationToken ct) =>
             writer.WriteAsync(
                 new RunEvent(0, success ? EventTypes.ToolResult : EventTypes.ToolError, new { name = toolName, success }), ct);
+
+        public async ValueTask OnMcpBrokerTokenRefreshRequiredAsync(CancellationToken ct)
+        {
+            var observedVersion = runtimeState.McpBrokerTokenVersion;
+            await writer.WriteAsync(
+                new RunEvent(0, EventTypes.McpBrokerTokenRefreshRequired, new { }),
+                ct).ConfigureAwait(false);
+            await runtimeState.WaitForMcpBrokerTokenRefreshAsync(observedVersion, ct).ConfigureAwait(false);
+        }
+
+        public ValueTask OnRunFailedAsync(AgentProviderException providerFailure, CancellationToken ct) =>
+            writer.WriteAsync(
+                new RunEvent(0, EventTypes.RunFailed, new
+                {
+                    message = providerFailure.UserMessage,
+                    category = providerFailure.FailureKind.ToString(),
+                    errorCode = providerFailure.ErrorCode,
+                    retryable = providerFailure.IsRetryable,
+                }),
+                ct);
 
         public async ValueTask<bool> OnApprovalRequiredAsync(
             string requestId, string toolName, string? argumentsJson, CancellationToken ct)

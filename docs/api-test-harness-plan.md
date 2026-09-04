@@ -1,5 +1,11 @@
 # Agentweaver API Test Harness Plan
 
+> **Superseded safety model (2026-09-02):** Hostname-based staging/production
+> classification, production confirmation flags, and TLS bypasses described below are
+> historical only. The implementation accepts arbitrary HTTPS hosts, permits HTTP only
+> for loopback, rejects URL credentials/fragments, and confines bearer credentials to
+> the configured origin.
+
 _Last updated: 2026-07-14 — author: Tank (Backend Engineer)_
 
 > **Status: design spec.** Unlike the UI and MCP specs, the harness this document
@@ -908,7 +914,8 @@ optional observability for Ahmed rather than any required interaction:
 
 - **Autonomous / low-touch.** The coordinator dispatches N persona sessions as background
   agents (mirroring the E2E plan's "parallelize as much as possible" rule). A bearer token
-  is resolved once (`gh auth token`) and reused; no per-run human step on the scoping rung.
+  is supplied explicitly through `AGENTWEAVER_TOKEN` and reused; no per-run human step
+  on the scoping rung. The harness never borrows GitHub CLI credentials.
 - **Optional observability, never required.** Ahmed can tail a live transcript / stream
   turn-by-turn stdout if he wants to watch a run, but observation is never a gating
   interactive step; the default is unattended fan-out. (Each driver tool already prints the

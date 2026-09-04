@@ -159,6 +159,9 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
     public Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default) =>
         inner.UpdateWorkflowSelectionReasonAsync(runId, reason, ct);
 
+    public Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default) =>
+        inner.UpdateModelSourceAsync(runId, modelSource, ct);
+
     public Task<IReadOnlyList<Run>> GetRunsBySubmittingUserAsync(
         string submittingUser, string? agentName, int limit, CancellationToken ct = default) =>
         inner.GetRunsBySubmittingUserAsync(submittingUser, agentName, limit, ct);

@@ -11,7 +11,7 @@ public static class SandboxEndpoints
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim>
         PreviewApprovalRetryGates = new(StringComparer.Ordinal);
 
-    public static void MapSandboxEndpoints(this WebApplication app)
+    public static void MapSandboxEndpoints(this IEndpointRouteBuilder app)
     {
         // POST /api/runs/{runId}/sandbox/port-forward
         // Starts a browser preview for the run's sandbox pod on the requested target port.

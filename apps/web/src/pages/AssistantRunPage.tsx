@@ -152,10 +152,10 @@ function derivePendingApprovals(events: RunStreamEvent[], runId: string): Pendin
   const resolvedCommandHashes = new Set<string>();
   for (const evt of events) {
     if (evt.type === 'tool.approval_resolved' || evt.type === 'tool.auto_approved') {
-      const id = readString(evt.payload, ['requestId', 'request_id']);
+      const id = readString(evt.payload, ['requestId', 'request_id', 'RequestId']);
       if (id) resolvedRequestIds.add(id);
     }
-    const hash = readString(evt.payload, ['commandHash', 'command_hash']);
+    const hash = readString(evt.payload, ['commandHash', 'command_hash', 'CommandHash']);
     if (hash && (evt.type === 'tool.approval_resolved' || evt.type === 'tool.auto_approved')) {
       resolvedCommandHashes.add(hash);
     }
@@ -163,10 +163,10 @@ function derivePendingApprovals(events: RunStreamEvent[], runId: string): Pendin
   const pending: PendingApproval[] = [];
   for (const evt of events) {
     const isShell = evt.type === 'shell.approval_required';
-    const isTool = evt.type === 'tool.approval_required';
+    const isTool = evt.type === 'tool.approval_required' || evt.type === 'tool.approval_context';
     if (!isShell && !isTool) continue;
-    const requestId = readString(evt.payload, ['requestId', 'request_id']) ?? '';
-    const commandHash = readString(evt.payload, ['commandHash', 'command_hash']) ?? '';
+    const requestId = readString(evt.payload, ['requestId', 'request_id', 'RequestId']) ?? '';
+    const commandHash = readString(evt.payload, ['commandHash', 'command_hash', 'CommandHash']) ?? '';
     if (requestId && resolvedRequestIds.has(requestId)) continue;
     if (commandHash && resolvedCommandHashes.has(commandHash)) continue;
     pending.push({
@@ -174,7 +174,7 @@ function derivePendingApprovals(events: RunStreamEvent[], runId: string): Pendin
       isShell,
       requestId,
       commandHash,
-      toolName: readString(evt.payload, ['toolName', 'tool_name']) ?? (isShell ? 'run_command' : 'tool'),
+      toolName: readString(evt.payload, ['toolName', 'tool_name', 'ToolName']) ?? (isShell ? 'run_command' : 'tool'),
       targetRunId: readString(evt.payload, ['childRunId', 'child_run_id']) ?? runId,
     });
   }
@@ -301,8 +301,11 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   // below.
   const [pendingMessage, setPendingMessage] = useState<{ id: string; text: string } | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const scrolledForRunRef = useRef<string | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const lastRenderedMessageSignatureRef = useRef('');
   // Remembers the run id of a conversation that turned out to be genuinely, permanently
   // gone (404 run_not_found / 409 operator_run_closed below — NOT plain idle timeout, which
   // now wakes the same run transparently), so the NEXT createAssistantRun call (the user's
@@ -344,10 +347,34 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     () => buildRunTimeline(events, { stripSerializedWorkPlan: false }),
     [events],
   );
+  const renderedMessages = useMemo(
+    () => timelineModel.steps.flatMap((step) => step.messages),
+    [timelineModel.steps],
+  );
+  const renderedMessageSignature = useMemo(() => {
+    const lastMessage = renderedMessages.at(-1);
+    return `${renderedMessages.length}:${lastMessage?.role ?? ''}:${lastMessage?.text ?? ''}`;
+  }, [renderedMessages]);
   const pendingApprovals = useMemo(
     () => (runId ? derivePendingApprovals(events, runId) : []),
     [events, runId],
   );
+
+  const updateShouldStickToBottom = useCallback(() => {
+    const node = transcriptRef.current;
+    if (!node) return;
+    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom <= 96;
+  }, []);
+
+  const scrollLatestMessageIntoView = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+  }, []);
+
+  useEffect(() => {
+    shouldStickToBottomRef.current = true;
+    lastRenderedMessageSignatureRef.current = '';
+  }, [runId]);
 
   // Clear the optimistic pending message once its server-confirmed counterpart appears in
   // the parsed timeline (a "user" role message with the same text) — the real message then
@@ -363,6 +390,16 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     void syncPendingMessage();
   }, [pendingMessage, timelineModel]);
 
+  // Always reveal the user's own just-sent optimistic message, even if they had scrolled up
+  // to read history; once they're back at the bottom, assistant streaming can keep following.
+  useEffect(() => {
+    if (!pendingMessage) return;
+    shouldStickToBottomRef.current = true;
+    requestAnimationFrame(() => {
+      scrollLatestMessageIntoView('smooth');
+    });
+  }, [pendingMessage, scrollLatestMessageIntoView]);
+
   // Auto-scroll to the latest message once a resumed run's history has loaded (#item-9) —
   // without this, reopening `?runId=...` left the viewport scrolled to the top of a long
   // transcript instead of showing the most recent activity.
@@ -370,12 +407,22 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     if (!runId || events.length === 0) return;
     if (scrolledForRunRef.current === runId) return;
     scrolledForRunRef.current = runId;
-    const node = transcriptRef.current;
-    if (!node) return;
     requestAnimationFrame(() => {
-      node.scrollTo({ top: node.scrollHeight });
+      scrollLatestMessageIntoView('auto');
+      shouldStickToBottomRef.current = true;
     });
-  }, [runId, events.length]);
+  }, [events.length, runId, scrollLatestMessageIntoView]);
+
+  useEffect(() => {
+    if (!runId || renderedMessages.length === 0) return;
+    const previousSignature = lastRenderedMessageSignatureRef.current;
+    lastRenderedMessageSignatureRef.current = renderedMessageSignature;
+    if (!previousSignature) return;
+    if (!shouldStickToBottomRef.current) return;
+    requestAnimationFrame(() => {
+      scrollLatestMessageIntoView('smooth');
+    });
+  }, [renderedMessageSignature, renderedMessages.length, runId, scrollLatestMessageIntoView]);
 
   const handleSubmit = useCallback(async () => {
     const message = input.trim();
@@ -390,6 +437,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       if (isNewRun) {
         const created = await apiClient.createAssistantRun({
           message,
+          defer_first_turn: true,
           project_id: effectiveProjectId,
           resume_from_run_id: pendingResumeFromRunIdRef.current ?? undefined,
         });
@@ -397,6 +445,10 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         // conversation (e.g. one started via "New Session" from the Sessions page).
         pendingResumeFromRunIdRef.current = null;
         setRunId(created.run_id);
+        // Create the conversation first so React can bind its SSE stream while this request is
+        // still running. Supplying the opening message to createAssistantRun would keep the run id
+        // hidden until the entire model turn completed, making the first reply impossible to stream.
+        await apiClient.sendAssistantMessage(created.run_id, { message });
       } else {
         await apiClient.sendAssistantMessage(runId, { message });
       }
@@ -458,7 +510,12 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         </Text>
       </div>
 
-      <div className={styles.transcript} data-testid="assistant-transcript" ref={transcriptRef}>
+      <div
+        className={styles.transcript}
+        data-testid="assistant-transcript"
+        ref={transcriptRef}
+        onScroll={updateShouldStickToBottom}
+      >
         {!runId && (
           <Text className={styles.emptyState} data-testid="assistant-empty-state">
             Start a conversation below. Your first message opens an operator run and the reply
@@ -505,6 +562,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
             ))}
           </div>
         )}
+        <div ref={messagesEndRef} aria-hidden="true" />
       </div>
 
       <div className={styles.composerStack}>

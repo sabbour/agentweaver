@@ -46,8 +46,11 @@ public static class RunAuthorship
         IRunAuthorshipCapabilityStore capabilityStore,
         CancellationToken ct)
     {
-        var caller = GitHubTokenAuthMiddleware.GetCaller(httpContext);
-        if (!httpContext.User.HasClaim("agentweaver_internal", "true"))
+        var caller = httpContext.GetCaller();
+        if (!string.Equals(
+                caller.AuthenticationScheme,
+                AgentweaverAuthenticationSchemes.InternalServiceKey,
+                StringComparison.Ordinal))
         {
             var displayName = string.IsNullOrWhiteSpace(requestedAgentName)
                 ? caller.User

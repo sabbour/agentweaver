@@ -18,6 +18,7 @@ public enum CopilotBindingOutcome
     AuthorizationTransactionInvalid,
     AuthorizationTransactionConsumed,
     GitHubBindingUnavailable,
+    ProjectModelProviderReconnectRequired,
 }
 
 public sealed record CopilotBindingBeginResult(
@@ -61,6 +62,7 @@ public sealed class ProjectCopilotBindingService(
     ILogger<ProjectCopilotBindingService> logger)
 {
     private const string CookieName = "__Host-agentweaver-copilot-app-auth";
+    private const string TombstoneSecretValue = """{"status":"revoked"}""";
     private static readonly TimeSpan TransactionLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(10);
     private static readonly IReadOnlyDictionary<string, string> ReturnRoutes =
@@ -72,6 +74,8 @@ public sealed class ProjectCopilotBindingService(
     private readonly string? _clientSecret = configuration["Auth:CopilotApp:ClientSecret"];
     private readonly string? _callbackUrl = configuration["Auth:CopilotApp:CallbackUrl"];
     private readonly string _scopes = configuration["Auth:CopilotApp:Scopes"] ?? "read:user";
+    private readonly CopilotCredentialRefreshService _credentialRefresh =
+        new(configuration, secretStore, httpClientFactory, logger);
 
     public async Task<McpCopilotBrowserHandoffResult> BeginMcpHandoffAsync(
         CallerContext caller,
@@ -283,6 +287,8 @@ public sealed class ProjectCopilotBindingService(
         if (binding is null)
             return new(CopilotBindingOutcome.Success, false, null);
 
+        await _credentialRefresh.EnsureFreshAsync(binding.CredentialReference, DateTimeOffset.UtcNow, ct)
+            .ConfigureAwait(false);
         var secret = await secretStore.GetSecretAsync(binding.CredentialReference, ct).ConfigureAwait(false);
         var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
         if (credential is null || !string.Equals(credential.Status, "signed-in", StringComparison.Ordinal))
@@ -290,7 +296,7 @@ public sealed class ProjectCopilotBindingService(
             logger.LogWarning(
                 "Copilot App connection for project {ProjectId} has an active binding record but its credential secret is {SecretState}.",
                 projectId, !secret.Found ? "missing" : credential is null ? "unparseable" : $"status={credential.Status}");
-            return new(CopilotBindingOutcome.GitHubBindingUnavailable, false, null);
+            return new(CopilotBindingOutcome.ProjectModelProviderReconnectRequired, false, null);
         }
 
         var login = IsGitHubLogin(credential.GitHubLogin)
@@ -299,6 +305,22 @@ public sealed class ProjectCopilotBindingService(
                 ? await GetGitHubLoginAsync(credential.AccessToken, ct).ConfigureAwait(false)
                 : null;
         return new(CopilotBindingOutcome.Success, true, login);
+    }
+
+    /// <summary>
+    /// Redeems the stored refresh token for a project's active Copilot binding when its access token
+    /// has expired or is inside the redeem-ahead window. Only a rejected refresh token marks the
+    /// binding as needing re-authentication.
+    /// </summary>
+    internal async Task<CopilotCredentialRefreshOutcome> RefreshCredentialAsync(
+        ProjectId projectId,
+        CancellationToken ct = default)
+    {
+        var binding = await persistence.GetActiveCopilotBindingAsync(projectId.ToString(), ct).ConfigureAwait(false);
+        return binding is null
+            ? CopilotCredentialRefreshOutcome.NotNeeded
+            : await _credentialRefresh.EnsureFreshAsync(binding.CredentialReference, DateTimeOffset.UtcNow, ct)
+                .ConfigureAwait(false);
     }
 
     public async Task<CopilotBindingOutcome> DisconnectAsync(
@@ -400,6 +422,7 @@ public sealed class ProjectCopilotBindingService(
         CopilotBindingOutcome.AuthorizationTransactionInvalid => "authorization_transaction_invalid",
         CopilotBindingOutcome.AuthorizationTransactionConsumed => "authorization_transaction_consumed",
         CopilotBindingOutcome.GitHubBindingUnavailable => "github_binding_unavailable",
+        CopilotBindingOutcome.ProjectModelProviderReconnectRequired => "project_model_provider_reconnect_required",
         _ => "success",
     };
 
@@ -441,7 +464,10 @@ public sealed class ProjectCopilotBindingService(
             logger.LogWarning(
                 "Copilot App binding failed for project {ProjectId}: registration validation returned {RegistrationState} instead of Ready.",
                 projectId, registrationState);
-            await WriteTombstoneAsync(transaction.PkceVerifierProtected, CancellationToken.None).ConfigureAwait(false);
+            await TryWriteTombstoneAsync(
+                transaction.PkceVerifierProtected,
+                $"project {projectId} registration failure cleanup",
+                CancellationToken.None).ConfigureAwait(false);
             await CompleteFailureAsync(transaction, projectId, GitHubAuditReasonCode.BindingUnavailable, CancellationToken.None)
                 .ConfigureAwait(false);
             return CopilotBindingOutcome.GitHubBindingUnavailable;
@@ -467,10 +493,8 @@ public sealed class ProjectCopilotBindingService(
 
             var version = CreateRandomValue();
             credentialReference = $"copilot-app-project-{projectId}-{version}";
-            await secretStore.SetSecretAsync(
-                credentialReference,
-                JsonSerializer.Serialize(credential with { Status = "signed-in" }),
-                ct: ct).ConfigureAwait(false);
+            var credentialValue = JsonSerializer.Serialize(credential with { Status = "signed-in" });
+            await WriteSecretAndVerifyAsync(credentialReference, credentialValue, ct).ConfigureAwait(false);
             var completed = await persistence.CompleteCopilotAuthorizationAsync(
                 transaction.State,
                 new ProjectCopilotBindingRecord
@@ -494,8 +518,14 @@ public sealed class ProjectCopilotBindingService(
         {
             logger.LogWarning(ex, "Copilot App binding failed to complete for project {ProjectId}.", projectId);
             if (!string.IsNullOrWhiteSpace(credentialReference))
-                await WriteTombstoneAsync(credentialReference, CancellationToken.None).ConfigureAwait(false);
-            await WriteTombstoneAsync(transaction.PkceVerifierProtected, CancellationToken.None).ConfigureAwait(false);
+                await TryWriteTombstoneAsync(
+                    credentialReference,
+                    $"project {projectId} Copilot credential cleanup",
+                    CancellationToken.None).ConfigureAwait(false);
+            await TryWriteTombstoneAsync(
+                transaction.PkceVerifierProtected,
+                $"project {projectId} PKCE verifier cleanup",
+                CancellationToken.None).ConfigureAwait(false);
             await CompleteFailureAsync(transaction, projectId, GitHubAuditReasonCode.BindingUnavailable, CancellationToken.None).ConfigureAwait(false);
             return CopilotBindingOutcome.GitHubBindingUnavailable;
         }
@@ -571,7 +601,14 @@ public sealed class ProjectCopilotBindingService(
                 return null;
 
             var login = await GetGitHubLoginAsync(provider.AccessToken, timeout.Token).ConfigureAwait(false);
-            return login is null ? null : new("signed-in", provider.AccessToken, provider.RefreshToken, login);
+            return login is null
+                ? null
+                : new(
+                    "signed-in",
+                    provider.AccessToken,
+                    provider.RefreshToken,
+                    login,
+                    provider.ExpiresIn is > 0 ? DateTimeOffset.UtcNow.AddSeconds(provider.ExpiresIn.Value) : null);
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException ||
                                    (ex is OperationCanceledException && !ct.IsCancellationRequested))
@@ -637,6 +674,39 @@ public sealed class ProjectCopilotBindingService(
     }
     private static string CreateGrantDigest(ProjectId projectId, string version) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"copilot:{projectId}:{version}"))).ToLowerInvariant();
+
+    private async Task WriteSecretAndVerifyAsync(string reference, string value, CancellationToken ct)
+    {
+        await secretStore.SetSecretAsync(reference, value, ct: ct).ConfigureAwait(false);
+        var persisted = await secretStore.GetSecretAsync(reference, ct).ConfigureAwait(false);
+        if (!persisted.Found || !string.Equals(persisted.Value, value, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Credential secret '{reference}' could not be verified after writing.");
+    }
+
+    private async Task TryWriteTombstoneAsync(string reference, string purpose, CancellationToken ct)
+    {
+        try
+        {
+            await WriteTombstoneAsync(reference, ct).ConfigureAwait(false);
+            var persisted = await secretStore.GetSecretAsync(reference, ct).ConfigureAwait(false);
+            if (!persisted.Found || !string.Equals(persisted.Value, TombstoneSecretValue, StringComparison.Ordinal))
+            {
+                logger.LogError(
+                    "Copilot App cleanup could not verify tombstone secret write for {Reference} during {Purpose}.",
+                    reference,
+                    purpose);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Copilot App cleanup failed to tombstone secret {Reference} during {Purpose}.",
+                reference,
+                purpose);
+        }
+    }
+
     private static string ToPublicStatus(GitHubAuthorizationStatus status) => status switch
     {
         GitHubAuthorizationStatus.Pending or GitHubAuthorizationStatus.Redeeming => "pending",
@@ -645,7 +715,7 @@ public sealed class ProjectCopilotBindingService(
         _ => "failed",
     };
     private async Task WriteTombstoneAsync(string reference, CancellationToken ct) =>
-        await secretStore.SetSecretAsync(reference, """{"status":"revoked"}""", ct: ct).ConfigureAwait(false);
+        await secretStore.SetSecretAsync(reference, TombstoneSecretValue, ct: ct).ConfigureAwait(false);
     private static CopilotCredential? DeserializeCredential(string? value)
     {
         try { return string.IsNullOrWhiteSpace(value) ? null : JsonSerializer.Deserialize<CopilotCredential>(value); }
@@ -704,11 +774,13 @@ public sealed class ProjectCopilotBindingService(
         string? Status,
         string? AccessToken,
         string? RefreshToken,
-        string? GitHubLogin = null);
+        string? GitHubLogin = null,
+        DateTimeOffset? ExpiresAt = null);
     private sealed class ProviderTokenResponse
     {
         [System.Text.Json.Serialization.JsonPropertyName("access_token")] public string? AccessToken { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("refresh_token")] public string? RefreshToken { get; init; }
+        [System.Text.Json.Serialization.JsonPropertyName("expires_in")] public long? ExpiresIn { get; init; }
         [System.Text.Json.Serialization.JsonPropertyName("error")] public string? Error { get; init; }
     }
     private sealed class ProviderUserResponse

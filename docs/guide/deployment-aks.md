@@ -47,7 +47,8 @@ npm run azure:provision-infra
 With no arguments (and a TTY), this launches an interactive installer that
 prompts for the Azure subscription, resource group (existing or new),
 location, cluster/ACR/Key Vault names, and Entra application/tenant IDs, then
-provisions the cluster, identity, monitoring, the OAuth signing key,
+provisions the cluster, identity, monitoring, durable OAuth signing and encryption
+certificates,
 PostgreSQL, builds and pushes images, verifies provenance, deploys, and
 verifies the result — printing an outputs summary at the end (never secrets).
 
@@ -67,7 +68,11 @@ npm run azure:provision-infra -- --resource-group agentweaver-rg --cluster-name 
 ```
 
 Config precedence: flags > env > params file > detected defaults > prompt.
-Optional flags: `--skip-postgres`, `--skip-oauth-key`, `--image-tag <tag>`, `--node-vm-size <sku>`.
+Optional flags include `--skip-postgres`, `--image-tag <tag>`,
+`--node-vm-size <sku>`, `--oauth-signing-certificate-name <name>`, and
+`--oauth-encryption-certificate-name <name>`. The runtime loads the newest two usable
+versions under each certificate name; create a new version under the same name for
+rotation overlap.
 
 `NODE_VM_SIZE` (or `--node-vm-size`) controls the AKS system/app/kata pool SKU for new clusters. The default is `Standard_D4s_v6`; existing clusters are unaffected because the installer only uses the value when it needs to run `az aks create` or `az aks nodepool add`.
 
@@ -136,13 +141,20 @@ npm run azure:verify
 ## Verify
 
 All three deployment paths perform verification as part of their workflow.
+Each path reads the trusted AKS `DefaultDomainCertificate` status, derives the
+canonical `https://agentweaver.<managed-domain>` origin, and injects it into one
+runtime ConfigMap. A checksum on both the API and MCP pod templates forces them
+to restart whenever that origin changes; request `Host` and forwarded headers
+are never used to select the canonical origin.
 To re-run only verification:
 
 ```bash
 npm run azure:verify
 ```
 
-The verifier checks cluster resources, routes, and health.
+The verifier checks cluster resources, routes, health, the canonical OAuth public
+origin and `/mcp` resource, runtime certificate-family configuration, Key Vault
+certificate versions, and JWKS.
 
 Useful follow-up commands:
 
@@ -168,6 +180,6 @@ described above.
 |---|---|
 | Gateway not programmed | `kubectl describe gateway agentweaver-gateway -n agentweaver` |
 | ImagePullBackOff | confirm ACR attach and the selected deployment command pushed the image tag |
-| API/MCP auth failures | confirm the Entra client and tenant configuration plus `mcp-api-key` are present |
+| API/MCP auth failures | confirm Entra client/tenant IDs, canonical OAuth public origin, and both configured Key Vault certificate families/versions |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |

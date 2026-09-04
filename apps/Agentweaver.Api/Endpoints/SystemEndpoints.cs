@@ -5,7 +5,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class SystemEndpoints
 {
-    public static void MapSystemEndpoints(this WebApplication app)
+    public static void MapSystemEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/system/runtime
         // Returns runtime context: whether we are running inside Kubernetes and, if so,

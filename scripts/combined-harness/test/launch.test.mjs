@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildCommands, runCombined } from '../launch.mjs';
+import { buildCommands, runCombined, sanitizeCommand, sanitizeEnvironment } from '../launch.mjs';
 
 const command = (surface) => JSON.stringify(['node', `${surface}-runner.mjs`, '--batch', '{batchId}', '--scenario', '{scenarioId}', '--out', '{verdictDir}/{scenarioId}.json']);
 
@@ -15,6 +15,27 @@ test('buildCommands replaces shared batch and scenario tokens', () => {
   ]);
 });
 
+test('combined remote API and MCP flows require explicit Agentweaver authentication', async () => {
+  for (const [surface, target] of [
+    ['api', 'https://example.test'],
+    ['mcp', 'https://example.test/mcp'],
+  ]) {
+    await assert.rejects(
+      runCombined({
+        'scenario-id': 'case-1',
+        surfaces: surface,
+        [`${surface}-command`]: JSON.stringify(['node', 'runner.mjs', '--target', target]),
+      }, {
+        env: {},
+        mkdir: async () => {},
+        runCommand: async () => ({ code: 0 }),
+        readVerdicts: () => [],
+      }),
+      /requires AGENTWEAVER_TOKEN in the transient launcher environment/,
+    );
+  }
+});
+
 test('runs all children independently and aggregates successful sibling verdicts after a failure', async () => {
   const calls = [];
   const writes = [];
@@ -22,6 +43,7 @@ test('runs all children independently and aggregates successful sibling verdicts
     'scenario-id': 'case-1', 'batch-id': 'batch-1', 'verdict-dir': 'test-verdicts',
     'api-command': command('api'), 'ui-command': command('ui'), 'mcp-command': command('mcp'),
   }, {
+    env: { AGENTWEAVER_TOKEN: 'explicit-test-token' },
     mkdir: async () => {},
     writeFile: async (file, content) => writes.push({ file, content }),
     runCommand: async (argv, options) => {
@@ -41,4 +63,79 @@ test('runs all children independently and aggregates successful sibling verdicts
   assert.deepEqual(report.missingSurfaces, ['ui']);
   assert.equal(report.aggregation.code, 0);
   assert.equal(writes.length, 1);
+});
+
+test('persisted process reports redact token-bearing arguments and environment values', () => {
+  const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.signaturevalue';
+  assert.deepEqual(
+    sanitizeCommand(['node', 'runner.mjs', '--secret', jwt, `--authorization=Bearer ${jwt}`, 'AGENTWEAVER_TOKEN=opaque', '--scenario', 'safe']),
+    ['node', 'runner.mjs', '--secret', '[REDACTED]', '--authorization=[REDACTED]', 'AGENTWEAVER_TOKEN=[REDACTED]', '--scenario', 'safe'],
+  );
+  assert.deepEqual(sanitizeEnvironment({
+    AGENTWEAVER_TOKEN: jwt,
+    SAFE: `prefix Bearer ${jwt}`,
+  }), {
+    AGENTWEAVER_TOKEN: '[REDACTED]',
+    SAFE: 'prefix Bearer [REDACTED]',
+  });
+
+});
+
+test('combined launcher rejects authentication embedded in child argv', () => {
+    for (const credentialArgument of [
+      ['--authorization', 'bearer-canary-argv'],
+      ['AGENTWEAVER_TOKEN=bearer-canary-argv'],
+      ['--header', 'Authorization: Bearer bearer-canary-argv'],
+    ]) {
+      assert.throws(
+        () => buildCommands({
+          surfaces: 'mcp',
+          'mcp-command': JSON.stringify(['node', 'runner.mjs', ...credentialArgument]),
+        }, { batchId: 'batch-1', scenarioId: 'case-1', verdictDir: 'verdicts' }),
+        /must not carry authentication in argv/,
+      );
+    }
+});
+
+test('combined report never persists extra child outcome fields', async () => {
+  const writes = [];
+  await runCombined({
+    'scenario-id': 'case-1', 'batch-id': 'batch-1', 'verdict-dir': 'test-verdicts',
+    surfaces: 'mcp', 'mcp-command': JSON.stringify(['node', 'runner.mjs', '--target', 'stdio']),
+  }, {
+    env: {},
+    mkdir: async () => {},
+    writeFile: async (_file, content) => writes.push(content),
+    runCommand: async () => ({ code: 0, signal: null, error: null, env: { TOKEN: 'leak' }, stdout: 'leak' }),
+    readVerdicts: () => [{ batchId: 'batch-1', scenarioId: 'case-1', surface: 'mcp' }],
+  });
+
+  const report = JSON.parse(writes[0]);
+  assert.equal(report.processes[0].command.at(-1), 'stdio');
+  assert.equal('env' in report.processes[0], false);
+  assert.equal('stdout' in report.processes[0], false);
+  assert.equal(report.preflight[0].surface, 'mcp');
+  assert.equal(report.preflight[0].cleanupResult, 'delegated-to-surface');
+});
+
+test('combined report strips query credentials from targets, commands, and process errors', async () => {
+  const canary = 'query-secret-canary';
+  const writes = [];
+  await runCombined({
+    'scenario-id': 'case-1',
+    'batch-id': 'batch-1',
+    'verdict-dir': 'test-verdicts',
+    surfaces: 'mcp',
+    'mcp-command': JSON.stringify([
+      'node', 'runner.mjs', '--target',
+      `https://example.test/mcp?${canary}=${canary}#${canary}`,
+    ]),
+  }, {
+    mkdir: async () => {},
+    writeFile: async (_file, content) => writes.push(content),
+    env: { AGENTWEAVER_TOKEN: 'explicit-test-token' },
+    runCommand: async () => ({ code: 1, signal: null, error: `failed at https://example.test/mcp?${canary}=${canary}` }),
+    readVerdicts: () => [],
+  });
+  assert.doesNotMatch(writes[0], new RegExp(canary));
 });

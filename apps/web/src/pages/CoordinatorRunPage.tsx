@@ -121,7 +121,7 @@ function pendingApprovalsByRun(events: RunStreamEvent[], coordinatorRunId: strin
     const childRunId = String(event.payload.childRunId ?? event.payload.child_run_id ?? '');
     const targetRunId = childRunId || coordinatorRunId;
     const key = `${targetRunId}:${requestId}`;
-    if (event.type === 'tool.approval_required' || event.type === 'shell.approval_required' || event.type === 'coordinator.child_approval_required') {
+    if (event.type === 'tool.approval_required' || event.type === 'tool.approval_context' || event.type === 'shell.approval_required' || event.type === 'coordinator.child_approval_required') {
       pending.set(key, targetRunId);
     } else if (event.type === 'tool.approval_resolved' || event.type === 'coordinator.child_approval_resolved') {
       pending.delete(key);

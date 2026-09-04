@@ -1,4 +1,5 @@
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Security;
 using System.Text.Json.Serialization;
@@ -7,7 +8,7 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class AuthEndpoints
 {
-    public static void MapAuthEndpoints(this WebApplication app)
+    public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/auth/config", (IConfiguration configuration) =>
         {
@@ -27,11 +28,11 @@ public static class AuthEndpoints
                     authority,
                 },
             });
-        }).AllowAnonymous();
+        }).OperationalAnonymous();
 
         app.MapGet("/api/auth/context", (HttpContext httpContext) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             return Results.Ok(new
             {
                 mode = "Entra",
@@ -42,16 +43,19 @@ public static class AuthEndpoints
                 platform_roles = caller.PlatformRoles,
                 primary_platform_role = caller.PrimaryPlatformRole,
             });
-        });
+        }).AuthenticatedPlatform();
 
         app.MapGet("/api/auth/session", async (
             HttpContext httpContext,
             EffectiveModelProviderResolver modelProviderResolver,
             CancellationToken ct) =>
         {
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
-            var effectiveProvider = await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false);
-            var aiConfigured = effectiveProvider is not EffectiveModelProviderResult.Unavailable;
+            var caller = httpContext.GetCaller();
+            var effectiveProvider = string.IsNullOrWhiteSpace(caller.EntraObjectId)
+                ? await modelProviderResolver.ResolveAsync(projectId: null, ct).ConfigureAwait(false)
+                : await modelProviderResolver.ResolveForSessionAsync(caller.EntraObjectId, ct).ConfigureAwait(false);
+            var aiConfigured = effectiveProvider is not EffectiveModelProviderResult.Unavailable ||
+                !caller.PlatformRoles.Contains(PlatformRoles.PlatformAdmin, StringComparer.Ordinal);
             return Results.Ok(new
             {
                 authenticated = true,
@@ -64,7 +68,7 @@ public static class AuthEndpoints
                 platform_roles = caller.PlatformRoles,
                 ai_configured = aiConfigured,
             });
-        });
+        }).AuthenticatedSelf();
 
         app.MapPost("/api/auth/github/repo-app/authorizations", async (
             HttpContext httpContext,
@@ -78,7 +82,7 @@ public static class AuthEndpoints
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var result = await service.BeginAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
             if (result.Outcome != RepoAppAuthorizationOutcome.Success)
                 return Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
 
@@ -103,7 +107,7 @@ public static class AuthEndpoints
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var result = await service.BeginMcpHandoffAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, request?.ReturnRouteKey, ct).ConfigureAwait(false);
             return result.Outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.Ok(new
                 {
@@ -125,7 +129,7 @@ public static class AuthEndpoints
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var result = await service.GetConnectionAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             return result.Outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.Ok(new
                 {
@@ -158,7 +162,7 @@ public static class AuthEndpoints
 
             RepoAppUserAuthorizationService.SetCallbackCookie(httpContext, handoff.Value.CallbackCookie);
             return Results.Redirect(handoff.Value.AuthorizationUrl);
-        }).AllowAnonymous();
+        }).ProtocolManaged();
 
         app.MapGet("/auth/github/repo-app/callback", async (
             HttpContext httpContext,
@@ -181,7 +185,7 @@ public static class AuthEndpoints
                 browserSession?.Id, browserSession?.EntraObjectId, state,
                 string.IsNullOrWhiteSpace(error) ? code : null, callbackCookie, ct).ConfigureAwait(false);
             return Results.Redirect(service.GetCallbackRedirect(result.ReturnRouteKey, result.Outcome));
-        }).AllowAnonymous();
+        }).ProtocolManaged();
 
         app.MapGet("/api/auth/github/repo-app/authorizations/{transactionId}", async (
             HttpContext httpContext,
@@ -195,7 +199,7 @@ public static class AuthEndpoints
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var result = await service.PollAsync(
-                ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, transactionId, ct).ConfigureAwait(false);
+                httpContext.GetCaller(), httpContext.User, transactionId, ct).ConfigureAwait(false);
             return result.Outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.Ok(new { status = result.Status })
                 : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(result.Outcome) });
@@ -211,7 +215,7 @@ public static class AuthEndpoints
             CancellationToken ct) =>
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
-            var outcome = await service.RefreshAsync(ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+            var outcome = await service.RefreshAsync(httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             return outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.NoContent()
                 : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(outcome) });
@@ -227,7 +231,7 @@ public static class AuthEndpoints
             CancellationToken ct) =>
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
-            var outcome = await service.RevokeAsync(ApiKeyAuthMiddleware.GetCaller(httpContext), httpContext.User, ct).ConfigureAwait(false);
+            var outcome = await service.RevokeAsync(httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
             return outcome == RepoAppAuthorizationOutcome.Success
                 ? Results.NoContent()
                 : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(outcome) });
@@ -235,12 +239,13 @@ public static class AuthEndpoints
 
         app.MapGet("/auth/entra/authorize", async (
             HttpContext httpContext,
+            string? oauth_return_handle,
             EntraOAuthRedirectService entraOauthService,
             CancellationToken ct) =>
         {
             try
             {
-                var url = await entraOauthService.BeginAuthorizationAsync(ct).ConfigureAwait(false);
+                var url = await entraOauthService.BeginAuthorizationAsync(oauth_return_handle, ct).ConfigureAwait(false);
                 var state = EntraOAuthStateCookie.ExtractState(url);
                 if (state is not null)
                     EntraOAuthStateCookie.Set(httpContext, state);
@@ -250,7 +255,11 @@ public static class AuthEndpoints
             {
                 return Results.Problem(ex.Message, statusCode: StatusCodes.Status503ServiceUnavailable);
             }
-        }).AllowAnonymous();
+            catch (OAuthReturnHandleException)
+            {
+                return Results.BadRequest(new { error = "invalid_request" });
+            }
+        }).ProtocolManaged();
 
         app.MapGet("/auth/entra/callback", async (
             HttpContext httpContext,
@@ -258,6 +267,7 @@ public static class AuthEndpoints
             string? state,
             string? error,
             EntraOAuthRedirectService entraOauthService,
+            OAuthBrokerTransactionService brokerTransactions,
             WebSessionExchangeService webSessionExchange,
             CancellationToken ct) =>
         {
@@ -280,22 +290,72 @@ public static class AuthEndpoints
             EntraOAuthStateCookie.Clear(httpContext);
             if (string.IsNullOrEmpty(boundState) || !EntraOAuthStateCookie.ConstantTimeEquals(boundState, state))
                 return Results.Redirect($"{frontendUrl}/?auth=error&reason=state_mismatch");
+
+            EntraAuthorizationClaim claim;
+            try
+            {
+                claim = await entraOauthService.ClaimAuthorizationAsync(state, ct).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return Results.Redirect($"{frontendUrl}/?auth=error&reason=state_mismatch");
+            }
+
             if (!string.IsNullOrWhiteSpace(error))
-                return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");
+            {
+                if (claim.ReturnHandle is null)
+                    return Results.Redirect($"{frontendUrl}/?auth=error&reason={Uri.EscapeDataString(error)}");
+                return await CompleteBrokerErrorAsync(
+                    brokerTransactions,
+                    claim.ReturnHandle,
+                    string.Equals(error, "access_denied", StringComparison.Ordinal)
+                        ? OpenIddict.Abstractions.OpenIddictConstants.Errors.AccessDenied
+                        : OpenIddict.Abstractions.OpenIddictConstants.Errors.ServerError,
+                    string.Equals(error, "access_denied", StringComparison.Ordinal)
+                        ? "The resource owner denied the request."
+                        : "The upstream identity provider could not complete the request.",
+                    ct).ConfigureAwait(false);
+            }
             if (string.IsNullOrWhiteSpace(code))
-                return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
+            {
+                if (claim.ReturnHandle is null)
+                    return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
+                return await CompleteBrokerErrorAsync(
+                    brokerTransactions,
+                    claim.ReturnHandle,
+                    OpenIddict.Abstractions.OpenIddictConstants.Errors.ServerError,
+                    "The upstream identity provider returned an incomplete response.",
+                    ct).ConfigureAwait(false);
+            }
 
             try
             {
-                var (claims, accessToken) = await entraOauthService.ExchangeCodeAsync(code, state, ct).ConfigureAwait(false);
+                var exchange = await entraOauthService.ExchangeClaimedCodeAsync(code, claim, ct).ConfigureAwait(false);
+                var claims = exchange.Claims;
+                var accessToken = exchange.AccessToken;
+                if (exchange.ReturnHandle is not null)
+                {
+                    await httpContext.RequestServices.GetRequiredService<BrowserEntraSessionService>()
+                        .IssueAsync(httpContext, claims, ct).ConfigureAwait(false);
+                    return Results.Redirect($"/oauth/resume?handle={Uri.EscapeDataString(exchange.ReturnHandle)}");
+                }
                 var oneTimeCode = await webSessionExchange.IssueAsync(accessToken, claims.DisplayName, ct).ConfigureAwait(false);
                 return Results.Redirect($"{frontendUrl}/?auth=success&code={Uri.EscapeDataString(oneTimeCode)}");
             }
             catch (Exception)
             {
+                if (claim.ReturnHandle is not null)
+                {
+                    return await CompleteBrokerErrorAsync(
+                        brokerTransactions,
+                        claim.ReturnHandle,
+                        OpenIddict.Abstractions.OpenIddictConstants.Errors.ServerError,
+                        "The authorization server could not complete the upstream token exchange.",
+                        ct).ConfigureAwait(false);
+                }
                 return Results.Redirect($"{frontendUrl}/?auth=error&reason=sign_in_failed");
             }
-        }).AllowAnonymous();
+        }).ProtocolManaged();
 
         app.MapPost("/api/auth/session/exchange", async (
             HttpContext httpContext,
@@ -316,7 +376,7 @@ public static class AuthEndpoints
                 return Results.BadRequest(new { error = "invalid_code" });
             await browserSessions.IssueAsync(httpContext, claims, ct).ConfigureAwait(false);
             return Results.Ok(new SessionExchangeResponse(accessToken, login));
-        }).AllowAnonymous();
+        }).ProtocolManaged();
 
         app.MapPost("/api/auth/session/sign-out", async (
             HttpContext httpContext,
@@ -329,7 +389,21 @@ public static class AuthEndpoints
             ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
             PlatformDefaultCopilotBindingService.ClearCallbackCookie(httpContext);
             return Results.NoContent();
-        });
+        }).AuthenticatedSelf();
+    }
+
+    private static async Task<IResult> CompleteBrokerErrorAsync(
+        OAuthBrokerTransactionService brokerTransactions,
+        string handle,
+        string error,
+        string description,
+        CancellationToken ct)
+    {
+        var redirect = await brokerTransactions.CompleteErrorAsync(
+            handle, error, description, ct).ConfigureAwait(false);
+        return redirect is null
+            ? Results.BadRequest(new { error = OpenIddict.Abstractions.OpenIddictConstants.Errors.InvalidRequest })
+            : Results.Redirect(redirect);
     }
 }
 

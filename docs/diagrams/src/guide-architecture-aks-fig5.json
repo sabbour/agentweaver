@@ -96,7 +96,7 @@
         "tone": "green"
       },
       "subLabel": "/mnt/secrets-store/",
-      "meta": "github-client-id · github-client-secret · mcp-oauth-signing-key"
+      "meta": "GitHub secrets · OAuth signing/encryption certificates"
     },
     {
       "id": "AGENT",

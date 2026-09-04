@@ -35,6 +35,11 @@
   "ENTRA_CLIENT_ID": "your-entra-app-client-id",
   "ENTRA_TENANT_ID": "your-entra-tenant-id",
   "ENTRA_ENTERPRISE_APP_OBJECT_ID": "your-enterprise-app-object-id (optional)",
+  // OAuth uses the newest usable Key Vault certificate version as active and retains
+  // the previous usable version during rotation. Change the name only when migrating
+  // certificate families; create a new version under the same name for routine rotation.
+  "OAUTH_SIGNING_CERTIFICATE_NAME": "agentweaver-oauth-signing",
+  "OAUTH_ENCRYPTION_CERTIFICATE_NAME": "agentweaver-oauth-encryption",
 
   // Optional overrides.
   // "PG_SERVER_NAME": "agentweaver-pg-staging", // Override the globally-unique Azure Flexible Server name if "agentweaver-pg" is already reserved.
@@ -47,6 +52,5 @@
   // "IMAGE_FRONTEND": "ghcr.io/your-org/agentweaver-frontend:v1.2.3",
   // "IMAGE_MCP": "ghcr.io/your-org/agentweaver-mcp:v1.2.3",
   // "IMAGE_AGENT_HOST": "ghcr.io/your-org/agentweaver-agent-host:v1.2.3",
-  "SKIP_POSTGRES": false,
-  "SKIP_OAUTH_KEY": false
+  "SKIP_POSTGRES": false
 }

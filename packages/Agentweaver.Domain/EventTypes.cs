@@ -3,6 +3,12 @@ namespace Agentweaver.Domain;
 /// <summary>Canonical event type strings used in the run event stream (FR-018).</summary>
 public static class EventTypes
 {
+    /// <summary>
+    /// Internal AgentHost control-plane signal requesting a fresh operator-assistant MCP broker
+    /// token. It is transported over A2A but is never persisted or exposed to browser clients.
+    /// </summary>
+    public const string McpBrokerTokenRefreshRequired = "mcp.broker_token.refresh_required";
+
     public const string RunStarted   = "run.started";
     public const string RunCompleted = "run.completed";
     public const string RunFailed    = "run.failed";
@@ -22,6 +28,17 @@ public static class EventTypes
     /// run (Idle -&gt; InProgress) and the same conversation resumes. Payload: { runId, reason }.
     /// </summary>
     public const string RunIdle = "run.idle";
+
+    /// <summary>
+    /// Durable provenance for the model provider a run ACTUALLY resolved to, emitted once per run
+    /// activation and once more when the AgentHost pod is configured. Without it a successful run
+    /// left no record at all of which provider/binding/account served its model turns, so a BYOK run
+    /// was indistinguishable from a GitHub Copilot run after the fact.
+    /// Payload: { runId, providerKind: "byok"|"project_github_copilot"|"platform_github_copilot"|
+    /// "unavailable", providerId, providerType, githubLogin, modelSource, modelId, unavailableReason,
+    /// timestamp_utc }.
+    /// </summary>
+    public const string RunModelProviderResolved = "run.model_provider_resolved";
 
     public const string ReviewRequested = "review.requested";
     public const string ReviewApproved  = "review.approved";

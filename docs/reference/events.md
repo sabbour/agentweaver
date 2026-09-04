@@ -351,9 +351,7 @@ Grounded in `CoordinatorDispatchService.TryRedispatchStalledSubtaskAsync` (`apps
 
 ### `coordinator.steering`
 
-Emitted when a steering directive is created through `POST /api/runs/{id}/steer` and as it changes state. `directiveId` identifies the directive; `kind` is `stop`, `send`, `redirect`, or `amend`; `targetChildRunId` is the targeted child run, or null for a broadcast to every active child; `instruction` is the direction relayed to the subagent(s); `status` advances `pending -> queued -> relayed -> applied`. A `stop` collapses to `applied` essentially immediately because it cancels the in-flight turn's token. A `redirect` or `amend` reaches `applied` only at the targeted subagent's next turn boundary, so observers should surface it as queued until then. Pause is not supported in Phase 2.
-
-**At the assembly human-review gate (#226):** a `redirect`/`amend`/`send` sent while the coordinator is parked at collective review (`awaiting_review`) is delivered to the parked assembly loop instead of the child-turn queue (previously it stuck at `queued` and was dropped). `redirect`/`amend` translate into a request-changes review decision — the same path as `POST /assembly/review` — and settle `relayed`; `send` becomes an advisory note and settles `applied`. When the review gate is armed on another API replica the decision is durably persisted for the owner's poller, so `status` is the new terminal value **`deferred`** and the `/steer` endpoint returns `202 Accepted`.
+Emitted when a steering directive is created through `POST /api/runs/{id}/steer` and as it changes state. `directiveId` identifies the directive. `kind` is `stop`, `redirect`, `amend`, or a recovery verb such as `recover`. `targetChildRunId` selects a child; null broadcasts to active children. `instruction` is required for `redirect` and `amend`, but optional for `stop` and recovery directives. `status` advances `pending -> queued -> relayed -> applied`. A `stop` applies immediately. Other directives apply at a child turn boundary. Pause is not supported.
 
 Unified autonomous steering adds two source-agnostic events around this legacy directive lifecycle:
 

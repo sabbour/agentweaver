@@ -26,8 +26,9 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class DecisionsEndpoints
 {
-    public static void MapDecisionsEndpoints(this WebApplication app)
+    public static void MapDecisionsEndpoints(this IEndpointRouteBuilder app)
     {
+        var logger = app.ServiceProvider.GetRequiredService<ILogger<Program>>();
 // -----------------------------------------------------------------------
 // Memory / Decision Inbox endpoints
 // -----------------------------------------------------------------------
@@ -89,7 +90,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
             exists.SourceRunId = author.SourceRunId;
             exists.UpdatedAt = DateTimeOffset.UtcNow;
             await memoryDb.SaveChangesAsync(ct);
-            await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+            await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
             return Results.Ok(new
             {
                 exists.Id, exists.AgentName, exists.Slug, exists.Type, exists.Title, exists.Content,
@@ -139,7 +140,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     };
     memoryDb.DecisionInbox.Add(entry);
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Created($"/api/projects/{id}/decisions/inbox/{entry.Id}", new
     {
         entry.Id, entry.AgentName, entry.Slug, entry.Type, entry.Title, entry.Content,
@@ -216,7 +217,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
     var now = DateTimeOffset.UtcNow;
     var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, approver!.SourceIdentity, ct);
     await tx.CommitAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
     {
         id = entry.Id,
@@ -255,7 +256,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
     var now = DateTimeOffset.UtcNow;
     var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, approver!.SourceIdentity, ct);
     await tx.CommitAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new
     {
         id = entry.Id,
@@ -295,7 +296,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
     entry.UpdatedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new { entry.Id, entry.Status });
 });
 
@@ -448,7 +449,7 @@ app.MapPost("/api/projects/{id}/decisions", async (
     };
     memoryDb.Decisions.Add(decision);
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
     {
         decision.Id, decision.AgentName, decision.Type, decision.Status,
@@ -505,7 +506,7 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     decision.ApprovedAt = DateTimeOffset.UtcNow;
     decision.UpdatedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, app.Logger);
+    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new
     {
         decision.Id, decision.Status, decision.Content, decision.Rationale,

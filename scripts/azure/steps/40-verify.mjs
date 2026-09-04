@@ -4,8 +4,8 @@
 //
 // Post-deploy health verification: pod running counts per tier, Gateway/
 // HTTPRoute programming status, an optional authenticated HTTP feature probe
-// (unauthenticated 401 + authenticated 200s using AGENTWEAVER_VALIDATION_TOKEN
-// / GH_TOKEN, exactly like the legacy scripts), SecretProviderClass sync,
+// (unauthenticated 401 + authenticated 200s using an explicitly supplied
+// AGENTWEAVER_VALIDATION_TOKEN), SecretProviderClass sync,
 // API RBAC can-i checks, sandbox CRDs/resources, and storage prerequisites.
 //
 // Every check is recorded as {ok, message} in `results` and tallied into
@@ -16,11 +16,121 @@
 // whether to exit non-zero.
 //
 // cfg is the resolved variables.mjs output: NAMESPACE. Optional:
-// VALIDATION_TOKEN (falls back to env.AGENTWEAVER_VALIDATION_TOKEN /
-// env.GH_TOKEN, matching the legacy scripts' precedence).
+// VALIDATION_TOKEN (falls back to env.AGENTWEAVER_VALIDATION_TOKEN).
 
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
+import { createPrivateKey, createPublicKey, X509Certificate } from "node:crypto";
+
+function certificatePem(text) {
+  return String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/)?.[0] ?? null;
+}
+
+function timestamp(value) {
+  if (typeof value === "number") return value < 10_000_000_000 ? value * 1000 : value;
+  const parsed = Date.parse(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export async function certificateValueUsability(value, { exec = execDefault, now = new Date() } = {}) {
+  let pem = String(value ?? "").trim();
+  if (!pem) return { usable: false, reason: "empty or private-key-less certificate secret" };
+  if (!pem.includes("-----BEGIN")) {
+    if (!/^[A-Za-z0-9+/=\r\n]+$/.test(pem)) return { usable: false, reason: "malformed certificate encoding" };
+    const pfx = Buffer.from(pem.replace(/\s/g, ""), "base64");
+    if (!pfx.length) return { usable: false, reason: "malformed certificate encoding" };
+    const extracted = await exec.capture(
+      "openssl",
+      ["pkcs12", "-in", "-", "-nodes", "-passin", "pass:"],
+      { input: pfx, allowFailure: true },
+    );
+    if (extracted.code !== 0) return { usable: false, reason: "malformed PKCS#12 certificate secret" };
+    pem = extracted.stdout;
+  }
+
+  const certPem = certificatePem(pem);
+  if (!certPem || !/-----BEGIN (?:RSA )?PRIVATE KEY-----/.test(pem)) {
+    return { usable: false, reason: "private-key-less certificate secret" };
+  }
+  try {
+    const certificate = new X509Certificate(certPem);
+    const privateKey = createPrivateKey(pem);
+    if (privateKey.asymmetricKeyType !== "rsa" || certificate.publicKey.asymmetricKeyType !== "rsa") {
+      return { usable: false, reason: "certificate algorithm is not RSA" };
+    }
+    const privatePublic = createPublicKey(privateKey).export({ type: "spki", format: "der" });
+    const certificatePublic = certificate.publicKey.export({ type: "spki", format: "der" });
+    if (!privatePublic.equals(certificatePublic)) {
+      return { usable: false, reason: "certificate private key does not match its public key" };
+    }
+    const keySize = privateKey.asymmetricKeyDetails?.modulusLength ?? 0;
+    if (keySize < 2048) return { usable: false, reason: "RSA private key is smaller than 2048 bits" };
+    const instant = now.getTime();
+    if (Date.parse(certificate.validFrom) > instant) return { usable: false, reason: "certificate is not yet valid" };
+    if (Date.parse(certificate.validTo) <= instant) return { usable: false, reason: "certificate is expired" };
+    return { usable: true, reason: "usable RSA certificate with private key" };
+  } catch {
+    return { usable: false, reason: "malformed certificate or private-key material" };
+  }
+}
+
+export async function verifyOAuthCertificateFamily({
+  vaultName,
+  name,
+  exec = execDefault,
+  now = new Date(),
+  inspectValue = certificateValueUsability,
+}) {
+  const listed = await exec.capture("az", [
+    "keyvault", "secret", "list-versions",
+    "--vault-name", vaultName,
+    "--name", name,
+    "--output", "json",
+  ], { allowFailure: true });
+  if (listed.code !== 0) return { usable: 0, reason: "certificate versions could not be listed" };
+  let versions;
+  try {
+    versions = JSON.parse(listed.stdout);
+  } catch {
+    return { usable: 0, reason: "certificate version metadata was malformed" };
+  }
+  const instant = now.getTime();
+  const candidates = (Array.isArray(versions) ? versions : [])
+    .filter((version) => version?.attributes?.enabled !== false)
+    .filter((version) => !version?.attributes?.nbf || timestamp(version.attributes.nbf) <= instant)
+    .filter((version) => !version?.attributes?.exp || timestamp(version.attributes.exp) > instant)
+    .sort((a, b) => timestamp(b?.attributes?.created) - timestamp(a?.attributes?.created))
+    .slice(0, 2);
+
+  const failures = [];
+  let usable = 0;
+  for (const version of candidates) {
+    const versionId = String(version?.id ?? "").split("/").at(-1);
+    if (!versionId) {
+      failures.push("version metadata had no version id");
+      continue;
+    }
+    const secret = await exec.capture("az", [
+      "keyvault", "secret", "show",
+      "--vault-name", vaultName,
+      "--name", name,
+      "--version", versionId,
+      "--query", "value",
+      "--output", "tsv",
+    ], { allowFailure: true });
+    if (secret.code !== 0) {
+      failures.push("certificate secret version could not be read");
+      continue;
+    }
+    const inspected = await inspectValue(secret.stdout, { exec, now });
+    if (inspected.usable) usable += 1;
+    else failures.push(inspected.reason);
+  }
+  return {
+    usable,
+    reason: usable ? `${usable} runtime-usable active/previous version(s)` : failures[0] ?? "no enabled version in its valid time window",
+  };
+}
 
 const RUNNING_POD_SELECTORS = [
   { label: "API", selector: "app=agentweaver-api" },
@@ -86,7 +196,12 @@ export async function httpStatus(url, { bearerToken, fetchImpl = fetch, timeoutM
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const headers = bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {};
-    const resp = await fetchImpl(url, { method: "GET", headers, signal: controller.signal });
+    const resp = await fetchImpl(url, {
+      method: "GET",
+      headers,
+      signal: controller.signal,
+      ...(bearerToken ? { redirect: "error" } : {}),
+    });
     return resp.status;
   } catch {
     return "000";
@@ -104,11 +219,27 @@ export async function httpJson(url, bearerToken, { fetchImpl = fetch, timeoutMs 
       method: "GET",
       headers: { Authorization: `Bearer ${bearerToken}` },
       signal: controller.signal,
+      redirect: "error",
     });
     if (!resp.ok) return [];
     return await resp.json();
   } catch {
     return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Fetches an anonymous discovery document, returning null on any failure. */
+export async function httpDiscoveryJson(url, { fetchImpl = fetch, timeoutMs = 10_000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetchImpl(url, { method: "GET", signal: controller.signal });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -140,7 +271,13 @@ export function firstProjectId(projectsJson) {
  * @param {Record<string,string>} [opts.env] Defaults to process.env.
  */
 export async function run(cfg, opts = {}) {
-  const { exec = execDefault, log = logDefault, fetchImpl = fetch, env = process.env } = opts;
+  const {
+    exec = execDefault,
+    log = logDefault,
+    fetchImpl = fetch,
+    env = process.env,
+    certificateInspector = certificateValueUsability,
+  } = opts;
   const NAMESPACE = cfg.NAMESPACE;
 
   const results = [];
@@ -208,6 +345,144 @@ export async function run(cfg, opts = {}) {
   if (host) {
     log.info("");
     log.info("--- Authenticated feature validation ---");
+    const origin = `https://${host}`;
+    const resource = `${origin}/mcp`;
+    const configuredOrigin = await jsonpath(
+      NAMESPACE,
+      ["configmap", "agentweaver-runtime-config"],
+      "{.data.OAUTH_PUBLIC_ORIGIN}",
+      { exec },
+    );
+    const configuredSigningName = await jsonpath(
+      NAMESPACE,
+      ["configmap", "agentweaver-runtime-config"],
+      "{.data.OAUTH_SIGNING_CERTIFICATE_NAME}",
+      { exec },
+    );
+    const configuredEncryptionName = await jsonpath(
+      NAMESPACE,
+      ["configmap", "agentweaver-runtime-config"],
+      "{.data.OAUTH_ENCRYPTION_CERTIFICATE_NAME}",
+      { exec },
+    );
+    const configuredRuntimeChecksum = await jsonpath(
+      NAMESPACE,
+      ["configmap", "agentweaver-runtime-config"],
+      "{.data.OAUTH_RUNTIME_CONFIG_CHECKSUM}",
+      { exec },
+    );
+    const apiRuntimeChecksum = await jsonpath(
+      NAMESPACE,
+      ["deployment", "agentweaver-api"],
+      "{.spec.template.metadata.annotations.agentweaver\\.io/oauth-runtime-config-checksum}",
+      { exec },
+    );
+    const mcpRuntimeChecksum = await jsonpath(
+      NAMESPACE,
+      ["deployment", "agentweaver-mcp"],
+      "{.spec.template.metadata.annotations.agentweaver\\.io/oauth-runtime-config-checksum}",
+      { exec },
+    );
+    const expectedSigningName = cfg.OAUTH_SIGNING_CERTIFICATE_NAME || "agentweaver-oauth-signing";
+    const expectedEncryptionName = cfg.OAUTH_ENCRYPTION_CERTIFICATE_NAME || "agentweaver-oauth-encryption";
+    record(
+      configuredOrigin === origin,
+      configuredOrigin === origin
+        ? "OAuth public origin ConfigMap value matches the canonical ingress origin"
+        : `OAuth public origin ConfigMap mismatch (expected ${origin})`,
+    );
+    record(
+      configuredSigningName === expectedSigningName && configuredEncryptionName === expectedEncryptionName,
+      configuredSigningName === expectedSigningName && configuredEncryptionName === expectedEncryptionName
+        ? "OAuth Key Vault certificate families are wired to the runtime ConfigMap"
+        : "OAuth Key Vault certificate family ConfigMap values are missing or inconsistent",
+    );
+    record(
+      /^[a-f0-9]{64}$/.test(configuredRuntimeChecksum)
+        && apiRuntimeChecksum === configuredRuntimeChecksum
+        && mcpRuntimeChecksum === configuredRuntimeChecksum,
+      /^[a-f0-9]{64}$/.test(configuredRuntimeChecksum)
+        && apiRuntimeChecksum === configuredRuntimeChecksum
+        && mcpRuntimeChecksum === configuredRuntimeChecksum
+        ? "API and MCP deployments consumed the canonical OAuth runtime configuration"
+        : "API or MCP deployment has not consumed the canonical OAuth runtime configuration",
+    );
+
+    if (cfg.KEYVAULT_NAME) {
+      for (const [usage, name] of [
+        ["signing", expectedSigningName],
+        ["encryption", expectedEncryptionName],
+      ]) {
+        const certificate = await exec.capture("az", [
+          "keyvault", "certificate", "show",
+          "--vault-name", cfg.KEYVAULT_NAME,
+          "--name", name,
+          "--output", "none",
+        ], { allowFailure: true });
+        record(
+          certificate.code === 0,
+          certificate.code === 0
+            ? `OAuth ${usage} certificate '${name}' exists in Key Vault`
+            : `OAuth ${usage} certificate '${name}' is missing from Key Vault`,
+        );
+        const versions = await verifyOAuthCertificateFamily({
+          vaultName: cfg.KEYVAULT_NAME,
+          name,
+          exec,
+          inspectValue: certificateInspector,
+        });
+        record(
+          versions.usable >= 1,
+          versions.usable >= 1
+            ? `OAuth ${usage} certificate has ${versions.reason}`
+            : `OAuth ${usage} certificate is not runtime-usable: ${versions.reason}`,
+        );
+      }
+    } else {
+      info("KEYVAULT_NAME is unavailable; skipping OAuth certificate version verification");
+    }
+    const resourceMetadataPaths = [
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-protected-resource/mcp",
+    ];
+    for (const path of resourceMetadataPaths) {
+      const document = await httpDiscoveryJson(`${origin}${path}`, { fetchImpl });
+      const valid = document?.resource === resource
+        && Array.isArray(document.authorization_servers)
+        && document.authorization_servers.length === 1
+        && document.authorization_servers[0]?.replace(/\/$/, "") === origin
+        && Array.isArray(document.scopes_supported)
+        && document.scopes_supported.includes("mcp:invoke");
+      record(valid, valid
+        ? `MCP protected-resource metadata ${path} is canonical`
+        : `MCP protected-resource metadata ${path} is missing or inconsistent`);
+    }
+
+    const asMetadata = await httpDiscoveryJson(
+      `${origin}/.well-known/oauth-authorization-server`,
+      { fetchImpl },
+    );
+    const oidcMetadata = await httpDiscoveryJson(
+      `${origin}/.well-known/openid-configuration`,
+      { fetchImpl },
+    );
+    const metadataValid = [asMetadata, oidcMetadata].every((document) =>
+      document?.issuer?.replace(/\/$/, "") === origin
+      && document?.jwks_uri === `${origin}/oauth/jwks`);
+    record(metadataValid, metadataValid
+      ? "OAuth AS and OIDC metadata advertise the canonical issuer and JWKS"
+      : "OAuth AS or OIDC metadata is missing or inconsistent");
+
+    const jwks = await httpDiscoveryJson(`${origin}/oauth/jwks`, { fetchImpl });
+    const jwksValid = Array.isArray(jwks?.keys)
+      && jwks.keys.some((key) => key?.use === "sig"
+        && key?.alg === "RS256"
+        && typeof key?.kid === "string"
+        && key.kid.length > 0);
+    record(jwksValid, jwksValid
+      ? "OAuth JWKS exposes a keyed RS256 signing key"
+      : "OAuth JWKS has no keyed RS256 signing key");
+
     const unauthProjectsStatus = await httpStatus(`https://${host}/api/projects`, { fetchImpl });
     record(
       unauthProjectsStatus === 401,
@@ -216,9 +491,9 @@ export async function run(cfg, opts = {}) {
         : `Unauthenticated /api/projects -> HTTP ${unauthProjectsStatus} (expected 401)`,
     );
 
-    const validationToken = cfg.VALIDATION_TOKEN || env.AGENTWEAVER_VALIDATION_TOKEN || env.GH_TOKEN || "";
+    const validationToken = cfg.VALIDATION_TOKEN || env.AGENTWEAVER_VALIDATION_TOKEN || "";
     if (!validationToken) {
-      info("Set AGENTWEAVER_VALIDATION_TOKEN or GH_TOKEN to validate signed-in identity plus project memory/decision APIs");
+      info("Set AGENTWEAVER_VALIDATION_TOKEN to validate signed-in identity plus project memory/decision APIs");
     } else {
       const authStatus = await httpStatus(`https://${host}/api/auth/github`, { bearerToken: validationToken, fetchImpl });
       const projectsStatus = await httpStatus(`https://${host}/api/projects`, { bearerToken: validationToken, fetchImpl });

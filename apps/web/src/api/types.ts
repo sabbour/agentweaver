@@ -504,6 +504,18 @@ export interface ByokProviderRequest {
   azure_api_version?: string | null;
 }
 
+export interface UserAiAccessStatus {
+  effective_source: 'platform_byok' | 'user_byok' | 'user_github_copilot' | 'none';
+  platform_byok: Pick<ByokProviderConfig, 'name' | 'type' | 'model'> | null;
+  preference: 'byok' | 'github_copilot';
+  personal_byok: Omit<ByokProviderConfig, 'is_active'> | null;
+  copilot: {
+    connected: boolean;
+    github_login: string | null;
+    reconnect_required: boolean;
+  };
+}
+
 export interface GitHubRepositorySelectionCandidate {
   full_name: string;
   owner_login: string;
@@ -935,8 +947,10 @@ export interface SteerCoordinatorResponse {
 // POST /api/assistant/runs + POST /api/assistant/runs/{id}/messages.
 // The transcript streams over the existing run-stream endpoints (GET /api/runs/{id}/stream + /events).
 export interface CreateAssistantRunRequest {
-  /** The operator's first message; creating the run also seeds this turn. */
-  message: string;
+  /** Optional opening message used for the conversation title and, by default, the first turn. */
+  message?: string;
+  /** Create and return the run before executing `message`, so the caller can attach its stream first. */
+  defer_first_turn?: boolean;
   /** Optional project scope for MCP tool calls that need a project context. */
   project_id?: string;
   /**
@@ -1614,8 +1628,8 @@ export interface OverviewDto {
 
 // ── #247 — Global notification center ─────────────────────────────────────────
 // GET /api/notifications — the signed-in user's pending Human Review and Tool Approval requests
-// across every project/run they own. The server includes a path for non-run notifications; run
-// notification routes are rebuilt from project_id + run_id so they always target that exact run.
+// across every project/run they own. The server emits the exact CTA path to open, including
+// assistant-session approvals that must resume /assistant rather than a project orchestration page.
 export interface NotificationDto {
   id: string;
   // Widened with `(string & {})` so the union still autocompletes known values while

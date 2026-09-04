@@ -43,7 +43,10 @@ public sealed class PlatformRolePolicyTests
     {
         var identity = new ClaimsIdentity(
         [
-            new Claim("agentweaver_internal", "true"),
+            new Claim(
+                AgentweaverClaimTypes.AuthenticationScheme,
+                AgentweaverAuthenticationSchemes.InternalServiceKey),
+            new Claim(AgentweaverClaimTypes.InternalService, "true"),
         ], authenticationType: "test-internal");
         var principal = new ClaimsPrincipal(identity);
         var requirement = new PlatformRoleRequirement();
@@ -54,25 +57,25 @@ public sealed class PlatformRolePolicyTests
         context.HasSucceeded.Should().BeTrue();
     }
 
-    [Fact(Skip = "pending Tank's endpoint-specific authorization policies beyond baseline PlatformAccess")]
+    [Fact(Skip = "project-operation role policies are tracked separately from the endpoint auth cutover")]
     public async Task ProjectCreator_CanCreateProjects_ButCannotAccessPlatformAdminOnlyOperations()
     {
         await Task.CompletedTask;
     }
 
-    [Fact(Skip = "pending Tank's endpoint-specific authorization policies beyond baseline PlatformAccess")]
+    [Fact(Skip = "project-operation role policies are tracked separately from the endpoint auth cutover")]
     public async Task Contributor_CannotSatisfy_ProjectCreationRequirement_UnlessPolicyExplicitlyAllowsIt()
     {
         await Task.CompletedTask;
     }
 
-    [Fact(Skip = "pending Tank's endpoint-specific authorization policies beyond baseline PlatformAccess")]
+    [Fact(Skip = "project-operation role policies are tracked separately from the endpoint auth cutover")]
     public async Task Viewer_IsReadOnly_AndCannotSatisfyMutationRequirements()
     {
         await Task.CompletedTask;
     }
 
-    [Fact(Skip = "pending Tank's Entra API integration path wiring roles onto HttpContext.User")]
+    [Fact(Skip = "covered by Entra request-level authorization tests")]
     public async Task MissingAppRole_FailsRequirement_ServerSide()
     {
         await Task.CompletedTask;

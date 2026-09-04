@@ -2,7 +2,7 @@ import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { SettingsPage } from '../pages/SettingsPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api/apiClient', () => ({
@@ -11,6 +11,12 @@ vi.mock('../api/apiClient', () => ({
     getAuthSession: vi.fn(),
     beginRepoAppAuthorization: vi.fn(),
     getRepoAppConnectionStatus: vi.fn(),
+    getUserAiAccess: vi.fn(),
+    setUserByokProvider: vi.fn(),
+    removeUserByokProvider: vi.fn(),
+    setUserAiPreference: vi.fn(),
+    beginUserCopilotAuthorization: vi.fn(),
+    disconnectUserCopilot: vi.fn(),
   },
 }));
 
@@ -42,6 +48,13 @@ beforeEach(() => {
     connected: false,
     github_login: null,
   } as never);
+  vi.mocked(apiClient.getUserAiAccess).mockResolvedValue({
+    effective_source: 'none',
+    platform_byok: null,
+    preference: 'github_copilot',
+    personal_byok: null,
+    copilot: { connected: false, github_login: null, reconnect_required: false },
+  });
 });
 
 describe('SettingsPage', () => {
@@ -62,6 +75,61 @@ describe('SettingsPage', () => {
     expect(screen.getByDisplayValue(/\/mcp$/)).toBeDefined();
     expect(screen.queryByText('Sandbox policy')).toBeNull();
     expect(screen.queryByText(/Linked GitHub accounts/i)).toBeNull();
+  });
+
+  it('shows client-specific OAuth guidance and copies the exact MCP URL', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(
+      <MemoryRouter>
+        <AzureFluentProvider density="compact">
+          <SettingsPage />
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/discovers Agentweaver OAuth endpoints automatically/i)).toBeDefined();
+    const urlInput = screen.getByRole('textbox', { name: 'MCP server URL' }) as HTMLInputElement;
+    expect(urlInput.value).toMatch(/\/mcp$/);
+    expect(screen.getByRole('tablist', { name: 'MCP client setup' })).toBeDefined();
+    for (const clientName of [
+      'Claude Desktop',
+      'VS Code',
+      'GitHub Copilot CLI',
+      'GitHub Copilot desktop',
+    ]) {
+      expect(screen.getByRole('tab', { name: clientName })).toBeDefined();
+    }
+    expect(screen.getByRole('tabpanel').textContent).toContain('Customize → Connectors');
+    expect(screen.getByRole('tabpanel').textContent).toContain('OAuth Client ID to agentweaver-claude');
+    expect(screen.getByRole('tabpanel').textContent).toContain('Leave OAuth Client Secret empty');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'VS Code' }));
+    expect(screen.getByRole('tabpanel').textContent).toContain('MCP: Add Server');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub Copilot CLI' }));
+    expect(screen.getByRole('tabpanel').textContent).toContain('/mcp show agentweaver');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub Copilot desktop' }));
+    expect(screen.getByRole('tabpanel').textContent).toContain('Customize → MCP servers');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy MCP server URL' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(urlInput.value));
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeDefined();
+
+    const agentLink = screen.getByRole('link', { name: 'Open agent definition' });
+    const expectedAgentUrl =
+      `${new URL(urlInput.value).origin}/agents/agentweaver.agent.md`;
+    expect(agentLink.getAttribute('href')).toBe(
+      expectedAgentUrl,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Agentweaver Driver URL' }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(expectedAgentUrl));
   });
 
   it('uses the Azure Portal users blade when the enterprise app object ID is configured', async () => {
@@ -101,7 +169,7 @@ describe('SettingsPage', () => {
     );
 
     expect(await screen.findByText('GitHub connections')).toBeDefined();
-    expect(screen.getByText(/separate Repo App provides repository access/i)).toBeDefined();
+    expect(screen.getByText(/Connect the GitHub Repo App for repository access/i)).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub Repo App' }));
     await waitFor(() => expect(apiClient.beginRepoAppAuthorization).toHaveBeenCalledWith('/settings'));
     expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/repo-app/authorize');
@@ -126,38 +194,37 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(apiClient.getRepoAppConnectionStatus).toHaveBeenCalledTimes(2));
   });
 
-  it('navigates to the last active project\'s settings page when one is remembered', async () => {
-    localStorage.setItem('agentweaver:last-active-project-id', 'proj-a');
+  it('shows platform BYOK as automatically available for personal session chat', async () => {
+    vi.mocked(apiClient.getUserAiAccess).mockResolvedValue({
+      effective_source: 'platform_byok',
+      platform_byok: { name: 'Platform OpenAI', type: 'openai', model: 'gpt-platform' },
+      preference: 'github_copilot',
+      personal_byok: null,
+      copilot: { connected: false, github_login: null, reconnect_required: false },
+    });
     render(
       <MemoryRouter initialEntries={['/settings']}>
-        <AzureFluentProvider>
-          <Routes>
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/projects/:projectId/settings" element={<div>Project settings route</div>} />
-          </Routes>
-        </AzureFluentProvider>
+        <AzureFluentProvider><SettingsPage /></AzureFluentProvider>
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Manage Copilot connections in projects' }));
-    expect(await screen.findByText('Project settings route')).toBeDefined();
-    localStorage.removeItem('agentweaver:last-active-project-id');
+    expect(await screen.findByText(/supplied by the platform/i)).toBeDefined();
+    expect(screen.getByText(/You do not need to add a personal key/i)).toBeDefined();
   });
 
-  it('navigates to the landing page when no project is remembered', async () => {
-    localStorage.removeItem('agentweaver:last-active-project-id');
+  it('starts a personal Copilot authorization from AI Access', async () => {
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
+    vi.mocked(apiClient.beginUserCopilotAuthorization).mockResolvedValue({
+      authorization_url: 'https://github.test/login/oauth/authorize',
+    });
     render(
       <MemoryRouter initialEntries={['/settings']}>
-        <AzureFluentProvider>
-          <Routes>
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/" element={<div>Landing route</div>} />
-          </Routes>
-        </AzureFluentProvider>
+        <AzureFluentProvider><SettingsPage /></AzureFluentProvider>
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Manage Copilot connections in projects' }));
-    expect(await screen.findByText('Landing route')).toBeDefined();
+    fireEvent.click(await screen.findByRole('button', { name: 'Authorize GitHub Copilot' }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://github.test/login/oauth/authorize'));
+    assign.mockRestore();
   });
 });

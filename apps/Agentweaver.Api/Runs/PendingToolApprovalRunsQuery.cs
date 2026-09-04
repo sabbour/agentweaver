@@ -10,13 +10,14 @@ namespace Agentweaver.Api.Runs;
 /// Single source of truth for "which of these runs currently have an unresolved tool-approval
 /// gate", shared by <see cref="BoardProjectionService"/> (board card badges, #issue n/a) and
 /// <see cref="Agentweaver.Api.Notifications.NotificationsService"/> (tool_approval notifications,
-/// #321). A run is pending iff it has at least one <c>tool.approval_required</c> event whose
-/// requestId has no matching <c>tool.approval_resolved</c> requestId or
-/// <c>tool.result</c>/<c>tool.error</c> callId yet — the same resolution logic used by the
-/// frontend's own pending-approval projection.
+/// #321). A run is pending iff it has at least one public <c>tool.approval_required</c> event or
+/// durable <c>tool.approval_context</c> event whose requestId has no matching
+/// <c>tool.approval_resolved</c> requestId or <c>tool.result</c>/<c>tool.error</c> callId yet —
+/// the same resolution logic used by the frontend's own pending-approval projection.
 /// </summary>
 public sealed class PendingToolApprovalRunsQuery
 {
+    private const string ToolApprovalContextEventType = "tool.approval_context";
     private readonly IServiceScopeFactory _scopeFactory;
 
     public PendingToolApprovalRunsQuery(IServiceScopeFactory scopeFactory)
@@ -46,7 +47,9 @@ public sealed class PendingToolApprovalRunsQuery
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
         var approvalEvents = await db.RunEvents.AsNoTracking()
-            .Where(e => runIds.Contains(e.RunId) && e.EventType == EventTypes.ToolApprovalRequired)
+            .Where(e => runIds.Contains(e.RunId)
+                && (e.EventType == EventTypes.ToolApprovalRequired
+                    || e.EventType == ToolApprovalContextEventType))
             .Select(e => new { e.RunId, e.PayloadJson, e.CreatedAt })
             .ToListAsync(ct)
             .ConfigureAwait(false);
@@ -81,13 +84,15 @@ public sealed class PendingToolApprovalRunsQuery
         foreach (var evt in approvalEvents)
         {
             var requestId = ExtractStringField(evt.PayloadJson, "requestId")
-                ?? ExtractStringField(evt.PayloadJson, "request_id");
+                ?? ExtractStringField(evt.PayloadJson, "request_id")
+                ?? ExtractStringField(evt.PayloadJson, "RequestId");
             if (requestId is null) continue;
             if (resolvedByRun.TryGetValue(evt.RunId, out var resolved) && resolved.Contains(requestId))
                 continue;
 
             var toolName = ExtractStringField(evt.PayloadJson, "toolName")
-                ?? ExtractStringField(evt.PayloadJson, "tool_name");
+                ?? ExtractStringField(evt.PayloadJson, "tool_name")
+                ?? ExtractStringField(evt.PayloadJson, "ToolName");
             var createdUtc = new DateTimeOffset(DateTime.SpecifyKind(evt.CreatedAt, DateTimeKind.Utc));
 
             if (!pending.TryGetValue(evt.RunId, out var existing) || createdUtc > existing.CreatedUtc)

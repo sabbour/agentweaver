@@ -103,7 +103,7 @@ Add a new feature: <describe what you want>
 - **Live streaming** — watch every agent step, tool call, and file change in real time from any replica
 - **Human-in-the-loop review** — nothing merges until you approve the assembled diff
 - **Sandbox browser preview** — open a live in-browser preview of the app running inside a run's sandbox (port-forward)
-- **MCP server** — expose Agentweaver runs and outcomes as MCP tools for Claude Desktop and compatible clients
+- **MCP server** — expose Agentweaver runs and outcomes through OAuth to Claude Desktop, VS Code, GitHub Copilot CLI, and GitHub Copilot desktop
 
 ## Quick start
 
@@ -185,7 +185,8 @@ resource group (pick an existing one or create a new one), a location, the
 AKS cluster / ACR / Key Vault names, the Postgres server/location/access-mode
 settings (prefilled with sensible defaults, editable), and Microsoft Entra
 application and tenant IDs. It then provisions
-the cluster, identity, monitoring, the MCP OAuth signing key, PostgreSQL,
+the cluster, identity, monitoring, durable MCP OAuth signing/encryption certificates
+(with active/previous version overlap during rotation), PostgreSQL,
 builds and pushes images (or optionally imports already-published GHCR images
 by immutable ref, or four operator-specified fully-qualified custom image
 refs), verifies image provenance, and performs an initial SHA-identified
@@ -436,6 +437,11 @@ project's maintained harness workflows:
 - **agentweaver-mcp-harness** — Run Agentweaver's MCP protocol harness for tool-surface validation, repro reruns, or scenario exploration.
 - **agentweaver-ui-harness** — Run Agentweaver's deployed-UI harness for browser evidence, repros, or scenario exploration.
 
+All network harnesses use host-agnostic transport validation: arbitrary HTTPS hosts
+are accepted, HTTP is loopback-only, URL credentials/fragments and TLS bypasses are
+rejected, and bearer/session credentials remain confined to their configured origin.
+Deterministic MCP smoke deletes only the unique project it creates.
+
 ## AKS architecture
 
 ### Block diagram
@@ -457,6 +463,8 @@ project's maintained harness workflows:
 ## Key docs
 
 - [Getting started](docs/guide/getting-started.md)
+- [Connect an MCP client](docs/guide/mcp-cli.md)
+- [Install the Agentweaver Driver](docs/guide/mcp-cli.md#install-the-agentweaver-driver)
 - [API reference](docs/reference/api.md)
 - [MCP server reference](docs/reference/mcp.md)
 - [AKS architecture](docs/guide/architecture-aks.md)

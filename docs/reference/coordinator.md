@@ -29,7 +29,7 @@ The coordinator is orchestration-only. It MUST NOT reimplement any platform capa
 | Scribe / session logging | Scribe executor | Reuses it; never re-logs sessions itself |
 | Memory and decisions | Memory store | Reads context; persists the outcome spec (and later the work plan); injects active decisions into child workers |
 
-Because of this non-redundancy contract, the coordinator's charter describes only orchestration behavior — read memories and decisions for context, draft and confirm an outcome spec, and (in later phases) decompose, dispatch, observe, and hand off. It does not re-specify RAI, casting, memory governance, sandboxing, review, merge, or scribe. The provider is fixed to GitHub Copilot; only the model id varies within Copilot.
+Because of this non-redundancy contract, the coordinator's charter describes only orchestration behavior — read memories and decisions for context, draft and confirm an outcome spec, and (in later phases) decompose, dispatch, observe, and hand off. It does not re-specify RAI, casting, memory governance, sandboxing, review, merge, or scribe. A deployment-wide BYOK provider is used when active. Otherwise, the coordinator uses GitHub Copilot.
 
 ## The Phase 1 outcome-spec flow
 
@@ -173,7 +173,14 @@ per-project integration-branch build lock.
 
 When no catalog/roster role adequately covers a subtask's function, the decomposition MAY mint a **bespoke role**: a descriptive id plus a short **inline charter** (2–4 sentences defining the agent's persona, expertise, and approach). Bespoke roles are a last resort — the decomposition prompt prefers exact catalog/roster ids and only sets a subtask's `charter` field when the role is bespoke. A subtask's inline charter is persisted on the subtask and flows to the dispatched child run's `AgentCharter`, overriding file-based charter resolution so the coordinator can stand up a domain-specific persona without a catalog role.
 
-The `isolation` field (`worktree` | `shared`) is an **advisory hint only** with no runtime enforcement — every child run executes against a single shared worktree. Each subtask must therefore declare its output filename(s) in its scope so the assembly conflict check can serialize colliding writers.
+The `isolation` field (`worktree` | `shared`) is retained as an advisory planning
+hint; it does not select the runtime topology. Every child run executes in its
+own AgentHost sandbox on a pod-local checkout of that child run's branch. The
+platform publishes captured changes to `agentweaver/{childRunId}` and merges
+them into the coordinator integration branch. Dependent children start from
+that integration branch, so they see completed prerequisite changes without
+sharing a writable directory or running git commands. File-scope declarations
+still let planning and assembly detect likely collisions before branch merge.
 
 ### Child dispatch: parallel and serial
 
@@ -303,5 +310,4 @@ The recreated run emits [`coordinator.recovered`](./events.md#coordinatorrecover
 - [MCP server reference — Coordinator tools](./mcp.md#coordinator)
 - [Web UI reference — Coordinator orchestration and topology view](./web.md#coordinator-orchestration-and-topology-view)
 - [Web UI reference — Coordinator run and outcome-spec gate](./web.md#coordinator-run-and-outcome-spec-gate)
-- [Browser console reference](./browser-console.md)
 - [Project generation model settings](./project-generation-model-settings.md)

@@ -15,7 +15,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class AutomationActivationEndpoints
 {
-    public static void MapAutomationActivationEndpoints(this WebApplication app)
+    public static void MapAutomationActivationEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{id}/automation/status — Owner-only, redacted activation status.
         app.MapGet("/api/projects/{id}/automation/status", async (
@@ -56,7 +56,7 @@ public static class AutomationActivationEndpoints
                 httpContext, id, projectStore, configuration, ct).ConfigureAwait(false);
             if (failure is not null) return failure;
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var (outcome, activation) = await activationService.ActivateAsync(
                 caller, httpContext.User, project!.Id, ct).ConfigureAwait(false);
             return outcome switch
@@ -117,7 +117,7 @@ public static class AutomationActivationEndpoints
                 httpContext, id, projectStore, configuration, ct).ConfigureAwait(false);
             if (failure is not null) return failure;
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(httpContext);
+            var caller = httpContext.GetCaller();
             var outcome = await activationService.DeactivateAsync(
                 caller, httpContext.User, project!.Id, ct).ConfigureAwait(false);
             return outcome switch

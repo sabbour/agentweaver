@@ -210,7 +210,7 @@ Agentweaver installs the controller and its three CRDs (API group `extensions.ag
 
 - **`SandboxTemplate`** (`k8s/base/sandbox-template-agenthost.yaml`, `agentweaver-agent-host`) defines the live AgentHost pod shape: `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, `/workspace` PVC, A2A listener port `8088`, workload identity, and the `agentweaver-exec` **executor sidecar** — a second container from the same image that owns every model-controlled process in its own PID namespace (see [sandbox pod execution](./sandbox-pod-execution.md#why-a-sidecar-and-not-a-nested-pid-namespace)).
 - **`SandboxWarmPool`** keeps AgentHost pods pre-built from that template so claims bind without a cold pod start. The live pool is `agentweaver-agent-host` (`k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). AgentHost warm pods boot without `RunId`, enter standby, and are configured after binding by `POST /configure`, so the .NET process and Copilot SDK are pre-warmed without per-run env.
-- **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/reference/sandbox-claim-template.yaml`) carries `spec.warmPoolRef.name` (`agentweaver-agent-host` on the live path), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and static values. Per-run `RunId`, `UserId`, `TurnBearerToken`, `KvUserSecretName`, and `WorkingDirectory` (`Run.WorktreePath`) arrive later via `/configure`. The controller adopts a warm pod, then signals readiness with a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) and writes the bound pod name into `status.sandbox.name`. There is **no** `status.phase` field.
+- **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/reference/sandbox-claim-template.yaml`) carries `spec.warmPoolRef.name` (`agentweaver-agent-host` on the live path), `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`, and static values. Per-run identity, workspace, credentials, turn authentication, purpose, and approval values arrive later via `/configure`. The controller adopts a warm pod, then signals readiness with a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) and writes the bound pod name into `status.sandbox.name`. There is **no** `status.phase` field.
 
 The executor's provisioning loop is the concrete contract with the controller:
 
@@ -244,12 +244,12 @@ Per-run values are delivered by `POST /configure` after the claim binds:
 | `runId` | The Agentweaver run this pod executes; missing values return `400`. |
 | `userId` | The submitting user; drives `RuntimeUserScopeProvider`. |
 | `turnBearerToken` | 256-bit per-run bearer token required on `POST /a2a/agent/v1/message:stream`. |
-| `kvUserSecretName` | Key Vault secret name for the run owner's GitHub token (`ghtok-user--{base32(userId)}`). |
+| `copilotCredential` / `byokProviderConfiguration` | Alternative run-scoped model-provider payloads. |
 | `workingDirectory` | The run's shared orchestration worktree path (`Run.WorktreePath`, for example `/workspace/{worktree}`), used as the pod's `SetupAsync` working directory and file-tool root. |
 
 `AgentHostRuntimeState.TryConfigure(...)` stores the runtime values exactly once with `Interlocked.CompareExchange`; a second configure attempt returns `409`. `AgentHostStartupService.ConfigureAsync` uses `workingDirectory` to override the static `AgentHost__WorkingDirectory` env default before it calls `SetupAsync`. That keeps the pod's current file-tool root identical to `Run.WorktreePath`, which is the path the run's system prompt names, so sibling agents can hand files across decomposition, synthesis, and assembly stages without writing to divergent directories. `/configure` cannot be protected by the turn token because it delivers that token, so the guard is the NetworkPolicy that restricts AgentHost port `8088` to API/worker pods. The turn endpoint itself still requires `Authorization: Bearer ...` and reads the expected token from runtime state.
 
-The previous run-scoped CSI path is gone: the executor no longer creates per-run `SecretProviderClass` objects, cloned `SandboxTemplate`s, or per-run warm pools for AgentHost. Instead the API resolves the run owner's token and brokers it to the pod in `/configure` (`gitHubAccessToken`); `KeyVaultUserTokenProvider` prefers that brokered token and caches it for the pod lifetime. The sandbox identity has no Key Vault access (issue #471), so the residual direct-fetch fallback fails closed.
+The executor does not create per-run `SecretProviderClass` objects, cloned `SandboxTemplate`s, or per-run warm pools for AgentHost. It sends the required run-scoped provider and repository capability data through `/configure`. The sandbox identity has no Key Vault access and cannot retrieve ambient user credentials.
 
 Where this lives:
 
@@ -260,12 +260,11 @@ Where this lives:
 | `apps/Agentweaver.AgentHost/Program.cs` | Defines the `/configure` request body, including `workingDirectory`, and passes it to AgentHost startup. |
 | `apps/Agentweaver.AgentHost/AgentHostRuntimeState.cs` | Stores the one-time run/user/token configuration. |
 | `apps/Agentweaver.AgentHost/AgentHostStartupService.cs` | Runs `SetupAsync` after `/configure`, using the per-run working directory when present and preserving env-var launch behavior otherwise. |
-| `apps/Agentweaver.AgentHost/KeyVaultUserTokenProvider.cs` | Fetches only the configured user's Key Vault token. |
 | `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs` | Receives the configured working directory as the agent setup/file-tool root. |
 
 ## Production pod isolation and hardening
 
-The AgentHost sandbox pod contains the runtime needed for live agent turns, but it is not privileged. Because it executes untrusted shell/tool code, it runs as a dedicated managed identity with **no Key Vault role assignments** (issue #471); the run owner's token is brokered to it per-run by the API rather than fetched directly from the vault.
+The AgentHost sandbox pod contains the runtime needed for live agent turns, but it is not privileged. Because it executes untrusted shell/tool code, it runs as a dedicated managed identity with **no Key Vault role assignments**. It receives only run-scoped capability data through `/configure`.
 
 The production template applies several important constraints:
 

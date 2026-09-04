@@ -4,12 +4,15 @@ export const MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE =
   'Set up a model provider to continue.';
 export const CONFIGURE_PROJECT_MODEL_PROVIDER_ACTION = 'configure_project_model_provider';
 export const CONFIGURE_PLATFORM_MODEL_PROVIDER_ACTION = 'configure_platform_model_provider';
+export const CONFIGURE_USER_MODEL_PROVIDER_ACTION = 'configure_user_model_provider';
 
 export interface ModelProviderConnectionRequirement {
   code: string;
   message: string;
   action: {
-    type: typeof CONFIGURE_PROJECT_MODEL_PROVIDER_ACTION | typeof CONFIGURE_PLATFORM_MODEL_PROVIDER_ACTION;
+    type: typeof CONFIGURE_PROJECT_MODEL_PROVIDER_ACTION
+      | typeof CONFIGURE_PLATFORM_MODEL_PROVIDER_ACTION
+      | typeof CONFIGURE_USER_MODEL_PROVIDER_ACTION;
     project_id: string;
   };
 }
@@ -21,11 +24,17 @@ export function isModelProviderConnectionRequirement(value: unknown): value is M
   if (typeof record.code !== 'string' || typeof record.message !== 'string') return false;
   if (typeof action !== 'object' || action === null) return false;
   const actionType = (action as Record<string, unknown>).type;
-  return (actionType === CONFIGURE_PROJECT_MODEL_PROVIDER_ACTION || actionType === CONFIGURE_PLATFORM_MODEL_PROVIDER_ACTION)
+  return (actionType === CONFIGURE_PROJECT_MODEL_PROVIDER_ACTION
+    || actionType === CONFIGURE_PLATFORM_MODEL_PROVIDER_ACTION
+    || actionType === CONFIGURE_USER_MODEL_PROVIDER_ACTION)
     && typeof (action as Record<string, unknown>).project_id === 'string';
 }
 
 /** True when a requirement is scoped to a specific project, rather than the platform default. */
 export function isProjectScopedModelProviderRequirement(requirement: ModelProviderConnectionRequirement): boolean {
   return requirement.action.type === CONFIGURE_PROJECT_MODEL_PROVIDER_ACTION;
+}
+
+export function isUserScopedModelProviderRequirement(requirement: ModelProviderConnectionRequirement): boolean {
+  return requirement.action.type === CONFIGURE_USER_MODEL_PROVIDER_ACTION;
 }

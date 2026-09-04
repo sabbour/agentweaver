@@ -19,6 +19,7 @@ spec:
         azure.workload.identity/use: "true"
       annotations:
         secrets-store.csi.k8s.io/rotation-poll-interval: "2m"
+        agentweaver.io/oauth-runtime-config-checksum: "placeholder"
     spec:
       # Dedicated least-privilege identity (serviceaccount-mcp.yaml). The public-facing MCP
       # must NOT reuse agentweaver-api's pod-create/exec/sandbox RBAC. See that file's header.
@@ -46,28 +47,11 @@ spec:
               value: Production
             - name: AGENTWEAVER_API_URL
               value: http://agentweaver-api:8080
-            # Backward-compat: allow raw GitHub tokens while clients migrate.
-            # Flip to "false" once all MCP clients use Agentweaver-minted tokens.
-            - name: Auth__Mcp__AllowGitHubPassthrough
-              value: "true"
-            # The browser Assistant forwards its current platform session token through the
-            # AgentHost. In Entra mode MCP validates that token before forwarding it to the API,
-            # which independently validates it again and applies platform/project authorization.
-            - name: Auth__Mode
+            - name: Auth__OAuth__PublicOrigin
               valueFrom:
                 configMapKeyRef:
                   name: agentweaver-runtime-config
-                  key: AUTH_MODE
-            - name: Auth__Entra__ClientId
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: ENTRA_CLIENT_ID
-            - name: Auth__Entra__TenantId
-              valueFrom:
-                configMapKeyRef:
-                  name: agentweaver-runtime-config
-                  key: ENTRA_TENANT_ID
+                  key: OAUTH_PUBLIC_ORIGIN
           volumeMounts: []
           resources:
             requests:

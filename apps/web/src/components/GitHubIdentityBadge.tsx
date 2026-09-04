@@ -147,8 +147,8 @@ function formatProjectCopilotStatusError(err: unknown): string {
         return 'Only a project owner can view this project’s GitHub Copilot connection.';
       case 'human_entra_subject_required':
         return 'Sign in with your Microsoft Entra work account to view this project’s GitHub status.';
-      case 'github_binding_unavailable':
-        return 'The project’s GitHub Copilot connection is currently unavailable. Retry, or reconnect it from Project settings.';
+      case 'project_model_provider_reconnect_required':
+        return 'Reconnect the project GitHub Copilot authorization used for unattended AI work.';
     }
   }
   return formatApiErrorMessage(err, 'Could not load the project Copilot connection status.');

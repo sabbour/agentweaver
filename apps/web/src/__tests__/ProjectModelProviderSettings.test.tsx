@@ -175,18 +175,31 @@ describe('ProjectModelProviderSettings', () => {
     expect((screen.getByRole('button', { name: 'Authorize GitHub Copilot' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('surfaces actionable API errors while loading the current connection', async () => {
+  it('starts the authorization handoff when a broken project binding requires reconnect', async () => {
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
     vi.mocked(apiClient.getProjectCopilotConnection).mockRejectedValue(
-      new ApiError(409, JSON.stringify({ error: 'github_binding_unavailable' })),
+      new ApiError(409, JSON.stringify({ error: 'project_model_provider_reconnect_required' })),
     );
+    vi.mocked(apiClient.beginProjectCopilotAuthorization).mockResolvedValue({
+      authorization_url: 'https://api.example.test/auth/github/copilot-app/authorize',
+      transaction_id: 'opaque-transaction',
+      expires_at: '2026-08-29T00:00:00Z',
+    });
     render(
       <Wrapper>
-        <ProjectModelProviderSettings projectId="project-1" showConnectionStatus />
+        <ProjectModelProviderSettings projectId="project-1" showConnectionStatus repairRequired />
       </Wrapper>,
     );
 
-    expect(await screen.findByText('The GitHub authorization status is unavailable. Try again later.')).toBeDefined();
+    expect(await screen.findByText(
+      'Reconnect the project GitHub Copilot authorization used for unattended AI work.',
+    )).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect GitHub Copilot' }));
+    await waitFor(() => expect(apiClient.beginProjectCopilotAuthorization)
+      .toHaveBeenCalledWith('project-1', '/projects/project-1/team'));
+    expect(assign).toHaveBeenCalledWith('https://api.example.test/auth/github/copilot-app/authorize');
     expect(screen.queryByText(/repository access/i)).toBeNull();
+    assign.mockRestore();
   });
 
   it('explains that Copilot authorization creates a durable user OAuth binding without installing an app', async () => {
@@ -221,6 +234,6 @@ describe('ProjectModelProviderSettings', () => {
     expect(await screen.findByText(
       'Reconnect the project GitHub Copilot authorization used for unattended AI work.',
     )).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Reconnect GitHub Copilot' })).toBeDefined();
   });
 });

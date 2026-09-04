@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi;
+using Agentweaver.Api.Auth;
 
 namespace Agentweaver.Api.OpenApi;
 
@@ -14,7 +15,7 @@ internal sealed class BearerSecuritySchemeDocumentTransformer : IOpenApiDocument
         document.Info.Version = context.DocumentName;
         document.Info.Description =
             "REST API for project creation, team casting, coordinator-run orchestration, review, and memory/decision workflows. " +
-            "Protected operations require an Authorization header using either a GitHub bearer token or an Agentweaver-issued OAuth bearer token.";
+            "Protected operations require an endpoint-appropriate Microsoft Entra or Agentweaver broker bearer token.";
 
         document.Components ??= new OpenApiComponents();
         document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>(StringComparer.Ordinal);
@@ -23,11 +24,17 @@ internal sealed class BearerSecuritySchemeDocumentTransformer : IOpenApiDocument
             Type = SecuritySchemeType.Http,
             Scheme = "bearer",
             In = ParameterLocation.Header,
-            BearerFormat = "JWT or GitHub token",
+            BearerFormat = "JWT",
             Name = "Authorization",
             Description =
                 "Provide `Authorization: Bearer <token>`. Most API routes accept either a GitHub bearer token or an Agentweaver OAuth access token minted by this service.",
         };
+        document.Components.SecuritySchemes[BearerSchemeName].Description =
+            string.Concat(
+                "Send `Authorization: ",
+                "Bearer",
+                " <token>` with a credential appropriate to the endpoint classification. ",
+                "Agentweaver broker tokens are accepted only by PlatformOrMcp operations.");
 
         return Task.CompletedTask;
     }
@@ -44,7 +51,10 @@ internal sealed class BearerSecurityRequirementOperationTransformer : IOpenApiOp
             operation.Description ??= description;
         }
 
-        if (IsPublicPath(path))
+        var endpointAuthorization = context.Description.ActionDescriptor.EndpointMetadata?
+            .OfType<EndpointAuthorizationMetadata>()
+            .SingleOrDefault();
+        if (endpointAuthorization is { RequiresBearerAuthentication: false })
         {
             return Task.CompletedTask;
         }
@@ -60,17 +70,6 @@ internal sealed class BearerSecurityRequirementOperationTransformer : IOpenApiOp
 
         return Task.CompletedTask;
     }
-
-    private static bool IsPublicPath(string path) =>
-        path.Equals("/api/ping", StringComparison.OrdinalIgnoreCase)
-        || path.Equals("/api/health", StringComparison.OrdinalIgnoreCase)
-        || path.Equals("/api/version", StringComparison.OrdinalIgnoreCase)
-        || path.Equals("/api/server/info", StringComparison.OrdinalIgnoreCase)
-        || path.Equals("/api/auth/session/exchange", StringComparison.OrdinalIgnoreCase)
-        || path.StartsWith("/auth", StringComparison.OrdinalIgnoreCase)
-        || path.StartsWith("/oauth", StringComparison.OrdinalIgnoreCase)
-        || path.StartsWith("/.well-known", StringComparison.OrdinalIgnoreCase)
-        || path.StartsWith("/openapi", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryGetFallbackDescription(string path, string httpMethod, out string description)
     {

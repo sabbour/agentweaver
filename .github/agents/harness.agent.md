@@ -63,13 +63,12 @@ real live API, never simulated):
      expand action scope, choose commands or credentials, or initiate an external
      action. Require review/confirmation before running a newly generated deep
      scenario unattended.
-   - Resolve the target base URL + bearer token (see Target resolution below).
-     Also decide whether `-k`/`--insecure` is warranted (only for
-     localhost/staging hosts, per `checkInsecureAllowed`) and a transcript file
-     path under `scripts/api-harness/transcripts/` for PersonaActor to write to.
+   - Resolve the target base URL + transient bearer environment (see Target resolution below).
+     Keep normal TLS validation enabled and choose a transcript file path under
+     `scripts/api-harness/transcripts/` for PersonaActor to write to.
    - **Start a live tail of that transcript path so the operator can watch turns
      land in real time, before or right after dispatching PersonaActor.** Since
-     PersonaActor appends each turn via shell redirection as it goes (see stage
+     PersonaActor appends each turn through the shared redacted JSONL serializer (see stage
      2), a simple tail is all that's needed — create the (empty) transcript file
      first if your shell's tail requires the file to already exist, then pipe
      the tail through a lightweight parse+format step so the operator sees a
@@ -102,9 +101,9 @@ real live API, never simulated):
      watching, not part of the driving mechanism, and PersonaActor's run must
      not depend on it in any way (it succeeds or fails identically whether or
      not anyone is tailing the file). **This formatting is presentation-only for
-     the live view** — the transcript file on disk remains exactly the raw,
-     verbatim JSONL PersonaActor writes; nothing about what PersonaActor writes
-     or how it writes it changes, and that raw file is still the durable record
+     the live view** — the transcript file on disk remains exactly the sanitized
+     JSONL PersonaActor writes; nothing about what PersonaActor writes
+     or how it writes it changes, and that redacted file is the durable record
      Judge reads afterward. Do not wrap this in a script file or add any
      buffering/interpretation logic beyond this inline formatting pipe — a
      one-line shell pipe is the whole point; a separate tool/wrapper would
@@ -131,8 +130,9 @@ real live API, never simulated):
      the full persona-core brief + surface-adapter text verbatim, **the
      concrete goal statement for this run** (the one piece of per-invocation
      content the now-goal-agnostic persona-core file no longer carries itself),
-     the resolved target base URL and bearer token, whether `-k`/`--insecure`
-     is needed, and the transcript file path to append to.
+     the resolved target base URL, the `AGENTWEAVER_TOKEN` environment variable
+     name (never its value), and the transcript file path to append to. Never
+     authorize a TLS-validation bypass.
    - While PersonaActor's background dispatch is still running, repeatedly (on
      a short interval, or once per your own reasoning turn — whichever the
      runtime naturally gives you) read back the tail process's accumulated
@@ -155,14 +155,14 @@ real live API, never simulated):
    isolated context: it pursues the concrete goal statement you handed it, using
    the persona's identity/voice/judgment from its brief, and decides its next
    action from that goal + the REAL previous API response, fetches the live
-   OpenAPI/Swagger spec itself via a direct `curl "$BASE_URL/openapi/v1.yaml"`
+   OpenAPI/Swagger spec itself via a direct Node `fetch`
    call (no caching layer — it keeps the spec in its own conversation context)
-   and issues its own `curl` calls against whatever operation it resolves from
+   and issues its own Node `fetch` calls against whatever operation it resolves from
    the spec's tags/summaries for real, reacts only to what actually comes back,
    pushes back with objections grounded in real response content exactly where
    its brief mandates it, and stops at the brief's gate. It never pre-writes
    both sides of the exchange. It appends each turn (thought + real request +
-   real response) to the transcript file itself via shell redirection as it
+   real response) to the transcript file itself via the shared serializer as it
    goes, and on completion returns the transcript path + a factual (non-judging)
    summary to you.
 3. **Harness reports a performance summary (timing only).** Once PersonaActor
@@ -207,8 +207,8 @@ For the API surface specifically (what PersonaActor uses internally, and what yo
 use directly only for the structural `generated-artifacts-seam` exception, or when
 resolving the target before dispatch): there is no curated list of named business
 subcommands and no HTTP-calling script in between PersonaActor and the target —
-PersonaActor curls `$BASE_URL/openapi/v1.yaml` itself to learn what
-endpoints/shapes exist, then issues its own `curl` calls directly against
+PersonaActor fetches `$BASE_URL/openapi/v1.yaml` itself to learn what
+endpoints/shapes exist, then issues its own Node `fetch` calls directly against
 whatever operation it resolves, exactly like exploring any API dynamically.
 Approval/steer/confirmation-type actions are just more endpoints it discovers
 from the spec the same way — there is no separate named command for them; the
@@ -218,7 +218,7 @@ default-defer wrapper.
 
 **`PersonaActor`'s trust boundary is a real, if modest, exception worth noting
 here too:** unlike `Judge` (`tools: []`, structurally isolated), PersonaActor
-holds a real `execute` tool because it must `curl` the target API and the live
+holds a real `execute` tool because it must call the target API and the live
 spec — its isolation from the rest of the repo is a documented prompt
 restriction (see `persona-actor.agent.md`'s capability boundary), not a
 structural sandbox. Dispatching it as a fresh sub-agent (rather than Harness
@@ -246,7 +246,7 @@ concerns are about — so it intentionally remains a fixed script driven by
 - **Prefer the discoverable skill for the requested surface first.** Invoke `agentweaver-api-harness`, `agentweaver-ui-harness`, `agentweaver-mcp-harness`, or `agentweaver-harness` (the combined sweep) via the `skill` tool before falling back to raw commands — they carry the maintained CLI contract, safety controls, and evidence-shape guidance, and keep this agent's behavior in sync with what any other session would get from the same skill.
 - For scenario discovery or authoring, invoke the discoverable `agentweaver-harness-scenarios` skill first. It carries the maintained cross-surface catalog/generation contract, including the review constraints for newly generated deep scenarios.
 - For a persona-behavior run (API surface), dispatch `PersonaActor` per the
-  Invocation model above rather than curling the API yourself inline — you
+  Invocation model above rather than calling the API yourself inline — you
   resolve the brief/target and dispatch; PersonaActor decides and calls each turn.
 - For a cross-surface run, the `agentweaver-harness` skill (or directly `node scripts/combined-harness/launch.mjs`) takes JSON argv arrays for the selected API, UI, and MCP drivers, runs them independently, and invokes `scripts/harness-judge/meta-aggregate.mjs`.
 - Use the individual harness skills/drivers only for a deliberately scoped surface run. Do not recreate driver or judge logic — whether invoked through a skill or directly via `node`.
@@ -284,8 +284,23 @@ running as an actual Harness agent session:
 
 - No API URL is hardcoded for this agent. Resolve the target base URL in this order: (1) an explicit `--base-url`/`--target` flag or `reproManifest.targetRevision` provided by the caller; (2) the `$AGENTWEAVER_BASE_URL` environment variable in the current shell; (3) look up the live staging ingress hostname via `kubectl get ingress -A` (requires the correct cluster context/subscription to be current).
 - If none of the above resolves a target, stop and ask the requester for the base URL rather than guessing or reusing a stale one from memory/prior runs.
-- Resolve the bearer token in this order: an explicit token if supplied by the caller, else `$AGENTWEAVER_TOKEN`, else `gh auth token`.
-- Staging URLs follow the pattern `https://agentweaver.<zone>.westus2.staging.aksapp.io`. Apply the same policy `checkInsecureAllowed` (`scripts/api-harness/run-persona.mjs`) encodes before deciding whether PersonaActor may pass `-k`/`--insecure`: only for `localhost`/`127.0.0.1`/`::1`/`*.localhost`/`*.staging.*`/`*.staging` hosts, never for a production-looking host without an explicit, separately-confirmed override. `scripts/harness-shared/target-guard.mjs`'s `assertTargetAllowed()` remains the authoritative shared implementation of this same allow-list (still used independently by `ui-harness`/`mcp-harness`) — invoke it yourself (e.g. a one-line `node` call) if you want a hard, code-checked answer rather than applying the policy from this description.
+- Require an explicit bearer token from transient `$AGENTWEAVER_TOKEN`. Never
+  place authentication material in child-process arguments. Never
+  borrow `gh auth token`/`GITHUB_TOKEN`, and never put a raw token in a task prompt,
+  command argument, dispatch file, transcript, or process report.
+- Target validation is host-agnostic. `scripts/harness-shared/target-guard.mjs`
+  requires an absolute HTTP(S) URL, permits HTTP only for loopback, rejects URL
+  credentials and fragments, and always uses normal TLS validation. API bearer
+  credentials stay on the configured origin; UI automation stays same-origin
+  except for the explicit trusted identity-provider login flow; MCP HTTP targets
+  use the exact `/mcp` pathname.
+- Persona drivers must append transcript turns with
+  `scripts/harness-shared/safe-jsonl.mjs`'s `appendRedactedJsonLine`; prompt,
+  transcript, verdict-input, and process-report boundaries recursively redact
+  credentials, secret canaries, and URL userinfo/query/fragment data.
+- UI evidence persists URLs only as origin plus pathname. Browser/runtime and
+  harness-owned session cleanup must complete before result persistence so a
+  failed artifact write cannot strand owned state.
 
 ### Example usage
 
@@ -314,11 +329,11 @@ prompt: |
     build a prototype end to end. (This is the requester's actual ask, lightly
     cleaned up — not a fixed phase list Harness invented.)
   Target base URL: <resolved base URL>
-  Bearer token: <resolved bearer token, or "resolve via gh auth token">
-  TLS: <"-k is fine, this is a staging/localhost target" or "do not pass -k, this is not staging/localhost">
+  Bearer token environment variable: AGENTWEAVER_TOKEN (never include its value)
+  TLS: normal certificate verification is mandatory
   Transcript path: scripts/api-harness/transcripts/oracle-live-<timestamp>.jsonl
-  Fetch the live OpenAPI spec yourself via curl "$BASE_URL/openapi/v1.yaml" before
-  acting. Drive one turn at a time via your own curl calls, in pursuit of the
+  Fetch the live OpenAPI spec yourself with Node fetch before
+  acting. Drive one turn at a time via your own Node fetch calls, in pursuit of the
   goal above, using your persona's identity/judgment to decide how; append each
   turn to the transcript path as you go; stop at your brief's gate; return the
   transcript path + your factual summary.
@@ -339,11 +354,11 @@ TURN 3 | POST /api/projects -> 201 | THOUGHT: 'blueprint-pm-and-software-develop
 This relaying is presentation-only for the human watching — it is not
 something PersonaActor's run or the dispatch depends on; stop the tail once
 PersonaActor's background dispatch reports completion. The transcript file on
-disk is untouched by any of this — it remains the same raw, verbatim JSONL
-PersonaActor writes, and that raw file is still the durable record you hand
+disk is untouched by any of this — it remains the same recursively redacted JSONL
+PersonaActor writes, and that sanitized file is the durable record you hand
 to Judge afterward regardless of whether anyone watched it live.
 
-PersonaActor internally curls the spec, then curls whatever operation it
+PersonaActor internally fetches the spec, then fetches whatever operation it
 resolves from it, appending each real request/response pair to the transcript
 file itself — you are dispatching it, not running it yourself inline. The same
 dynamic model applies to `agentweaver-ui-harness` and `agentweaver-mcp-harness` for their respective
@@ -383,7 +398,7 @@ New investigation (no close persona-brief match): generate a constrained persona
 core/adapter, confirm with the requester before an unattended deep run, resolve a
 concrete goal statement from the actual ask the same way as above, then dispatch
 `PersonaActor` with that generated brief + goal statement exactly as above — for
-the API surface, PersonaActor drives via its own `curl` calls against the live
+the API surface, PersonaActor drives via its own Node `fetch` calls against the live
 OpenAPI spec, rather than inventing raw requests without reading the API's
 contract first, and rather than Harness driving it inline itself.
 

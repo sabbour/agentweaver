@@ -455,6 +455,17 @@ public sealed class EfRunStore : IRunStore
         WarnIfNoRows(rows, runId, "update workflow selection reason");
     }
 
+    public async Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var id = runId.ToString();
+        var value = modelSource.ToApiString();
+        var rows = await db.Runs
+            .Where(r => r.RunId == id)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.ModelSource, value), ct);
+        WarnIfNoRows(rows, runId, "update model source");
+    }
+
     private void WarnIfNoRows(int rows, RunId runId, string operation)
     {
         if (rows == 0)

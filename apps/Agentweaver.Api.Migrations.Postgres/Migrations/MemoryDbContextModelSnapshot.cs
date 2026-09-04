@@ -17,7 +17,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.7")
+                .HasAnnotation("ProductVersion", "10.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -57,11 +57,174 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Nonce")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ReturnHandle")
+                        .HasColumnType("text");
+
                     b.HasKey("State");
 
                     b.HasIndex("ExpiresAt");
 
                     b.ToTable("EntraOAuthStates");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.OAuthAuthorizationTransaction", b =>
+                {
+                    b.Property<string>("HandleHash")
+                        .HasColumnType("text");
+
+                    b.Property<string>("BrowserSessionId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ClientId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ClientState")
+                        .HasColumnType("text");
+
+                    b.Property<string>("CodeChallenge")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ConsumedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RedirectUri")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Subject")
+                        .HasColumnType("text");
+
+                    b.HasKey("HandleHash");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.ToTable("OAuthAuthorizationTransactions");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.OAuthConsentRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ClientId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Scopes")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Subject", "ClientId")
+                        .IsUnique();
+
+                    b.ToTable("OAuthConsents");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.OAuthDynamicRegistration", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ClientId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("DisabledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("RegisteredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SourceHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientId")
+                        .IsUnique();
+
+                    b.HasIndex("SourceHash", "RegisteredAt");
+
+                    b.ToTable("OAuthDynamicRegistrations");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.OAuthMaintenanceLease", b =>
+                {
+                    b.Property<string>("Name")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Owner")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Name");
+
+                    b.ToTable("OAuthMaintenanceLeases");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.OAuthRefreshTokenFamily", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AuthorizationId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ClientId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("RevocationReason")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AuthorizationId")
+                        .IsUnique();
+
+                    b.ToTable("OAuthRefreshTokenFamilies");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Auth.OAuth.WebSessionExchangeCode", b =>
@@ -306,7 +469,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.HasIndex("InstallationId", "RepositoryId");
 
-                    b.ToTable("automation_activations", t =>
+                    b.ToTable("automation_activations", null, t =>
                         {
                             t.HasCheckConstraint("CK_automation_activations_snapshot_tuple", "status <> 0 OR (\n    (\n        (installation_id IS NULL AND repository_id IS NULL AND repository_grant_digest IS NULL)\n        OR\n        (installation_id IS NOT NULL AND installation_id > 0 AND\n            repository_id IS NOT NULL AND repository_id > 0 AND\n            repository_grant_digest IS NOT NULL AND repository_grant_digest <> '')\n    ) AND (\n        (model_provider_source = 1 AND\n            byok_provider_id IS NOT NULL AND byok_provider_id <> '' AND\n            (copilot_binding_id IS NULL OR copilot_binding_id = '') AND\n            (copilot_binding_grant_digest IS NULL OR copilot_binding_grant_digest = ''))\n        OR\n        (model_provider_source <> 1 AND\n            copilot_binding_id IS NOT NULL AND copilot_binding_id <> '' AND\n            copilot_binding_grant_digest IS NOT NULL AND copilot_binding_grant_digest <> '' AND\n            (byok_provider_id IS NULL OR byok_provider_id = ''))\n    ))");
                         });
@@ -1465,7 +1628,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnName("issued_at");
 
                     b.Property<string>("ProjectId")
-                        .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("project_id");
 
@@ -2477,6 +2639,109 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.ToTable("SubtaskDependencies");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.UserCopilotBindingRecord", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("BoundAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("bound_at");
+
+                    b.Property<string>("CredentialReference")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("credential_reference");
+
+                    b.Property<string>("CredentialVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("credential_version");
+
+                    b.Property<DateTimeOffset?>("DeactivatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deactivated_at");
+
+                    b.Property<string>("EntraObjectId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("entra_object_id");
+
+                    b.Property<string>("GrantDigest")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("grant_digest");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EntraObjectId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_user_copilot_bindings_active_user")
+                        .HasFilter("status = 0");
+
+                    b.ToTable("user_copilot_bindings", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.UserModelProviderSettingsRecord", b =>
+                {
+                    b.Property<string>("EntraObjectId")
+                        .HasColumnType("text")
+                        .HasColumnName("entra_object_id");
+
+                    b.Property<string>("ByokAzureApiVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_azure_api_version");
+
+                    b.Property<string>("ByokBaseUrl")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_base_url");
+
+                    b.Property<string>("ByokCredentialReference")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_credential_reference");
+
+                    b.Property<string>("ByokHeadersJson")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_headers_json");
+
+                    b.Property<string>("ByokModel")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_model");
+
+                    b.Property<string>("ByokName")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_name");
+
+                    b.Property<string>("ByokProviderId")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_provider_id");
+
+                    b.Property<string>("ByokType")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_type");
+
+                    b.Property<string>("ByokWireApi")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_wire_api");
+
+                    b.Property<int>("Preference")
+                        .HasColumnType("integer")
+                        .HasColumnName("preference");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("EntraObjectId");
+
+                    b.ToTable("user_model_provider_settings", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.WorkPlan", b =>
                 {
                     b.Property<int>("Id")
@@ -2726,6 +2991,214 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.ToTable("RunEvents");
                 });
 
+            modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreApplication", b =>
+                {
+                    b.Property<string>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ApplicationType")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("ClientId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("ClientSecret")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ClientType")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("ConcurrencyToken")
+                        .IsConcurrencyToken()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("ConsentType")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("DisplayNames")
+                        .HasColumnType("text");
+
+                    b.Property<string>("JsonWebKeySet")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Permissions")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PostLogoutRedirectUris")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Properties")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RedirectUris")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Requirements")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Settings")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientId")
+                        .IsUnique();
+
+                    b.ToTable("OpenIddictApplications", (string)null);
+                });
+
+            modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreAuthorization", b =>
+                {
+                    b.Property<string>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ApplicationId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ConcurrencyToken")
+                        .IsConcurrencyToken()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime?>("CreationDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Properties")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Scopes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("Subject")
+                        .HasMaxLength(400)
+                        .HasColumnType("character varying(400)");
+
+                    b.Property<string>("Type")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApplicationId", "Status", "Subject", "Type");
+
+                    b.ToTable("OpenIddictAuthorizations", (string)null);
+                });
+
+            modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreScope", b =>
+                {
+                    b.Property<string>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ConcurrencyToken")
+                        .IsConcurrencyToken()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Descriptions")
+                        .HasColumnType("text");
+
+                    b.Property<string>("DisplayName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("DisplayNames")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Properties")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Resources")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("OpenIddictScopes", (string)null);
+                });
+
+            modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreToken", b =>
+                {
+                    b.Property<string>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ApplicationId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("AuthorizationId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ConcurrencyToken")
+                        .IsConcurrencyToken()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime?>("CreationDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ExpirationDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Payload")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Properties")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("RedemptionDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ReferenceId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Status")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("Subject")
+                        .HasMaxLength(400)
+                        .HasColumnType("character varying(400)");
+
+                    b.Property<string>("Type")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AuthorizationId");
+
+                    b.HasIndex("ReferenceId")
+                        .IsUnique();
+
+                    b.HasIndex("ApplicationId", "Status", "Subject", "Type");
+
+                    b.ToTable("OpenIddictTokens", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.AutomationActivationRecord", b =>
                 {
                     b.HasOne("Agentweaver.Api.Memory.ProjectRecord", null)
@@ -2824,7 +3297,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .WithMany()
                         .HasForeignKey("ProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
                         .HasConstraintName("FK_marketplace_copilot_capabilities_projects_project_id");
                 });
 
@@ -2916,6 +3388,42 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasForeignKey("OutcomeSpecId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreAuthorization", b =>
+                {
+                    b.HasOne("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreApplication", "Application")
+                        .WithMany("Authorizations")
+                        .HasForeignKey("ApplicationId");
+
+                    b.Navigation("Application");
+                });
+
+            modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreToken", b =>
+                {
+                    b.HasOne("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreApplication", "Application")
+                        .WithMany("Tokens")
+                        .HasForeignKey("ApplicationId");
+
+                    b.HasOne("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreAuthorization", "Authorization")
+                        .WithMany("Tokens")
+                        .HasForeignKey("AuthorizationId");
+
+                    b.Navigation("Application");
+
+                    b.Navigation("Authorization");
+                });
+
+            modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreApplication", b =>
+                {
+                    b.Navigation("Authorizations");
+
+                    b.Navigation("Tokens");
+                });
+
+            modelBuilder.Entity("OpenIddict.EntityFrameworkCore.Models.OpenIddictEntityFrameworkCoreAuthorization", b =>
+                {
+                    b.Navigation("Tokens");
                 });
 #pragma warning restore 612, 618
         }

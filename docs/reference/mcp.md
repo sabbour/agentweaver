@@ -4,28 +4,33 @@
 The Agentweaver MCP server is **experimental**. Tool names, parameters, and behavior may change without notice. Pin to a known revision if you depend on the current surface.
 :::
 
-The Agentweaver MCP server exposes all Agentweaver operations as structured tool calls over stdio. Any MCP-capable host (GitHub Copilot CLI, Claude, Cursor, Windsurf, etc.) can discover and invoke these tools automatically via the `.mcp.json` file at the repository root.
+The Agentweaver MCP server exposes Agentweaver operations as structured tool calls over hosted HTTP and local stdio transports.
 
 > For a complete, always-up-to-date list of every tool name and its one-line description, see the auto-generated [MCP tool index](./mcp-tools.md). This page documents each tool's full parameters and return shape.
 
 ## Setup
 
-Set your **own per-user bearer token** before starting any MCP host that uses the server:
+For normal hosted use, open **Account settings → MCP clients** in Agentweaver and
+copy the exact `https://<deployment-origin>/mcp` URL. Add it as a remote HTTP
+server without headers. The client discovers Agentweaver OAuth, opens a browser
+for sign-in and consent, and completes authorization code + PKCE. See
+[Connect an MCP client](../guide/mcp-cli.md) for supported-client instructions.
+
+### Local stdio development
+
+Set an Agentweaver broker token before starting a local stdio MCP host:
 
 ```
-AGENTWEAVER_TOKEN=$(gh auth token)
+AGENTWEAVER_TOKEN=<agentweaver-broker-token>
 ```
 
-`AGENTWEAVER_TOKEN` is your personal credential — an Agentweaver-minted OAuth access token or a
-GitHub token (e.g. from `gh auth token`). The backend attributes calls to the real user and
-enforces project ownership, so you only ever reach your own projects.
+`AGENTWEAVER_TOKEN` must be issued by Agentweaver for the exact
+`<public-origin>/mcp` audience and include `mcp:invoke`. The API attributes calls to its
+subject and enforces project ownership.
 
-::: danger Do not use the shared service key for human clients
-`AGENTWEAVER_API_KEY` is the **internal service-to-service** credential. The API maps it to the
-trusted `agentweaver-internal` identity, which is **exempt from project-ownership checks** — a
-client holding it can read or mutate *any* project regardless of who owns it (see issue #474).
-Never configure it on a desktop/stdio MCP client. It exists only for in-process/service callers.
-If a stdio client starts with only `AGENTWEAVER_API_KEY` set, the server refuses to start to protect against silent credential leaks. Legitimate service-to-service usage must explicitly set `AGENTWEAVER_ALLOW_SHARED_KEY=true` to force the insecure fallback.
+::: danger Broker tokens only
+Raw Entra access tokens, GitHub tokens, API keys, and shared service credentials are not MCP
+credentials. Stdio mode refuses to start without a configured broker token.
 :::
 
 Optionally override the API base URL (defaults to `http://localhost:5000`):
@@ -43,43 +48,6 @@ The `.mcp.json` at the repository root registers the server automatically for MC
 `dotnet run --project apps/Agentweaver.Mcp -- --stdio` on demand. Confirm the tools are
 live with `copilot mcp list` or `/mcp` inside an interactive session.
 
-**Hosted/remote (HTTP), e.g. a staging or production deployment.** Register the server
-explicitly with a bearer token, since there is no `.mcp.json` entry for a remote host:
-
-```bash
-copilot mcp add aw-remote \
-  --transport http \
-  --url https://<your-agentweaver-host>/mcp \
-  --header "Authorization: Bearer <token>"
-```
-
-Use `copilot mcp get aw-remote` / `copilot mcp remove aw-remote` to inspect or remove it.
-This registration is saved to `~/.copilot/mcp-config.json` and persists across sessions.
-
-**Session-scoped override**, e.g. for a one-off run against a different host without
-touching persisted config, use `--additional-mcp-config` with an inline JSON string or an
-`@<path-to-json>` file:
-
-```bash
-copilot -p "..." --allow-all-tools --additional-mcp-config @aw-mcp-config.json
-```
-
-```json
-{
-  "mcpServers": {
-    "aw-remote": {
-      "type": "http",
-      "url": "https://<your-agentweaver-host>/mcp",
-      "headers": { "Authorization": "Bearer <token>" },
-      "tools": ["*"]
-    }
-  }
-}
-```
-
-`--additional-mcp-config` augments (does not replace) whatever config already exists for
-that session only.
-
 ::: tip Server-name collisions
 Copilot CLI resolves MCP servers by **name**, merging `~/.copilot/mcp-config.json` (user),
 `.mcp.json`/`.github/mcp.json` (workspace), and `--additional-mcp-config` (session) in that
@@ -87,27 +55,35 @@ order. If your personal `~/.copilot/settings.json` has `agentweaver` listed unde
 `disabledMcpServers` (e.g. because you disabled the workspace stdio server), naming a
 session override `agentweaver` will be silently skipped — check
 `~/.copilot/logs/process-*.log` for `Skipping disabled MCP server: <name>` if a
-registered server discovers zero tools. Use a distinct name (like `aw-remote` above) to
+registered server discovers zero tools. Use a distinct name to
 avoid the collision.
 :::
 
 ## Authentication
 
+Hosted clients obtain and refresh the bearer token through Agentweaver's OAuth
+authorization code + PKCE flow. Users do not copy the token into client
+configuration.
+
 The MCP server forwards every tool call to the Agentweaver API as an authenticated HTTP request using a **bearer token** (`Authorization: Bearer <key>`).
 
-- **Per-user token (recommended).** `AGENTWEAVER_TOKEN` is your own bearer (OAuth access token or a
-  GitHub token). In stdio mode — where there is no inbound HTTP request to carry your identity — it
-  is what the server forwards to the backend, so the API attributes calls to the real user and
-  enforces project ownership. This is the correct credential for desktop/stdio MCP clients.
-- **Per-caller token propagation (HTTP mode).** When the MCP server itself is reached over HTTP with a
-  bearer token (validated by `McpBearerTokenMiddleware`), that caller's token is stashed on the
-  request (`HttpContext.Items["mcp.bearer_token"]`) and `AgentweaverApiClient.GetEffectiveApiKey()`
-  uses it for the downstream API call — so each caller's identity flows through to the API rather
-  than collapsing onto a shared key. SSE streams (`run_watch`) propagate the same effective token.
-- **Shared service key (`AGENTWEAVER_API_KEY`) — internal only.** Used as a last-resort fallback for
-  genuine in-process/service callers. It maps to the trusted `agentweaver-internal` identity that
-  **bypasses project-ownership checks**, so it must never be handed to a human/stdio client (#474).
-  Credential-selection precedence is: inbound per-request token &gt; `AGENTWEAVER_TOKEN` &gt; `AGENTWEAVER_API_KEY`.
+- **HTTP mode.** ASP.NET/OpenIddict validates the broker JWT through remote discovery/JWKS,
+  requiring the exact issuer and audience, keyed RS256 signature, valid lifetime, subject, and
+  `mcp:invoke`. Only that validated token is forwarded to the API.
+- **Stdio mode.** The configured `AGENTWEAVER_TOKEN` is forwarded. The API performs the same broker
+  validation before any `PlatformOrMcp` endpoint runs.
+- **No fallback.** Raw Entra, GitHub, API-key, malformed, expired, wrong-audience, wrong-issuer,
+  wrong-scope, and unknown-key credentials are rejected.
+
+Both RFC 9728 endpoints are anonymous:
+
+- `/.well-known/oauth-protected-resource`
+- `/.well-known/oauth-protected-resource/mcp`
+
+They advertise the exact `<public-origin>/mcp` resource, same-origin authorization server, and
+`mcp:invoke`. A missing token receives a `401` challenge with `resource_metadata` and `scope` but
+no OAuth error. Invalid tokens add `error="invalid_token"`; missing scope adds
+`error="insufficient_scope"`.
 
 ## Health probe
 
@@ -117,7 +93,8 @@ The MCP server exposes an unauthenticated liveness probe:
 GET /healthz → 200 { "status": "healthy" }
 ```
 
-`/healthz` is explicitly bypassed by the bearer-token middleware so orchestrators (containers, Kubernetes probes) can check liveness without a key.
+`/healthz` and both RFC 9728 protected-resource metadata paths are explicitly public. MCP protocol
+paths require broker authentication.
 
 ## Error handling
 
@@ -252,8 +229,8 @@ Legacy compatibility alias that starts a coordinator run directly in `direct` mo
 |-----------|------|----------|-------------|
 | `project_id` | string | yes | Project ID |
 | `task` | string | yes | Task description for the agent |
-| `agent_name` | string | no | Target team member name (e.g., `"ripley"`) |
-| `base_branch` | string | no | Branch to base the run on (defaults to current) |
+| `agent_name` | string | no | Legacy field. A value returns a tool error. |
+| `base_branch` | string | no | Legacy field. A value returns a tool error. |
 | `model_source` | string | no | Model provider override |
 
 **Returns**: `{ run_id, status, start_mode }`.
@@ -479,10 +456,10 @@ Steer a coordinator run's subagents. Proxies `POST /api/runs/{id}/steer`.
 |-----------|------|----------|-------------|
 | `run_id` | string | yes | Coordinator run ID |
 | `kind` | string | yes | `stop`, `redirect`, or `amend` |
-| `instruction` | string | yes | Direction relayed to the targeted subagent(s) |
+| `instruction` | string | conditional | Required for `redirect` and `amend`. Optional for `stop` and recovery verbs. |
 | `target_child_run_id` | string | no | Target child run ID; omit to broadcast to every active child |
 
-A `stop` cancels the targeted child run's in-flight turn immediately. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary, without restarting the run. Pause is not supported in Phase 2.
+A `stop` cancels active subagents immediately. A `redirect` or `amend` takes effect at the targeted subagent's next turn boundary. Recovery verbs, such as `recover`, reset blocked, failed, or parked subtasks and resume dispatch. Omit `target_child_run_id` to target every active child. Pause is not supported.
 
 **Returns**: The created steering directive with `directiveId`, `kind`, `targetChildRunId`, `status` (`pending`), and `instruction`.
 

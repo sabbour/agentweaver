@@ -10,7 +10,9 @@ namespace Agentweaver.Api.Auth;
 /// Bounded, metadata-only view of repositories available through one Repo App user authorization.
 /// This client never returns provider permission maps, content, or raw failure bodies.
 /// </summary>
-internal sealed class GitHubRepositorySelectionClient(IHttpClientFactory httpClientFactory)
+internal sealed class GitHubRepositorySelectionClient(
+    IHttpClientFactory httpClientFactory,
+    Webhooks.RepoAppInstallationTokenService repoAppInstallationTokenService)
 {
     private const int PageSize = 100;
     private const int MaximumPages = 2;
@@ -27,12 +29,18 @@ internal sealed class GitHubRepositorySelectionClient(IHttpClientFactory httpCli
         var candidates = new Dictionary<long, GitHubRepositorySelectionCandidate>();
         foreach (var installation in installations)
         {
+            var installationToken = await repoAppInstallationTokenService
+                .MintMetadataInstallationTokenAsync(installation.Id, ct).ConfigureAwait(false);
+            if (installationToken is null)
+                return null;
+
+            var repositoriesUrl = GetInstallationRepositoriesUrl(installation);
             for (var page = 1; page <= MaximumPages; page++)
             {
                 using var request = CreateRequest(
                     HttpMethod.Get,
-                    AppendPagination(installation.RepositoriesUrl, page),
-                    accessToken);
+                    AppendPagination(repositoriesUrl, page),
+                    installationToken.Value);
                 using var response = await httpClientFactory.CreateClient("github")
                     .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > MaximumResponseBytes)
@@ -209,6 +217,26 @@ internal sealed class GitHubRepositorySelectionClient(IHttpClientFactory httpCli
     {
         var separator = repositoriesUrl.Contains('?', StringComparison.Ordinal) ? "&" : "?";
         return $"{repositoriesUrl}{separator}per_page={PageSize}&page={page}";
+    }
+
+    private static string GetInstallationRepositoriesUrl(GitHubAccessibleInstallation installation)
+    {
+        if (!Uri.TryCreate(installation.RepositoriesUrl, UriKind.Absolute, out var uri))
+            return installation.RepositoriesUrl;
+
+        var normalizedPath = uri.AbsolutePath.TrimEnd('/');
+        var userInstallationSuffix = $"/user/installations/{installation.Id}/repositories";
+        if (!normalizedPath.EndsWith(userInstallationSuffix, StringComparison.OrdinalIgnoreCase))
+            return installation.RepositoriesUrl;
+
+        var pathPrefix = normalizedPath[..^userInstallationSuffix.Length];
+        var builder = new UriBuilder(uri)
+        {
+            Path = $"{pathPrefix}/installation/repositories",
+            Query = string.Empty,
+            Fragment = string.Empty,
+        };
+        return builder.Uri.AbsoluteUri.TrimEnd('/');
     }
 
     private sealed record GitHubAccessibleInstallation(

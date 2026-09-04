@@ -91,6 +91,8 @@ describe('PlatformSettingsPage', () => {
     expect(screen.getByText('Connect a model provider')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Authorize GitHub Copilot' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Add provider' })).toBeDefined();
+    expect(screen.getByText(/Account settings → AI Access/)).toBeDefined();
+    expect(screen.getByText(/Personal settings are used when no platform BYOK provider is active/)).toBeDefined();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add provider' }));
     expect(await screen.findByRole('dialog')).toBeDefined();

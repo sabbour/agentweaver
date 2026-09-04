@@ -62,6 +62,8 @@ export const DEFAULTS = Object.freeze({
   KATA_POOL_NAME: "katapool",
   APP_POOL_NAME: "apppool",
   AUTH_MODE: "Entra",
+  OAUTH_SIGNING_CERTIFICATE_NAME: "agentweaver-oauth-signing",
+  OAUTH_ENCRYPTION_CERTIFICATE_NAME: "agentweaver-oauth-encryption",
 });
 
 /** Reject 'latest'/'latest-release'; accept a git short SHA (7-40 hex) or a 'v'-prefixed semver. */
@@ -231,6 +233,10 @@ export async function resolveVariables(options = {}) {
   const ENTRA_CLIENT_ID = env.ENTRA_CLIENT_ID || "";
   const ENTRA_TENANT_ID = env.ENTRA_TENANT_ID || "";
   const ENTRA_ENTERPRISE_APP_OBJECT_ID = env.ENTRA_ENTERPRISE_APP_OBJECT_ID || "";
+  const OAUTH_SIGNING_CERTIFICATE_NAME =
+    env.OAUTH_SIGNING_CERTIFICATE_NAME || DEFAULTS.OAUTH_SIGNING_CERTIFICATE_NAME;
+  const OAUTH_ENCRYPTION_CERTIFICATE_NAME =
+    env.OAUTH_ENCRYPTION_CERTIFICATE_NAME || DEFAULTS.OAUTH_ENCRYPTION_CERTIFICATE_NAME;
   // These are deliberately opt-in: a local Azure CLI timeout does not prove
   // whether a remote ACR build/import completed, so callers must reconcile
   // the target tag/digest before deciding whether a retry is safe.
@@ -300,6 +306,8 @@ export async function resolveVariables(options = {}) {
     ENTRA_CLIENT_ID,
     ENTRA_TENANT_ID,
     ENTRA_ENTERPRISE_APP_OBJECT_ID,
+    OAUTH_SIGNING_CERTIFICATE_NAME,
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME,
     ACR_BUILD_TIMEOUT_MS,
     ACR_IMPORT_TIMEOUT_MS,
     TENANT_ID,
@@ -328,6 +336,8 @@ export function printSummary(vars, log) {
   log.field("Image tag", vars.IMAGE_TAG);
   log.field("AgentHost tag", vars.AGENTHOST_IMAGE_TAG);
   log.field("Key Vault", vars.KEYVAULT_NAME);
+  log.field("OAuth signing certificate", vars.OAUTH_SIGNING_CERTIFICATE_NAME);
+  log.field("OAuth encryption certificate", vars.OAUTH_ENCRYPTION_CERTIFICATE_NAME);
   log.field("AgentHost KV", vars.AGENTHOST_KEYVAULT_URI);
   log.field("Tenant ID", vars.TENANT_ID || "<not set>");
   log.field("Identity client", vars.IDENTITY_CLIENT_ID || "<not set>");

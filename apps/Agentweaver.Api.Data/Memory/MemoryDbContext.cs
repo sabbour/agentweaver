@@ -24,6 +24,11 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<EntraOAuthState> EntraOAuthStates => Set<EntraOAuthState>();
     public DbSet<WebSessionExchangeCode> WebSessionExchangeCodes => Set<WebSessionExchangeCode>();
     public DbSet<BrowserEntraSession> BrowserEntraSessions => Set<BrowserEntraSession>();
+    public DbSet<OAuthConsentRecord> OAuthConsents => Set<OAuthConsentRecord>();
+    public DbSet<OAuthAuthorizationTransaction> OAuthAuthorizationTransactions => Set<OAuthAuthorizationTransaction>();
+    public DbSet<OAuthDynamicRegistration> OAuthDynamicRegistrations => Set<OAuthDynamicRegistration>();
+    public DbSet<OAuthRefreshTokenFamily> OAuthRefreshTokenFamilies => Set<OAuthRefreshTokenFamily>();
+    public DbSet<OAuthMaintenanceLease> OAuthMaintenanceLeases => Set<OAuthMaintenanceLease>();
     public DbSet<IntegrationBuildLockRecord> IntegrationBuildLocks => Set<IntegrationBuildLockRecord>();
     public DbSet<DismissedNotification> DismissedNotifications => Set<DismissedNotification>();
     public DbSet<GitHubAuthorizationRecord> GitHubAuthorizations => Set<GitHubAuthorizationRecord>();
@@ -33,6 +38,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<GitHubRepositorySelectionCodeRecord> GitHubRepositorySelectionCodes => Set<GitHubRepositorySelectionCodeRecord>();
     public DbSet<ProjectCopilotBindingRecord> ProjectCopilotBindings => Set<ProjectCopilotBindingRecord>();
     public DbSet<PlatformDefaultCopilotBindingRecord> PlatformDefaultCopilotBindings => Set<PlatformDefaultCopilotBindingRecord>();
+    public DbSet<UserCopilotBindingRecord> UserCopilotBindings => Set<UserCopilotBindingRecord>();
+    public DbSet<UserModelProviderSettingsRecord> UserModelProviderSettings => Set<UserModelProviderSettingsRecord>();
     public DbSet<AutomationActivationRecord> AutomationActivations => Set<AutomationActivationRecord>();
     public DbSet<AutomationProjectGuardRecord> AutomationProjectGuards => Set<AutomationProjectGuardRecord>();
     public DbSet<AutomationInvocationRecord> AutomationInvocations => Set<AutomationInvocationRecord>();
@@ -71,6 +78,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
     protected override void OnModelCreating(ModelBuilder model)
     {
+        base.OnModelCreating(model);
+        model.UseOpenIddict();
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.Status });
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.AgentName });
         model.Entity<Decision>().Property(d => d.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
@@ -145,6 +154,12 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<WebSessionExchangeCode>().HasIndex(c => c.ExpiresAt);
         model.Entity<BrowserEntraSession>().HasKey(s => s.Id);
         model.Entity<BrowserEntraSession>().HasIndex(s => s.ExpiresAt);
+        model.Entity<OAuthConsentRecord>().HasIndex(x => new { x.Subject, x.ClientId }).IsUnique();
+        model.Entity<OAuthAuthorizationTransaction>().HasIndex(x => x.ExpiresAt);
+        model.Entity<OAuthDynamicRegistration>().HasIndex(x => x.ClientId).IsUnique();
+        model.Entity<OAuthDynamicRegistration>().HasIndex(x => new { x.SourceHash, x.RegisteredAt });
+        model.Entity<OAuthRefreshTokenFamily>().HasIndex(x => x.AuthorizationId).IsUnique();
+        model.Entity<OAuthMaintenanceLease>().HasKey(x => x.Name);
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
         ConfigureGitHubConnectionsPersistence(model);
@@ -544,7 +559,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.AppKind).HasColumnName("app_kind");
             e.Property(x => x.Purpose).HasColumnName("purpose");
             e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
-            e.Property(x => x.ProjectId).HasColumnName("project_id");
+            e.Property(x => x.ProjectId).HasColumnName("project_id").IsRequired(false);
             e.Property(x => x.ExpiresAtUnixMilliseconds).HasColumnName("expires_at_unix_ms");
             e.Property(x => x.ReturnRouteKey).HasColumnName("return_route_key");
             e.Property(x => x.PkceVerifierProtected).HasColumnName("pkce_verifier_protected");
@@ -643,6 +658,38 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.Status).HasColumnName("status");
             e.Property(x => x.BoundAt).HasColumnName("bound_at");
             e.Property(x => x.DeactivatedAt).HasColumnName("deactivated_at");
+        });
+
+        model.Entity<UserCopilotBindingRecord>(e =>
+        {
+            e.ToTable("user_copilot_bindings").HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id");
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.CredentialReference).HasColumnName("credential_reference");
+            e.Property(x => x.CredentialVersion).HasColumnName("credential_version");
+            e.Property(x => x.GrantDigest).HasColumnName("grant_digest");
+            e.Property(x => x.Status).HasColumnName("status");
+            e.Property(x => x.BoundAt).HasColumnName("bound_at");
+            e.Property(x => x.DeactivatedAt).HasColumnName("deactivated_at");
+            e.HasIndex(x => x.EntraObjectId).IsUnique().HasFilter("status = 0")
+                .HasDatabaseName("UX_user_copilot_bindings_active_user");
+        });
+
+        model.Entity<UserModelProviderSettingsRecord>(e =>
+        {
+            e.ToTable("user_model_provider_settings").HasKey(x => x.EntraObjectId);
+            e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
+            e.Property(x => x.Preference).HasColumnName("preference");
+            e.Property(x => x.ByokProviderId).HasColumnName("byok_provider_id");
+            e.Property(x => x.ByokName).HasColumnName("byok_name");
+            e.Property(x => x.ByokType).HasColumnName("byok_type");
+            e.Property(x => x.ByokBaseUrl).HasColumnName("byok_base_url");
+            e.Property(x => x.ByokModel).HasColumnName("byok_model");
+            e.Property(x => x.ByokWireApi).HasColumnName("byok_wire_api");
+            e.Property(x => x.ByokHeadersJson).HasColumnName("byok_headers_json");
+            e.Property(x => x.ByokAzureApiVersion).HasColumnName("byok_azure_api_version");
+            e.Property(x => x.ByokCredentialReference).HasColumnName("byok_credential_reference");
+            e.Property(x => x.UpdatedAt).HasColumnName("updated_at");
         });
 
         model.Entity<AutomationActivationRecord>(e =>

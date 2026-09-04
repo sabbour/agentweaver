@@ -20,7 +20,7 @@ namespace Agentweaver.Api.Endpoints;
 /// </summary>
 public static class SkillEndpoints
 {
-    public static void MapSkillEndpoints(this WebApplication app)
+    public static void MapSkillEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/projects/{id}/skill-defaults/preview", async (
             HttpContext http, string id, SkillDefaultsPreviewRequest body,
@@ -32,7 +32,7 @@ public static class SkillEndpoints
             if (string.IsNullOrWhiteSpace(body.BlueprintId))
                 return Results.BadRequest(new { error = "blueprint_id is required." });
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var project = await projects.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
             if (await RequireProjectRoleAsync(http, project, ProjectRole.Viewer, ct) is { } forbid) return forbid;
@@ -62,7 +62,7 @@ public static class SkillEndpoints
             if (string.IsNullOrWhiteSpace(body.BlueprintId) || string.IsNullOrWhiteSpace(body.Digest))
                 return Results.BadRequest(new { error = "blueprint_id and digest are required." });
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var project = await projects.GetAsync(projectId, ct);
             if (project is null) return Results.NotFound();
             if (await RequireProjectRoleAsync(http, project, ProjectRole.Contributor, ct) is { } forbid) return forbid;
@@ -91,7 +91,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId))
                 return Results.BadRequest(new { error = "Invalid project id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var (outcome, value) = await svc.ListAsync(projectId, caller, ct);
             return outcome == SkillOutcome.Ok ? Results.Ok(value) : Results.NotFound();
         });
@@ -102,7 +102,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId) || !SkillId.TryParse(skillId, out var sid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var (outcome, skill) = await svc.GetAsync(projectId, sid, caller, ct);
             return outcome == SkillOutcome.Ok ? Results.Ok(ToDetail(skill!)) : Results.NotFound();
         });
@@ -113,7 +113,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId))
                 return Results.BadRequest(new { error = "Invalid project id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var result = await svc.CreateManualSkillAsync(
                 projectId,
                 new CreateSkillRequestDto(body.Name ?? "", body.DisplayName, body.Description, body.Instructions ?? ""),
@@ -128,7 +128,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId))
                 return Results.BadRequest(new { error = "Invalid project id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var (outcome, _) = await svc.ListAsync(projectId, caller, ct);
             if (outcome == SkillOutcome.NotFound)
                 return Results.NotFound();
@@ -155,7 +155,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId) || !SkillId.TryParse(skillId, out var sid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var outcome = await svc.DeleteAsync(projectId, sid, caller, ct);
             return outcome == SkillOutcome.Ok ? Results.NoContent() : Results.NotFound();
         });
@@ -166,7 +166,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId))
                 return Results.BadRequest(new { error = "Invalid project id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var result = await svc.SyncConnectedRepoAsync(projectId, caller, ct);
             return MapAcquisition(result);
         });
@@ -177,7 +177,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId))
                 return Results.BadRequest(new { error = "Invalid project id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var (outcome, error, candidates) = await svc.PreviewRepoCandidatesAsync(projectId, body.RepoUrl ?? "", caller, ct);
             return outcome switch
             {
@@ -194,7 +194,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId))
                 return Results.BadRequest(new { error = "Invalid project id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var result = await svc.ImportFromRepoAsync(projectId, body.RepoUrl ?? "", body.Locations, caller, ct);
             return MapAcquisition(result);
         });
@@ -271,7 +271,7 @@ public static class SkillEndpoints
             var (failure, project) = await ProjectAuthorization.ResolveProjectAsync(http, id, projects, configuration, ProjectRole.Viewer, ct);
             if (failure is not null) return failure;
             var projectId = project!.Id;
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var source = await sources.ResolveAsync(projectId, marketplace, ct);
             if (source is null) return Results.NotFound();
             var page = body?.Page ?? 1;
@@ -312,7 +312,7 @@ public static class SkillEndpoints
             var (failure, project) = await ProjectAuthorization.ResolveProjectAsync(http, id, projects, configuration, ProjectRole.Contributor, ct);
             if (failure is not null) return failure;
             var projectId = project!.Id;
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var source = await sources.ResolveAsync(projectId, marketplace, ct);
             if (source is null) return Results.NotFound();
 
@@ -344,7 +344,7 @@ public static class SkillEndpoints
             if (!http.Request.HasFormContentType)
                 return Results.BadRequest(new { error = "Expected multipart/form-data upload." });
 
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var form = await http.Request.ReadFormAsync(ct);
             var files = new List<UploadedSkillFile>();
             try
@@ -388,7 +388,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId))
                 return Results.BadRequest(new { error = "Invalid project id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var (outcome, value) = await svc.ListAsync(projectId, caller, ct);
             if (outcome != SkillOutcome.Ok) return Results.NotFound();
             var assignments = value!
@@ -403,7 +403,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId) || !SkillId.TryParse(skillId, out var sid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var outcome = await svc.AssignAsync(projectId, sid, agentName, caller, ct);
             return outcome switch
             {
@@ -419,7 +419,7 @@ public static class SkillEndpoints
         {
             if (!ProjectId.TryParse(id, out var projectId) || !SkillId.TryParse(skillId, out var sid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var caller = ApiKeyAuthMiddleware.GetCaller(http);
+            var caller = http.GetCaller();
             var outcome = await svc.UnassignAsync(projectId, sid, agentName, caller, ct);
             return outcome == SkillOutcome.Ok ? Results.NoContent() : Results.NotFound();
         });

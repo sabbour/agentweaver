@@ -1,155 +1,40 @@
-# Token usage monitoring — Deep Dive
+# Token usage monitoring
 
-Every GitHub Copilot model call has a cost: input tokens read, output tokens written, and a nano-AIU charge
-that maps to the **AI Credits (AIC)** shown on the product dashboard. Agentweaver treats that cost data as a
-**first-class run event** — an `agent.turn.usage` fact emitted after every model response, persisted before
-it is visible to any consumer, and projected into four aggregation levels: individual run, workflow run,
-project (time-ranged), and app-wide. Cost is not bolted on as a background batch job; it is wired into the
-same event stream that drives live UI updates and durable observability.
+## Flow
 
-This page explains how the data flows from model response to dashboard. For the API surface see the
-[reference](../reference/token-usage.md); for the user flow see the
-[user guide](../experience/token-usage-monitoring.md).
+After a model turn, the runtime emits a durable `agent.turn.usage` run event. The payload includes input tokens, output tokens, total tokens, nano-AIU, and the response model when available.
 
-## End-to-end flow
+The runtime also creates an `Agentweaver` activity for the model turn and records the `agentweaver.token.usage` metric. It adds run, project, agent, model, token, nano-AIU, duration, and first-token data when the provider supplies it.
 
-![End-to-end flow: GitHub Copilot SDK, CopilotAIAgent, Run event stream, token_usage_records, SSE /api/runs/{id}/stream, Dashboard, UsageEndpoints, /api/runs/{id}/usage, /api/workflow-runs/{id}/usage, /api/projects/{id}/usage, /api/usage](../diagrams/token-usage-monitoring-fig1.png)
+In production, run events use the EF/Postgres durable event stream. Local development can use the SQLite event stream. Subscribers replay events by cursor, so a web replica can show work performed by another replica.
 
-<!-- Rendered from ../diagrams/src/token-usage-monitoring-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
+## Queries
 
-1. **Model response arrives.** The GitHub Copilot SDK emits an `AssistantUsageEvent` inside
-   `CopilotAIAgent.StreamTurnOnceAsync` / `ExecuteStreamingLoopAsync`
-   (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`). The agent accumulates
-   `inputTokens`, `outputTokens`, `totalTokens`, `totalNanoAiu`, and `modelId` from that event.
+Application Insights provides project metrics and run traces when telemetry is available. Stored data supplies fallback model and agent usage where supported.
 
-2. **`agent.turn.usage` event emitted.** After the turn completes, `CopilotAIAgent` appends an
-   `agent.turn.usage` event to the run's `IRunEventStream`. The payload is:
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/projects/{id}/metrics` | Project throughput, model, agent, duration, first-token, and AI-credit metrics. |
+| `GET /api/runs/{id}/token-breakdown` | Per-agent token and AI-credit data for a run. |
+| `GET /api/metrics/runs/{runId}/traces` | Agent and LLM spans for a run. |
 
-   | Field | Type | Description |
-   |---|---|---|
-   | `inputTokens` | `long` | Prompt tokens for this turn |
-   | `outputTokens` | `long` | Completion tokens for this turn |
-   | `totalTokens` | `long` | Sum of input + output |
-   | `totalNanoAiu` | `long` | Cost in nano-AIU units |
-   | `modelId` | `string` | Copilot model identifier (e.g. `gpt-4o`) |
+The retired `/usage` routes, token-usage projection store, and `token_usage_records` table are not part of the current architecture.
 
-   The event type is `EventTypes.AgentTurnUsage = "agent.turn.usage"`
-   (`packages/Agentweaver.Domain/EventTypes.cs`).
+## AI-credit unit
 
-3. **Durability before visibility.** Per the core run-event invariant, the `IRunEventStream.AppendAsync`
-   call writes the event row to the database before live subscribers see it. Live SSE clients — including the
-   Watch page — receive the frame through the in-process fan-out channel after the row is committed.
-
-4. **Background projection.** `TokenUsageProjectionService`
-   (`apps/Agentweaver.Api/Runs/TokenUsageProjectionService.cs`) subscribes to active run event streams
-   and writes a `TokenUsageRecord` row to `token_usage_records` on every `agent.turn.usage` event. This
-   projection is separate from the event log itself, enabling efficient aggregation queries across runs,
-   projects, and the entire app without scanning the raw event payload columns.
-
-5. **Aggregation hierarchy.** `ITokenUsageStore` (`packages/Agentweaver.Domain/ITokenUsageStore.cs`)
-   exposes four read methods, implemented by `SqliteTokenUsageStore`
-   (`apps/Agentweaver.Api/Infrastructure/SqliteTokenUsageStore.cs`) and `EfTokenUsageStore`
-   (`apps/Agentweaver.Api/Infrastructure/Ef/EfTokenUsageStore.cs`):
-
-   | Method | Scope |
-   |---|---|
-   | `GetRunUsageAsync` | One run |
-   | `GetWorkflowRunUsageAsync` | One workflow-run envelope (may span many child runs) |
-   | `GetProjectUsageAsync` | One project, time-ranged (default: last 30 days) |
-   | `GetAppUsageAsync` | Entire app, time-ranged |
-
-6. **HTTP endpoints.** `UsageEndpoints` (`apps/Agentweaver.Api/Endpoints/UsageEndpoints.cs`) maps
-   each store method to an API route. Existing dashboard and overview endpoints extend their responses with
-   `token_usage` fields when the store returns data.
-
-7. **MCP tools.** `get_run_usage` (`apps/Agentweaver.Mcp/Tools/RunTools.cs`) and
-   `get_project_usage` (`apps/Agentweaver.Mcp/Tools/ProjectTools.cs`) let any MCP client query usage
-   without a browser.
-
-8. **Embedded run inspection.** Run stream reducers consume `agent.turn.usage` SSE events and surface cost context through board cards and coordinator graph cost chips. The retired standalone Watch page no longer owns token display.
-
-9. **Dashboard, cards, and overview.** `CostChip` converts `total_nano_aiu` to AIC labels and falls back
-   to compact token labels. Run cards, workflow/coordinator DAG nodes, the dashboard leaderboard Cost
-   column, and the Overview Cost overview all render from the same usage summaries. Source:
-   `apps/web/src/components/CostChip.tsx:18`, `apps/web/src/components/board/RunCard.tsx:160`,
-   `apps/web/src/components/WorkflowGraphPanel.tsx:594`, `apps/web/src/pages/DashboardPage.tsx:461`,
-   `apps/web/src/pages/OverviewPage.tsx:442`.
-
-
-## Application Insights spans and metrics
-
-The runtime now emits a second observability path alongside `agent.turn.usage`. `CopilotAIAgent` creates an `ActivitySource` named `Agentweaver` and a `Meter` counter named `agentweaver.token.usage` with unit `nano_aiu` (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:45`, `:48`). Each model turn starts an **Agentweaver model turn** client span tagged as `agentweaver.span.kind=agent_turn`, with run id, project id, agent name, operation name, and request model (`CopilotAIAgent.cs:643`). When the turn completes, the span is enriched with response model, input tokens, output tokens, total tokens, nano-AIU, and TTFT tags when available (`CopilotAIAgent.cs:664`). Positive nano-AIU values are also added to `agentweaver.token.usage` with model, run, project, and agent tags (`CopilotAIAgent.cs:683`).
-
-`AppInsightsMetricsService` queries that telemetry for project dashboards and observability pages. It joins `AppDependencies` spans with `agentweaver.token.usage` metrics for the agent leaderboard (`apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:190`), uses the metric for model usage, agent breakdown, run-level breakdown, and AI-credit trend (`AppInsightsMetricsService.cs:292`, `:417`, `:454`, `:493`), and filters traces to agentic/LLM spans by `agentweaver.span.kind`, GenAI tags, agent tags, or model tags (`AppInsightsMetricsService.cs:518`).
-
-This path powers the project Observability tabs: **Overview** renders compact model-performance panels and the **AI credit usage over time** chart (`apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160`, `:186`), **Agents** aggregates cross-run token usage by agent (`apps/web/src/pages/observability/ObservabilityAgentsPage.tsx:58`), and **Traces** previews recent coordinator traces with expandable AppInsights bars (`apps/web/src/pages/observability/ObservabilityTracesPage.tsx:108`, `apps/web/src/components/runs/TransactionTracePanel.tsx:211`).
-
-## DAG card layout
-
-Usage chips add metadata to graph cards, so the graph layout shares `DAG_NODE_SEP = 96` and rendered-height hints by node type. `CoordinatorTopologyGraph`, `WorkflowGraphPanel`, and `VisualWorkflowEditor` pass those hints into `layoutDag`, which prevents overlapping cards as cost, pod, status, and action badges appear. Source: `apps/web/src/utils/dagLayout.ts`, `apps/web/src/components/CoordinatorTopologyGraph.tsx`, `apps/web/src/components/WorkflowGraphPanel.tsx`, `apps/web/src/components/VisualWorkflowEditor.tsx`.
-
-## AIC unit and display
-
-Agentweaver reports usage in **nano-AIU** internally. The display unit is **AIC (AI Credit)**:
-
+```text
+1 AIC (AI Credit) = 1,000,000,000 nano-AIU
+display value = total_nano_aiu / 1_000_000_000
 ```
-1 AIC = 1,000,000,000 nano-AIU
-display value = totalNanoAiu / 1_000_000_000  (4 decimal places)
-```
-
-This mapping means small model calls show as fractional AICs (e.g. `0.0012 AIC`) and larger agent loops
-accumulate to whole credits. The 4-decimal format is the product convention set by
-`TokenUsagePanel.tsx`.
-
-## Per-model breakdown
-
-Each `TokenUsageSummaryDto` carries a `by_model` array (`TokenUsageByModelDto[]`). A project or workflow
-may use multiple models in different agents — the breakdown lets operators see which model dominates token
-consumption and AIC spend. The `modelId` string comes directly from the Copilot SDK response and is not
-normalized by Agentweaver, so it matches the Copilot model identifier as returned by the provider.
-
-## Access control
-
-| Endpoint | Who may call it |
-|---|---|
-| `GET /api/runs/{id}/usage` | API key owner of the run |
-| `GET /api/workflow-runs/{id}/usage` | API key owner of the project |
-| `GET /api/projects/{id}/usage` | API key owner of the project |
-| `GET /api/usage` | Admin key only |
-| Dashboard `token_usage` field | Same as `GET /api/projects/{id}/dashboard` (project owner) |
-| Overview `token_usage` field | Same as `GET /api/overview` (admin; degrades on 403) |
-
-These rules match the general API auth model: run owners see their own run data; project owners see their
-project data; admins see everything. Non-admin callers of `/api/usage` receive `403 Forbidden`.
 
 ## Source
 
-| Concern | File |
-|---|---|
-| `agent.turn.usage` event type | `packages/Agentweaver.Domain/EventTypes.cs` |
-| Token accumulation, AppInsights span tags, and `agentweaver.token.usage` metric | `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs:45` |
-| Domain types: `TokenUsageRecord`, `TokenUsageSummary`, `TokenUsageByModel`, `TokenUsageByProject` | `packages/Agentweaver.Domain/ITokenUsageStore.cs` |
-| SQLite projection store | `apps/Agentweaver.Api/Infrastructure/SqliteTokenUsageStore.cs` |
-| EF Core / Postgres projection store | `apps/Agentweaver.Api/Infrastructure/Ef/EfTokenUsageStore.cs` |
-| `token_usage_records` schema | `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs` |
-| Background projection service (subscribes to event streams) | `apps/Agentweaver.Api/Runs/TokenUsageProjectionService.cs` |
-| HTTP endpoints (all 4 levels) | `apps/Agentweaver.Api/Endpoints/UsageEndpoints.cs` |
-| DTOs (`TokenUsageSummaryDto`, `TokenUsageByModelDto`, `AppUsageDto`, `ProjectUsageDto`, `ProjectMetricsDto`, `RunTraceDto`) | `apps/Agentweaver.Api/Metrics/MetricsDtos.cs:86` |
-| AppInsights metrics and trace queries | `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs:31` |
-| Metrics endpoints (`/api/projects/{id}/metrics`, `/api/metrics/runs/{runId}/traces`) | `apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs:55` |
-| Observability model panels | `apps/web/src/components/dashboard/ModelPerformancePanels.tsx:160` |
-| MCP `get_run_usage` tool | `apps/Agentweaver.Mcp/Tools/RunTools.cs` |
-| MCP `get_project_usage` tool | `apps/Agentweaver.Mcp/Tools/ProjectTools.cs` |
-| Embedded cost chips | `apps/web/src/components/CostChip.tsx`, `apps/web/src/components/WorkflowGraphPanel.tsx` |
-| Dashboard token/AIC section | `apps/web/src/pages/DashboardPage.tsx` |
-| Overview app-level usage section | `apps/web/src/pages/OverviewPage.tsx` |
+- `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
+- `apps/Agentweaver.Api/Endpoints/MetricsEndpoints.cs`
+- `apps/Agentweaver.Api/Metrics/MetricsDtos.cs`
+- `apps/Agentweaver.Api/Metrics/AppInsightsMetricsService.cs`
 
-## See also
+## Related reading
 
-- [Token usage — Reference](../reference/token-usage.md) — endpoints, DTOs, status codes, MCP tools.
-- [Token usage monitoring — User Guide](../experience/token-usage-monitoring.md) — watch counter, dashboard section, overview.
-- [Events & observability](./events-observability.md) — the run event stream and SSE architecture.
-- [Data & persistence](./data-persistence.md) — database architecture and the SQLite control-plane schema.
+- [Token usage and metrics reference](../reference/token-usage.md)
+- [Events and observability](./events-observability.md)

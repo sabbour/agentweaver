@@ -10,7 +10,7 @@ A **Session** is one Assistant conversation. Sessions live at the top level of t
 
 ## Why chat instead of forms?
 
-Most of Agentweaver's surface area — submitting runs, managing the backlog, reviewing a coordinator's work plan, checking cluster health — is also exposed as MCP tools (see [MCP CLI & tools](./mcp-cli)). The Assistant is what happens when you point that same tool surface at a chat model running *inside* Agentweaver: ask "what's blocked on the board right now?" or "kick off a run to fix the flaky auth test and let me know when it needs review," and the assistant calls `backlog_*` / `run_submit` / `run_status` on your behalf and reports back.
+Most of Agentweaver's surface area is also exposed as MCP tools. This includes backlog management, coordinator work plans, and cluster health. See [MCP CLI & tools](./mcp-cli). The Assistant calls `backlog_*`, `coordinator_start`, and `run_status` for you.
 
 ::: tip Same tools, no separate MCP client needed
 Anything the Assistant does is something an external MCP client (Claude Desktop, VS Code, your own script) could also do against the same server. The Assistant just gives you that capability without leaving the browser.
@@ -20,7 +20,11 @@ Anything the Assistant does is something an external MCP client (Claude Desktop,
 
 Open **Sessions** in the left nav (it's a collapsible top-level section, next to Projects) and click **New Session**. Type your first message — the assistant responds using whichever MCP tools are relevant, and the conversation becomes an entry in your session list.
 
-The Assistant uses the same signed-in Agentweaver identity as the browser request. The current Entra bearer is validated by the MCP service and forwarded to the API; repository and Copilot capabilities use their respective GitHub App authorizations. You do not need to sign in again inside the conversation.
+The Assistant uses the same signed-in Agentweaver identity as the browser request. The API
+validates that identity and current project access, then issues a five-minute Agentweaver broker
+token for the exact MCP resource and sends it only to the per-turn Assistant runtime. The browser's
+Entra bearer is never sent to MCP. Repository and Copilot capabilities use their respective GitHub
+App authorizations, so you do not need to sign in again inside the conversation.
 
 When Agentweaver is configured to run assistant turns in an **AgentHost pod**, start the
 session from a project that has its GitHub Copilot App connected. The pod is created only after

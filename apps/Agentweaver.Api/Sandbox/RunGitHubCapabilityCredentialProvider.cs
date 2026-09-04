@@ -38,7 +38,7 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
 
     async Task<GitHubCapabilitySnapshotCredential?> IGitHubCopilotCapabilityCredentialProvider.GetProjectOperationCredentialAsync(
         string capabilityReference,
-        string projectId,
+        string? projectId,
         string entraObjectId,
         ProjectModelProviderCapabilityPurpose purpose,
         CancellationToken ct) =>
@@ -47,13 +47,13 @@ internal sealed class RunGitHubCapabilityCredentialProvider(IServiceScopeFactory
 
     private async Task<GitHubCapabilitySnapshotCredential?> GetProjectOperationCredentialAsync(
         string capabilityReference,
-        string projectId,
+        string? projectId,
         string entraObjectId,
         ProjectModelProviderCapabilityPurpose purpose,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(capabilityReference) ||
-            string.IsNullOrWhiteSpace(projectId) ||
+            (projectId is not null && string.IsNullOrWhiteSpace(projectId)) ||
             string.IsNullOrWhiteSpace(entraObjectId))
             return null;
 

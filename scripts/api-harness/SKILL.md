@@ -6,8 +6,10 @@ request/response evidence, and emit a normalized
 end-to-end validation; use the UI or MCP harness for those surfaces.
 
 Run all commands below from the repository root. The harness requires Node 18 or
-newer. It resolves an access token from `--token`, then `AGENTWEAVER_TOKEN`, then
-`gh auth token`. The GitHub CLI fallback applies only to GitHubLegacy deployments.
+newer. It requires an access token from the transient `AGENTWEAVER_TOKEN`
+environment or the explicit recorder-session provider. It never accepts bearer
+material in process arguments and never borrows `gh auth token` or
+`GITHUB_TOKEN` for a remote target.
 
 ### Token acquisition for staging (Entra Conditional Access)
 
@@ -38,7 +40,7 @@ actor and the target. Harness dispatches a fresh **`PersonaActor`** sub-agent
 access) to fully impersonate the persona in an isolated context — handed ONLY
 that persona's brief — `scripts/persona-briefs/personas/<id>.md` +
 `scripts/persona-briefs/surfaces/<id>.api.md` — and it decides every next action
-live by curling whatever operation it resolves from the real API's OpenAPI/
+live by calling whatever operation it resolves from the real API's OpenAPI/
 Swagger document, one turn at a time, reacting only to the real response it gets
 back. This is what lets the actor push back, poll events, and adapt — a fixed
 script (or a fixed subcommand wrapper) structurally cannot.
@@ -48,13 +50,16 @@ Roughly, this is what PersonaActor runs inside its own shell (see
 pushback grounding, never-blind-approve, stop-at-gate, transcript recording):
 
 ```powershell
-$baseUrl = "https://agentweaver.example.staging.example"
-$token = $env:AGENTWEAVER_TOKEN
+$env:AGENTWEAVER_BASE_URL = "https://agentweaver.example.staging.example"
 $transcript = "scripts/api-harness/transcripts/priya-live-<timestamp>.jsonl"
 
-curl.exe -s "$baseUrl/openapi/v1.yaml"
-# ...decide the next call from the spec + persona brief + prior real response...
-curl.exe -s -w "`nHTTP_STATUS:%{http_code}`n" -X GET "$baseUrl/api/blueprints" -H "Authorization: Bearer $token"
+@'
+const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/blueprints`, {
+  headers: { Authorization: `Bearer ${process.env.AGENTWEAVER_TOKEN}` },
+  redirect: 'error',
+});
+console.log(await response.text());
+'@ | node --input-type=module -
 # ...append the real request+response as a JSON line to $transcript, then repeat...
 ```
 
@@ -67,11 +72,11 @@ no code-enforced default-defer wrapper for approvals anymore; PersonaActor is
 explicitly instructed (in its own agent file) to never blind-approve a gate and
 to ground every approval decision in real observed content.
 
-**Transcript recording is PersonaActor's own responsibility, not a separate
-script's.** It appends one JSON line per turn (thought + real request + real
-response) to the transcript path Harness gave it, via shell redirection, as it
-goes — never reconstructed after the fact. Harness reads this file directly when
-building the judge evidence.
+**Transcript recording is PersonaActor's own responsibility.** It appends one
+JSON line per turn (thought + real request + real response) with
+`appendRedactedJsonLine` from `scripts/harness-shared/safe-jsonl.mjs` as it goes
+— never direct shell redirection or reconstruction after the fact. Harness reads
+this recursively sanitized file directly when building judge evidence.
 
 ## Generation-seam structural check (fixed, not a persona scenario)
 
@@ -85,7 +90,6 @@ driving LLM needs to interpret live.
 node scripts/api-harness/run-persona.mjs `
   --scenario generated-artifacts-seam `
   --target https://agentweaver.example.staging.example `
-  --token $env:AGENTWEAVER_TOKEN `
   --batch-id api-validation-001 `
   --seed generated-artifacts-seam `
   --out scripts/api-harness/verdicts/generated-artifacts-seam.json
@@ -133,10 +137,10 @@ each time.
 
 - `--timeout <seconds>` sets the seam-check or polling timeout; `--keep` retains the
   throwaway resources.
-- `--insecure` disables TLS verification only for localhost/staging targets. It
-  needs `--allow-insecure-prod` for non-staging targets.
-- Targets are limited to localhost or staging by default. Production requires both
-  `--allow-prod` and `--i-understand-this-targets-production`.
+- Network targets must be absolute HTTP(S) URLs. HTTP is allowed only for loopback;
+  URL credentials/fragments and TLS bypasses are rejected.
+- Bearer credentials are sent only to the configured origin. Absolute cross-origin
+  paths and cross-origin redirects fail closed.
 
 Exit codes for `run-persona.mjs`: `0` means deterministic driver checks passed and
 evidence was captured, `1` means a deterministic check failed, `2` is setup or

@@ -14,9 +14,7 @@ public sealed class LegacyOAuthRetirementTests
     [Theory]
     [InlineData("/api/auth/github/device")]
     [InlineData("/api/auth/github/status")]
-    [InlineData("/oauth/authorize")]
-    [InlineData("/oauth/token")]
-    public async Task LegacyOAuthEndpoints_AreNotMapped(string path)
+    public async Task LegacyGitHubOAuthEndpoints_AreNotMapped(string path)
     {
         await using var factory = new EntraWebApplicationFactory();
         using var client = factory.CreateAuthenticatedClient(PlatformRoles.ProjectCreator);

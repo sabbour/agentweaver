@@ -291,12 +291,8 @@ public sealed class AgentweaverApiClient
 {
     private readonly HttpClient _http;
     private readonly McpConfig _config;
-    // Injected when registered as scoped/singleton-with-accessor.
-    // When present, the caller's own bearer token (API key, or an Agentweaver-minted OAuth access
-    // token validated by McpBearerTokenMiddleware) is forwarded to the backend so the backend sees
-    // the real caller identity instead of the shared service identity. In stdio mode (no inbound
-    // HTTP context) the configured per-user token (AGENTWEAVER_TOKEN) is used; the shared
-    // AGENTWEAVER_API_KEY is only a last-resort fallback for in-process/service callers (#474).
+    // HTTP mode forwards only the token accepted by the broker validation scheme. Stdio mode has
+    // no inbound HTTP request, so its configured Agentweaver broker token is forwarded instead.
     private readonly IHttpContextAccessor? _httpContextAccessor;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -317,25 +313,27 @@ public sealed class AgentweaverApiClient
 
     /// <summary>
     /// Returns the Bearer token to use for this request.
-    /// Prefers the caller's own token stored in <c>mcp.bearer_token</c> (set by the inbound
-    /// middleware after validating the GitHub token), so the backend receives the real caller
-    /// identity. In stdio mode there is no inbound HTTP context, so it uses the configured per-user
-    /// token (<c>AGENTWEAVER_TOKEN</c>). The shared service key (<c>AGENTWEAVER_API_KEY</c>) is used
-    /// only as a last resort — for genuine in-process/service callers — because the API maps it to
-    /// the trusted <c>agentweaver-internal</c> identity that bypasses project-ownership checks (#474).
+    /// Prefers the caller token stored under the validated-token item (set by the inbound
+    /// broker authentication scheme), so the backend independently validates the same identity.
+    /// In stdio mode there is no inbound HTTP context, so the configured Agentweaver broker token
+    /// (<c>AGENTWEAVER_TOKEN</c>) is used.
     /// </summary>
-    private string GetEffectiveApiKey()
+    private string GetEffectiveBrokerToken()
     {
         var ctx = _httpContextAccessor?.HttpContext;
-        if (ctx?.Items.TryGetValue("mcp.bearer_token", out var callerToken) == true && callerToken is string token)
+        if (ctx?.Items.TryGetValue(
+                McpBrokerAuthenticationDefaults.ValidatedTokenItem,
+                out var callerToken) == true
+            && callerToken is string token
+            && ctx.User.Identity?.IsAuthenticated == true)
             return token;
-        if (!string.IsNullOrWhiteSpace(_config.UserToken))
-            return _config.UserToken;
-        return _config.ApiKey;
+        if (ctx is null && !string.IsNullOrWhiteSpace(_config.BrokerToken))
+            return _config.BrokerToken;
+        throw new InvalidOperationException("A validated Agentweaver MCP broker token is required.");
     }
 
     private AuthenticationHeaderValue GetAuthHeader() =>
-        new("Bearer", GetEffectiveApiKey());
+        new("Bearer", GetEffectiveBrokerToken());
 
     public async Task<T> GetAsync<T>(string path, CancellationToken ct = default)
     {
@@ -411,7 +409,7 @@ public sealed class AgentweaverApiClient
     public IAsyncEnumerable<SseEvent> StreamSseAsync(string path, CancellationToken ct = default)
     {
         var fullUrl = _config.ApiUrl.TrimEnd('/') + "/" + path.TrimStart('/');
-        var sseClient = new SseClient(_http, GetEffectiveApiKey());
+        var sseClient = new SseClient(_http, GetEffectiveBrokerToken());
         return sseClient.StreamAsync(fullUrl, ct);
     }
 
