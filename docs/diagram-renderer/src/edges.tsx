@@ -111,7 +111,11 @@ export function RoutedEdge({ id, style, markerEnd, label, data }: EdgeProps) {
               border: `1px solid ${neutral.stroke2}`,
               padding: '5px 9px',
               borderRadius: 6,
-              whiteSpace: 'nowrap',
+              // The router pre-wraps long labels and reserves space for the
+              // wrapped block, so honour its line breaks exactly ('pre') and
+              // never let the browser re-wrap to a different shape.
+              whiteSpace: 'pre',
+              textAlign: 'center',
               pointerEvents: 'none',
               // Labels belong on top of every connector, including the ones
               // they do not describe. Edge SVGs carry their own zIndex, so the

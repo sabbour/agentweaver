@@ -32,8 +32,80 @@ const GROUP_PAD_BOTTOM = 56;
 const CANVAS_MARGIN = 80;
 const LANE_STEP = 34;
 
+// Label metrics. These mirror the inline styles in edges.tsx (15px / 600 /
+// 1.1 line-height, 9px horizontal and 5px vertical padding, 1px border) so
+// the layout can reserve real space for a label instead of guessing. A label
+// is always drawn centred on its edge's run, which means the run has to be
+// long enough and the gutter tall enough to hold it -- both are sized here.
+const LABEL_CHAR_W = 8.4;
+const LABEL_PAD_X = 20;
+const LABEL_LINE_H = 16.5;
+const LABEL_PAD_Y = 12;
+// Cap for labels on lateral (card-side-to-card-side) edges. Their run is the
+// column gap, and that gap widens to fit the label, so an unwrapped long
+// label would push the whole row apart. Wrapping trades width for height,
+// which the row has to spare.
+const LATERAL_LABEL_MAX_W = 150;
+
 const nodeTypes = { card: CardNode, band: GroupNode, bandLabel: GroupLabelNode };
 const edgeTypes = { routed: RoutedEdge };
+
+interface LabelGeom {
+  lines: string[];
+  w: number;
+  h: number;
+}
+
+function measureLines(lines: string[]): LabelGeom {
+  const widest = Math.max(...lines.map((l) => l.length));
+  return {
+    lines,
+    w: widest * LABEL_CHAR_W + LABEL_PAD_X,
+    h: lines.length * LABEL_LINE_H + LABEL_PAD_Y,
+  };
+}
+
+/** Greedy balanced wrap: pick the fewest lines that fit `maxW`, then fill each
+ * line to roughly the same length so the block reads as a tidy stack rather
+ * than a long line with an orphan. A single word longer than `maxW` is left
+ * alone -- breaking mid-word would be worse than an over-wide label. */
+function wrapLabel(text: string, maxW: number): string[] {
+  if (measureLines([text]).w <= maxW) return [text];
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return [text];
+
+  for (let n = 2; n <= Math.min(words.length, 3); n += 1) {
+    const target = Math.ceil(text.length / n);
+    const lines: string[] = [];
+    let cur = '';
+    for (const word of words) {
+      const next = cur ? `${cur} ${word}` : word;
+      if (cur && next.length > target && lines.length < n - 1) {
+        lines.push(cur);
+        cur = word;
+      } else {
+        cur = next;
+      }
+    }
+    if (cur) lines.push(cur);
+    if (measureLines(lines).w <= maxW) return lines;
+  }
+  // Nothing fit the cap; use the tightest split we can rather than one long line.
+  const target = Math.ceil(text.length / 3);
+  const lines: string[] = [];
+  let cur = '';
+  for (const word of words) {
+    const next = cur ? `${cur} ${word}` : word;
+    if (cur && next.length > target) {
+      lines.push(cur);
+      cur = word;
+    } else {
+      cur = next;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
 
 function cardHeight(n: GraphNode): number {
   return n.meta ? CARD_H_3 : CARD_H_2;
@@ -120,7 +192,7 @@ function layout(spec: GraphSpec): {
       const slice = band.nodes.slice(r * cols, (r + 1) * cols);
       rowHeights.push(Math.max(...slice.map(cardHeight)));
     }
-    return { cols, rows, rowHeights, width: cols * CARD_WIDTH + (cols - 1) * COL_GAP };
+    return { cols, rows, rowHeights };
   });
 
   const SIDE_CHANNEL = 230;
@@ -137,8 +209,10 @@ function layout(spec: GraphSpec): {
   });
 
   const gutterLanes = new Array(Math.max(bands.length - 1, 0)).fill(0);
-  const bumpGutter = (i: number) => {
-    if (i >= 0 && i < gutterLanes.length) gutterLanes[i] += 1;
+  const bumpGutter = (i: number, labelH: number) => {
+    if (i < 0 || i >= gutterLanes.length) return;
+    gutterLanes[i] += 1;
+    gutterLabelH[i] = Math.max(gutterLabelH[i], labelH);
   };
   // In-band traffic, keyed by the row gutter it will travel through. A same-row
   // edge dips into the gap below its row, and a cross-row edge crosses that
@@ -175,40 +249,82 @@ function layout(spec: GraphSpec): {
     lateral.add(idx);
   });
 
+  // Measure every label now, because the space a label needs is what sizes the
+  // column gap it sits in and the gutter lane it rides on.
+  const labelGeom = new Map<number, LabelGeom>();
+  (spec.edges ?? []).forEach((e, idx) => {
+    if (!e.label) return;
+    labelGeom.set(
+      idx,
+      measureLines(lateral.has(idx) ? wrapLabel(e.label, LATERAL_LABEL_MAX_W) : [e.label]),
+    );
+  });
+
+  // A lateral edge's entire run is the gap between two cards, so the gap has
+  // to be at least as wide as the label that must sit centred on it.
+  const bandColGap = bands.map((_, bi) => {
+    let widest = 0;
+    (spec.edges ?? []).forEach((e, idx) => {
+      if (!lateral.has(idx) || bandOf.get(e.from) !== bi) return;
+      widest = Math.max(widest, labelGeom.get(idx)?.w ?? 0);
+    });
+    return Math.max(COL_GAP, widest + 28);
+  });
+
+  // Tallest label riding each gutter, so a wrapped multi-line label gets a
+  // lane tall enough to hold it without touching its neighbours.
+  const gutterLabelH = new Array(Math.max(bands.length - 1, 0)).fill(0);
+  const rowLabelH = new Map<string, number>();
+  const stepGutter = (i: number) => Math.max(LANE_STEP, (gutterLabelH[i] ?? 0) + 10);
+  const stepRow = (bi: number, r: number) =>
+    Math.max(LANE_STEP, (rowLabelH.get(rowKey(bi, r)) ?? 0) + 10);
+
   (spec.edges ?? []).forEach((e, idx) => {
     const sb = bandOf.get(e.from);
     const tb = bandOf.get(e.to);
     if (sb === undefined || tb === undefined) return;
+    const lh = labelGeom.get(idx)?.h ?? 0;
     if (sb === tb) {
       // Lateral edges never enter a gutter, so they must not reserve a lane.
       if (lateral.has(idx)) return;
       const k = rowKey(sb, Math.min(rowOf.get(e.from)!, rowOf.get(e.to)!));
       rowLanes.set(k, (rowLanes.get(k) ?? 0) + 1);
+      rowLabelH.set(k, Math.max(rowLabelH.get(k) ?? 0, lh));
       return;
     }
     if (Math.abs(tb - sb) === 1) {
       // Adjacent hop: one run, in the gutter between the two bands.
-      bumpGutter(Math.min(sb, tb));
+      bumpGutter(Math.min(sb, tb), lh);
     } else {
       // Long span: one run leaving the source, one entering the target.
-      bumpGutter(tb > sb ? sb : sb - 1);
-      bumpGutter(tb > sb ? tb - 1 : tb);
+      bumpGutter(tb > sb ? sb : sb - 1, lh);
+      bumpGutter(tb > sb ? tb - 1 : tb, lh);
     }
   });
 
   // Row gutters and the band's bottom padding grow with the number of in-band
   // runs they have to carry, exactly like the inter-band gutters do.
   const inners = grids.map((g, bi) => {
+    const colGap = bandColGap[bi];
     const rowGaps: number[] = [];
     for (let r = 0; r < g.rows - 1; r += 1) {
-      rowGaps.push(Math.max(ROW_GAP, 48 + laneCountRow(bi, r) * LANE_STEP));
+      rowGaps.push(Math.max(ROW_GAP, 48 + laneCountRow(bi, r) * stepRow(bi, r)));
     }
-    const height =
-      g.rowHeights.reduce((a, b) => a + b, 0) + rowGaps.reduce((a, b) => a + b, 0);
+    const height = g.rowHeights.reduce((a, b) => a + b, 0) + rowGaps.reduce((a, b) => a + b, 0);
     const padBottom = bands[bi].id
-      ? Math.max(GROUP_PAD_BOTTOM, 28 + laneCountRow(bi, g.rows - 1) * LANE_STEP)
+      ? Math.max(
+          GROUP_PAD_BOTTOM,
+          28 + laneCountRow(bi, g.rows - 1) * stepRow(bi, g.rows - 1),
+        )
       : 0;
-    return { ...g, rowGaps, height, padBottom };
+    return {
+      ...g,
+      colGap,
+      width: g.cols * CARD_WIDTH + (g.cols - 1) * colGap,
+      rowGaps,
+      height,
+      padBottom,
+    };
   });
 
   const contentWidth = Math.max(...inners.map((b) => b.width));
@@ -216,7 +332,7 @@ function layout(spec: GraphSpec): {
   // Each gutter needs room for its lanes plus a label row, floored so even an
   // empty gutter still reads as a separation between bands.
   const gapFor = (i: number) =>
-    Math.max(BAND_GAP_MIN, BAND_GAP_MIN + (gutterLanes[i] ?? 0) * LANE_STEP);
+    Math.max(BAND_GAP_MIN, BAND_GAP_MIN + (gutterLanes[i] ?? 0) * stepGutter(i));
 
   // Vertical span available to in-band runs, per row gutter.
   const rowGutter = new Map<string, { top: number; bottom: number }>();
@@ -244,7 +360,7 @@ function layout(spec: GraphSpec): {
       slice.forEach((n, c) => {
         placed.push({
           node: n,
-          x: rowX + c * (CARD_WIDTH + COL_GAP),
+          x: rowX + c * (CARD_WIDTH + inner.colGap),
           y: rowY + (rh - cardHeight(n)) / 2,
           w: CARD_WIDTH,
           h: cardHeight(n),
@@ -391,11 +507,10 @@ function layout(spec: GraphSpec): {
     xmax: number;
   }
   const labelBoxes: LabelBox[] = [];
-  // Every vertical and horizontal run in the picture. A label that lands on a
-  // vertical reads as sitting on a junction; a label pushed off its own line
-  // must not land on someone else's. Placement below steers around both.
+  // Every vertical run in the picture. A label centred on its own run must not
+  // also sit on a connector crossing that run, which would read as a junction
+  // label; placement below steers around them.
   const verticals: { edgeId: string; x: number; y0: number; y1: number }[] = [];
-  const horizontals: { edgeId: string; y: number; x0: number; x1: number }[] = [];
 
   for (const r of routed) {
     const { s, t, sx, tx, kind } = r;
@@ -484,14 +599,16 @@ function layout(spec: GraphSpec): {
       ];
     }
 
-    // Anchor the label on the edge's own horizontal run. The run's extent is
-    // recorded too, so the collision pass can slide the label along its own
-    // line instead of drifting it off the edge it describes.
+    // Anchor the label on the edge's own horizontal run, always centred on the
+    // line. The run's extent is recorded so the collision pass can slide the
+    // label along its own line -- the only degree of freedom it gets, since
+    // moving it off the run would break that centring.
     const runStartX = kind === 'lateral' ? points[0].x : sx;
     const runEndX =
       kind === 'lateral' ? points[1].x : kind === 'sideDown' || kind === 'sideUp' ? points[2].x : tx;
     const labelX = (runStartX + runEndX) / 2;
-    const halfLabel = ((r.e.label?.length ?? 0) * 8.4 + 20) / 2 + 12;
+    const geom = labelGeom.get(r.idx);
+    const halfLabel = (geom?.w ?? 0) / 2 + 12;
     const labelPos = {
       x: Math.min(Math.max(labelX, halfLabel), canvasWidth - halfLabel),
       y: runY,
@@ -508,24 +625,17 @@ function layout(spec: GraphSpec): {
           y0: Math.min(a.y, b.y),
           y1: Math.max(a.y, b.y),
         });
-      } else if (Math.abs(a.y - b.y) < 0.5 && Math.abs(a.x - b.x) > 1) {
-        horizontals.push({
-          edgeId,
-          y: a.y,
-          x0: Math.min(a.x, b.x),
-          x1: Math.max(a.x, b.x),
-        });
       }
     }
 
-    if (r.e.label) {
+    if (geom) {
       labelBoxes.push({
         edgeId,
         x: labelPos.x,
         ideal: labelPos.x,
         y: labelPos.y,
-        w: halfLabel * 2,
-        h: 28,
+        w: geom.w,
+        h: geom.h,
         xmin: Math.min(runStartX, runEndX),
         xmax: Math.max(runStartX, runEndX),
       });
@@ -537,7 +647,8 @@ function layout(spec: GraphSpec): {
       source: r.e.from,
       target: r.e.to,
       type: 'routed',
-      label: r.e.label,
+      // Pre-wrapped so the rendered box matches the size layout reserved.
+      label: geom?.lines.join('\n'),
       zIndex: 2,
       data: { points, labelPos, labelOffset: { dx: 0, dy: 0 } },
       style: {
@@ -551,29 +662,21 @@ function layout(spec: GraphSpec): {
     });
   }
 
-  // Two things make a label unreadable: sitting on a junction where another
-  // connector crosses it, and sitting on top of another label. The fix is to
-  // search two dimensions per label: slide it ALONG its own horizontal run
-  // (free, keeps it centred on its line), and if -- and only if -- every
-  // position on that run is still blocked, lift it a little off the run. A
-  // short run boxed in by verticals, which is the common case for in-band
-  // edges between adjacent columns, has no clear x at all, so x-only search
-  // was guaranteed to leave those labels on a crossing. The offset is capped
-  // at a couple of dozen pixels so the label still visibly belongs to its own
-  // edge, and any position that lands on a different connector, another label,
-  // or a card is penalised far more than the offset itself.
-  const cardRects = placed.map((p) => ({
-    x0: p.x,
-    x1: p.x + p.w,
-    y0: p.y,
-    y1: p.y + p.h,
-  }));
+  // A label is always drawn centred on its edge's run -- that is what makes it
+  // unambiguous which connector it belongs to -- so the only freedom left is
+  // sliding it along that run. The space it needs was already reserved during
+  // layout (column gaps widen to fit lateral labels, gutter lanes are spaced
+  // by the tallest label they carry), so a clear position almost always
+  // exists. Each label takes the cheapest x on its own run, penalising
+  // positions that land on a crossing connector or on a label already placed.
   const CLEAR_X = 10;
-  const DY_OPTIONS = [0, -19, 19, -26, 26, -46, 46, -68, 68, -90, 90];
   const settled: LabelBox[] = [];
   const order = [...labelBoxes].sort((a, b) => b.w - a.w);
   for (const box of order) {
     const half = box.w / 2;
+    const top = box.y - box.h / 2;
+    const bottom = box.y + box.h / 2;
+
     let lo = box.xmin + half;
     let hi = box.xmax - half;
     if (hi - lo < 40) {
@@ -591,62 +694,31 @@ function layout(spec: GraphSpec): {
     if (box.ideal >= lo && box.ideal <= hi) candidates.push(box.ideal);
 
     let bestX = box.ideal;
-    let bestDy = 0;
     let bestCost = Infinity;
-    for (const dy of DY_OPTIONS) {
-      const top = box.y + dy - box.h / 2;
-      const bottom = box.y + dy + box.h / 2;
-      for (const x of candidates) {
-        const left = x - half - CLEAR_X;
-        const right = x + half + CLEAR_X;
+    for (const x of candidates) {
+      const left = x - half - CLEAR_X;
+      const right = x + half + CLEAR_X;
 
-        let crossings = 0;
-        for (const v of verticals) {
-          if (v.edgeId === box.edgeId) continue;
-          if (v.x < left || v.x > right) continue;
-          if (v.y1 < top || v.y0 > bottom) continue;
-          crossings += 1;
-        }
-        // Only relevant once the label has left its own run: at dy = 0 the
-        // only horizontal under the box is the edge it describes.
-        let onOtherRun = 0;
-        if (dy !== 0) {
-          for (const h of horizontals) {
-            if (h.edgeId === box.edgeId) continue;
-            if (h.y < top || h.y > bottom) continue;
-            if (h.x1 < x - half || h.x0 > x + half) continue;
-            onOtherRun += 1;
-          }
-        }
-        let collisions = 0;
-        for (const p of settled) {
-          if (Math.abs(p.y - (box.y + dy)) >= (p.h + box.h) / 2 + 4) continue;
-          if (Math.abs(p.x - x) >= (p.w + box.w) / 2 + 10) continue;
-          collisions += 1;
-        }
-        let overCard = 0;
-        for (const c of cardRects) {
-          if (c.x1 < x - half || c.x0 > x + half) continue;
-          if (c.y1 < top || c.y0 > bottom) continue;
-          overCard += 1;
-        }
-
-        const cost =
-          overCard * 9000 +
-          collisions * 4000 +
-          crossings * 1200 +
-          onOtherRun * 900 +
-          Math.abs(dy) * 13 +
-          Math.abs(x - box.ideal) * 0.35;
-        if (cost < bestCost) {
-          bestCost = cost;
-          bestX = x;
-          bestDy = dy;
-        }
+      let crossings = 0;
+      for (const v of verticals) {
+        if (v.edgeId === box.edgeId) continue;
+        if (v.x < left || v.x > right) continue;
+        if (v.y1 < top || v.y0 > bottom) continue;
+        crossings += 1;
+      }
+      let collisions = 0;
+      for (const p of settled) {
+        if (Math.abs(p.y - box.y) >= (p.h + box.h) / 2 + 4) continue;
+        if (Math.abs(p.x - x) >= (p.w + box.w) / 2 + 10) continue;
+        collisions += 1;
+      }
+      const cost = collisions * 4000 + crossings * 1200 + Math.abs(x - box.ideal) * 0.35;
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestX = x;
       }
     }
     box.x = bestX;
-    box.y += bestDy;
     settled.push(box);
   }
   const resolvedLabel = new Map(labelBoxes.map((l) => [l.edgeId, l]));
