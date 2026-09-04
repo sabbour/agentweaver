@@ -271,39 +271,15 @@ function AuthGate() {
     );
   }
 
-  if (!aiConfigured || (isPlatformAdmin && requiredSetupPending)) {
-    if (isPlatformAdmin) {
-      return (
-        <Routes>
-          <Route
-            path="/platform-settings"
-            element={<PlatformSettingsPage setupRequired onRetryAccess={completeRequiredSetup} />}
-          />
-          <Route path="*" element={<Navigate to="/platform-settings" replace />} />
-        </Routes>
-      );
-    }
-
+  if (isPlatformAdmin && (!aiConfigured || requiredSetupPending)) {
     return (
-      <PageContainer width="readable">
-        <PageHeader
-          title="Model provider setup required"
-          description="Agentweaver requires a model provider before AI work can start."
+      <Routes>
+        <Route
+          path="/platform-settings"
+          element={<PlatformSettingsPage setupRequired onRetryAccess={completeRequiredSetup} />}
         />
-        <SetupReadiness
-          model={{
-            title: 'Setup readiness',
-            description: 'A Platform Admin manages the model provider for this deployment.',
-            items: [{
-              id: 'model-provider',
-              title: 'Model provider',
-              description: 'Ask a Platform Admin to complete this setup.',
-              requirement: 'required',
-              status: 'unavailable',
-            }],
-          }}
-        />
-      </PageContainer>
+        <Route path="*" element={<Navigate to="/platform-settings" replace />} />
+      </Routes>
     );
   }
 
