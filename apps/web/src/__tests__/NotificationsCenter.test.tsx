@@ -207,6 +207,35 @@ describe('NotificationBell + NotificationsProvider', () => {
     expect(await screen.findByText('This approval no longer has a run to review.')).toBeTruthy();
   });
 
+  it('uses the server CTA path for an assistant-session tool approval', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const approval = makeNotification({
+      type: 'tool_approval',
+      run_id: 'assistant-run-7',
+      project_id: 'proj-7',
+      cta_path: '/assistant?runId=assistant-run-7&project=proj-7',
+      title: 'Approval needed to run "coordinator_start"',
+    });
+    vi.mocked(apiClient.getNotifications)
+      .mockResolvedValueOnce(respond([]))
+      .mockResolvedValueOnce(respond([approval]))
+      .mockResolvedValueOnce(respond([approval]));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    renderBell(1000);
+
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    await user.click(await screen.findByText('Review now'));
+
+    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(3));
+    expect(screen.getByTestId('current-location').textContent)
+      .toBe('/assistant?runId=assistant-run-7&project=proj-7');
+  });
+
   it('does not navigate when a later poll removes an approval while its CTA validation is pending', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const approval = makeNotification({

@@ -152,10 +152,10 @@ function derivePendingApprovals(events: RunStreamEvent[], runId: string): Pendin
   const resolvedCommandHashes = new Set<string>();
   for (const evt of events) {
     if (evt.type === 'tool.approval_resolved' || evt.type === 'tool.auto_approved') {
-      const id = readString(evt.payload, ['requestId', 'request_id']);
+      const id = readString(evt.payload, ['requestId', 'request_id', 'RequestId']);
       if (id) resolvedRequestIds.add(id);
     }
-    const hash = readString(evt.payload, ['commandHash', 'command_hash']);
+    const hash = readString(evt.payload, ['commandHash', 'command_hash', 'CommandHash']);
     if (hash && (evt.type === 'tool.approval_resolved' || evt.type === 'tool.auto_approved')) {
       resolvedCommandHashes.add(hash);
     }
@@ -163,10 +163,10 @@ function derivePendingApprovals(events: RunStreamEvent[], runId: string): Pendin
   const pending: PendingApproval[] = [];
   for (const evt of events) {
     const isShell = evt.type === 'shell.approval_required';
-    const isTool = evt.type === 'tool.approval_required';
+    const isTool = evt.type === 'tool.approval_required' || evt.type === 'tool.approval_context';
     if (!isShell && !isTool) continue;
-    const requestId = readString(evt.payload, ['requestId', 'request_id']) ?? '';
-    const commandHash = readString(evt.payload, ['commandHash', 'command_hash']) ?? '';
+    const requestId = readString(evt.payload, ['requestId', 'request_id', 'RequestId']) ?? '';
+    const commandHash = readString(evt.payload, ['commandHash', 'command_hash', 'CommandHash']) ?? '';
     if (requestId && resolvedRequestIds.has(requestId)) continue;
     if (commandHash && resolvedCommandHashes.has(commandHash)) continue;
     pending.push({
@@ -174,7 +174,7 @@ function derivePendingApprovals(events: RunStreamEvent[], runId: string): Pendin
       isShell,
       requestId,
       commandHash,
-      toolName: readString(evt.payload, ['toolName', 'tool_name']) ?? (isShell ? 'run_command' : 'tool'),
+      toolName: readString(evt.payload, ['toolName', 'tool_name', 'ToolName']) ?? (isShell ? 'run_command' : 'tool'),
       targetRunId: readString(evt.payload, ['childRunId', 'child_run_id']) ?? runId,
     });
   }

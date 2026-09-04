@@ -1,7 +1,6 @@
 import {
   Text } from '@fluentui/react-components';
 import { AgentMessageBubble } from './AgentMessageBubble';
-import { LifecycleEventCard } from './LifecycleEventCard';
 import { ToolCallCard } from './ToolCallCard';
 import { makeStyles,
   mergeClasses,
@@ -10,7 +9,7 @@ import { makeStyles,
 import { ChevronDownRegular, ChevronRightRegular, ErrorCircleFilled, WarningFilled } from '@fluentui/react-icons';
 import { memo, useState } from 'react';
 import type { StreamStatus } from '../api/sse';
-import type { AgentMessageItem, ApprovalRequestItem, ToolCallItem, TurnGroupItem, TurnStep } from '../timeline/types';
+import type { AgentMessageItem, ToolCallItem, TurnGroupItem, TurnStep } from '../timeline/types';
 const useStyles = makeStyles({
   steps: {
     display: 'flex',
@@ -305,7 +304,7 @@ interface TurnGroupProps {
   runId?: string;
 }
 
-export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus, runId }: TurnGroupProps) {
+export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus }: TurnGroupProps) {
   const styles = useStyles();
 
   if (item.steps.length === 0 && item.active === false) {
@@ -350,26 +349,7 @@ export const TurnGroup = memo(function TurnGroup({ item, isLiveRun, streamStatus
             );
           }
           if (step.kind === 'approval-request') {
-            const aprStep = step as ApprovalRequestItem;
-            return (
-              <LifecycleEventCard
-                key={`approval-${aprStep.requestId}`}
-                event={{
-                  sequence: -1,
-                  type: 'tool.approval_required',
-                  payload: {
-                    request_id: aprStep.requestId,
-                    tool_name: aprStep.toolName,
-                    url: aprStep.url ?? '',
-                    // Route approve/deny to the owning child subtask run id when present (issue #196).
-                    ...(aprStep.childRunId ? { childRunId: aprStep.childRunId } : {}),
-                  },
-                }}
-                runId={runId}
-                isResolved={aprStep.resolved}
-                resolvedScope={aprStep.resolvedScope}
-              />
-            );
+            return null;
           }
           // report_intent — compact system annotation
           if ((step as ToolCallItem).toolName === 'report_intent') {

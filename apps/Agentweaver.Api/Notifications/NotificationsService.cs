@@ -1,5 +1,6 @@
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -25,9 +26,10 @@ namespace Agentweaver.Api.Notifications;
 /// SCOPE: Human Review is derivable straight from the durable `runs` table (`status =
 /// awaiting_review`), which already survives pod restarts with no extra plumbing. Tool Approval
 /// (#321) is sourced from the SAME signal <see cref="PendingToolApprovalRunsQuery"/> uses for the
-/// board's "Approval needed" badge (<c>tool.approval_required</c> run events with no matching
-/// <c>tool.result</c>/<c>tool.error</c> callId yet) rather than a parallel detection mechanism —
-/// candidate runs are the caller's owned, non-archived, in-progress runs.
+/// board's "Approval needed" badge (<c>tool.approval_required</c> plus durable
+/// <c>tool.approval_context</c> run events with no matching terminal resolution) rather than a
+/// parallel detection mechanism — candidate runs are the caller's owned, non-archived,
+/// in-progress runs.
 /// </summary>
 public sealed class NotificationsService
 {
@@ -237,7 +239,6 @@ public sealed class NotificationsService
         var occurrenceAt = reviewReadyAt ?? run.EndedAt ?? run.StartedAt;
         // Run detail routes are keyed by the persisted execution run_id. A workflow_run_id can
         // identify a different workflow record, so never use it to navigate to an approval/review.
-        var deepLinkRunId = run.Id.ToString();
         var title = string.IsNullOrWhiteSpace(run.Task)
             ? "A run is awaiting your review"
             : Truncate(run.Task, 120);
@@ -252,7 +253,7 @@ public sealed class NotificationsService
             AgentName = run.AgentName,
             Title = title,
             CreatedUtc = occurrenceAt,
-            CtaPath = $"/projects/{projectId}/orchestrations/{deepLinkRunId}",
+            CtaPath = BuildRunTargetPath(run),
         };
     }
 
@@ -263,9 +264,6 @@ public sealed class NotificationsService
         IReadOnlyDictionary<string, string> ownedProjectNames)
     {
         var projectId = run.ProjectId!.ToString()!;
-        // The approval event belongs to this exact execution run. Detail routes are run_id-keyed;
-        // using workflow_run_id can send the operator to a different active orchestration.
-        var deepLinkRunId = run.Id.ToString();
         var title = string.IsNullOrWhiteSpace(approval.ToolName)
             ? "A run needs tool approval"
             : Truncate($"Approval needed to run \"{approval.ToolName}\"", 120);
@@ -280,8 +278,23 @@ public sealed class NotificationsService
             AgentName = run.AgentName,
             Title = title,
             CreatedUtc = approval.CreatedUtc,
-            CtaPath = $"/projects/{projectId}/orchestrations/{deepLinkRunId}",
+            CtaPath = BuildRunTargetPath(run),
         };
+    }
+
+    private static string BuildRunTargetPath(Run run)
+    {
+        var runId = run.Id.ToString();
+        if (string.Equals(run.AgentName, AssistantRunService.OperatorAgentName, StringComparison.Ordinal))
+        {
+            var query = new List<string> { $"runId={Uri.EscapeDataString(runId)}" };
+            if (run.ProjectId is not null)
+                query.Add($"project={Uri.EscapeDataString(run.ProjectId.ToString()!)}");
+            return $"/assistant?{string.Join("&", query)}";
+        }
+
+        var projectId = run.ProjectId!.ToString()!;
+        return $"/projects/{projectId}/orchestrations/{runId}";
     }
 
     private static string Truncate(string value, int max)
