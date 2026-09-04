@@ -136,7 +136,7 @@ The MCP transport is stateless: each tool call forwards the caller's Agentweaver
 
 ### Backlog first-class workflow
 
-`backlog_capture_task → backlog_move_to_ready` (or `send_all_backlog_to_ready`) `→ coordinator_start`  
+`backlog_capture_task → backlog_move_to_ready` (or `send_all_backlog_to_ready`) `→ coordinator_start`
 Use `run_task` instead of `coordinator_start` when the user wants the end-to-end happy path in one call.
 
 ## Output format
