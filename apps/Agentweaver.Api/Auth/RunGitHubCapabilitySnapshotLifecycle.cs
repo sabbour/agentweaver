@@ -108,31 +108,25 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
     internal async Task<bool> PrepareForUnattendedCopilotLaunchAsync(
         Run run, CancellationToken ct, bool platformScoped = false)
     {
+        RunGitHubCapabilitySnapshotRecord? copilotSnapshot;
         if (run.ProjectId is { } && !platformScoped)
         {
             if (!await PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
                 return false;
+
+            copilotSnapshot = (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString(), ct)
+                .ConfigureAwait(false))
+                .SingleOrDefault(snapshot => snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot);
         }
         else
         {
-            var existing = await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString(), ct)
+            copilotSnapshot = await persistence
+                .RefreshPlatformDefaultUnattendedCopilotSnapshotAsync(run.Id.ToString(), ct)
                 .ConfigureAwait(false);
-            if (existing.Count == 0)
-            {
-                if (!await persistence.TryCapturePlatformDefaultUnattendedCopilotSnapshotAsync(
-                        run.Id.ToString(),
-                        ct).ConfigureAwait(false))
-                    return false;
-            }
-            else if (!existing.Any(snapshot => snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot))
-            {
+            if (copilotSnapshot is null)
                 return false;
-            }
         }
 
-        var copilotSnapshot = (await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString(), ct)
-            .ConfigureAwait(false))
-            .SingleOrDefault(snapshot => snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot);
         return copilotSnapshot is not null &&
             await broker.TryUseCopilotCredentialAsync(
                 new SnapshotRef(copilotSnapshot.SnapshotRef),

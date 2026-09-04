@@ -1756,6 +1756,85 @@ public sealed class GitHubConnectionsPersistenceStore(
             .OrderBy(snapshot => snapshot.Purpose)
             .ToListAsync(ct);
 
+    internal async Task<RunGitHubCapabilitySnapshotRecord?> RefreshPlatformDefaultUnattendedCopilotSnapshotAsync(
+        string runId,
+        CancellationToken ct = default)
+    {
+        var binding = await db.PlatformDefaultCopilotBindings.AsNoTracking()
+            .Where(x => x.Id == PlatformDefaultCopilotBindingRecord.SingletonId &&
+                        x.Status == GitHubBindingStatus.Active &&
+                        x.DeactivatedAt == null)
+            .Select(x => new CopilotBindingSnapshotSource(
+                x.Id,
+                x.CredentialReference,
+                x.CredentialVersion,
+                x.GrantDigest))
+            .SingleOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+
+        if (binding is null)
+        {
+            await db.RunGitHubCapabilitySnapshots
+                .Where(snapshot =>
+                    snapshot.RunId == runId &&
+                    snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot)
+                .ExecuteDeleteAsync(ct)
+                .ConfigureAwait(false);
+            return null;
+        }
+
+        var existing = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+            .SingleOrDefaultAsync(snapshot =>
+                snapshot.RunId == runId &&
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot, ct)
+            .ConfigureAwait(false);
+        if (MatchesPlatformDefaultBinding(existing, binding))
+            return existing;
+
+        if (existing is not null)
+        {
+            await db.RunGitHubCapabilitySnapshots
+                .Where(snapshot =>
+                    snapshot.RunId == runId &&
+                    snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot)
+                .ExecuteDeleteAsync(ct)
+                .ConfigureAwait(false);
+        }
+
+        var inserted = await TryInsertCapabilitySnapshotAsync(new RunGitHubCapabilitySnapshotRecord
+        {
+            SnapshotRef = SnapshotRef.Create().Value,
+            RunId = runId,
+            Purpose = GitHubCapabilityPurpose.UnattendedCopilot,
+            AppKind = GitHubAppKind.Copilot,
+            SourceKind = GitHubCapabilitySnapshotSourceKind.CopilotBinding,
+            ProjectId = null,
+            SourceBindingId = binding.Id,
+            CredentialReference = binding.CredentialReference,
+            CredentialVersion = binding.CredentialVersion,
+            GrantDigest = binding.GrantDigest,
+            CapturedAt = DateTimeOffset.UtcNow,
+        }, ct).ConfigureAwait(false);
+
+        if (inserted)
+        {
+            return await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+                .SingleAsync(snapshot =>
+                    snapshot.RunId == runId &&
+                    snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot, ct)
+                .ConfigureAwait(false);
+        }
+
+        var refreshed = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+            .SingleOrDefaultAsync(snapshot =>
+                snapshot.RunId == runId &&
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot, ct)
+            .ConfigureAwait(false);
+        return MatchesPlatformDefaultBinding(refreshed, binding)
+            ? refreshed
+            : null;
+    }
+
     internal async Task<bool> TryCapturePlatformDefaultUnattendedCopilotSnapshotAsync(
         string runId,
         CancellationToken ct = default)
@@ -1789,6 +1868,18 @@ public sealed class GitHubConnectionsPersistenceStore(
             CapturedAt = DateTimeOffset.UtcNow,
         }, ct).ConfigureAwait(false);
     }
+
+    private static bool MatchesPlatformDefaultBinding(
+        RunGitHubCapabilitySnapshotRecord? snapshot,
+        CopilotBindingSnapshotSource binding) =>
+        snapshot is not null &&
+        snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot &&
+        snapshot.SourceKind == GitHubCapabilitySnapshotSourceKind.CopilotBinding &&
+        snapshot.ProjectId is null &&
+        string.Equals(snapshot.SourceBindingId, binding.Id, StringComparison.Ordinal) &&
+        string.Equals(snapshot.CredentialReference, binding.CredentialReference, StringComparison.Ordinal) &&
+        string.Equals(snapshot.CredentialVersion, binding.CredentialVersion, StringComparison.Ordinal) &&
+        string.Equals(snapshot.GrantDigest, binding.GrantDigest, StringComparison.Ordinal);
 
     /// <summary>
     /// Atomically creates fresh opaque references for a child or retry from the exact immutable
