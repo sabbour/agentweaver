@@ -110,10 +110,10 @@ The live event stream is what makes a run watchable in real time. In a single pr
 
 `EfRunEventStream` is registered as the Postgres `IRunEventStream` implementation (`Program.cs:534`). Its append path writes through to `RunEvents` before acknowledging, using a serializable transaction and retrying sequence conflicts. Its subscribe path repeatedly loads rows with `Sequence > lastSeen`, yields them in order, and sleeps for `250 ms` only when no new row was emitted. That gives every replica the same live floor: it can stream any run as long as it can read the shared database. Source: `apps/Agentweaver.Api/Program.cs:534`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:89`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:97`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:114`.
 
-![Current mechanism: durable write-through + cursor polling: Worker replica, RunStreamEntry, EfRunEventStream, Shared RunEvents table, Web replica A, Web replica B, Browser / MCP watcher](../diagrams/distributed-execution-scaling-fig4.png)
+![Sequence showing a worker mirroring a run event into the shared RunEvents table, one web replica streaming it live, and another replica resuming after the browser reconnects with a cursor](../diagrams/distributed-execution-scaling-fig4.png)
 
 <!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig4.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Playwright (Fluent-styled sequence diagram).
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 

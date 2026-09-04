@@ -1,0 +1,217 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Durable-first event delivery and replay-then-tail",
+  "alt": "Sequence showing a producer durably appending a run event before acknowledgement, publishing it to the live channel, and an SSE subscriber replaying from its cursor before tailing live events with durable recovery",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "Producer",
+      "label": "Run / coordinator producer",
+      "icon": "bot",
+      "badge": { "text": "Runtime", "tone": "green" }
+    },
+    {
+      "id": "Stream",
+      "label": "Run event stream",
+      "subLabel": "append + subscribe",
+      "icon": "server",
+      "badge": { "text": "Events", "tone": "teal" }
+    },
+    {
+      "id": "Store",
+      "label": "Durable RunEvents",
+      "subLabel": "ordered by sequence",
+      "icon": "database",
+      "badge": { "text": "Data", "tone": "teal" }
+    },
+    {
+      "id": "Live",
+      "label": "Live fan-out channel",
+      "subLabel": "bounded in-process tail",
+      "icon": "box",
+      "badge": { "text": "Events", "tone": "teal" }
+    },
+    {
+      "id": "SSE",
+      "label": "SSE run endpoint",
+      "subLabel": "replay then tail",
+      "icon": "route",
+      "badge": { "text": "Network", "tone": "teal" }
+    },
+    {
+      "id": "Client",
+      "label": "Frontend / MCP watcher",
+      "subLabel": "reducers and projections",
+      "icon": "globe",
+      "badge": { "text": "Client", "tone": "lavender" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Producer",
+      "to": "Stream",
+      "label": "append(run id, sequence, type, payload)"
+    },
+    {
+      "type": "activation",
+      "participant": "Stream",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "Stream",
+      "to": "Store",
+      "label": "persist event first"
+    },
+    {
+      "type": "message",
+      "from": "Store",
+      "to": "Stream",
+      "label": "durable commit",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Stream",
+      "to": "Live",
+      "label": "publish for active subscribers"
+    },
+    {
+      "type": "message",
+      "from": "Stream",
+      "to": "Producer",
+      "label": "append acknowledged",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "activation",
+      "participant": "Stream",
+      "action": "end"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "SSE",
+      "label": "connect with Last-Event-ID cursor"
+    },
+    {
+      "type": "activation",
+      "participant": "SSE",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "SSE",
+      "to": "Store",
+      "label": "replay Sequence > last seen"
+    },
+    {
+      "type": "fragment",
+      "operator": "loop",
+      "label": "drain persisted replay in order",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Store",
+              "to": "SSE",
+              "label": "next durable event",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "SSE",
+              "to": "Client",
+              "label": "id + event + data frame",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "SSE",
+      "to": "Live",
+      "label": "subscribe at replay boundary"
+    },
+    {
+      "type": "fragment",
+      "operator": "loop",
+      "label": "tail while the run remains active",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "fragment",
+              "operator": "alt",
+              "label": "delivery source",
+              "sections": [
+                {
+                  "label": "live copy available",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "Live",
+                      "to": "SSE",
+                      "label": "next live event",
+                      "line": "dashed",
+                      "arrow": "open"
+                    }
+                  ]
+                },
+                {
+                  "label": "live copy dropped or client reconnects",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "SSE",
+                      "to": "Store",
+                      "label": "recover after last delivered sequence"
+                    },
+                    {
+                      "type": "message",
+                      "from": "Store",
+                      "to": "SSE",
+                      "label": "missing durable events",
+                      "line": "dashed",
+                      "arrow": "open"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "message",
+              "from": "SSE",
+              "to": "Client",
+              "label": "ordered SSE frame",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "SSE",
+      "to": "Client",
+      "label": "terminal event + done",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "activation",
+      "participant": "SSE",
+      "action": "end"
+    }
+  ]
+}

@@ -1,169 +1,265 @@
 {
-  "$schema": "./graph-spec.schema.json",
-  "title": "End-to-end flow",
-  "alt": "End-to-end flow: Gate, Test, Approved or, PreviewCommandResolver, AgentHost /preview-runner, observe app port, forwarder, AgentPreviewGate, Gateway HTTPRoute, preview_ready / failed / skipped, Human review",
-  "direction": "LR",
-  "nodes": [
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Deterministic live-preview provisioning",
+  "alt": "Sequence showing the coordinator resolving and starting a preview command in AgentHost, observing and forwarding the app port, registering a Gateway route, and reporting ready, failed, skipped, or declined outcomes for human review",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "Coordinator",
+      "label": "Coordinator assembly",
+      "subLabel": "Build & Test gate + PreviewStep",
+      "icon": "server",
+      "badge": { "text": "Compute", "tone": "green" }
+    },
+    {
+      "id": "Resolver",
+      "label": "Preview command resolver",
+      "subLabel": "find runnable UI command",
+      "icon": "box",
+      "badge": { "text": "Step", "tone": "neutral" }
+    },
+    {
+      "id": "Host",
+      "label": "AgentHost",
+      "subLabel": "/preview-runner",
+      "icon": "server",
+      "badge": { "text": "Runtime", "tone": "green" }
+    },
+    {
+      "id": "App",
+      "label": "Preview app",
+      "subLabel": "supervised process + forwarder",
+      "icon": "window",
+      "badge": { "text": "Runtime", "tone": "green" }
+    },
     {
       "id": "Gate",
-      "label": "Gate",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      }
+      "label": "Preview gate",
+      "subLabel": "SandboxPreviewService",
+      "icon": "server",
+      "badge": { "text": "Service", "tone": "green" }
     },
     {
-      "id": "Test",
-      "label": "Test",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      }
-    },
-    {
-      "id": "Check",
-      "label": "Approved or",
-      "icon": "branch",
-      "badge": {
-        "text": "Decision",
-        "tone": "marigold"
-      },
-      "subLabel": "request changes?"
-    },
-    {
-      "id": "Resolve",
-      "label": "PreviewCommandResolver",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      },
-      "subLabel": "find run command"
-    },
-    {
-      "id": "Runner",
-      "label": "AgentHost /preview-runner",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      },
-      "subLabel": "start supervised process"
-    },
-    {
-      "id": "Port",
-      "label": "observe app port",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      },
-      "subLabel": "logs + /proc tcp/tcp6"
-    },
-    {
-      "id": "Forward",
-      "label": "forwarder",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      },
-      "subLabel": "0.0.0.0:publicPort"
-    },
-    {
-      "id": "Approval",
-      "label": "AgentPreviewGate",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      },
-      "subLabel": "existing approval policy"
-    },
-    {
-      "id": "Route",
+      "id": "Gateway",
       "label": "Gateway HTTPRoute",
+      "subLabel": "preview URL",
       "icon": "route",
-      "badge": {
-        "text": "Network",
-        "tone": "teal"
-      },
-      "subLabel": "preview_url"
+      "badge": { "text": "Network", "tone": "teal" }
     },
     {
-      "id": "Outcome",
-      "label": "preview_ready / failed / skipped",
-      "icon": "box",
-      "badge": {
-        "text": "Step",
-        "tone": "neutral"
-      }
-    },
-    {
-      "id": "Review",
-      "label": "Human review",
+      "id": "Reviewer",
+      "label": "Human reviewer",
       "icon": "globe",
-      "badge": {
-        "text": "Client",
-        "tone": "lavender"
-      },
-      "subLabel": "preview ready or unavailable"
+      "badge": { "text": "Client", "tone": "lavender" }
     }
   ],
-  "edges": [
+  "steps": [
     {
-      "from": "Gate",
-      "to": "Check"
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Coordinator",
+      "label": "record Build & Test verdict"
     },
     {
-      "from": "Check",
-      "to": "Review",
-      "label": "declined"
-    },
-    {
-      "from": "Check",
-      "to": "Resolve",
-      "label": "yes"
-    },
-    {
-      "from": "Resolve",
-      "to": "Runner"
-    },
-    {
-      "from": "Runner",
-      "to": "Port"
-    },
-    {
-      "from": "Port",
-      "to": "Forward"
-    },
-    {
-      "from": "Forward",
-      "to": "Approval"
-    },
-    {
-      "from": "Approval",
-      "to": "Route"
-    },
-    {
-      "from": "Route",
-      "to": "Outcome"
-    },
-    {
-      "from": "Outcome",
-      "to": "Review"
-    },
-    {
-      "from": "Resolve",
-      "to": "Outcome",
-      "label": "infra unavailable"
-    },
-    {
-      "from": "Port",
-      "to": "Outcome",
-      "label": "failure"
+      "type": "fragment",
+      "operator": "alt",
+      "label": "authored gate decision",
+      "sections": [
+        {
+          "label": "DECLINED",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Coordinator",
+              "to": "Reviewer",
+              "label": "skip preview; continue declined review",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "APPROVED or REQUEST_CHANGES",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Coordinator",
+              "to": "Resolver",
+              "label": "resolve command from retained worktree"
+            },
+            {
+              "type": "fragment",
+              "operator": "alt",
+              "label": "preview applicability",
+              "sections": [
+                {
+                  "label": "infrastructure or command unavailable",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "Resolver",
+                      "to": "Coordinator",
+                      "label": "not applicable",
+                      "line": "dashed",
+                      "arrow": "open"
+                    },
+                    {
+                      "type": "message",
+                      "from": "Coordinator",
+                      "to": "Reviewer",
+                      "label": "preview_skipped; review continues",
+                      "line": "dashed",
+                      "arrow": "open"
+                    }
+                  ]
+                },
+                {
+                  "label": "runnable preview command found",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "Resolver",
+                      "to": "Coordinator",
+                      "label": "command + workdir",
+                      "line": "dashed",
+                      "arrow": "open"
+                    },
+                    {
+                      "type": "message",
+                      "from": "Coordinator",
+                      "to": "Host",
+                      "label": "POST /preview-runner/processes"
+                    },
+                    {
+                      "type": "activation",
+                      "participant": "Host",
+                      "action": "start"
+                    },
+                    {
+                      "type": "message",
+                      "from": "Host",
+                      "to": "App",
+                      "label": "start supervised process"
+                    },
+                    {
+                      "type": "fragment",
+                      "operator": "loop",
+                      "label": "observe until ready or timeout",
+                      "sections": [
+                        {
+                          "steps": [
+                            {
+                              "type": "message",
+                              "from": "Host",
+                              "to": "Host",
+                              "label": "inspect logs + /proc/net/tcp{,6}"
+                            },
+                            {
+                              "type": "message",
+                              "from": "Host",
+                              "to": "App",
+                              "label": "probe discovered app port"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "fragment",
+                      "operator": "alt",
+                      "label": "port observation",
+                      "sections": [
+                        {
+                          "label": "process exits, no port, or health check fails",
+                          "steps": [
+                            {
+                              "type": "message",
+                              "from": "Host",
+                              "to": "Coordinator",
+                              "label": "structured unhealthy reason",
+                              "line": "dashed",
+                              "arrow": "open"
+                            },
+                            {
+                              "type": "message",
+                              "from": "Coordinator",
+                              "to": "Reviewer",
+                              "label": "preview_failed; review continues",
+                              "line": "dashed",
+                              "arrow": "open"
+                            }
+                          ]
+                        },
+                        {
+                          "label": "healthy app port discovered",
+                          "steps": [
+                            {
+                              "type": "message",
+                              "from": "Host",
+                              "to": "Host",
+                              "label": "start public-port forwarder + verify"
+                            },
+                            {
+                              "type": "message",
+                              "from": "Host",
+                              "to": "Coordinator",
+                              "label": "preview-runner session + public port",
+                              "line": "dashed",
+                              "arrow": "open"
+                            },
+                            {
+                              "type": "message",
+                              "from": "Coordinator",
+                              "to": "Gate",
+                              "label": "register preview(public port)"
+                            },
+                            {
+                              "type": "message",
+                              "from": "Gate",
+                              "to": "Gateway",
+                              "label": "create Service + HTTPRoute"
+                            },
+                            {
+                              "type": "message",
+                              "from": "Gateway",
+                              "to": "Gate",
+                              "label": "preview URL",
+                              "line": "dashed",
+                              "arrow": "open"
+                            },
+                            {
+                              "type": "message",
+                              "from": "Gate",
+                              "to": "Coordinator",
+                              "label": "registered preview",
+                              "line": "dashed",
+                              "arrow": "open"
+                            },
+                            {
+                              "type": "message",
+                              "from": "Coordinator",
+                              "to": "Reviewer",
+                              "label": "preview_ready + URL",
+                              "line": "dashed",
+                              "arrow": "open"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "activation",
+                      "participant": "Host",
+                      "action": "end"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ]
 }
