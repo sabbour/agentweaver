@@ -270,6 +270,62 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
     }
 
     [Fact]
+    public async Task OtherProjectContributor_CannotDeletePersonalSession()
+    {
+        var projectId = await CreateProjectAsync(
+            VictimOwnerOid,
+            (ContributorOid, ProjectRole.Contributor));
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            AssistantRunService.OperatorAgentName,
+            RunStatus.Completed,
+            addOperatorStartMarker: true);
+        using var contributor = CreateEntraClient(ContributorOid, PlatformRoles.Contributor);
+
+        var response = await contributor.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task IncidentalProjectOwner_CannotDeletePersonalSession()
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            AssistantRunService.OperatorAgentName,
+            RunStatus.Completed,
+            addOperatorStartMarker: true);
+        using var projectOwner = CreateEntraClient(VictimOwnerOid, PlatformRoles.Viewer);
+
+        var response = await projectOwner.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task PlatformAdmin_CanDeleteAnotherUsersPersonalSession()
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            AssistantRunService.OperatorAgentName,
+            RunStatus.Completed,
+            addOperatorStartMarker: true);
+        using var platformAdmin = CreateEntraClient(OtherProjectOwnerOid, PlatformRoles.PlatformAdmin);
+
+        var response = await platformAdmin.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().BeNull();
+    }
+
+    [Fact]
     public async Task SubmittingUser_CannotDeleteProjectRunNamedOperatorAfterProjectRoleRevoked()
     {
         var projectId = await CreateProjectAsync(

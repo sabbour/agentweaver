@@ -71,9 +71,10 @@ internal static async Task<IResult?> RequireRunAccessAsync(
 
 /// <summary>
 /// Authorizes permanent deletion without making an Operator session's incidental project context
-/// authoritative. Platform administrators may delete any run. The submitting user may delete their
-/// own personal Operator session even after that project is deleted or their project role changes.
-/// Every other run retains normal project Contributor authorization.
+/// authoritative. Platform administrators may delete any run. A personal Operator session is
+/// exclusively deletable by its submitting user or a platform administrator, even when another user
+/// has Contributor access to its incidental project. Every other run retains normal project
+/// Contributor authorization.
 /// </summary>
 internal static async Task<IResult?> RequireRunDeletionAccessAsync(
     HttpContext context,
@@ -85,9 +86,12 @@ internal static async Task<IResult?> RequireRunDeletionAccessAsync(
     if (projectRoles.IsPlatformAdmin(caller))
         return null;
 
-    if (caller.Owns(run.SubmittingUser)
-        && await IsPersonalAssistantSessionAsync(context, run, ct).ConfigureAwait(false))
-        return null;
+    if (await IsPersonalAssistantSessionAsync(context, run, ct).ConfigureAwait(false))
+    {
+        return caller.Owns(run.SubmittingUser)
+            ? null
+            : Results.StatusCode(StatusCodes.Status403Forbidden);
+    }
 
     return await RequireRunAccessAsync(context, run, ProjectRole.Contributor, ct).ConfigureAwait(false);
 }
