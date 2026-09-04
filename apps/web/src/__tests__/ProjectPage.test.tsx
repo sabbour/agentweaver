@@ -35,12 +35,15 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
-function renderPage(projectId = 'proj-1') {
+function renderPage(projectId = 'proj-1', currentUserKey = 'entra-user-1') {
   return render(
     <Wrapper>
       <MemoryRouter initialEntries={[`/projects/${projectId}/board`]}>
         <Routes>
-          <Route path="/projects/:projectId/board" element={<ProjectPage />} />
+          <Route
+            path="/projects/:projectId/board"
+            element={<ProjectPage currentUserKey={currentUserKey} />}
+          />
         </Routes>
       </MemoryRouter>
     </Wrapper>,
@@ -56,10 +59,15 @@ const project: Project = {
   default_branch: 'main',
   default_model_github_copilot: 'gpt-4o',
   available: true,
+  owner: 'project-owner',
+  state: 'active',
+  created_at: '2026-09-01T00:00:00Z',
+  updated_at: '2026-09-01T00:00:00Z',
 } as unknown as Project;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   vi.mocked(apiClient.getProject).mockResolvedValue(project);
   vi.mocked(apiClient.listProjectRuns).mockResolvedValue(runsPage([]));
   vi.mocked(apiClient.getBoard).mockResolvedValue(makeBoard({}));
@@ -90,6 +98,61 @@ describe('ProjectPage board (board-dedupe)', () => {
     expect(screen.getAllByText('Optional').length).toBeGreaterThan(0);
     expect(screen.getByText(/Local agent work can continue without a repository/)).toBeDefined();
     expect(screen.getByRole('button', { name: 'Set up repository access' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Dismiss Project setup' })).toBeDefined();
+  });
+
+  it('persists setup dismissal for the current project and user across route reloads', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      ...project,
+      origin: 'blank',
+      source_repository: null,
+    } as Project);
+
+    const firstRender = renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss Project setup' }));
+    expect(screen.queryByText('Project setup')).toBeNull();
+    firstRender.unmount();
+
+    renderPage();
+    await waitFor(() => expect(apiClient.getProject).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('Project setup')).toBeNull();
+  });
+
+  it('shows setup again when the project setup state changes', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      ...project,
+      origin: 'blank',
+      source_repository: null,
+    } as Project);
+
+    const firstRender = renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss Project setup' }));
+    firstRender.unmount();
+
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      ...project,
+      origin: 'blank',
+      source_repository: null,
+      updated_at: '2026-09-02T00:00:00Z',
+    } as Project);
+    renderPage();
+
+    expect(await screen.findByText('Project setup')).toBeDefined();
+  });
+
+  it('keeps setup dismissal scoped to the signed-in user', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      ...project,
+      origin: 'blank',
+      source_repository: null,
+    } as Project);
+
+    const firstRender = renderPage('proj-1', 'entra-user-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss Project setup' }));
+    firstRender.unmount();
+
+    renderPage('proj-1', 'entra-user-2');
+    expect(await screen.findByText('Project setup')).toBeDefined();
   });
 
   it('keeps the Start task CTA and removes the standalone Start run affordance', async () => {

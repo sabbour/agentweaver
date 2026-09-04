@@ -86,6 +86,8 @@ Manage Agentweaver project members.
 If a project started blank, local agent work remains available. Open **Repository** only when you want GitHub operations.
 
 Select **Set up repository access** to create or connect a repository. Pull-request publishing requires this access.
+You can dismiss the optional setup card. Agentweaver remembers that choice for the current
+project and signed-in user, and shows the card again if the project's setup state changes.
 
 ### Sandbox policy
 

@@ -43,6 +43,13 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { Project, WorkflowRunDto } from '../api/types';
 import { isTerminalRunStatus, normalizeRunStatus } from '../utils/runStatus';
+import {
+  hasDismissedProjectSetupPrompt,
+  markProjectSetupPromptDismissed,
+  projectSetupPromptFingerprint,
+  projectSetupPromptStorageKey,
+} from '../components/onboarding/projectSetupPromptStorage';
+import type { ProjectSetupPromptState } from '../components/onboarding/projectSetupPromptStorage';
 // Map a coordinator orchestration status (Feature 008) to a human label. Optional —
 // the backend adds coordinator_status concurrently, so callers fall back to the bare
 // RunStatus when it is absent.
@@ -399,7 +406,26 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
   );
 }
 
-export function ProjectPage() {
+export interface ProjectPageProps {
+  currentUserKey?: string | null;
+}
+
+function projectSetupPromptState(
+  project: Project,
+  currentUserKey: string | null | undefined,
+): ProjectSetupPromptState {
+  return {
+    projectId: project.project_id,
+    userKey: currentUserKey ?? project.owner,
+    projectUpdatedAt: project.updated_at,
+    origin: project.origin,
+    sourceRepository: project.source_repository,
+    repositoryAccessRequired: false,
+    repositoryAccessStatus: 'optional',
+  };
+}
+
+export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -408,6 +434,7 @@ export function ProjectPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [connectRepoOpen, setConnectRepoOpen] = useState(false);
+  const [projectSetupDismissed, setProjectSetupDismissed] = useState(false);
 
   const handleRunDeleted = (workflowRunId: string) => {
     setRuns((prev) => prev.filter((r) => r.workflow_run_id !== workflowRunId));
@@ -434,6 +461,12 @@ export function ProjectPage() {
     ])
       .then(([proj, runList]) => {
         if (!cancelled) {
+          const setupState = projectSetupPromptState(proj, currentUserKey);
+          const storageKey = projectSetupPromptStorageKey(setupState);
+          const fingerprint = projectSetupPromptFingerprint(setupState);
+          setProjectSetupDismissed(
+            hasDismissedProjectSetupPrompt(storageKey, fingerprint),
+          );
           setProject(proj);
         }
         // Kick off polling while any run is non-terminal
@@ -466,11 +499,12 @@ export function ProjectPage() {
       cancelled = true;
       if (intervalId) clearInterval(intervalId);
     };
-  }, [projectId]);
+  }, [currentUserKey, projectId]);
 
   if (!projectId) return null;
   const liveRuns = runs.filter((run) => !isTerminalRunStatus(run.status));
   const completedRuns = runs.length - liveRuns.length;
+  const setupState = project ? projectSetupPromptState(project, currentUserKey) : null;
 
   return (
     <div className={styles.root}>
@@ -492,9 +526,15 @@ export function ProjectPage() {
         </MessageBar>
       )}
 
-      {project && project.origin === 'blank' && (
+      {project && project.origin === 'blank' && !projectSetupDismissed && setupState && (
         <SetupReadiness
           compact
+          onDismiss={() => {
+            const storageKey = projectSetupPromptStorageKey(setupState);
+            const fingerprint = projectSetupPromptFingerprint(setupState);
+            markProjectSetupPromptDismissed(storageKey, fingerprint);
+            setProjectSetupDismissed(true);
+          }}
           model={{
             title: 'Project setup',
             description: 'The local project is ready for agent work.',
