@@ -1141,10 +1141,10 @@ A claim can stay unbound longer than the coordinator's subtask-stall timeout (`C
 
 The coordinator's child-observation loop exempts a subtask whose most recent event is `sandbox.provisioning_pending`: it resets the stall window and keeps observing instead of firing `agent_stall_timeout`. The guard self-heals and cannot latch — any other real event (the pod binding, agent output, a terminal event) clears the flag, so a pod that genuinely hangs after provisioning is still caught. The heartbeat is best-effort: if the run-event stream is unavailable the wait degrades to a plain bind poll and never fails the launch.
 
-![Provisioning heartbeat and the coordinator stall exemption: CoordinatorDispatchService, KubernetesSandboxExecutor, claim Bound /, emit sandbox.provisioning_pending, coordinator resets stall, child run executes](../diagrams/sandbox-pod-execution-fig5.png)
+![Sequence showing a coordinator dispatching a child run, the sandbox executor polling an unbound claim, periodic provisioning heartbeats resetting the coordinator stall window, and execution starting after the pod becomes ready](../diagrams/sandbox-pod-execution-fig5.png)
 
 <!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig5.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Playwright (Fluent-styled sequence diagram).
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 

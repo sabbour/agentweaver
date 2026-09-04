@@ -6,10 +6,10 @@ For proxy internals, see [Sandbox browser preview](./sandbox-browser-preview.md)
 
 ## End-to-end flow
 
-![End-to-end flow: Gate, Test, Approved or, PreviewCommandResolver, AgentHost /preview-runner, observe app port, forwarder, AgentPreviewGate, Gateway HTTPRoute, preview_ready / failed / skipped, Human review](../diagrams/live-preview-provisioning-fig1.png)
+![Sequence showing the coordinator resolving and starting a preview command in AgentHost, observing and forwarding the app port, registering a Gateway route, and reporting ready, failed, skipped, or declined outcomes for human review](../diagrams/live-preview-provisioning-fig1.png)
 
 <!-- Rendered from ../diagrams/src/live-preview-provisioning-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
+     Playwright (Fluent-styled sequence diagram).
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
