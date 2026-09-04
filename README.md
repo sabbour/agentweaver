@@ -103,7 +103,7 @@ Add a new feature: <describe what you want>
 - **Live streaming** — watch every agent step, tool call, and file change in real time from any replica
 - **Human-in-the-loop review** — nothing merges until you approve the assembled diff
 - **Sandbox browser preview** — open a live in-browser preview of the app running inside a run's sandbox (port-forward)
-- **MCP server** — expose Agentweaver runs and outcomes as MCP tools for Claude Desktop and compatible clients
+- **MCP server** — expose Agentweaver runs and outcomes through OAuth to Claude Desktop, VS Code, GitHub Copilot CLI, and GitHub Copilot desktop
 
 ## Quick start
 
@@ -463,6 +463,8 @@ Deterministic MCP smoke deletes only the unique project it creates.
 ## Key docs
 
 - [Getting started](docs/guide/getting-started.md)
+- [Connect an MCP client](docs/guide/mcp-cli.md)
+- [Install the Agentweaver Driver](https://sabbour.me/agentweaver/agents/agentweaver.agent.md)
 - [API reference](docs/reference/api.md)
 - [MCP server reference](docs/reference/mcp.md)
 - [AKS architecture](docs/guide/architecture-aks.md)

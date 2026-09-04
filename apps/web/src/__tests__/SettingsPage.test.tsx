@@ -64,6 +64,54 @@ describe('SettingsPage', () => {
     expect(screen.queryByText(/Linked GitHub accounts/i)).toBeNull();
   });
 
+  it('shows client-specific OAuth guidance and copies the exact MCP URL', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(
+      <MemoryRouter>
+        <AzureFluentProvider density="compact">
+          <SettingsPage />
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/discovers Agentweaver OAuth automatically/i)).toBeDefined();
+    const urlInput = screen.getByRole('textbox', { name: 'MCP server URL' }) as HTMLInputElement;
+    expect(urlInput.value).toMatch(/\/mcp$/);
+    expect(screen.getByRole('tablist', { name: 'MCP client setup' })).toBeDefined();
+    for (const clientName of [
+      'Claude Desktop',
+      'VS Code',
+      'GitHub Copilot CLI',
+      'GitHub Copilot desktop',
+    ]) {
+      expect(screen.getByRole('tab', { name: clientName })).toBeDefined();
+    }
+    expect(screen.getByRole('tabpanel').textContent).toContain('Settings → Connectors');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'VS Code' }));
+    expect(screen.getByRole('tabpanel').textContent).toContain('MCP: Add Server');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub Copilot CLI' }));
+    expect(screen.getByRole('tabpanel').textContent).toContain('/mcp show agentweaver');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub Copilot desktop' }));
+    expect(screen.getByRole('tabpanel').textContent).toContain('Customize → MCP servers');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy MCP server URL' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(urlInput.value));
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeDefined();
+
+    const agentLink = screen.getByRole('link', { name: 'Open agent definition' });
+    expect(agentLink.getAttribute('href')).toBe(
+      'https://sabbour.me/agentweaver/agents/agentweaver.agent.md',
+    );
+  });
+
   it('uses the Azure Portal users blade when the enterprise app object ID is configured', async () => {
     vi.mocked(apiClient.getAuthConfig).mockResolvedValue({
       mode: 'Entra',

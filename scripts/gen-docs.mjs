@@ -10,6 +10,8 @@
 //      copy of (2), embedded into Agentweaver.Api and materialized into each new
 //      project's .github/agents/ at creation time. Keeping it a generated copy means
 //      the repo file and the per-project template can never drift.
+//   4. docs/public/agents/agentweaver.agent.md              — the anonymous download
+//      served by the documentation site for user-level installation.
 //
 // Usage:
 //   node scripts/gen-docs.mjs            # write the generated file(s)
@@ -33,6 +35,13 @@ const agentTemplateCopy = join(
   "Agentweaver.Api",
   "Projects",
   "Templates",
+  "agentweaver.agent.md"
+);
+const publicAgentFile = join(
+  repoRoot,
+  "docs",
+  "public",
+  "agents",
   "agentweaver.agent.md"
 );
 
@@ -244,11 +253,12 @@ function computeTargets() {
   const block = buildToolMapBlock(groups, total);
   const agentContent = applyToolMapBlock(agentTemplate, block);
 
-  // 3. API embedded copy: identical bytes to the agent file.
+  // 3-4. API embedded and public download copies: identical bytes to the agent file.
   return [
     { file: toolsDocFile, content: toolsDoc },
     { file: agentFile, content: agentContent },
     { file: agentTemplateCopy, content: agentContent },
+    { file: publicAgentFile, content: agentContent },
   ];
 }
 

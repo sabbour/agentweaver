@@ -147,9 +147,8 @@ npm run azure:provision-infra</code></pre>
           <span class="aw-mcp-dot aw-mcp-dot-green" aria-hidden="true"></span>
           <span class="aw-mcp-panel-title">MCP server</span>
         </div>
-        <pre class="aw-mcp-panel-body"><code><span class="aw-mcp-prompt">$</span> copilot mcp add agentweaver --transport http \
-    --url https://&lt;your-host&gt;/mcp --header "Authorization: Bearer &lt;token&gt;"
-<span class="aw-mcp-out">agentweaver MCP server connected</span>
+        <pre class="aw-mcp-panel-body"><code><span class="aw-mcp-prompt">$</span> copilot mcp add --transport http agentweaver https://&lt;deployment-origin&gt;/mcp
+<span class="aw-mcp-out">Browser sign-in and consent completed; Agentweaver tools connected</span>
 <span class="aw-mcp-prompt">&gt;</span> Create a "Task Tracker" project and start the coordinator on it
 <span class="aw-mcp-call">● project_create({ name: "Task Tracker" })</span>
 <span class="aw-mcp-ret">  → project_id: 4b1a9e…  state: active</span>
@@ -157,8 +156,8 @@ npm run azure:provision-infra</code></pre>
 <span class="aw-mcp-ret">  → run_id: 9c2f31…  status: drafting</span>
 <span class="aw-mcp-out">Drafted an OutcomeSpec for your review — nothing runs until you confirm it.</span></code></pre>
         <p class="aw-mcp-panel-caption">
-          Read the <a href="./reference/mcp">MCP reference</a> for connection and
-          authentication details.
+          Read <a href="./guide/mcp-cli">Connect an MCP client</a> for setup and
+          OAuth sign-in details.
         </p>
       </div>
       <div class="aw-mcp-panel aw-mcp-panel-chat">
