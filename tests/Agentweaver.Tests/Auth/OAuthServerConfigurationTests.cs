@@ -102,6 +102,45 @@ public sealed class OAuthServerConfigurationTests
     }
 
     [Fact]
+    public void Resolve_AllowsDifferentStaticClientsToShareRedirectUri()
+    {
+        const string sharedRedirectUri = "com.example.shared:/oauth/callback";
+        var result = OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:Clients:0:ClientId", "first"),
+                ("Auth:OAuth:Clients:0:DisplayName", "First"),
+                ("Auth:OAuth:Clients:0:RedirectUris:0", sharedRedirectUri),
+                ("Auth:OAuth:Clients:1:ClientId", "second"),
+                ("Auth:OAuth:Clients:1:DisplayName", "Second"),
+                ("Auth:OAuth:Clients:1:RedirectUris:0", sharedRedirectUri)),
+            Environment("Production"));
+
+        result.StaticClients
+            .Where(client => client.ClientId is "first" or "second")
+            .Should().HaveCount(2)
+            .And.OnlyContain(client =>
+                client.RedirectUris.Length == 1
+                && client.RedirectUris[0] == sharedRedirectUri);
+    }
+
+    [Fact]
+    public void Resolve_RejectsReservedClaudeCallbackForDifferentStaticClient()
+    {
+        var action = () => OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:EnableClaudeHostedClient", "false"),
+                ("Auth:OAuth:Clients:0:ClientId", "not-claude"),
+                ("Auth:OAuth:Clients:0:DisplayName", "Unsafe reassignment"),
+                ("Auth:OAuth:Clients:0:RedirectUris:0", OAuthKnownClients.ClaudeHostedRedirectUri)),
+            Environment("Production"));
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage($"*reserved for static OAuth client '{OAuthKnownClients.ClaudeHostedClientId}'*");
+    }
+
+    [Fact]
     public void Resolve_AllowsExplicitClaudeHostedClientOptOut()
     {
         var result = OAuthServerConfiguration.Resolve(

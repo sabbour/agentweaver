@@ -70,9 +70,6 @@ public sealed record OAuthServerConfiguration(
             client.Validate();
         if (clients.Select(client => client.ClientId).Distinct(StringComparer.Ordinal).Count() != clients.Length)
             throw new InvalidOperationException("Static OAuth client IDs must be unique.");
-        if (clients.SelectMany(client => client.RedirectUris).Distinct(StringComparer.Ordinal).Count()
-            != clients.Sum(client => client.RedirectUris.Length))
-            throw new InvalidOperationException("Static OAuth client redirect URIs must be unique.");
 
         var perDay = configuration.GetValue("Auth:OAuth:DynamicRegistration:PerSourcePerDay", 20);
         var total = configuration.GetValue("Auth:OAuth:DynamicRegistration:MaximumActive", 1000);
@@ -183,7 +180,11 @@ public sealed class OAuthStaticClient
             throw new InvalidOperationException($"Invalid static OAuth client '{ClientId}'.");
         }
 
-        if (string.Equals(ClientId, OAuthKnownClients.ClaudeHostedClientId, StringComparison.Ordinal)
+        var isClaudeHostedClient = string.Equals(
+            ClientId,
+            OAuthKnownClients.ClaudeHostedClientId,
+            StringComparison.Ordinal);
+        if (isClaudeHostedClient
             && (RedirectUris.Length != 1
                 || !string.Equals(
                     RedirectUris[0],
@@ -192,6 +193,13 @@ public sealed class OAuthStaticClient
         {
             throw new InvalidOperationException(
                 $"Static OAuth client '{OAuthKnownClients.ClaudeHostedClientId}' must use the exact trusted Claude callback.");
+        }
+
+        if (!isClaudeHostedClient
+            && RedirectUris.Contains(OAuthKnownClients.ClaudeHostedRedirectUri, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"The trusted Claude callback is reserved for static OAuth client '{OAuthKnownClients.ClaudeHostedClientId}'.");
         }
     }
 }
