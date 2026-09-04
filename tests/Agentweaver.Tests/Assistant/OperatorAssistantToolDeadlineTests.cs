@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
 
@@ -104,6 +105,8 @@ public sealed class OperatorAssistantToolDeadlineTests
         public ValueTask OnToolCallAsync(string toolName, string? argumentsJson, CancellationToken ct) =>
             ValueTask.CompletedTask;
         public ValueTask OnToolResultAsync(string toolName, bool success, CancellationToken ct) =>
+            ValueTask.CompletedTask;
+        public ValueTask OnRunFailedAsync(AgentProviderException providerFailure, CancellationToken ct) =>
             ValueTask.CompletedTask;
 
         public ValueTask<bool> OnApprovalRequiredAsync(
