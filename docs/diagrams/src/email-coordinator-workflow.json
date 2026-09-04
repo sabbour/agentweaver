@@ -1,0 +1,326 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "How the Coordinator Runs a Workflow",
+  "alt": "How the Coordinator Runs a Workflow: User, Coordinator, Durable Store, Dispatcher, Child Agent Runs, Collective Assembly, Git Repository, Scribe and Memory",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "subLabel": "human or backlog owner",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Coordinator",
+      "label": "Coordinator",
+      "subLabel": "outcome and work plan",
+      "icon": "server",
+      "badge": {
+        "text": "Control",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Store",
+      "label": "Durable Store",
+      "subLabel": "spec, plan, status, decisions",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Dispatcher",
+      "label": "Dispatcher",
+      "subLabel": "ready DAG frontier",
+      "icon": "route",
+      "badge": {
+        "text": "Control",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Children",
+      "label": "Child Agent Runs",
+      "subLabel": "isolated execution",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Assembly",
+      "label": "Collective Assembly",
+      "subLabel": "integration and gates",
+      "icon": "box",
+      "badge": {
+        "text": "Control",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Git",
+      "label": "Git Repository",
+      "subLabel": "child and integration branches",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Scribe",
+      "label": "Scribe and Memory",
+      "subLabel": "learnings and decisions",
+      "icon": "database",
+      "badge": {
+        "text": "Memory",
+        "tone": "teal"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Coordinator",
+      "label": "submit goal or ready backlog task"
+    },
+    {
+      "type": "activation",
+      "participant": "Coordinator",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Coordinator",
+      "label": "draft OutcomeSpec"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Store",
+      "label": "persist outcome spec and await confirmation"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "User",
+      "label": "request confirmation or revision",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Coordinator",
+      "label": "confirm outcome",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Coordinator",
+      "label": "select workflow and decompose dependency DAG"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Store",
+      "label": "persist WorkPlan, subtasks, and dependencies"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Dispatcher",
+      "label": "start dispatch and observation"
+    },
+    {
+      "type": "activation",
+      "participant": "Dispatcher",
+      "action": "start"
+    },
+    {
+      "type": "fragment",
+      "operator": "loop",
+      "label": "each ready dependency frontier",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Dispatcher",
+              "to": "Children",
+              "label": "launch eligible child runs in parallel"
+            },
+            {
+              "type": "activation",
+              "participant": "Children",
+              "action": "start"
+            },
+            {
+              "type": "message",
+              "from": "Children",
+              "to": "Dispatcher",
+              "label": "stream assemble-ready, failed, or completed result",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "activation",
+              "participant": "Children",
+              "action": "end"
+            },
+            {
+              "type": "message",
+              "from": "Dispatcher",
+              "to": "Store",
+              "label": "persist subtask status and topology"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "activation",
+      "participant": "Dispatcher",
+      "action": "end"
+    },
+    {
+      "type": "message",
+      "from": "Dispatcher",
+      "to": "Assembly",
+      "label": "all subtasks settled; start collective assembly"
+    },
+    {
+      "type": "activation",
+      "participant": "Assembly",
+      "action": "start"
+    },
+    {
+      "type": "message",
+      "from": "Assembly",
+      "to": "Git",
+      "label": "build integration branch from child branches"
+    },
+    {
+      "type": "message",
+      "from": "Assembly",
+      "to": "Assembly",
+      "label": "run configured RAI, build/test, and review gates"
+    },
+    {
+      "type": "message",
+      "from": "Assembly",
+      "to": "User",
+      "label": "request one collective review",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Assembly",
+      "label": "approve, request changes, or decline",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "collective review decision",
+      "sections": [
+        {
+          "label": "approved",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Git",
+              "label": "merge reviewed integration branch"
+            },
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Scribe",
+              "label": "run final Scribe"
+            },
+            {
+              "type": "activation",
+              "participant": "Scribe",
+              "action": "start"
+            },
+            {
+              "type": "message",
+              "from": "Scribe",
+              "to": "Store",
+              "label": "record learnings and pending decisions"
+            },
+            {
+              "type": "activation",
+              "participant": "Scribe",
+              "action": "end"
+            },
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Store",
+              "label": "promote Coordinator decisions and complete plan"
+            },
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Coordinator",
+              "label": "complete parent run",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "changes requested",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Dispatcher",
+              "label": "reset affected subtasks and re-dispatch"
+            }
+          ]
+        },
+        {
+          "label": "declined or blocked",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Assembly",
+              "to": "Coordinator",
+              "label": "record terminal outcome",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "activation",
+      "participant": "Assembly",
+      "action": "end"
+    },
+    {
+      "type": "activation",
+      "participant": "Coordinator",
+      "action": "end"
+    }
+  ]
+}
