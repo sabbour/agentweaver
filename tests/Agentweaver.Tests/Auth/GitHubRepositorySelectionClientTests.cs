@@ -67,14 +67,14 @@ public sealed class GitHubRepositorySelectionClientTests
     }
 
     [Fact]
-    public async Task List_PreservesProviderRepositoriesUrlForInstallationRepositoryPages()
+    public async Task List_RewritesUserInstallationRepositoriesUrlToInstallationRepositoriesEndpoint()
     {
         await using var db = await OpenDbAsync();
         var secrets = new InMemorySecretStore();
         using var rsa = RSA.Create(2048);
         await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
         var handler = new RecordingRouteHandler(
-            "https://ghe.example.com/api/v3/installation/repositories",
+            "https://ghe.example.com/api/v3/user/installations/72/repositories",
             "/api/v3/installation/repositories");
         var httpClientFactory = new StubHttpClientFactory(handler);
         var client = new GitHubRepositorySelectionClient(
@@ -112,7 +112,7 @@ public sealed class GitHubRepositorySelectionClientTests
     }
 
     private sealed class RecordingRouteHandler(
-        string repositoriesUrl = "https://api.github.com/installation/repositories",
+        string repositoriesUrl = "https://api.github.com/user/installations/72/repositories",
         string installationRepositoriesPath = "/installation/repositories") : HttpMessageHandler
     {
         public List<RecordedRequest> Requests { get; } = [];
