@@ -107,9 +107,14 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('button', { name: 'Copied' })).toBeDefined();
 
     const agentLink = screen.getByRole('link', { name: 'Open agent definition' });
+    const expectedAgentUrl =
+      `${new URL(urlInput.value).origin}/agents/agentweaver.agent.md`;
     expect(agentLink.getAttribute('href')).toBe(
-      'https://sabbour.me/agentweaver/agents/agentweaver.agent.md',
+      expectedAgentUrl,
     );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Agentweaver Driver URL' }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(expectedAgentUrl));
   });
 
   it('uses the Azure Portal users blade when the enterprise app object ID is configured', async () => {

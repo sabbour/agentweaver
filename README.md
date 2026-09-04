@@ -464,7 +464,7 @@ Deterministic MCP smoke deletes only the unique project it creates.
 
 - [Getting started](docs/guide/getting-started.md)
 - [Connect an MCP client](docs/guide/mcp-cli.md)
-- [Install the Agentweaver Driver](https://sabbour.me/agentweaver/agents/agentweaver.agent.md)
+- [Install the Agentweaver Driver](docs/guide/mcp-cli.md#install-the-agentweaver-driver)
 - [API reference](docs/reference/api.md)
 - [MCP server reference](docs/reference/mcp.md)
 - [AKS architecture](docs/guide/architecture-aks.md)

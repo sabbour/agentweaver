@@ -12,6 +12,8 @@
 //      the repo file and the per-project template can never drift.
 //   4. docs/public/agents/agentweaver.agent.md              — the anonymous download
 //      served by the documentation site for user-level installation.
+//   5. apps/Agentweaver.Web/wwwroot/agents/agentweaver.agent.md — the anonymous,
+//      same-origin download served by every Agentweaver deployment.
 //
 // Usage:
 //   node scripts/gen-docs.mjs            # write the generated file(s)
@@ -41,6 +43,14 @@ const publicAgentFile = join(
   repoRoot,
   "docs",
   "public",
+  "agents",
+  "agentweaver.agent.md"
+);
+const deployedAgentFile = join(
+  repoRoot,
+  "apps",
+  "Agentweaver.Web",
+  "wwwroot",
   "agents",
   "agentweaver.agent.md"
 );
@@ -253,12 +263,13 @@ function computeTargets() {
   const block = buildToolMapBlock(groups, total);
   const agentContent = applyToolMapBlock(agentTemplate, block);
 
-  // 3-4. API embedded and public download copies: identical bytes to the agent file.
+  // 3-5. API embedded and public download copies: identical bytes to the agent file.
   return [
     { file: toolsDocFile, content: toolsDoc },
     { file: agentFile, content: agentContent },
     { file: agentTemplateCopy, content: agentContent },
     { file: publicAgentFile, content: agentContent },
+    { file: deployedAgentFile, content: agentContent },
   ];
 }
 

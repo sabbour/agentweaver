@@ -1,3 +1,5 @@
+import { resolvePublicApiOrigin } from '../config';
+
 export const MCP_CLIENT_IDS = [
   'claude-desktop',
   'vs-code',
@@ -8,7 +10,7 @@ export const MCP_CLIENT_IDS = [
 export type McpClientId = (typeof MCP_CLIENT_IDS)[number];
 
 export const AGENTWEAVER_AGENT_URL =
-  'https://sabbour.me/agentweaver/agents/agentweaver.agent.md';
+  `${resolvePublicApiOrigin()}/agents/agentweaver.agent.md`;
 
 export interface McpClientGuidance {
   label: string;

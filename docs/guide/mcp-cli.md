@@ -40,9 +40,14 @@ Its definition includes the current MCP tool map and the safe playbooks for
 discovery, confirmation, run supervision, review, retries, and credential
 handling.
 
-The canonical definition is available without authentication:
+Every hosted Agentweaver deployment serves the definition without
+authentication from the same origin:
 
-<https://sabbour.me/agentweaver/agents/agentweaver.agent.md>
+`https://<deployment-origin>/agents/agentweaver.agent.md`
+
+For example, if the MCP URL is `https://agentweaver.example.com/mcp`, the agent
+definition is
+`https://agentweaver.example.com/agents/agentweaver.agent.md`.
 
 For Copilot CLI, save it as a user-level agent:
 
@@ -52,7 +57,7 @@ For Copilot CLI, save it as a user-level agent:
 $agentDirectory = Join-Path $HOME ".copilot\agents"
 New-Item -ItemType Directory -Force $agentDirectory | Out-Null
 Invoke-WebRequest `
-  -Uri "https://sabbour.me/agentweaver/agents/agentweaver.agent.md" `
+  -Uri "https://<deployment-origin>/agents/agentweaver.agent.md" `
   -OutFile (Join-Path $agentDirectory "agentweaver.agent.md")
 ```
 
@@ -60,7 +65,7 @@ Invoke-WebRequest `
 install -d "$HOME/.copilot/agents"
 curl --fail --proto '=https' --tlsv1.2 \
   --output "$HOME/.copilot/agents/agentweaver.agent.md" \
-  "https://sabbour.me/agentweaver/agents/agentweaver.agent.md"
+  "https://<deployment-origin>/agents/agentweaver.agent.md"
 ```
 
 :::

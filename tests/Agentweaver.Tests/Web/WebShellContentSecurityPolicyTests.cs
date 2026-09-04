@@ -10,6 +10,20 @@ namespace Agentweaver.Tests.Web;
 public sealed class WebShellContentSecurityPolicyTests
 {
     [Fact]
+    public async Task AgentDefinition_IsAvailableWithoutAuthentication()
+    {
+        await using var factory = new WebApplicationFactory<WebProgram>();
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync("/agents/agentweaver.agent.md");
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        var content = await response.Content.ReadAsStringAsync();
+        content.Should().StartWith("---");
+        content.Should().Contain("# Agentweaver Driver");
+    }
+
+    [Fact]
     public async Task DocsRedirect_ResponseAllowsGitHubAvatarsInImgSrc()
     {
         await using var factory = new WebApplicationFactory<WebProgram>();
