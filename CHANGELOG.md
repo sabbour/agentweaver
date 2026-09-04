@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.1
+
+### Patch Changes
+
+- 0a65ff3: Make workflow, run-topology, and landing-demo diagrams use a deterministic banded layout with compact serpentine flows and clearer routing gutters.
+
 ## 0.28.0
 
 ### Minor Changes
