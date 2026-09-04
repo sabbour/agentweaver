@@ -176,28 +176,12 @@ A typical MCP review loop is:
 3. `run_get_file` for each file that needs detailed inspection.
 4. `run_review` with `approved: true` to approve or `approved: false` to reject.
 
-```mermaid
-sequenceDiagram
-    participant Reviewer as MCP reviewer
-    participant MCP as Agentweaver MCP
-    participant API as Agentweaver API
-    participant Git as Local git repository
+![`run_get_file`: MCP reviewer, Agentweaver MCP, Agentweaver API, Local git repository](../diagrams/experience-review-workspace-merge-fig3.png)
 
-    Reviewer->>MCP: run_status / run_watch
-    MCP->>API: read run state
-    API-->>MCP: awaiting_review
-    Reviewer->>MCP: run_show_artifacts
-    MCP->>API: GET changed files
-    API-->>MCP: changed-file list
-    Reviewer->>MCP: run_get_file(path)
-    MCP->>API: GET file diff/content metadata
-    API-->>MCP: diff or binary marker
-    Reviewer->>MCP: run_review(approved: true)
-    MCP->>API: POST review decision
-    API->>Git: verify tree hash + merge locally
-    Git-->>API: merge result
-    API-->>MCP: merged / merge_failed / conflict
-```
+<!-- Rendered from ../diagrams/src/experience-review-workspace-merge-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Workspace experience in the web UI
 

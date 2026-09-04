@@ -162,25 +162,12 @@ The main route families are:
 
 A typical protected handler follows this flow:
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Middleware
-    participant Endpoint
-    participant Store as Store/Service
-    participant Durable as DB/Workspace
+![Handler pattern: Client, Middleware, Endpoint, Store/Service, DB/Workspace](../diagrams/api-core-fig7.png)
 
-    Client->>Middleware: HTTP request + bearer token
-    Middleware->>Middleware: authenticate and org-authorize
-    Middleware->>Endpoint: invoke route handler
-    Endpoint->>Endpoint: bind route/query/body DTOs
-    Endpoint->>Store: load project/run/resource
-    Store->>Durable: read current state
-    Durable-->>Store: state
-    Store-->>Endpoint: domain result
-    Endpoint->>Endpoint: enforce ownership/resource invariants
-    Endpoint-->>Client: DTO, empty success, 4xx, or problem response
-```
+<!-- Rendered from ../diagrams/src/api-core-fig7.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The exact service/store calls differ by feature, but the responsibilities stay stable:
 

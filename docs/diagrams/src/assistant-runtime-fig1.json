@@ -1,0 +1,299 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "The life of a session",
+  "alt": "The life of a session: Sessions UI, AssistantEndpoints, AssistantRunService, AgentHost pod, OperatorAssistantAgent, MCP server, Copilot SDK session, Run store / event log",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "UI",
+      "label": "Sessions UI",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "EP",
+      "label": "AssistantEndpoints",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "SVC",
+      "label": "AssistantRunService",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "HOST",
+      "label": "AgentHost pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "AGT",
+      "label": "OperatorAssistantAgent",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "MCP",
+      "label": "MCP server",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "SDK",
+      "label": "Copilot SDK session",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "STORE",
+      "label": "Run store / event log",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "UI",
+      "to": "EP",
+      "label": "POST /api/assistant/runs {message}",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "EP",
+      "to": "SVC",
+      "label": "StartRunAsync(caller, message)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "SVC",
+      "to": "STORE",
+      "label": "create run (AgentName=Operator)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "SVC",
+      "to": "HOST",
+      "label": "launch + configure (caller bearer, linked GitHub token)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "HOST",
+      "to": "AGT",
+      "label": "RunTurnAsync(history=[])",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AGT",
+      "to": "MCP",
+      "label": "connect with caller bearer",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AGT",
+      "to": "SDK",
+      "label": "CreateSessionAsync (fresh, per turn)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "SDK",
+      "to": "AGT",
+      "label": "response + tool calls",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "AGT",
+      "to": "SVC",
+      "label": "assistant message",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "SVC",
+      "to": "STORE",
+      "label": "append AgentMessage events",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "SVC",
+      "to": "UI",
+      "label": "201 Created {runId, message}",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": [
+        "UI",
+        "SVC"
+      ],
+      "label": "... later, possibly a different pod ..."
+    },
+    {
+      "type": "message",
+      "from": "UI",
+      "to": "EP",
+      "label": "POST /api/assistant/runs/{id}/messages",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "EP",
+      "to": "SVC",
+      "label": "SendMessageAsync(id, message)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "run cached in this pod",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "SVC",
+              "to": "HOST",
+              "label": "reuse held claim (per-turn caller bearer refresh, no /configure)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "HOST",
+              "to": "AGT",
+              "label": "RunTurnAsync(history=in-memory)",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "cache miss (idle sweep / restart / other pod)",
+          "steps": [
+            {
+              "type": "message",
+              "from": "SVC",
+              "to": "STORE",
+              "label": "read persisted AgentMessage events",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "SVC",
+              "to": "SVC",
+              "label": "rebuild history, rehydrate run state",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "SVC",
+              "to": "HOST",
+              "label": "launch + configure current caller bearer",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "HOST",
+              "to": "AGT",
+              "label": "RunTurnAsync(history=rebuilt)",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "AGT",
+      "to": "SDK",
+      "label": "CreateSessionAsync (fresh, per turn)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "SDK",
+      "to": "AGT",
+      "label": "response + tool calls",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "AGT",
+      "to": "SVC",
+      "label": "assistant message",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "SVC",
+      "to": "STORE",
+      "label": "append AgentMessage events",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "SVC",
+      "to": "UI",
+      "label": "200 OK {message}",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

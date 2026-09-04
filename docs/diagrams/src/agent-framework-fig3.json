@@ -1,0 +1,128 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "The file store's startup safety net (dev / fallback only)",
+  "alt": "The file store's startup safety net (dev / fallback only): MAF workflow, review-gate RequestPort, Watch loop, Checkpoint store (Postgres workflow_checkpoints), Reviewer",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "Graph",
+      "label": "MAF workflow",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Port",
+      "label": "review-gate RequestPort",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Watch",
+      "label": "Watch loop",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Store",
+      "label": "Checkpoint store (Postgres workflow_checkpoints)",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Human",
+      "label": "Reviewer",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Graph",
+      "to": "Port",
+      "label": "route AgentTurnOutput → WorkflowReviewRequest",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Port",
+      "to": "Watch",
+      "label": "RequestInfoEvent (status PendingRequests)",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Watch",
+      "to": "Store",
+      "label": "checkpoint (superstep state + serialized session)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Watch",
+      "to": "Human",
+      "label": "review.requested (live stream closes at gate)",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": [
+        "Graph",
+        "Store"
+      ],
+      "label": "process may restart here — and resume on EITHER replica"
+    },
+    {
+      "type": "message",
+      "from": "Human",
+      "to": "Watch",
+      "label": "approve / request-changes / decline",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Watch",
+      "to": "Store",
+      "label": "load latest checkpoint (runId = session id)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Watch",
+      "to": "Graph",
+      "label": "resume, deliver WorkflowReviewDecision into the port",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Graph",
+      "to": "Graph",
+      "label": "continue from the gate (merge / revise / terminal)",
+      "line": "solid",
+      "arrow": "filled"
+    }
+  ]
+}

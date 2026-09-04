@@ -1,0 +1,207 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "3.4 The path-suffixed well-known gotcha",
+  "alt": "3.4 The path-suffixed well-known gotcha: MCP client, Agentweaver.Mcp<br/>Resource Server, Agentweaver.Api<br/>Authorization Server, Microsoft Entra ID",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "C",
+      "label": "MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "RS",
+      "label": "Agentweaver.Mcp<br/>Resource Server",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "AS",
+      "label": "Agentweaver.Api<br/>Authorization Server",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Entra",
+      "label": "Microsoft Entra ID",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "C",
+      "to": "RS",
+      "label": "POST /mcp without bearer token",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "RS",
+      "to": "C",
+      "label": "401 WWW-Authenticate<br/>resource_metadata=https://HOST/.well-known/oauth-protected-resource/mcp",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "RS",
+      "label": "GET /.well-known/oauth-protected-resource or /mcp-suffixed variant",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "RS",
+      "to": "C",
+      "label": "resource=https://HOST/mcp<br/>authorization_servers=[https://HOST]",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "AS",
+      "label": "GET /.well-known/oauth-authorization-server",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "C",
+      "label": "authorize/token/JWKS/register/revoke metadata<br/>PKCE S256, code grant, public client",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "AS",
+      "label": "GET /oauth/authorize<br/>code_challenge=S256, resource=https://HOST/mcp",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "Entra",
+      "label": "Authenticate the user",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Entra",
+      "to": "AS",
+      "label": "Entra identity and roles",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "AS",
+      "label": "Create a single-use code",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "C",
+      "label": "Redirect to client with authorization code",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "AS",
+      "label": "POST /oauth/token with code_verifier",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "C",
+      "label": "Bearer access token signed by AS",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "RS",
+      "label": "POST /mcp with Authorization: Bearer token",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "RS",
+      "to": "AS",
+      "label": "Fetch JWKS if cache is cold",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "RS",
+      "to": "RS",
+      "label": "Validate signature, issuer, audience, lifetime",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "RS",
+      "to": "AS",
+      "label": "Invoke Agentweaver API with same bearer token",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "AS",
+      "label": "Validate token, jti denylist, caller policy",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "RS",
+      "label": "API result",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "RS",
+      "to": "C",
+      "label": "MCP tool result",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

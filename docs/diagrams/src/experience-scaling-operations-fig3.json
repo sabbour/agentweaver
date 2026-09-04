@@ -1,0 +1,90 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "How runs survive replica restarts",
+  "alt": "How runs survive replica restarts: Worker A (owns run), Postgres (lease), Worker B",
+  "participants": [
+    {
+      "id": "W1",
+      "label": "Worker A (owns run)",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "DB",
+      "label": "Postgres (lease)",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "W2",
+      "label": "Worker B",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "W1",
+      "to": "DB",
+      "label": "renew heartbeat while working",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": [
+        "W1"
+      ],
+      "label": "pod restarts / crashes"
+    },
+    {
+      "type": "message",
+      "from": "W1",
+      "to": "DB",
+      "label": "heartbeats stop",
+      "line": "dashed",
+      "arrow": "cross"
+    },
+    {
+      "type": "note",
+      "over": [
+        "DB"
+      ],
+      "label": "lease expires"
+    },
+    {
+      "type": "message",
+      "from": "W2",
+      "to": "DB",
+      "label": "claim WHERE free OR expired",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "DB",
+      "to": "W2",
+      "label": "won — run re-leased to B",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": [
+        "W2"
+      ],
+      "label": "resumes from last checkpoint"
+    }
+  ]
+}

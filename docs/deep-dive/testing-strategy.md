@@ -47,26 +47,12 @@ The main integration pattern is a custom `WebApplicationFactory<Program>`. Each 
 - development/test bypass flags where the test is not exercising GitHub org authorization;
 - service replacements for live external seams.
 
-```mermaid
-sequenceDiagram
-    participant Test
-    participant Factory as Test WebApplicationFactory
-    participant API as Real Program host
-    participant DB as Temp SQLite
-    participant Git as Temp worktree roots
-    participant Fakes as Deterministic seams
+![How API integration tests host the system: Test, Test WebApplicationFactory, Real Program host, Temp SQLite, Temp worktree roots, Deterministic seams](../diagrams/testing-strategy-fig4.png)
 
-    Test->>Factory: CreateClient()
-    Factory->>API: Configure app settings
-    Factory->>DB: Point Database:Path at unique file
-    Factory->>Git: Point worktrees/checkpoints at unique dirs
-    Factory->>Fakes: Replace external services only
-    API-->>Test: HttpClient against in-process routes
-    Test->>API: HTTP request with test bearer token
-    API->>DB: Real stores and transactions
-    API->>Git: Real git/worktree behavior when needed
-    API-->>Test: Real serialized response
-```
+<!-- Rendered from ../diagrams/src/testing-strategy-fig4.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 This approach is important because middleware order and DI wiring are part of the contract. A project endpoint test is not merely testing a service method; it verifies that authentication, route binding, JSON naming, service registration, persistence, and response status codes all agree.
 

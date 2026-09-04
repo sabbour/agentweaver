@@ -1,0 +1,176 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Workflow Generation",
+  "alt": "Workflow Generation: User, Endpoint, Generator, Copilot model, Loader, Binder",
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Endpoint",
+      "label": "Endpoint",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Generator",
+      "label": "Generator",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Model",
+      "label": "Copilot model",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Loader",
+      "label": "Loader",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Binder",
+      "label": "Binder",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Endpoint",
+      "label": "describe desired workflow",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Endpoint",
+      "to": "Generator",
+      "label": "description + project roles",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Generator",
+      "to": "Model",
+      "label": "schema, rules, roles, examples, fenced description",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Model",
+      "to": "Generator",
+      "label": "YAML candidate",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Generator",
+      "to": "Loader",
+      "label": "parse and structural validate",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Generator",
+      "to": "Binder",
+      "label": "bindability dry-run",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "valid",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Generator",
+              "to": "Endpoint",
+              "label": "draft YAML",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "invalid first pass",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Generator",
+              "to": "Model",
+              "label": "previous YAML + validation error",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Model",
+              "to": "Generator",
+              "label": "corrected YAML",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Generator",
+              "to": "Loader",
+              "label": "validate again",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Generator",
+              "to": "Binder",
+              "label": "bindability dry-run",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Generator",
+              "to": "Endpoint",
+              "label": "draft or failure",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Heartbeat Loop",
+  "alt": "Heartbeat Loop: Heartbeat, ProjectStore, Backlog, Pickup, Runs, Reconciler",
+  "participants": [
+    {
+      "id": "Heartbeat",
+      "label": "Heartbeat",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ProjectStore",
+      "label": "ProjectStore",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Backlog",
+      "label": "Backlog",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Pickup",
+      "label": "Pickup",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Runs",
+      "label": "Runs",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Reconciler",
+      "label": "Reconciler",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Heartbeat",
+      "to": "ProjectStore",
+      "label": "list active projects",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "loop",
+      "label": "each project",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Heartbeat",
+              "to": "Heartbeat",
+              "label": "verify workspace is usable",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Heartbeat",
+              "to": "Backlog",
+              "label": "read ready tasks, deterministic order",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "fragment",
+              "operator": "loop",
+              "label": "each ready task",
+              "sections": [
+                {
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "Heartbeat",
+                      "to": "Pickup",
+                      "label": "attempt pickup",
+                      "line": "solid",
+                      "arrow": "filled"
+                    },
+                    {
+                      "type": "message",
+                      "from": "Pickup",
+                      "to": "Backlog",
+                      "label": "atomically claim task and reserve run",
+                      "line": "solid",
+                      "arrow": "filled"
+                    },
+                    {
+                      "type": "message",
+                      "from": "Pickup",
+                      "to": "Runs",
+                      "label": "start coordinator run unattended",
+                      "line": "solid",
+                      "arrow": "filled"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "message",
+              "from": "Heartbeat",
+              "to": "Reconciler",
+              "label": "sweep coordinator progress",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

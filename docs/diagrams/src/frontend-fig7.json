@@ -1,0 +1,159 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Live Run Timeline: Event-Sourced UI Projection",
+  "alt": "Live Run Timeline: Event-Sourced UI Projection: Embedded run surface, useRunStream, Run stream endpoint, Timeline/topology reducers, Rendered panels",
+  "participants": [
+    {
+      "id": "Page",
+      "label": "Embedded run surface",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Stream",
+      "label": "useRunStream",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Run stream endpoint",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Reducer",
+      "label": "Timeline/topology reducers",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "UI",
+      "label": "Rendered panels",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Page",
+      "to": "Stream",
+      "label": "Start watching run id",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Stream",
+      "to": "API",
+      "label": "GET /api/runs/{id}/stream\\nAccept: text/event-stream\\nAuthorization + cookies\\nLast-Event-ID when reconnecting",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Stream",
+      "label": "id/event/data frames",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Stream",
+      "to": "Stream",
+      "label": "Parse frame and JSON payload",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Stream",
+      "to": "Stream",
+      "label": "Drop duplicates by sequence",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Stream",
+      "to": "Page",
+      "label": "Append event to event buffer",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Page",
+      "to": "Reducer",
+      "label": "Fold only new events",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Reducer",
+      "to": "UI",
+      "label": "Timeline items, statuses, graph/topology state",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "stream ends with terminal event",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Stream",
+              "to": "Page",
+              "label": "status = done",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "stream disconnects early",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Stream",
+              "to": "Stream",
+              "label": "Backoff and reconnect",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Stream",
+              "to": "API",
+              "label": "Reopen with Last-Event-ID",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

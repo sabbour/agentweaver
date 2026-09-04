@@ -1,13 +1,11 @@
 #!/usr/bin/env node
-// Rewrites Markdown docs by replacing ```mermaid *flowchart* fences with a
-// pre-rendered graph-spec diagram embed (matching the convention used by
-// docs/guide/architecture-aks.md), and writing the generated graph-spec JSON
-// under docs/diagrams/src/. Non-flowchart Mermaid blocks (sequence/state/
-// class/er) are left untouched and reported as skipped follow-ups.
+// Rewrites Markdown docs by replacing supported Mermaid flowchart and
+// sequenceDiagram fences with pre-rendered spec diagram embeds.
 //
 // Usage:
 //   node scripts/docs/migrate-mermaid.mjs <file.md> [<file2.md> ...]
 //   node scripts/docs/migrate-mermaid.mjs --dir docs/deep-dive
+//   node scripts/docs/migrate-mermaid.mjs --dir docs/deep-dive --sequence-only
 //   node scripts/docs/migrate-mermaid.mjs --dir docs/deep-dive --dry
 //
 // Idempotent: files with no convertible fences are left unchanged.
@@ -16,6 +14,7 @@ import { readFile, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { convertFlowchart, mermaidType } from './mermaid-to-graphspec.mjs';
+import { convertSequenceDiagram } from './mermaid-to-sequencespec.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -23,12 +22,13 @@ const specsDir = path.join(repoRoot, 'docs', 'diagrams', 'src');
 
 const args = process.argv.slice(2);
 const dry = args.includes('--dry');
+const sequenceOnly = args.includes('--sequence-only');
 
 async function collectFiles() {
   const files = [];
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
-    if (a === '--dry') continue;
+    if (a === '--dry' || a === '--sequence-only') continue;
     if (a === '--dir') {
       const dir = path.resolve(repoRoot, args[++i]);
       const entries = await readdir(dir);
@@ -51,12 +51,12 @@ function slugBase(file) {
   return dir === 'deep-dive' ? doc : `${dir}-${doc}`;
 }
 
-function embedBlock(name, alt, relDir) {
+function embedBlock(name, alt, relDir, type) {
   return [
     `![${alt}](${relDir}${name}.png)`,
     '',
     `<!-- Rendered from ${relDir}src/${name}.json by docs/diagram-renderer +`,
-    '     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.',
+    `     Playwright (Fluent-styled ${type === 'sequenceDiagram' ? 'sequence diagram' : 'React Flow'}), replacing Mermaid.`,
     '     Edit the JSON, then run `npm run docs:render-diagrams` and commit the',
     '     regenerated PNG + .hash.txt. -->',
   ].join('\n');
@@ -79,7 +79,12 @@ async function processFile(file) {
   const base = slugBase(file);
   const relDir = relDiagramsDir(file);
   let heading = base;
-  let fig = 0;
+  // A document may already contain migrated image embeds alongside remaining
+  // Mermaid fences. Start after the highest existing figure number so a later
+  // migration never overwrites an earlier graph spec.
+  const existingFigures = [...raw.matchAll(new RegExp(`${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-fig(\\d+)\\.png`, 'g'))]
+    .map((match) => Number(match[1]));
+  let fig = existingFigures.length ? Math.max(...existingFigures) : 0;
   const result = { file, converted: [], skipped: [], warnings: [] };
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -103,16 +108,24 @@ async function processFile(file) {
     const bodyStr = body.join('\n');
     const type = mermaidType(bodyStr);
 
-    if (type === 'flowchart' || type === 'graph') {
+    const supported = type === 'sequenceDiagram' || (!sequenceOnly && (type === 'flowchart' || type === 'graph'));
+    if (supported) {
       const nextFig = fig + 1;
       const name = `${base}-fig${nextFig}`;
       const title = heading === base ? name : `${heading}`;
-      const converted = convertFlowchart(bodyStr, { title, name });
-      if (converted && converted.spec.nodes.length > 0) {
+      const converted = type === 'sequenceDiagram'
+        ? convertSequenceDiagram(bodyStr, { title, name })
+        : convertFlowchart(bodyStr, { title, name });
+      const hasContent = converted && (
+        converted.spec.kind === 'sequence'
+          ? converted.spec.participants.length > 0 && converted.spec.steps.length > 0
+          : converted.spec.nodes.length > 0
+      );
+      if (hasContent) {
         fig = nextFig;
         result.converted.push({ name, spec: converted.spec });
         result.warnings.push(...converted.warnings.map((w) => `${name}: ${w}`));
-        out.push(indent + embedBlock(name, converted.spec.alt, relDir));
+        out.push(indent + embedBlock(name, converted.spec.alt, relDir, type));
         i = j; // skip past closing fence
         continue;
       }
@@ -152,7 +165,7 @@ async function main() {
     allWarnings.push(...r.warnings);
   }
   console.log(`\n=== Summary ===`);
-  console.log(`Converted ${totalConverted} flowcharts across ${files.length} files.`);
+  console.log(`Converted ${totalConverted} supported Mermaid diagrams across ${files.length} files.`);
   console.log(`Skipped (left as Mermaid): ${JSON.stringify(totalSkipped)}`);
   if (allWarnings.length) {
     console.log(`\nWarnings (${allWarnings.length}):`);

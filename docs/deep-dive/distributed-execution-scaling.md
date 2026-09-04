@@ -89,22 +89,12 @@ Leasing rests on a small set of per-row ideas:
 - **Heartbeat** — a liveness stamp the owner refreshes while it works, so stalls are visible across the fleet rather than only inside one process.
 - **A fencing token** — a number that increments on every successful acquisition. A worker must present its token when it writes; a stale (smaller) token is rejected. This stops a paused or zombie former owner from waking up and clobbering a run that has since been re-leased to someone else.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant A as Worker A
-    participant B as Worker B
-    participant DB as Postgres (run row)
-    A->>DB: UPDATE ... SET owner=A, token+1 WHERE owner IS NULL OR lease_expired
-    DB-->>A: rows = 1  (A wins)
-    B->>DB: UPDATE ... SET owner=B WHERE owner IS NULL OR lease_expired
-    DB-->>B: rows = 0  (already owned — B steps aside)
-    Note over A: A renews heartbeat while it works
-    A--xA: A crashes (stops renewing)
-    Note over DB: lease expires
-    B->>DB: UPDATE ... WHERE lease_expired
-    DB-->>B: rows = 1  (B re-claims — crash recovery)
-```
+![Durable run leasing: Worker A, Worker B, Postgres (run row)](../diagrams/distributed-execution-scaling-fig5.png)
+
+<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The lease *lifecycle* is owned by `RunWatchLoopService`: on claim it records the `(ownerId, fencingToken)`, runs a background renew loop at half the TTL (`LeaseTtl` = 5 minutes, renew every ~2.5 minutes), and releases on completion or drain. Terminal handlers and `FailRun` first re-check `IsLeaseOwnerAsync` so a worker whose lease was stolen does not finalize a run it no longer owns.
 

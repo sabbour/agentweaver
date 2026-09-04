@@ -88,48 +88,12 @@ An effective MCP client does not call tools randomly. It keeps a small mental mo
 
 The best user experience is conversational but auditable: the assistant says what it is about to do, calls the relevant tool, summarizes the returned state, and links the next action to a visible Agentweaver concept such as a project, board card, coordinator gate, child run, or review.
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant Assistant as MCP client assistant
-    participant MCP as Agentweaver MCP server
-    participant API as Agentweaver API/UI state
-    participant Coord as Coordinator run
-    participant Child as Child agent runs
+![Assistant operating pattern: User, MCP client assistant, Agentweaver MCP server, Agentweaver API/UI state, Coordinator run, Child agent runs](../diagrams/experience-mcp-client-fig1.png)
 
-    User->>Assistant: "Build the onboarding-auth feature end to end"
-    Assistant->>MCP: project_list
-    MCP->>API: List projects
-    API-->>MCP: Projects
-    Assistant->>MCP: project_create
-    MCP->>API: Create project
-    API-->>MCP: project_id
-    Assistant->>MCP: team_cast(confirm=true)
-    MCP->>API: Cast and confirm team
-    API-->>MCP: Confirmed team
-    Assistant->>MCP: backlog_capture_task / backlog_decompose_spec
-    MCP->>API: Add or preview tasks
-    Assistant->>MCP: send_all_backlog_to_ready
-    MCP->>API: Promote tasks to Ready
-    Assistant->>MCP: coordinator_start
-    MCP->>API: Start orchestration
-    API-->>Coord: Draft outcome spec
-    Assistant->>MCP: coordinator_outcome_spec_get
-    MCP->>API: Read spec
-    API-->>Assistant: Draft spec for user confirmation
-    User->>Assistant: "Approved"
-    Assistant->>MCP: coordinator_outcome_spec_confirm
-    MCP->>API: Resume coordinator
-    Coord->>Child: Dispatch subtasks
-    Assistant->>MCP: run_watch
-    MCP-->>Assistant: Progress notifications and final state
-    Assistant->>MCP: run_show_artifacts / run_get_file
-    MCP->>API: Read review artifacts
-    Assistant-->>User: Summary and recommendation
-    User->>Assistant: "Approve"
-    Assistant->>MCP: run_review(approved=true)
-    MCP->>API: Merge/approve run
-```
+<!-- Rendered from ../diagrams/src/experience-mcp-client-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Safety, idempotency, and confirmations
 

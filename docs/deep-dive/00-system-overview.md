@@ -48,21 +48,12 @@ A run is both a state machine and a story. Operators need the live story while i
 
 The invariant is that the durable event log is the source of truth. The in-memory stream is a same-replica optimization; cross-replica watchers read from the shared `RunEvents` table by `Last-Event-ID` cursor. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:15`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:423`, `apps/Agentweaver.Api/Endpoints/RunEndpoints.cs:429`.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant Step as Workflow step
-    participant Store as Shared RunEvents table
-    participant Web as Any web replica
-    participant UI as UI / MCP client
+![Durable events plus live fan-out: Workflow step, Shared RunEvents table, Any web replica, UI / MCP client](../diagrams/00-system-overview-fig8.png)
 
-    Step->>Store: append event with ordered sequence
-    Store-->>Step: persisted
-    UI->>Web: SSE with Last-Event-ID cursor
-    Web->>Store: read Sequence > cursor
-    Store-->>Web: ordered events
-    Web-->>UI: SSE frames
-```
+<!-- Rendered from ../diagrams/src/00-system-overview-fig8.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ### Human gates protect irreversible actions
 
