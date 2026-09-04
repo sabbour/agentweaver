@@ -139,7 +139,7 @@ public static class OAuthAuthorizationServerEndpoints
         var styleNonce = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers.ContentSecurityPolicy =
-            $"default-src 'none'; style-src 'nonce-{styleNonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+            $"default-src 'none'; style-src 'nonce-{styleNonce}'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
         return Results.Content(
             RenderConsent(request, scope, consentHandle, clientName, browser.EntraObjectId, styleNonce),
             "text/html; charset=utf-8");
@@ -403,7 +403,7 @@ public static class OAuthAuthorizationServerEndpoints
                 .card { width: min(560px, 100%); overflow: hidden; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
                 .content { padding: 32px; }
                 .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; font-size: 16px; font-weight: 600; }
-                .brand-mark { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; background: #242424; color: #faf8f5; font-size: 12px; font-weight: 700; letter-spacing: -.03em; }
+                .brand-mark { width: 28px; height: 28px; display: block; object-fit: contain; }
                 h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
                 .intro { margin: 10px 0 0; color: #3c3c3c; font-size: 15px; }
                 .client { margin: 24px 0; padding: 16px; background: #f3f1ed; border: 1px solid #e6e6e6; border-radius: 10px; }
@@ -433,7 +433,7 @@ public static class OAuthAuthorizationServerEndpoints
             <body>
               <main class="card" aria-labelledby="consent-title">
                 <section class="content">
-                  <div class="brand"><span class="brand-mark" aria-hidden="true">AW</span><span>Agentweaver</span></div>
+                  <div class="brand"><img class="brand-mark" src="/agentweaver.png" alt="Agentweaver logo"><span>Agentweaver</span></div>
                   <h1 id="consent-title">Allow access to Agentweaver?</h1>
                   <p class="intro">An MCP client wants to connect to your Agentweaver account.</p>
                   <div class="client">

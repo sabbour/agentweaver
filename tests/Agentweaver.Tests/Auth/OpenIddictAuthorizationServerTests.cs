@@ -359,11 +359,14 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         html.Should().Contain("Use Agentweaver MCP tools");
         html.Should().Contain("Stay connected");
         html.Should().Contain($"<strong>{subject}</strong>");
+        html.Should().Contain("<img class=\"brand-mark\" src=\"/agentweaver.png\" alt=\"Agentweaver logo\">");
+        html.Should().NotContain("aria-hidden=\"true\">AW</span>");
         html.Should().Contain("value=\"approve\">Allow</button>");
         html.Should().Contain("value=\"deny\">Deny</button>");
         var styleNonce = Regex.Match(html, "<style nonce=\"([^\"]+)\">").Groups[1].Value;
         styleNonce.Should().NotBeNullOrWhiteSpace();
-        policy.Should().Contain($"style-src 'nonce-{styleNonce}'");
+        policy.Should().Be(
+            $"default-src 'none'; style-src 'nonce-{styleNonce}'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
     }
 
     [Fact]
