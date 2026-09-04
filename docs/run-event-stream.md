@@ -17,6 +17,15 @@ For the scaling story, see [Distributed execution & scaling](./deep-dive/distrib
 
 The horizontal-scale invariant is simple: **the database log is the source of truth, and the cursor is the replay boundary**. `EfRunEventStream.AppendAsync` writes through before acknowledging (`WriteThroughAsync`), and `SubscribeAsync` repeatedly loads rows whose sequence is greater than the caller's last seen cursor, yielding them in sequence order until a terminal event appears. It drains the full replay batch before stopping, so a diagnostic row persisted immediately after a terminal row is still delivered before the SSE subscription closes. Source: `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:63`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:71`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:77`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:84`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:111`, `apps/Agentweaver.Api/Infrastructure/EfRunEventStream.cs:180`.
 
+## Delivery sequence — durable-first, then replay and live tail
+
+![Sequence showing a producer durably appending a run event before acknowledgement, publishing it to the live channel, and an SSE subscriber replaying from its cursor before tailing live events with durable recovery](diagrams/canonical-durable-event-stream-sequence.png)
+
+<!-- Rendered from diagrams/src/canonical-durable-event-stream-sequence.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram).
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
+
 ## What changed from the old in-memory-only stream
 
 | Concern | Current behavior | Source |
