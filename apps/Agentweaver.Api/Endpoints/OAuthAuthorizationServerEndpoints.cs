@@ -139,7 +139,7 @@ public static class OAuthAuthorizationServerEndpoints
         var styleNonce = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers.ContentSecurityPolicy =
-            $"default-src 'none'; style-src 'nonce-{styleNonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+            $"default-src 'none'; style-src 'nonce-{styleNonce}'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
         return Results.Content(
             RenderConsent(request, scope, consentHandle, clientName, browser.EntraObjectId, styleNonce),
             "text/html; charset=utf-8");
