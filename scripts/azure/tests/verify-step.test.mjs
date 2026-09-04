@@ -195,6 +195,34 @@ test("run: reports failures for missing pods and unprogrammed gateway", async ()
   assert.ok(result.fail > 0);
 });
 
+test("run: reports a missing canonical Repo App private-key secret", async () => {
+  const captureImpl = (_cmd, args) => {
+    const joined = args.join(" ");
+    if (joined.includes("keyvault secret show") && joined.includes("ghtok-repo-app-private-key")) {
+      return { stdout: "", stderr: "SecretNotFound", code: 3 };
+    }
+    if (joined.includes("--field-selector=status.phase=Running")) return { stdout: "pod-1\n", stderr: "", code: 0 };
+    if (joined.includes("Programmed") || joined.includes("Accepted") || joined.includes("ResolvedRefs")) {
+      return { stdout: "True", stderr: "", code: 0 };
+    }
+    if (joined.includes("addresses")) return { stdout: "1.2.3.4", stderr: "", code: 0 };
+    if (joined.includes("defaultdomaincertificate")) return { stdout: "", stderr: "", code: 0 };
+    if (joined.includes("secretproviderclasspodstatus")) return { stdout: "spc-1\n", stderr: "", code: 0 };
+    if (joined.includes("auth can-i")) return { stdout: "yes", stderr: "", code: 0 };
+    if (joined.includes("agentweaver-sandbox")) return { stdout: "", stderr: "", code: 1 };
+    return { stdout: "", stderr: "", code: 0 };
+  };
+
+  const result = await run(
+    { ...CFG, KEYVAULT_NAME: "test-kv" },
+    { exec: fakeExec(captureImpl), log: noopLog(), env: {} },
+  );
+
+  assert.equal(result.ok, false);
+  assert.ok(result.results.some((entry) =>
+    entry.ok === false && entry.message.includes("ghtok-repo-app-private-key") && entry.message.includes("missing")));
+});
+
 test("run: performs authenticated feature checks when HOST resolves and a token is supplied", async () => {
   let configuredRuntimeChecksum = RUNTIME_CHECKSUM;
   let apiRuntimeChecksum = RUNTIME_CHECKSUM;

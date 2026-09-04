@@ -40,6 +40,11 @@
   // certificate families; create a new version under the same name for routine rotation.
   "OAUTH_SIGNING_CERTIFICATE_NAME": "agentweaver-oauth-signing",
   "OAUTH_ENCRYPTION_CERTIFICATE_NAME": "agentweaver-oauth-encryption",
+  // Optional path to the GitHub Repo App PEM. Provision/deploy imports it as the canonical
+  // physical Key Vault secret `ghtok-repo-app-private-key`. If omitted, the deploy accepts an
+  // existing canonical secret or migrates the legacy physical `repo-app-private-key` secret.
+  // The legacy secret is preserved after migration.
+  // "REPO_APP_PRIVATE_KEY_FILE": "C:\\secure\\agentweaver-repo-app.pem",
 
   // Optional overrides.
   // "PG_SERVER_NAME": "agentweaver-pg-staging", // Override the globally-unique Azure Flexible Server name if "agentweaver-pg" is already reserved.

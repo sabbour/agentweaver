@@ -16,8 +16,12 @@
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
 import * as azDefault from "../lib/az.mjs";
-import * as secretDefault from "../lib/secret.mjs";
-import os from "node:os";
+import {
+  ensureRepoAppPrivateKeySecret,
+  setSecretWithRetry,
+} from "../lib/repo-app-secret.mjs";
+
+export { setSecretWithRetry };
 
 export const IDENTITY_NAME = "agentweaver-api-identity";
 
@@ -36,42 +40,6 @@ export function oauthCertificateNames(cfg = {}) {
     signing: cfg.OAUTH_SIGNING_CERTIFICATE_NAME || OAUTH_SIGNING_CERTIFICATE_NAME,
     encryption: cfg.OAUTH_ENCRYPTION_CERTIFICATE_NAME || OAUTH_ENCRYPTION_CERTIFICATE_NAME,
   };
-}
-
-/**
- * Sets a Key Vault secret, tolerating transient RBAC-propagation Forbidden errors with bounded retry.
- * Writes `value` to a short-lived private (0600) scratch file and passes it via `az`'s '--file'
- * parameter instead of '--value', so the secret never appears in this process's argv -- argv is
- * readable by any co-resident process/user via `ps`/`/proc/<pid>/cmdline` for the command's entire
- * runtime, unlike a file that's deleted immediately after the command exits.
- */
-export async function setSecretWithRetry(
-  keyvaultName,
-  name,
-  value,
-  { exec = execDefault, log = logDefault, maxAttempts = 12, sleep = defaultSleep, secret = secretDefault, scratchDir = os.tmpdir() } = {},
-) {
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const result = await secret.withSecretFile(scratchDir, `kv-secret-${name}`, value, (filePath) =>
-      exec.capture(
-        "az",
-        ["keyvault", "secret", "set", "--vault-name", keyvaultName, "--name", name, "--file", filePath, "--output", "none"],
-        { allowFailure: true },
-      ),
-    );
-    if (result.code === 0) return;
-    const isRbacPropagating = /Forbidden|ForbiddenByRbac|not authorized/i.test(result.stderr || "");
-    if (isRbacPropagating && attempt < maxAttempts) {
-      log.info(`  [retry ${attempt}/${maxAttempts}] RBAC role for '${name}' still propagating; waiting 15s...`);
-      await sleep(15000);
-      continue;
-    }
-    throw new Error(`Failed to set Key Vault secret '${name}': ${result.stderr}`);
-  }
-}
-
-function defaultSleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Grants a role assignment, tolerating an "already exists" response (idempotent). */
@@ -291,6 +259,16 @@ export async function run(cfg, opts = {}) {
   await createRoleAssignmentIdempotent(
     ["--role", "Key Vault Secrets Officer", "--assignee-object-id", IDENTITY_OBJECT_ID, "--assignee-principal-type", "ServicePrincipal", "--scope", KEYVAULT_ID],
     { exec },
+  );
+
+  log.info("");
+  log.section("Step 3c: Ensure Repo App private key");
+  await ensureRepoAppPrivateKeySecret(
+    {
+      vaultName: cfg.KEYVAULT_NAME,
+      sourceFile: cfg.REPO_APP_PRIVATE_KEY_FILE,
+    },
+    { exec, log },
   );
 
   log.info("");

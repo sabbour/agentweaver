@@ -95,6 +95,7 @@ configMapGenerator:
       - "ENTRA_FRONTEND_URL=https://agentweaver.example.com"
       - "COPILOT_APP_CALLBACK_URL=https://agentweaver.example.com/auth/github/copilot-app/callback"
       - "REPO_APP_CALLBACK_URL=https://agentweaver.example.com/auth/github/repo-app/callback"
+      - "REPO_APP_PRIVATE_KEY_SECRET_NAME=repo-app-private-key"
       - "KEYVAULT_URI=https://changeme.vault.azure.net"
       - "AGENTHOST_KEYVAULT_URI=https://changeme.vault.azure.net/"
       - "APPINSIGHTS_WORKSPACE_ID="
