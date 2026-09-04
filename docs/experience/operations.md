@@ -131,29 +131,12 @@ Heartbeat answers: **is background automation ticking, and did it act?** The coo
 > *Shows:* the **Heartbeat** page titled "Heartbeat" / "Background automation status and recent ticks." with the **Auto-refresh** switch and **Refresh** button, the **Automations** section, and the **Recent activity** table (`aria-label="Recent heartbeat ticks"`).
 > *Path:* open a project → click **Heartbeat** in the left rail → `/projects/:projectId/heartbeat`.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Board as Board Ready column
-    participant Heartbeat as Coordinator heartbeat
-    participant API
-    participant Run as Coordinator run
-    participant Flow
+![Heartbeat experience: User, Board Ready column, Coordinator heartbeat, API, Coordinator run, Flow](../diagrams/experience-operations-fig2.png)
 
-    User->>Board: Rank work in Ready
-    loop every interval
-        Heartbeat->>API: tick
-        API->>Board: read Ready tasks and pickup settings
-        alt claimable work exists
-            API->>Run: start/advance coordinator work
-            API-->>Heartbeat: acted_count > 0
-        else no claimable work
-            API-->>Heartbeat: acted_count = 0
-        end
-    end
-    API-->>Flow: agent_queues projection
-    Flow-->>User: active / queued / blocked / done by agent
-```
+<!-- Rendered from ../diagrams/src/experience-operations-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The page title is **Heartbeat** with subtitle **Background automation status and recent ticks.** It provides:
 

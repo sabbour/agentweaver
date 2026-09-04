@@ -1,0 +1,160 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Coordinator Control Flow",
+  "alt": "Coordinator Control Flow: User, Coordinator, Durable Store, Dispatcher, Child Runs, Parent Run",
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Coordinator",
+      "label": "Coordinator",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Store",
+      "label": "Durable Store",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Dispatcher",
+      "label": "Dispatcher",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Child",
+      "label": "Child Runs",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Parent",
+      "label": "Parent Run",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Coordinator",
+      "label": "goal or backlog task",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Coordinator",
+      "label": "draft OutcomeSpec",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "User",
+      "label": "request confirmation or revision",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Coordinator",
+      "label": "confirm",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Store",
+      "label": "persist confirmed OutcomeSpec",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Coordinator",
+      "label": "select workflow and decompose DAG",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Coordinator",
+      "to": "Store",
+      "label": "persist WorkPlan + subtasks + dependencies",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Dispatcher",
+      "to": "Store",
+      "label": "read ready DAG frontier",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Dispatcher",
+      "to": "Child",
+      "label": "launch child runs",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Child",
+      "to": "Dispatcher",
+      "label": "completed, failed, or assemble-ready",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Dispatcher",
+      "to": "Store",
+      "label": "update subtask statuses",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Dispatcher",
+      "to": "Parent",
+      "label": "hand off to assembly when all settle",
+      "line": "solid",
+      "arrow": "filled"
+    }
+  ]
+}

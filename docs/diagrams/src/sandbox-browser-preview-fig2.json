@@ -1,0 +1,151 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Agent-initiated preview (`start_preview`)",
+  "alt": "Agent-initiated preview (`start_preview`): Agent (in sandbox), API (start_preview endpoint), AgentPreviewGate, Operator / auto-approve, SandboxPreviewService",
+  "participants": [
+    {
+      "id": "Agent",
+      "label": "Agent (in sandbox)",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "API",
+      "label": "API (start_preview endpoint)",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Gate",
+      "label": "AgentPreviewGate",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Op",
+      "label": "Operator / auto-approve",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Preview",
+      "label": "SandboxPreviewService",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Agent",
+      "to": "API",
+      "label": "POST /api/runs/{runId}/sandbox/preview { target_port }",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "API",
+      "label": "IsOwnerOrServiceCaller (owner OR run's own agent)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Gate",
+      "label": "RequestApprovalAsync(runId, port)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "auto-approve source on",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Gate",
+              "to": "API",
+              "label": "Approved (immediate)",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "human-gated",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Gate",
+              "to": "Op",
+              "label": "emit tool.approval_required (request_id)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Op",
+              "to": "Gate",
+              "label": "POST /tool-approvals (grant) — or timeout",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "Gate",
+              "to": "API",
+              "label": "Approved / DeniedOrTimedOut",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Preview",
+      "label": "StartPreviewAsync(runId, port) %% same path as operator route",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Preview",
+      "to": "API",
+      "label": "preview_url",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Agent",
+      "label": "{ preview_url, … }",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

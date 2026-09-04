@@ -1,0 +1,127 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Pickup and automation",
+  "alt": "Pickup and automation: User, Board, Heartbeat, Pickup, Coordinator",
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Board",
+      "label": "Board",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Heartbeat",
+      "label": "Heartbeat",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Pickup",
+      "label": "Pickup",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Coordinator",
+      "label": "Coordinator",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Board",
+      "label": "Move task to Ready",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Heartbeat",
+      "to": "Board",
+      "label": "Read top Ready tasks",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Heartbeat",
+      "to": "Pickup",
+      "label": "Try pickup task",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Pickup",
+      "to": "Board",
+      "label": "Atomic claim + reserve run",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "claim won",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Pickup",
+              "to": "Coordinator",
+              "label": "Start unattended coordinator run",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "Coordinator",
+              "to": "Board",
+              "label": "Run appears in Active",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "claim lost or project unavailable",
+          "steps": [
+            {
+              "type": "message",
+              "from": "Pickup",
+              "to": "Board",
+              "label": "Task remains or another run owns it",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

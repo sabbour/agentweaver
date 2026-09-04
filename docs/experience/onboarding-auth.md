@@ -25,26 +25,12 @@ If no session exists, the page shows **Sign in with Microsoft Entra ID**. This a
 
 The browser returns through `/auth/entra/callback`. Agentweaver keeps authorization details on the server.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User
-    participant Web as web UI
-    participant API as Agentweaver API
-    participant Entra as Microsoft Entra ID
+![First-run web UI experience: User, web UI, Agentweaver API, Microsoft Entra ID](../diagrams/experience-onboarding-auth-fig1.png)
 
-    User->>Web: Open Agentweaver
-    Web->>API: Check session
-    API-->>Web: not signed in
-    Web-->>User: Show Entra sign-in
-    User->>Web: Select sign-in
-    Web->>API: Start Entra authorization
-    API-->>Entra: Redirect with PKCE
-    User->>Entra: Sign in
-    Entra-->>API: Return authorization code
-    API-->>Web: Return authenticated session
-    Web-->>User: Show setup readiness
-```
+<!-- Rendered from ../diagrams/src/experience-onboarding-auth-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Setup readiness
 
@@ -126,42 +112,12 @@ The MCP OAuth flow has four visible phases:
 3. **Token issuance.** Agentweaver enforces organization membership when configured, redirects an Agentweaver authorization code back to the MCP client's redirect URI, and exchanges that code plus the PKCE verifier for an Agentweaver JWT and rotating refresh token.
 4. **Tool use.** The client calls `/mcp` with `Authorization: Bearer <Agentweaver JWT>`. The MCP server validates the JWT offline using JWKS, then forwards the same bearer token to the API during tool calls.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User
-    participant Client as MCP client
-    participant MCP as Agentweaver MCP server
-    participant AS as Agentweaver API / Authorization Server
-    participant GitHub
-    participant API as Agentweaver API resources
+![MCP OAuth and bearer-token flow: User, MCP client, Agentweaver MCP server, Agentweaver API / Authorization Server, GitHub, Agentweaver API resources](../diagrams/experience-onboarding-auth-fig2.png)
 
-    Client->>MCP: Call /mcp without bearer token
-    MCP-->>Client: 401 WWW-Authenticate with resource_metadata
-    Client->>MCP: GET /.well-known/oauth-protected-resource/mcp
-    MCP-->>Client: resource, authorization_servers, scopes
-    Client->>AS: GET /.well-known/oauth-authorization-server/mcp
-    AS-->>Client: authorize, token, register, revoke, jwks
-    Client->>AS: Optional /oauth/register with loopback redirect URI
-    AS-->>Client: public client_id
-    Client->>AS: /oauth/authorize with client_id, redirect_uri, resource, S256 challenge
-    AS->>AS: Validate client, redirect URI, response_type, PKCE
-    AS-->>GitHub: Browser redirect for GitHub sign-in
-    User->>GitHub: Sign in and consent
-    GitHub-->>AS: Callback with GitHub code + state
-    AS->>GitHub: Exchange GitHub code server-side
-    AS->>AS: Enforce required org membership
-    AS-->>Client: Redirect to loopback/registered URI with Agentweaver code
-    Client->>AS: /oauth/token with code_verifier
-    AS->>AS: Consume code, verify redirect/client/PKCE binding
-    AS-->>Client: Bearer Agentweaver JWT + refresh token
-    Client->>MCP: /mcp with Bearer Agentweaver JWT
-    MCP->>AS: Fetch/cache JWKS when needed
-    MCP->>MCP: Validate JWT offline
-    MCP->>API: Forward same bearer token for tool-backed API call
-    API-->>MCP: Caller-scoped result
-    MCP-->>Client: Tool result
-```
+<!-- Rendered from ../diagrams/src/experience-onboarding-auth-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The Agentweaver JWT is short-lived, signed with RS256, and bound to the MCP resource audience. It carries the issuer, audience, subject, GitHub login, scope `mcp:invoke`, optional organization claim, lifetime claims, and a JWT ID used for revocation. The MCP server validates signature, issuer, audience, lifetime, and algorithm using cached JWKS. The API validates again when the token is forwarded and checks revocation state for the token ID.
 

@@ -287,32 +287,12 @@ The library is process-oriented. A workflow is named for what it does, not for t
 
 Workflow generation turns a natural-language process request into an unsaved YAML draft.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant User
-    participant Endpoint
-    participant Generator
-    participant Model as Copilot model
-    participant Loader
-    participant Binder
+![Workflow Generation: User, Endpoint, Generator, Copilot model, Loader, Binder](../diagrams/workflow-engine-fig11.png)
 
-    User->>Endpoint: describe desired workflow
-    Endpoint->>Generator: description + project roles
-    Generator->>Model: schema, rules, roles, examples, fenced description
-    Model-->>Generator: YAML candidate
-    Generator->>Loader: parse and structural validate
-    Generator->>Binder: bindability dry-run
-    alt valid
-        Generator-->>Endpoint: draft YAML
-    else invalid first pass
-        Generator->>Model: previous YAML + validation error
-        Model-->>Generator: corrected YAML
-        Generator->>Loader: validate again
-        Generator->>Binder: bindability dry-run
-        Generator-->>Endpoint: draft or failure
-    end
-```
+<!-- Rendered from ../diagrams/src/workflow-engine-fig11.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 Generation has these rules:
 

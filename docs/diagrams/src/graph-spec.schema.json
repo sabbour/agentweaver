@@ -5,6 +5,7 @@
   "type": "object",
   "required": ["title", "alt", "nodes", "edges"],
   "properties": {
+    "kind": { "const": "graph", "description": "Optional for backward compatibility; omitted specs are treated as graph specs." },
     "title": { "type": "string" },
     "alt": { "type": "string", "description": "Markdown image alt text used in README.md / architecture-aks.md" },
     "direction": { "type": "string", "enum": ["TB", "LR"], "default": "TB" },

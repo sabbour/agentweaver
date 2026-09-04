@@ -273,26 +273,12 @@ is the price of keeping policy deliberate.
 
 ## Putting it together
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant H as Human
-    participant C as Coordinator
-    participant W as Worker tier
-    participant P as Sandbox pod (A2A)
-    participant L as Shared brain
-    H->>C: goal
-    C->>C: draft OutcomeSpec, confirm, build WorkPlan DAG
-    C->>W: dispatch child subtask
-    W->>P: remote one agent turn (A2A)
-    P->>L: read decisions + memory (compiled into prompt)
-    P-->>W: turn output
-    P->>L: submit inbox proposal
-    W-->>C: assemble-ready result (up, not sideways)
-    C->>C: assemble + collective review
-    C->>L: promote accepted decisions (Scribe)
-    C-->>H: combined outcome
-```
+![Putting it together: Human, Coordinator, Worker tier, Sandbox pod (A2A), Shared brain](../diagrams/agent-communication-fig5.png)
+
+<!-- Rendered from ../diagrams/src/agent-communication-fig5.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 The three channels never blur:
 

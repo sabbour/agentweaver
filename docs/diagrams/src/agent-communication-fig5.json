@@ -1,0 +1,143 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Putting it together",
+  "alt": "Putting it together: Human, Coordinator, Worker tier, Sandbox pod (A2A), Shared brain",
+  "participants": [
+    {
+      "id": "H",
+      "label": "Human",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "C",
+      "label": "Coordinator",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "W",
+      "label": "Worker tier",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "P",
+      "label": "Sandbox pod (A2A)",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "L",
+      "label": "Shared brain",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "H",
+      "to": "C",
+      "label": "goal",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "C",
+      "label": "draft OutcomeSpec, confirm, build WorkPlan DAG",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "W",
+      "label": "dispatch child subtask",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "W",
+      "to": "P",
+      "label": "remote one agent turn (A2A)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "P",
+      "to": "L",
+      "label": "read decisions + memory (compiled into prompt)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "P",
+      "to": "W",
+      "label": "turn output",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "P",
+      "to": "L",
+      "label": "submit inbox proposal",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "W",
+      "to": "C",
+      "label": "assemble-ready result (up, not sideways)",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "C",
+      "label": "assemble + collective review",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "L",
+      "label": "promote accepted decisions (Scribe)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "C",
+      "to": "H",
+      "label": "combined outcome",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

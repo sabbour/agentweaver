@@ -227,34 +227,12 @@ caller owns it (`403`/`404` otherwise).
   pod (suspend/resume, run end) ends forwarding, and a new preview must be started against the re-claimed
   pod.
 
-```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
-sequenceDiagram
-    participant User as User / operator
-    participant API as API (SandboxEndpoints)
-    participant PF as PortForwardService
-    participant Reg as PodNameRegistry
-    participant K as kubectl
-    participant Pod as Sandbox pod (run-bound)
-    User->>API: POST /api/runs/{runId}/sandbox/port-forward { targetPort }
-    API->>API: validate port, run exists, caller owns run
-    API->>PF: StartAsync(runId, targetPort)
-    PF->>Reg: TryGet(runId) → pod_name
-    alt no pod registered
-        Reg-->>PF: null
-        PF-->>API: InvalidOperationException → 409
-    else pod registered
-        PF->>K: kubectl port-forward --address 127.0.0.1 pod/{pod} :{target_port} -n {ns}
-        K->>Pod: tunnel target_port
-        K-->>PF: "Forwarding from 127.0.0.1:{local_port} ->"
-        PF->>PF: probe loopback TCP until ready
-        PF-->>API: PortForwardSession
-        API-->>User: { session_id, local_port, target_port, pod_name, started_at }
-    end
-    User->>API: open 127.0.0.1:{local_port} → reach server in pod
-    User->>API: DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}
-    API->>PF: Stop(runId, sessionId) → kill kubectl
-```
+![Behavior: User / operator, API (SandboxEndpoints), PortForwardService, PodNameRegistry, kubectl, Sandbox pod (run-bound)](../diagrams/reference-sandbox-pods-fig1.png)
+
+<!-- Rendered from ../diagrams/src/reference-sandbox-pods-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 ## Security properties
 

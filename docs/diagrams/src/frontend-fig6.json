@@ -1,0 +1,169 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Authentication and Session Flow",
+  "alt": "Authentication and Session Flow: User, React SPA, Agentweaver API, GitHub",
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "SPA",
+      "label": "React SPA",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver API",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "GitHub",
+      "label": "GitHub",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "SPA",
+      "label": "Open app",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "SPA",
+      "to": "API",
+      "label": "Check auth status after redirect handling",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "not signed in",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "SPA",
+              "to": "User",
+              "label": "Show sign-in page",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "User",
+              "to": "SPA",
+              "label": "Click Sign in with GitHub",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "SPA",
+              "to": "API",
+              "label": "Navigate to /auth/github/authorize",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "API",
+              "to": "GitHub",
+              "label": "Start GitHub auth flow",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "GitHub",
+              "to": "API",
+              "label": "User authorizes",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "API",
+              "to": "SPA",
+              "label": "Redirect with auth success code",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "SPA",
+      "to": "API",
+      "label": "Exchange code for session",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "SPA",
+      "label": "Session token + login / cookie context",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "SPA",
+      "to": "SPA",
+      "label": "Store token and login in sessionStorage, strip auth params from URL",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "SPA",
+      "to": "API",
+      "label": "GET auth status",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "SPA",
+      "label": "signed_in + login/avatar",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "SPA",
+      "to": "User",
+      "label": "Render AppShell",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

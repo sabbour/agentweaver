@@ -1,0 +1,155 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Heartbeat experience",
+  "alt": "Heartbeat experience: User, Board Ready column, Coordinator heartbeat, API, Coordinator run, Flow",
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Board",
+      "label": "Board Ready column",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Heartbeat",
+      "label": "Coordinator heartbeat",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "API",
+      "label": "API",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Run",
+      "label": "Coordinator run",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Flow",
+      "label": "Flow",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Board",
+      "label": "Rank work in Ready",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "loop",
+      "label": "every interval",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Heartbeat",
+              "to": "API",
+              "label": "tick",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "API",
+              "to": "Board",
+              "label": "read Ready tasks and pickup settings",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "fragment",
+              "operator": "alt",
+              "label": "claimable work exists",
+              "sections": [
+                {
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "API",
+                      "to": "Run",
+                      "label": "start/advance coordinator work",
+                      "line": "solid",
+                      "arrow": "filled"
+                    },
+                    {
+                      "type": "message",
+                      "from": "API",
+                      "to": "Heartbeat",
+                      "label": "acted_count > 0",
+                      "line": "dashed",
+                      "arrow": "open"
+                    }
+                  ]
+                },
+                {
+                  "label": "no claimable work",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "API",
+                      "to": "Heartbeat",
+                      "label": "acted_count = 0",
+                      "line": "dashed",
+                      "arrow": "open"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Flow",
+      "label": "agent_queues projection",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Flow",
+      "to": "User",
+      "label": "active / queued / blocked / done by agent",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Sandbox preview: reaching a server inside the pod",
+  "alt": "Sandbox preview: reaching a server inside the pod: User, CoordinatorRunPage (preview dialog), API, Run's sandbox pod",
+  "participants": [
+    {
+      "id": "U",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "UI",
+      "label": "CoordinatorRunPage (preview dialog)",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "API",
+      "label": "API",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Pod",
+      "label": "Run's sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "U",
+      "to": "UI",
+      "label": "click Preview (K8s sandbox + active run), pick port",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "UI",
+      "to": "API",
+      "label": "POST /sandbox/port-forward { target_port }",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Pod",
+      "label": "kubectl port-forward :target_port",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "UI",
+      "label": "{ session_id, local_port, target_port, pod_name, started_at }",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "UI",
+      "to": "U",
+      "label": "Preview active for port {target_port} on pod {pod_name}",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": [
+        "UI",
+        "U"
+      ],
+      "label": "iframe shown only if preview_url present;<br/>otherwise \"no proxied preview URL\""
+    },
+    {
+      "type": "message",
+      "from": "U",
+      "to": "UI",
+      "label": "stop preview",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "UI",
+      "to": "API",
+      "label": "DELETE /sandbox/port-forward/{sessionId}",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Pod",
+      "label": "tear down tunnel",
+      "line": "solid",
+      "arrow": "filled"
+    }
+  ]
+}

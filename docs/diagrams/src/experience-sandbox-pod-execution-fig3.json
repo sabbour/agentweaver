@@ -1,0 +1,117 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Suspend and resume, from the user's view",
+  "alt": "Suspend and resume, from the user's view: User, Run (worker-owned), Sandbox pod",
+  "participants": [
+    {
+      "id": "U",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Run",
+      "label": "Run (worker-owned)",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Pod",
+      "label": "Sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "U",
+      "to": "Run",
+      "label": "submit work",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Run",
+      "to": "Pod",
+      "label": "claim warm pod + /configure (agent turn)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Pod",
+      "to": "U",
+      "label": "live tokens + pod pill 'pod-A'",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Run",
+      "to": "U",
+      "label": "reach review gate (pause)",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Run",
+      "to": "Pod",
+      "label": "checkpoint + release pod",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": [
+        "U",
+        "Run"
+      ],
+      "label": "human reviews — no pod held"
+    },
+    {
+      "type": "message",
+      "from": "U",
+      "to": "Run",
+      "label": "approve / request changes",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Run",
+      "to": "Pod",
+      "label": "re-claim warm pod + /configure + rehydrate",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Pod",
+      "to": "U",
+      "label": "live again + pod pill 'pod-B'",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Run",
+      "to": "U",
+      "label": "run completes",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

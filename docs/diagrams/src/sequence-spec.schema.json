@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentweaver sequence diagram spec",
+  "description": "Content source-of-truth for Fluent-styled sequence diagrams rendered by docs/diagram-renderer and captured by scripts/docs/capture-diagrams.mjs.",
+  "type": "object",
+  "required": ["kind", "title", "alt", "participants", "steps"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "kind": { "const": "sequence" },
+    "title": { "type": "string" },
+    "alt": { "type": "string", "description": "Markdown image alt text." },
+    "autonumber": { "type": "boolean", "default": false },
+    "participants": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "icon", "badge"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "subLabel": { "type": "string" },
+          "icon": { "type": "string", "enum": ["globe", "branch", "route", "window", "server", "bot", "database", "key", "box"] },
+          "badge": {
+            "type": "object",
+            "required": ["text", "tone"],
+            "properties": {
+              "text": { "type": "string" },
+              "tone": { "type": "string", "enum": ["lavender", "teal", "green", "marigold", "neutral"] }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "steps": { "$ref": "#/$defs/steps" }
+  },
+  "$defs": {
+    "steps": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/message" },
+          { "$ref": "#/$defs/activation" },
+          { "$ref": "#/$defs/note" },
+          { "$ref": "#/$defs/fragment" }
+        ]
+      }
+    },
+    "message": {
+      "type": "object",
+      "required": ["type", "from", "to", "label"],
+      "properties": {
+        "type": { "const": "message" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "label": { "type": "string" },
+        "line": { "type": "string", "enum": ["solid", "dashed"], "default": "solid" },
+        "arrow": { "type": "string", "enum": ["filled", "open", "cross"], "default": "filled" }
+      },
+      "additionalProperties": false
+    },
+    "activation": {
+      "type": "object",
+      "required": ["type", "participant", "action"],
+      "properties": {
+        "type": { "const": "activation" },
+        "participant": { "type": "string" },
+        "action": { "type": "string", "enum": ["start", "end"] }
+      },
+      "additionalProperties": false
+    },
+    "note": {
+      "type": "object",
+      "required": ["type", "over", "label"],
+      "properties": {
+        "type": { "const": "note" },
+        "over": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "label": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "fragment": {
+      "type": "object",
+      "required": ["type", "operator", "sections"],
+      "properties": {
+        "type": { "const": "fragment" },
+        "operator": { "type": "string", "enum": ["alt", "opt", "loop"] },
+        "label": { "type": "string" },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["steps"],
+            "properties": {
+              "label": { "type": "string" },
+              "steps": { "$ref": "#/$defs/steps" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

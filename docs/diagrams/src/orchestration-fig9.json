@@ -1,0 +1,153 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Runtime Sequence",
+  "alt": "Runtime Sequence: Client, Orchestrator, Workflow Factory, Agent Turn Executor, Worker Agent, Watch Loop, Event Stream / SSE",
+  "participants": [
+    {
+      "id": "Client",
+      "label": "Client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Orchestrator",
+      "label": "Orchestrator",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Factory",
+      "label": "Workflow Factory",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Executor",
+      "label": "Agent Turn Executor",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Agent",
+      "label": "Worker Agent",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Watch",
+      "label": "Watch Loop",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Stream",
+      "label": "Event Stream / SSE",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "Orchestrator",
+      "label": "start or resume run",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Orchestrator",
+      "to": "Orchestrator",
+      "label": "prepare worktree and run record",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Orchestrator",
+      "to": "Factory",
+      "label": "resolve and bind workflow",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Factory",
+      "to": "Executor",
+      "label": "build executable graph",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Executor",
+      "to": "Agent",
+      "label": "setup and run turn",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Agent",
+      "to": "Stream",
+      "label": "step and output events",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Executor",
+      "to": "Factory",
+      "label": "turn output, diff, steps",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Factory",
+      "to": "Watch",
+      "label": "workflow events",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Watch",
+      "to": "Orchestrator",
+      "label": "persist status transitions",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Watch",
+      "to": "Stream",
+      "label": "review, merge, terminal events",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

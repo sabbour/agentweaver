@@ -73,19 +73,12 @@ Now the restart story:
 
 A graceful shutdown is even cleaner: on a stop signal a worker stops claiming new runs, releases (or lets expire) the leases it holds, and finishes or checkpoints whatever is in flight before exiting — which is why worker disruption budgets favor draining one pod at a time.
 
-```mermaid
-sequenceDiagram
-    participant W1 as Worker A (owns run)
-    participant DB as Postgres (lease)
-    participant W2 as Worker B
-    W1->>DB: renew heartbeat while working
-    Note over W1: pod restarts / crashes
-    W1--xDB: heartbeats stop
-    Note over DB: lease expires
-    W2->>DB: claim WHERE free OR expired
-    DB-->>W2: won — run re-leased to B
-    Note over W2: resumes from last checkpoint
-```
+![How runs survive replica restarts: Worker A (owns run), Postgres (lease), Worker B](../diagrams/experience-scaling-operations-fig3.png)
+
+<!-- Rendered from ../diagrams/src/experience-scaling-operations-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A subtle but important guarantee sits underneath this: a former owner that was paused or stuck cannot wake up later and corrupt a run that has since been re-leased. Each acquisition carries a token that only moves forward, and a stale token's writes are rejected — so the new owner is always the only one whose work counts.
 

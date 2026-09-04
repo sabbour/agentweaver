@@ -1,0 +1,200 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Behavior",
+  "alt": "Behavior: User / operator, API (SandboxEndpoints), PortForwardService, PodNameRegistry, kubectl, Sandbox pod (run-bound)",
+  "participants": [
+    {
+      "id": "User",
+      "label": "User / operator",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "API",
+      "label": "API (SandboxEndpoints)",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "PF",
+      "label": "PortForwardService",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Reg",
+      "label": "PodNameRegistry",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "K",
+      "label": "kubectl",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Pod",
+      "label": "Sandbox pod (run-bound)",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "API",
+      "label": "POST /api/runs/{runId}/sandbox/port-forward { targetPort }",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "API",
+      "label": "validate port, run exists, caller owns run",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "PF",
+      "label": "StartAsync(runId, targetPort)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "PF",
+      "to": "Reg",
+      "label": "TryGet(runId) → pod_name",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "no pod registered",
+      "sections": [
+        {
+          "steps": [
+            {
+              "type": "message",
+              "from": "Reg",
+              "to": "PF",
+              "label": "null",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "PF",
+              "to": "API",
+              "label": "InvalidOperationException → 409",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "pod registered",
+          "steps": [
+            {
+              "type": "message",
+              "from": "PF",
+              "to": "K",
+              "label": "kubectl port-forward --address 127.0.0.1 pod/{pod} :{target_port} -n {ns}",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "K",
+              "to": "Pod",
+              "label": "tunnel target_port",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "K",
+              "to": "PF",
+              "label": "Forwarding from 127.0.0.1:{local_port} ->",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "PF",
+              "to": "PF",
+              "label": "probe loopback TCP until ready",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "PF",
+              "to": "API",
+              "label": "PortForwardSession",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "API",
+              "to": "User",
+              "label": "{ session_id, local_port, target_port, pod_name, started_at }",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "API",
+      "label": "open 127.0.0.1:{local_port} → reach server in pod",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "API",
+      "label": "DELETE /api/runs/{runId}/sandbox/port-forward/{sessionId}",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "PF",
+      "label": "Stop(runId, sessionId) → kill kubectl",
+      "line": "solid",
+      "arrow": "filled"
+    }
+  ]
+}

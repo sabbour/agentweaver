@@ -21,49 +21,12 @@ A project run needs an isolated git worktree, a sandboxed execution environment,
 
 ## The life of a session
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant UI as Sessions UI
-    participant EP as AssistantEndpoints
-    participant SVC as AssistantRunService
-    participant HOST as AgentHost pod
-    participant AGT as OperatorAssistantAgent
-    participant MCP as MCP server
-    participant SDK as Copilot SDK session
-    participant STORE as Run store / event log
+![The life of a session: Sessions UI, AssistantEndpoints, AssistantRunService, AgentHost pod, OperatorAssistantAgent, MCP server, Copilot SDK session, Run store / event log](../diagrams/assistant-runtime-fig1.png)
 
-    UI->>EP: POST /api/assistant/runs {message}
-    EP->>SVC: StartRunAsync(caller, message)
-    SVC->>STORE: create run (AgentName=Operator)
-    SVC->>HOST: launch + configure (caller bearer, linked GitHub token)
-    HOST->>AGT: RunTurnAsync(history=[])
-    AGT->>MCP: connect with caller bearer
-    AGT->>SDK: CreateSessionAsync (fresh, per turn)
-    SDK-->>AGT: response + tool calls
-    AGT-->>SVC: assistant message
-    SVC->>STORE: append AgentMessage events
-    SVC-->>UI: 201 Created {runId, message}
-
-    Note over UI,SVC: ... later, possibly a different pod ...
-
-    UI->>EP: POST /api/assistant/runs/{id}/messages
-    EP->>SVC: SendMessageAsync(id, message)
-    alt run cached in this pod
-        SVC->>HOST: reuse held claim (per-turn caller bearer refresh, no /configure)
-        HOST->>AGT: RunTurnAsync(history=in-memory)
-    else cache miss (idle sweep / restart / other pod)
-        SVC->>STORE: read persisted AgentMessage events
-        SVC->>SVC: rebuild history, rehydrate run state
-        SVC->>HOST: launch + configure current caller bearer
-        HOST->>AGT: RunTurnAsync(history=rebuilt)
-    end
-    AGT->>SDK: CreateSessionAsync (fresh, per turn)
-    SDK-->>AGT: response + tool calls
-    AGT-->>SVC: assistant message
-    SVC->>STORE: append AgentMessage events
-    SVC-->>UI: 200 OK {message}
-```
+<!-- Rendered from ../diagrams/src/assistant-runtime-fig1.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 1. **Start.** `POST /api/assistant/runs` creates a run record and, if an initial message was supplied, immediately runs the opening turn. The response returns the `runId` used for every subsequent message.
 2. **Converse.** `POST /api/assistant/runs/{id}/messages` appends the caller's message, runs a turn, and returns the assistant's reply. Each turn is serialized per-run via a semaphore so two messages to the same session can't race.

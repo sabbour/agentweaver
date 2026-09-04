@@ -226,25 +226,12 @@ These are board buckets, not necessarily workflow nodes. Failed, blocked, declin
 
 Pickup turns Ready tasks into coordinator runs. The coordinator heartbeat scans eligible projects, reads top Ready tasks, claims them atomically, reserves a coordinator run, and starts that run unattended.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Board
-    participant Heartbeat
-    participant Pickup
-    participant Coordinator
+![Pickup and automation: User, Board, Heartbeat, Pickup, Coordinator](../diagrams/experience-workflows-backlog-fig3.png)
 
-    User->>Board: Move task to Ready
-    Heartbeat->>Board: Read top Ready tasks
-    Heartbeat->>Pickup: Try pickup task
-    Pickup->>Board: Atomic claim + reserve run
-    alt claim won
-        Pickup->>Coordinator: Start unattended coordinator run
-        Coordinator->>Board: Run appears in Active
-    else claim lost or project unavailable
-        Pickup-->>Board: Task remains or another run owns it
-    end
-```
+<!-- Rendered from ../diagrams/src/experience-workflows-backlog-fig3.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 A project is eligible when it is active and its workspace is available. If the workspace is unavailable, Ready tasks remain untouched and preserve priority for a later heartbeat. Atomic claim means two ticks or instances cannot create duplicate runs for the same Ready task.
 

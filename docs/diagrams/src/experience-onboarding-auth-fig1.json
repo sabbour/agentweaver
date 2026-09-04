@@ -1,0 +1,135 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "First-run web UI experience",
+  "alt": "First-run web UI experience: User, web UI, Agentweaver API, Microsoft Entra ID",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Actor",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Web",
+      "label": "web UI",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver API",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Entra",
+      "label": "Microsoft Entra ID",
+      "icon": "box",
+      "badge": {
+        "text": "Component",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Web",
+      "label": "Open Agentweaver",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Web",
+      "to": "API",
+      "label": "Check session",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Web",
+      "label": "not signed in",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Web",
+      "to": "User",
+      "label": "Show Entra sign-in",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Web",
+      "label": "Select sign-in",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Web",
+      "to": "API",
+      "label": "Start Entra authorization",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Entra",
+      "label": "Redirect with PKCE",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "Entra",
+      "label": "Sign in",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "Entra",
+      "to": "API",
+      "label": "Return authorization code",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "Web",
+      "label": "Return authenticated session",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Web",
+      "to": "User",
+      "label": "Show setup readiness",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}

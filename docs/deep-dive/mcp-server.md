@@ -127,35 +127,12 @@ This follows the well-known URI convention for issuers/resources with path compo
 
 This is a standards-compliance and interoperability decision, not a cosmetic duplicate. Some clients probe the suffixed form; serving only the bare form breaks those clients even though the resource itself is `/mcp`.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as MCP client
-    participant RS as Agentweaver.Mcp<br/>Resource Server
-    participant AS as Agentweaver.Api<br/>Authorization Server
-    participant Entra as Microsoft Entra ID
+![3.4 The path-suffixed well-known gotcha: MCP client, Agentweaver.Mcp<br/>Resource Server, Agentweaver.Api<br/>Authorization Server, Microsoft Entra ID](../diagrams/mcp-server-fig2.png)
 
-    C->>RS: POST /mcp without bearer token
-    RS-->>C: 401 WWW-Authenticate<br/>resource_metadata=https://HOST/.well-known/oauth-protected-resource/mcp
-    C->>RS: GET /.well-known/oauth-protected-resource or /mcp-suffixed variant
-    RS-->>C: resource=https://HOST/mcp<br/>authorization_servers=[https://HOST]
-    C->>AS: GET /.well-known/oauth-authorization-server
-    AS-->>C: authorize/token/JWKS/register/revoke metadata<br/>PKCE S256, code grant, public client
-    C->>AS: GET /oauth/authorize<br/>code_challenge=S256, resource=https://HOST/mcp
-    AS->>Entra: Authenticate the user
-    Entra-->>AS: Entra identity and roles
-    AS->>AS: Create a single-use code
-    AS-->>C: Redirect to client with authorization code
-    C->>AS: POST /oauth/token with code_verifier
-    AS-->>C: Bearer access token signed by AS
-    C->>RS: POST /mcp with Authorization: Bearer token
-    RS->>AS: Fetch JWKS if cache is cold
-    RS->>RS: Validate signature, issuer, audience, lifetime
-    RS->>AS: Invoke Agentweaver API with same bearer token
-    AS->>AS: Validate token, jti denylist, caller policy
-    AS-->>RS: API result
-    RS-->>C: MCP tool result
-```
+<!-- Rendered from ../diagrams/src/mcp-server-fig2.json by docs/diagram-renderer +
+     Playwright (Fluent-styled sequence diagram), replacing Mermaid.
+     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
+     regenerated PNG + .hash.txt. -->
 
 **Where this lives**
 

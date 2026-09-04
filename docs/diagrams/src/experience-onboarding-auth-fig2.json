@@ -1,0 +1,265 @@
+{
+  "$schema": "./sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "MCP OAuth and bearer-token flow",
+  "alt": "MCP OAuth and bearer-token flow: User, MCP client, Agentweaver MCP server, Agentweaver API / Authorization Server, GitHub, Agentweaver API resources",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "User",
+      "label": "User",
+      "icon": "globe",
+      "badge": {
+        "text": "Actor",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Client",
+      "label": "MCP client",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "MCP",
+      "label": "Agentweaver MCP server",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "AS",
+      "label": "Agentweaver API / Authorization Server",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "GitHub",
+      "label": "GitHub",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "API",
+      "label": "Agentweaver API resources",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "MCP",
+      "label": "Call /mcp without bearer token",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "Client",
+      "label": "401 WWW-Authenticate with resource_metadata",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "MCP",
+      "label": "GET /.well-known/oauth-protected-resource/mcp",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "Client",
+      "label": "resource, authorization_servers, scopes",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "AS",
+      "label": "GET /.well-known/oauth-authorization-server/mcp",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "Client",
+      "label": "authorize, token, register, revoke, jwks",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "AS",
+      "label": "Optional /oauth/register with loopback redirect URI",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "Client",
+      "label": "public client_id",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "AS",
+      "label": "/oauth/authorize with client_id, redirect_uri, resource, S256 challenge",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "AS",
+      "label": "Validate client, redirect URI, response_type, PKCE",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "GitHub",
+      "label": "Browser redirect for GitHub sign-in",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "User",
+      "to": "GitHub",
+      "label": "Sign in and consent",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "GitHub",
+      "to": "AS",
+      "label": "Callback with GitHub code + state",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "GitHub",
+      "label": "Exchange GitHub code server-side",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "AS",
+      "label": "Enforce required org membership",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "Client",
+      "label": "Redirect to loopback/registered URI with Agentweaver code",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "AS",
+      "label": "/oauth/token with code_verifier",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "AS",
+      "label": "Consume code, verify redirect/client/PKCE binding",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "AS",
+      "to": "Client",
+      "label": "Bearer Agentweaver JWT + refresh token",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "Client",
+      "to": "MCP",
+      "label": "/mcp with Bearer Agentweaver JWT",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "AS",
+      "label": "Fetch/cache JWKS when needed",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "MCP",
+      "label": "Validate JWT offline",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "API",
+      "label": "Forward same bearer token for tool-backed API call",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "API",
+      "to": "MCP",
+      "label": "Caller-scoped result",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "MCP",
+      "to": "Client",
+      "label": "Tool result",
+      "line": "dashed",
+      "arrow": "open"
+    }
+  ]
+}
