@@ -357,7 +357,7 @@ describe('ProjectSettingsPage', () => {
     expect(await screen.findByText('project_model_provider_reconnect_required')).toBeDefined();
     expect(screen.getByText('Repository access is ready for background automation.')).toBeDefined();
     expect(screen.queryByText('Legacy combined message.')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Manage GitHub Copilot' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Reconnect GitHub Copilot' })).toBeDefined();
   });
 
   it('shows the platform default Copilot account instead of a broken project warning', async () => {
