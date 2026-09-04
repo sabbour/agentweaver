@@ -1,0 +1,426 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Agentweaver System Architecture",
+  "alt": "Agentweaver system architecture grouped into clients, identity and authorization, the API control plane, the AKS execution plane, and durable state and external systems",
+  "direction": "TB",
+  "groups": [
+    {
+      "id": "clients",
+      "label": "Clients",
+      "tier": 1
+    },
+    {
+      "id": "identity",
+      "label": "Identity and authorization",
+      "tier": 1
+    },
+    {
+      "id": "control",
+      "label": "Control plane — the API is authoritative",
+      "tier": 1
+    },
+    {
+      "id": "execution",
+      "label": "Execution plane on AKS — one sandbox per run",
+      "tier": 1
+    },
+    {
+      "id": "external",
+      "label": "Durable state and external systems",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Web",
+      "label": "Web UI",
+      "subLabel": "React 19 + Fluent UI",
+      "icon": "window",
+      "badge": {
+        "text": "Client",
+        "tone": "teal"
+      },
+      "group": "clients"
+    },
+    {
+      "id": "McpClients",
+      "label": "MCP clients",
+      "subLabel": "Copilot CLI, VS Code, assistants",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      },
+      "group": "clients"
+    },
+    {
+      "id": "Entra",
+      "label": "Microsoft Entra",
+      "subLabel": "browser session + bearer identity",
+      "icon": "key",
+      "badge": {
+        "text": "Identity",
+        "tone": "marigold"
+      },
+      "group": "identity"
+    },
+    {
+      "id": "OAuth",
+      "label": "OAuth 2.1 server",
+      "subLabel": "OpenIddict · PKCE + consent",
+      "icon": "key",
+      "badge": {
+        "text": "Auth",
+        "tone": "marigold"
+      },
+      "group": "identity"
+    },
+    {
+      "id": "McpServer",
+      "label": "Agentweaver MCP",
+      "subLabel": "mcp:invoke validation + tools",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "group": "identity"
+    },
+    {
+      "id": "Api",
+      "label": "API endpoints",
+      "subLabel": "REST, SSE, OAuth, run controls",
+      "icon": "server",
+      "badge": {
+        "text": "Core",
+        "tone": "lavender"
+      },
+      "group": "control"
+    },
+    {
+      "id": "Coordinator",
+      "label": "Coordinator",
+      "subLabel": "plans, dispatch, assembly",
+      "icon": "bot",
+      "badge": {
+        "text": "Core",
+        "tone": "lavender"
+      },
+      "group": "control"
+    },
+    {
+      "id": "Workflow",
+      "label": "Workflow engine",
+      "subLabel": "loader, selector, graph binder",
+      "icon": "route",
+      "badge": {
+        "text": "Workflow",
+        "tone": "green"
+      },
+      "group": "control"
+    },
+    {
+      "id": "Gates",
+      "label": "Platform gates",
+      "subLabel": "RAI, build/test, review, merge",
+      "icon": "key",
+      "badge": {
+        "text": "Workflow",
+        "tone": "green"
+      },
+      "group": "control"
+    },
+    {
+      "id": "GitServices",
+      "label": "Git services",
+      "subLabel": "worktrees, integration branches, locks",
+      "icon": "branch",
+      "badge": {
+        "text": "Workflow",
+        "tone": "green"
+      },
+      "group": "control"
+    },
+    {
+      "id": "Catalog",
+      "label": "Catalog and memory",
+      "subLabel": "teams, skills, workflows, decisions",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "control"
+    },
+    {
+      "id": "Authorization",
+      "label": "Authorization services",
+      "subLabel": "project roles + capability snapshots",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      },
+      "group": "control"
+    },
+    {
+      "id": "WarmPool",
+      "label": "Sandbox controller",
+      "subLabel": "SandboxClaim + SandboxWarmPool",
+      "icon": "box",
+      "badge": {
+        "text": "AKS",
+        "tone": "teal"
+      },
+      "group": "execution"
+    },
+    {
+      "id": "AgentHost",
+      "label": "AgentHost pod",
+      "subLabel": "mTLS A2A server · one run per pod",
+      "icon": "server",
+      "badge": {
+        "text": "Runtime",
+        "tone": "marigold"
+      },
+      "group": "execution"
+    },
+    {
+      "id": "Executor",
+      "label": "Executor sidecar",
+      "subLabel": "all model-controlled processes",
+      "icon": "box",
+      "badge": {
+        "text": "Runtime",
+        "tone": "marigold"
+      },
+      "group": "execution"
+    },
+    {
+      "id": "Governance",
+      "label": "Governance kernel",
+      "subLabel": "tool approval + sandbox policy",
+      "icon": "key",
+      "badge": {
+        "text": "Policy",
+        "tone": "green"
+      },
+      "group": "execution"
+    },
+    {
+      "id": "Isolation",
+      "label": "Sandbox isolation",
+      "subLabel": "Kata VM + bubblewrap",
+      "icon": "box",
+      "badge": {
+        "text": "Sandbox",
+        "tone": "marigold"
+      },
+      "group": "execution"
+    },
+    {
+      "id": "Network",
+      "label": "Network policy",
+      "subLabel": "default deny + egress allowlists",
+      "icon": "route",
+      "badge": {
+        "text": "Policy",
+        "tone": "green"
+      },
+      "group": "execution"
+    },
+    {
+      "id": "Postgres",
+      "label": "PostgreSQL",
+      "subLabel": "runs, events, checkpoints, memory",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "external"
+    },
+    {
+      "id": "KeyVault",
+      "label": "Azure Key Vault",
+      "subLabel": "API-held secrets + certificates",
+      "icon": "key",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      },
+      "group": "external"
+    },
+    {
+      "id": "GitHub",
+      "label": "GitHub",
+      "subLabel": "repositories + app capabilities",
+      "icon": "branch",
+      "badge": {
+        "text": "External",
+        "tone": "lavender"
+      },
+      "group": "external"
+    },
+    {
+      "id": "Models",
+      "label": "Model providers",
+      "subLabel": "GitHub Copilot or BYOK",
+      "icon": "bot",
+      "badge": {
+        "text": "External",
+        "tone": "neutral"
+      },
+      "group": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Web",
+      "to": "Entra",
+      "label": "signs in"
+    },
+    {
+      "from": "McpClients",
+      "to": "OAuth",
+      "label": "authorizes"
+    },
+    {
+      "from": "McpClients",
+      "to": "McpServer",
+      "label": "invokes tools"
+    },
+    {
+      "from": "OAuth",
+      "to": "Entra",
+      "label": "uses Entra session"
+    },
+    {
+      "from": "McpServer",
+      "to": "OAuth",
+      "label": "validates mcp:invoke"
+    },
+    {
+      "from": "Web",
+      "to": "Api",
+      "label": "REST + SSE"
+    },
+    {
+      "from": "McpServer",
+      "to": "Api",
+      "label": "calls protected API"
+    },
+    {
+      "from": "Api",
+      "to": "Authorization",
+      "label": "authorizes caller"
+    },
+    {
+      "from": "Api",
+      "to": "Coordinator",
+      "label": "starts orchestration"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Workflow",
+      "label": "selects workflow"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Catalog",
+      "label": "reads team + memory"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Gates",
+      "label": "runs assembly gates"
+    },
+    {
+      "from": "Coordinator",
+      "to": "GitServices",
+      "label": "assembles branches"
+    },
+    {
+      "from": "WarmPool",
+      "to": "AgentHost",
+      "label": "assigns sandbox pod"
+    },
+    {
+      "from": "Coordinator",
+      "to": "AgentHost",
+      "label": "dispatches child run"
+    },
+    {
+      "from": "Workflow",
+      "to": "AgentHost",
+      "label": "binds execution"
+    },
+    {
+      "from": "Gates",
+      "to": "AgentHost",
+      "label": "runs reviewer agents"
+    },
+    {
+      "from": "AgentHost",
+      "to": "Governance",
+      "label": "evaluates tool call"
+    },
+    {
+      "from": "Governance",
+      "to": "Executor",
+      "label": "allows approved command"
+    },
+    {
+      "from": "AgentHost",
+      "to": "Executor",
+      "label": "submits process"
+    },
+    {
+      "from": "Executor",
+      "to": "Isolation",
+      "label": "runs isolated"
+    },
+    {
+      "from": "Network",
+      "to": "AgentHost",
+      "label": "restricts traffic",
+      "undirected": true
+    },
+    {
+      "from": "Api",
+      "to": "Postgres",
+      "label": "persists runs + events"
+    },
+    {
+      "from": "Catalog",
+      "to": "Postgres",
+      "label": "persists catalog + memory"
+    },
+    {
+      "from": "Authorization",
+      "to": "KeyVault",
+      "label": "stores app secrets"
+    },
+    {
+      "from": "Authorization",
+      "to": "GitHub",
+      "label": "brokers capabilities"
+    },
+    {
+      "from": "GitServices",
+      "to": "GitHub",
+      "label": "clones + merges"
+    },
+    {
+      "from": "AgentHost",
+      "to": "Models",
+      "label": "model turns"
+    },
+    {
+      "from": "Executor",
+      "to": "GitHub",
+      "label": "repository access"
+    }
+  ]
+}
