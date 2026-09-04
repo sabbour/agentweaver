@@ -1,0 +1,148 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Content Authoring workflow",
+  "alt": "Content Authoring workflow: Research, Draft, Editorial Review, RAI Check, Human Review, Publish, Safety Failed, Declined, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "research",
+      "label": "Research",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "draft",
+      "label": "Draft",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "edit",
+      "label": "Editorial Review",
+      "subLabel": "review",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "rai-check",
+      "label": "RAI Check",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "RAI gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "human-review",
+      "label": "Human Review",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Human gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "publish",
+      "label": "Publish",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "terminal-safety-failed",
+      "label": "Safety Failed",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-declined",
+      "label": "Declined",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "research",
+      "to": "draft"
+    },
+    {
+      "from": "draft",
+      "to": "edit"
+    },
+    {
+      "from": "edit",
+      "to": "rai-check"
+    },
+    {
+      "from": "rai-check",
+      "to": "draft",
+      "label": "revise"
+    },
+    {
+      "from": "rai-check",
+      "to": "terminal-safety-failed",
+      "label": "safety-failed"
+    },
+    {
+      "from": "rai-check",
+      "to": "done",
+      "label": "no-changes"
+    },
+    {
+      "from": "rai-check",
+      "to": "human-review",
+      "label": "review"
+    },
+    {
+      "from": "human-review",
+      "to": "publish",
+      "label": "approved"
+    },
+    {
+      "from": "human-review",
+      "to": "draft",
+      "label": "request-changes"
+    },
+    {
+      "from": "human-review",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "publish",
+      "to": "done"
+    }
+  ]
+}

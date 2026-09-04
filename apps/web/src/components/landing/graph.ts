@@ -15,7 +15,7 @@ import type { Scenario, ScenarioNode } from './types';
  * stepped-DAG layout.
  *
  * The landing demo intentionally reuses the exact Coordinator run-graph helpers
- * (`layoutDagStaircase` for the compact alternating staircase and `routeGridEdges`
+ * (`layoutDagStaircase` for the compact banded-lane layout and `routeGridEdges`
  * for the stepped connector routing) rather than a landing-only layout algorithm.
  * This module only prepares the per-node size hints and forward (spine) edges the
  * shared helpers expect, then returns their output. Positions are deterministic
@@ -23,11 +23,11 @@ import type { Scenario, ScenarioNode } from './types';
  * scenario and asserted directly against a fresh `layoutDagStaircase` call.
  */
 
-/** Rank/node separation mirrors the Coordinator graph's compact staircase spacing. */
+/** Rank/node separation mirrors the Coordinator graph's compact band/gutter spacing. */
 export const LANDING_RANK_SEP = 40;
 export const LANDING_NODE_SEP = 20;
 
-/** Staircase options mirroring CoordinatorRunPage's compact alternating cascade. */
+/** Layout options mirroring CoordinatorRunPage's compact banded flow. */
 export const LANDING_STAIRCASE_OPTS = {
   rankSep: LANDING_RANK_SEP,
   nodeSep: LANDING_NODE_SEP,
@@ -42,7 +42,7 @@ export interface ScenarioGraph {
   routedEdges: Edge[];
   /** Per-node dagre size hints keyed by node id (drives readable packing). */
   sizeHints: Record<string, NodeSizeHint>;
-  /** The staircase-laid nodes (carry initialWidth/initialHeight for edge routing). */
+  /** The band-laid nodes (carry initialWidth/initialHeight for edge routing). */
   laidOutNodes: Node[];
 }
 
@@ -60,7 +60,7 @@ export function scenarioNodeSizeHint(node: ScenarioNode): NodeSizeHint {
 }
 
 /**
- * Compute the deterministic stepped-staircase geometry for one scenario using the
+ * Compute the deterministic banded-lane geometry for one scenario using the
  * shared production helpers. Pure — depends only on the scenario topology.
  */
 export function buildScenarioGraph(scenario: Scenario): ScenarioGraph {
@@ -78,7 +78,7 @@ export function buildScenarioGraph(scenario: Scenario): ScenarioGraph {
 
   const forwardEdges = scenario.edges.map(([id, source, target]) => forwardEdge(id, source, target));
 
-  // LR alternating staircase — the same configuration CoordinatorRunPage renders.
+  // LR banded-lane layout — the same configuration CoordinatorRunPage renders.
   const laidOutNodes = layoutDagStaircase(
     rawNodes,
     forwardEdges,

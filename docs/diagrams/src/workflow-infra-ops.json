@@ -1,0 +1,165 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Infrastructure & Operations workflow",
+  "alt": "Infrastructure & Operations workflow: Plan, Implement, Validate, RAI Check, Infra & Config Review, Human Review, Safety Failed, Declined, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "plan",
+      "label": "Plan",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "implement",
+      "label": "Implement",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "validate-gate",
+      "label": "Validate",
+      "subLabel": "devops-engineer · review",
+      "icon": "branch",
+      "badge": {
+        "text": "Peer review",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "rai-check",
+      "label": "RAI Check",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "RAI gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "infra-review",
+      "label": "Infra & Config Review",
+      "subLabel": "security-engineer · review",
+      "icon": "branch",
+      "badge": {
+        "text": "Peer review",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "human-review",
+      "label": "Human Review",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Human gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-safety-failed",
+      "label": "Safety Failed",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-declined",
+      "label": "Declined",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "plan",
+      "to": "implement"
+    },
+    {
+      "from": "implement",
+      "to": "validate-gate"
+    },
+    {
+      "from": "validate-gate",
+      "to": "rai-check",
+      "label": "pass"
+    },
+    {
+      "from": "validate-gate",
+      "to": "implement",
+      "label": "fail"
+    },
+    {
+      "from": "rai-check",
+      "to": "implement",
+      "label": "revise"
+    },
+    {
+      "from": "rai-check",
+      "to": "terminal-safety-failed",
+      "label": "safety-failed"
+    },
+    {
+      "from": "rai-check",
+      "to": "done",
+      "label": "no-changes"
+    },
+    {
+      "from": "rai-check",
+      "to": "infra-review",
+      "label": "review"
+    },
+    {
+      "from": "infra-review",
+      "to": "human-review",
+      "label": "approved"
+    },
+    {
+      "from": "infra-review",
+      "to": "implement",
+      "label": "request-changes"
+    },
+    {
+      "from": "infra-review",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "human-review",
+      "to": "done",
+      "label": "approved"
+    },
+    {
+      "from": "human-review",
+      "to": "implement",
+      "label": "request-changes"
+    },
+    {
+      "from": "human-review",
+      "to": "terminal-declined",
+      "label": "declined"
+    }
+  ]
+}

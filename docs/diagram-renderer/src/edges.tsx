@@ -12,12 +12,14 @@ export interface Point {
 }
 
 export interface RoutedEdgeData extends Record<string, unknown> {
-  /** Poly-line waypoints dagre computed for this edge, in flow coordinates,
-   * already routed to avoid intervening node cards. */
+  /** Orthogonal poly-line waypoints the layout router computed for this edge,
+   * in flow coordinates, already routed through the gutters between bands so
+   * it never crosses a node card. */
   points: Point[];
-  /** Label anchor dagre reserved for this edge (edge.x/edge.y). */
+  /** Position the router chose for this edge's label: on the edge's own
+   * horizontal run, slid clear of crossing connectors and other labels. */
   labelPos?: Point;
-  /** Small nudge applied on top of labelPos to break residual label overlaps. */
+  /** Reserved nudge applied on top of labelPos. */
   labelOffset?: LabelOffset;
 }
 
@@ -31,11 +33,12 @@ function dist(a: Point, b: Point): number {
 
 /**
  * Builds an SVG path that follows `points` exactly but replaces each interior
- * vertex with a short quadratic-bezier fillet, so dagre's routed orthogonal
+ * vertex with a short quadratic-bezier fillet, so the router's orthogonal
  * poly-line renders with rounded corners. Because the geometry comes straight
- * from dagre's edge routing (which threads edges through the gaps between
- * ranked nodes), the resulting line never cuts through an unrelated card the
- * way a naive handle-to-handle smoothstep path does.
+ * from `layout()` in DiagramCanvas.tsx (which assigns every horizontal run its
+ * own lane inside a gutter and fans each card's ports out along its edge), the
+ * resulting line never cuts through an unrelated card and never lies on top of
+ * another edge the way a naive handle-to-handle smoothstep path does.
  */
 export function buildRoundedPath(points: Point[], radius = CORNER_RADIUS): string {
   if (points.length === 0) return '';
@@ -73,16 +76,14 @@ export function buildRoundedPath(points: Point[], radius = CORNER_RADIUS): strin
 }
 
 /**
- * An edge that draws the exact poly-line dagre routed for it (see
- * `layout()` in DiagramCanvas.tsx) instead of a handle-to-handle smoothstep
- * path. dagre performs real layered edge routing -- inserting per-rank
- * routing waypoints that thread the line through the gaps between cards -- so
- * using those waypoints is what keeps edges from visually overlapping or
- * crossing straight through unrelated nodes. The label is rendered via
- * `EdgeLabelRenderer` at dagre's reserved label anchor (dagre reserves label
- * space in the layout, so labels no longer pile onto a shared midpoint),
- * with a small precomputed `labelOffset` applied to break any residual
- * overlap between co-located labels.
+ * An edge that draws the exact orthogonal poly-line the layout router computed
+ * for it (see `layout()` in DiagramCanvas.tsx) instead of a handle-to-handle
+ * smoothstep path. The router gives every horizontal run its own lane inside
+ * the gutter it travels through and fans each card's connections out along the
+ * card edge, which is what keeps parallel edges from collapsing onto each
+ * other. The label is rendered via `EdgeLabelRenderer` at the anchor the
+ * router picked for it -- a point on this edge's own run that was searched
+ * clear of crossing connectors, other labels, and cards.
  */
 export function RoutedEdge({ id, style, markerEnd, label, data }: EdgeProps) {
   const { points, labelPos, labelOffset } = (data as RoutedEdgeData | undefined) ?? {
@@ -102,16 +103,24 @@ export function RoutedEdge({ id, style, markerEnd, label, data }: EdgeProps) {
               position: 'absolute',
               transform: `translate(-50%, -50%) translate(${labelPos.x + offset.dx}px, ${labelPos.y + offset.dy}px)`,
               fontFamily,
-              fontSize: 11,
+              fontSize: 15,
               fontWeight: 600,
-              lineHeight: 1,
-              color: neutral.foreground3,
+              lineHeight: 1.1,
+              color: neutral.foreground2,
               backgroundColor: neutral.background1,
-              opacity: 0.95,
-              padding: '3px 5px',
-              borderRadius: 4,
-              whiteSpace: 'nowrap',
+              border: `1px solid ${neutral.stroke2}`,
+              padding: '5px 9px',
+              borderRadius: 6,
+              // The router pre-wraps long labels and reserves space for the
+              // wrapped block, so honour its line breaks exactly ('pre') and
+              // never let the browser re-wrap to a different shape.
+              whiteSpace: 'pre',
+              textAlign: 'center',
               pointerEvents: 'none',
+              // Labels belong on top of every connector, including the ones
+              // they do not describe. Edge SVGs carry their own zIndex, so the
+              // label needs an explicit higher one to win.
+              zIndex: 50,
             }}
           >
             {label}

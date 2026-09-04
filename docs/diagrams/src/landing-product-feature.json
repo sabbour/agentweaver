@@ -1,0 +1,81 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Landing demo — ship a product feature",
+  "alt": "Ship a product feature run tree: Coordinator, Outcome plan, Work plan, Design the setting and contract, Migration and enforcement, Limiter tests, Operator note, Human review.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "coordinator",
+      "label": "Coordinator",
+      "subLabel": "plans and steers the run",
+      "meta": "claude-sonnet-5",
+      "icon": "bot",
+      "badge": { "text": "Coordinator", "tone": "marigold" }
+    },
+    {
+      "id": "outcome",
+      "label": "Outcome plan",
+      "subLabel": "planning gate",
+      "meta": "9s",
+      "icon": "window",
+      "badge": { "text": "Gate", "tone": "teal" }
+    },
+    {
+      "id": "work-plan",
+      "label": "Work plan",
+      "subLabel": "work planning",
+      "meta": "7s",
+      "icon": "window",
+      "badge": { "text": "Gate", "tone": "teal" }
+    },
+    {
+      "id": "design",
+      "label": "Design the setting & contract",
+      "subLabel": "Morpheus · Lead Architect",
+      "meta": "claude-opus-4.8 · 48s",
+      "icon": "box",
+      "badge": { "text": "Agent", "tone": "lavender" }
+    },
+    {
+      "id": "docs",
+      "label": "Operator note",
+      "subLabel": "Link · Docs Writer",
+      "meta": "claude-sonnet-5 · 41s",
+      "icon": "box",
+      "badge": { "text": "Agent", "tone": "lavender" }
+    },
+    {
+      "id": "build",
+      "label": "Migration & enforcement",
+      "subLabel": "Tank · Core Implementer",
+      "meta": "claude-sonnet-5 · 2m 04s",
+      "icon": "box",
+      "badge": { "text": "Agent", "tone": "lavender" }
+    },
+    {
+      "id": "tests",
+      "label": "Limiter tests",
+      "subLabel": "Tank · Core Implementer",
+      "meta": "claude-sonnet-5 · 1m 12s",
+      "icon": "box",
+      "badge": { "text": "Agent", "tone": "lavender" }
+    },
+    {
+      "id": "review",
+      "label": "Human review",
+      "subLabel": "nothing merges without it",
+      "icon": "globe",
+      "badge": { "text": "Review", "tone": "green" }
+    }
+  ],
+  "edges": [
+    { "from": "coordinator", "to": "outcome" },
+    { "from": "outcome", "to": "work-plan" },
+    { "from": "work-plan", "to": "design" },
+    { "from": "work-plan", "to": "docs" },
+    { "from": "design", "to": "build" },
+    { "from": "build", "to": "tests" },
+    { "from": "tests", "to": "review" },
+    { "from": "docs", "to": "review" }
+  ]
+}

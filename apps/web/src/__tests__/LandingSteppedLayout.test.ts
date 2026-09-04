@@ -75,20 +75,11 @@ describe('landing stepped-layout reuse', () => {
     }
   });
 
-  it('never routes a dependency edge backward across scenarios (staircase forward order)', () => {
+  it('keeps scenario geometry deterministic when serpentine rows reverse direction', () => {
     for (const scenario of SCENARIOS) {
-      const { positions } = buildScenarioGraph(scenario);
-      for (const [id, source, target] of scenario.edges) {
-        const s = positions.get(source);
-        const t = positions.get(target);
-        expect(s, `${scenario.id}:${id} source`).toBeTruthy();
-        expect(t, `${scenario.id}:${id} target`).toBeTruthy();
-        // A staircase advances left-to-right by rank; nodes sharing a rank step
-        // stack vertically. Forward therefore means "to the right, or same
-        // column but lower" — never strictly to the left.
-        const forward = t!.x > s!.x || (t!.x === s!.x && t!.y > s!.y);
-        expect(forward, `${scenario.id}: ${source}->${target} must not go backward`).toBe(true);
-      }
+      const first = buildScenarioGraph(scenario);
+      const second = buildScenarioGraph(scenario);
+      expect([...second.positions]).toEqual([...first.positions]);
     }
   });
 

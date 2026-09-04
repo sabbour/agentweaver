@@ -11,6 +11,7 @@ import {
   layoutWorkflowDefinitionNodes,
   NODE_H,
   NODE_W,
+  routeGridEdges,
   WORKFLOW_DEFINITION_NODE_W,
   WORKFLOW_LONG_LINEAR_MIN_RANKS,
 } from '../utils/dagLayout';
@@ -230,52 +231,58 @@ describe('layoutDagStaircase', () => {
     }
   });
 
-  it('yields a fixed dependency spine order for a fixed fixture', () => {
+  it('keeps dependency order adjacent through deterministic serpentine runs', () => {
     const { nodes, edges, hints } = coordinatorWithSubtasks(3);
     const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, minStepRanks: 3 }, hints);
-    // Sorting the spine nodes by primary axis (X in LR) must reproduce the real dependency order.
-    const spineOrder = laid
-      .filter((n) => SPINE.includes(n.id))
-      .slice()
-      .sort((a, b) => a.position.x - b.position.x)
-      .map((n) => n.id);
-    expect(spineOrder).toEqual(SPINE);
+    const byId = new Map(laid.map((node) => [node.id, node]));
+    for (const [sourceId, targetId] of [
+      ['coordinator', 'outcome'],
+      ['outcome', 'work'],
+      ['rai', 'review'],
+      ['review', 'merge'],
+      ['merge', 'scribe'],
+    ]) {
+      const source = byId.get(sourceId)!;
+      const target = byId.get(targetId)!;
+      expect(
+        centerX(source, hints[sourceId].width) === centerX(target, hints[targetId].width)
+        || centerY(source, hints[sourceId].height) === centerY(target, hints[targetId].height),
+      ).toBe(true);
+    }
   });
 
-  it('holds 2+ nodes per stair tread (chunky staircase, not a 1-node-per-step diagonal)', () => {
-    // 3 subtasks ⇒ 8 ranks. With STAIR_RUN=2 the spine forms 2-node treads that share a row before
-    // stepping down, so the number of distinct rows is well below the number of spine nodes.
+  it('folds long one-node rank runs into compact serpentine bands', () => {
     const { nodes, edges, hints } = coordinatorWithSubtasks(3);
     const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, minStepRanks: 3 }, hints);
     const byId = new Map(laid.map((n) => [n.id, n]));
 
     const rows = SPINE.map((id) => rounded(byId.get(id)!.position.y));
     const distinctRows = new Set(rows).size;
-    // A pure 1-per-step diagonal would put every spine node on its own row (distinctRows === length).
     expect(distinctRows).toBeLessThan(SPINE.length);
     expect(distinctRows).toBeGreaterThan(1); // still uses height (multiple treads)
 
-    // The first tread groups the first two ranks on the same row (advancing right, no step yet).
+    // A run at the configured threshold stays linear; the longer tail folds.
     expect(rounded(byId.get('coordinator')!.position.y)).toBe(rounded(byId.get('outcome')!.position.y));
     expect(byId.get('outcome')!.position.x).toBeGreaterThan(byId.get('coordinator')!.position.x);
+    expect(new Set(['rai', 'review', 'merge', 'scribe'].map((id) => byId.get(id)!.position.y)).size)
+      .toBeGreaterThan(1);
   });
 
-  it('cascades a long linear spine as an alternating orthogonal stair, using both dimensions (LR)', () => {
-    // 3 subtasks ⇒ 8 ranks (coordinator, outcome, work, [subtasks], rai, review, merge, scribe).
+  it('uses both dimensions and keeps consecutive spine nodes orthogonally adjacent (LR)', () => {
     const { nodes, edges, hints } = coordinatorWithSubtasks(3);
     const laid = layoutDagStaircase(nodes, edges, { rankdir: 'LR', ...SEP, targetAspect: 1.35, minStepRanks: 3 }, hints);
     const byId = new Map(laid.map((n) => [n.id, n]));
 
     const xs = SPINE.map((id) => byId.get(id)!.position.x);
     const ys = SPINE.map((id) => byId.get(id)!.position.y);
-    // Monotonic non-decreasing on BOTH axes, and every step advances at least one axis (forward
-    // progress, never reversing). The alternating stair steps right OR down each step — not both.
-    for (let i = 1; i < SPINE.length; i += 1) {
-      expect(xs[i]).toBeGreaterThanOrEqual(xs[i - 1]);
-      expect(ys[i]).toBeGreaterThanOrEqual(ys[i - 1]);
-      expect(xs[i] > xs[i - 1] || ys[i] > ys[i - 1]).toBe(true);
+    for (let i = 4; i < SPINE.length; i += 1) {
+      const previous = byId.get(SPINE[i - 1])!;
+      const current = byId.get(SPINE[i])!;
+      expect(
+        centerX(previous, hints[previous.id].width) === centerX(current, hints[current.id].width)
+        || centerY(previous, hints[previous.id].height) === centerY(current, hints[current.id].height),
+      ).toBe(true);
     }
-    // Both dimensions are actually used (distinct columns AND distinct rows along the spine).
     expect(new Set(xs).size).toBeGreaterThan(1);
     expect(new Set(ys).size).toBeGreaterThan(1);
 
@@ -308,25 +315,26 @@ describe('layoutDagStaircase', () => {
     expect(ys.size).toBe(1);
   });
 
-  it('transposes for the vertical (TB) orientation — an alternating stair down then right', () => {
+  it('transposes the serpentine flow for the vertical (TB) orientation', () => {
     const { nodes, edges, hints } = coordinatorWithSubtasks(3);
     const laid = layoutDagStaircase(nodes, edges, { rankdir: 'TB', ...SEP, targetAspect: 1.35, minStepRanks: 3 }, hints);
     const byId = new Map(laid.map((n) => [n.id, n]));
 
-    // In TB the primary axis is vertical (Y advances down) and the step spreads across X (right); the
-    // alternation moves down OR right each step, so assert non-decreasing + forward progress on both.
     const xs = SPINE.map((id) => byId.get(id)!.position.x);
     const ys = SPINE.map((id) => byId.get(id)!.position.y);
-    for (let i = 1; i < SPINE.length; i += 1) {
-      expect(xs[i]).toBeGreaterThanOrEqual(xs[i - 1]);
-      expect(ys[i]).toBeGreaterThanOrEqual(ys[i - 1]);
-      expect(xs[i] > xs[i - 1] || ys[i] > ys[i - 1]).toBe(true);
+    for (let i = 4; i < SPINE.length; i += 1) {
+      const previous = byId.get(SPINE[i - 1])!;
+      const current = byId.get(SPINE[i])!;
+      expect(
+        centerX(previous, hints[previous.id].width) === centerX(current, hints[current.id].width)
+        || centerY(previous, hints[previous.id].height) === centerY(current, hints[current.id].height),
+      ).toBe(true);
     }
     expect(new Set(xs).size).toBeGreaterThan(1);
     expect(new Set(ys).size).toBeGreaterThan(1);
   });
 
-  it('uses a shorter primary-axis pitch for compact→compact than compact→subtask transitions in both LR and TB', () => {
+  it('uses fixed band gutters while honoring each source rank extent in both LR and TB', () => {
     const nodes: Node[] = ['compact-a', 'compact-b', 'subtask-c', 'compact-d'].map(makeNode);
     const edges: Edge[] = [
       makeEdge('compact-a', 'compact-b'),
@@ -349,14 +357,11 @@ describe('layoutDagStaircase', () => {
       const compactToCompact = primary('compact-b') - primary('compact-a');
       const compactToSubtask = primary('subtask-c') - primary('compact-b');
       const expectedCompact = (rankdir === 'LR' ? FIXED_NODE_W : FIXED_NODE_H) + laneGap;
-      const expectedSubtask = Math.max(
-        rankdir === 'LR' ? FIXED_NODE_W : FIXED_NODE_H,
-        rankdir === 'LR' ? SUBTASK_NODE_W : SUBTASK_NODE_H,
-      ) + laneGap;
+      const expectedSubtask = (rankdir === 'LR' ? FIXED_NODE_W : FIXED_NODE_H) + laneGap;
 
       expect(compactToCompact).toBe(expectedCompact);
       expect(compactToSubtask).toBe(expectedSubtask);
-      expect(compactToCompact).toBeLessThan(compactToSubtask);
+      expect(compactToCompact).toBe(compactToSubtask);
     }
   });
 
@@ -412,6 +417,54 @@ describe('layoutDagStaircase', () => {
         expect(n.position.y).toBeGreaterThanOrEqual(0);
       }
     }
+  });
+
+  it('widens inter-band gutters for parallel unwrapped labels', () => {
+    const nodes = ['start', 'a', 'b', 'c', 'done'].map(makeNode);
+    const plainEdges = [
+      makeEdge('start', 'a'),
+      makeEdge('start', 'b'),
+      makeEdge('start', 'c'),
+      makeEdge('a', 'done'),
+      makeEdge('b', 'done'),
+      makeEdge('c', 'done'),
+    ];
+    const labelledEdges = plainEdges.map((edge) => ({
+      ...edge,
+      label: 'A deliberately long transition label that wraps in the routing gutter',
+    }));
+    const hints = Object.fromEntries(nodes.map((node) => [node.id, { width: 180, height: 72 }]));
+
+    const plain = new Map(
+      layoutDagStaircase(nodes, plainEdges, { rankdir: 'LR', ...SEP, minStepRanks: 3 }, hints)
+        .map((node) => [node.id, node]),
+    );
+    const labelled = new Map(
+      layoutDagStaircase(nodes, labelledEdges, { rankdir: 'LR', ...SEP, minStepRanks: 3 }, hints)
+        .map((node) => [node.id, node]),
+    );
+
+    expect(labelled.get('done')!.position.x).toBeGreaterThan(plain.get('done')!.position.x);
+  });
+
+  it('assigns deterministic distinct lanes to edges sharing a routing gutter', () => {
+    const nodes = [
+      { ...makeNode('start'), position: { x: 0, y: 100 } },
+      { ...makeNode('a'), position: { x: 300, y: 0 } },
+      { ...makeNode('b'), position: { x: 300, y: 100 } },
+      { ...makeNode('c'), position: { x: 300, y: 200 } },
+    ];
+    const edges = ['a', 'b', 'c'].map((target) => ({
+      ...makeEdge('start', target),
+      type: 'spine',
+    }));
+
+    const first = routeGridEdges(edges, nodes);
+    const second = routeGridEdges(edges, nodes);
+    const offsets = first.map((edge) => (edge.data as { gutterLaneOffset: number }).gutterLaneOffset);
+
+    expect(new Set(offsets).size).toBe(3);
+    expect(second.map((edge) => edge.data)).toEqual(first.map((edge) => edge.data));
   });
 });
 
@@ -518,16 +571,14 @@ describe('layoutBBox + fill-maximizing orientation', () => {
     expect(bb.h).toBeGreaterThan(104); // taller than a single node (staircase uses height)
   });
 
-  it('LR and TB footprints are transposes, so the fill-maximizing pick tracks the container aspect', () => {
+  it('produces landscape LR and portrait TB footprints for orientation selection', () => {
     const bbLR = layoutBBox(layoutDagStaircase(spine, spineEdges, { rankdir: 'LR', ...OPTS }, hints), hints);
     const bbTB = layoutBBox(layoutDagStaircase(spine, spineEdges, { rankdir: 'TB', ...OPTS }, hints), hints);
+    expect(bbLR.w).toBeGreaterThan(bbLR.h);
+    expect(bbTB.h).toBeGreaterThan(bbTB.w);
     const fit = (bb: { w: number; h: number }, cw: number, ch: number) => Math.min(cw / bb.w, ch / bb.h);
-    const pick = (cw: number, ch: number): 'LR' | 'TB' =>
-      fit(bbTB, cw, ch) > fit(bbLR, cw, ch) * 1.001 ? 'TB' : 'LR';
-    // Wide landscape panel → the wider (LR) staircase fills more area.
-    expect(pick(1600, 500)).toBe('LR');
-    // Tall portrait panel → the taller (TB) staircase fills more area.
-    expect(pick(500, 1600)).toBe('TB');
+    expect(fit(bbLR, 1600, 500)).toBeGreaterThanOrEqual(fit(bbTB, 1600, 500));
+    expect(fit(bbTB, 500, 1600)).toBeGreaterThanOrEqual(fit(bbLR, 500, 1600));
   });
 
   it('is deterministic — identical input yields identical bbox (Tidy-safe)', () => {
