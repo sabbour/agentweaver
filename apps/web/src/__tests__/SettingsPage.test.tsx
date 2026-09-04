@@ -79,7 +79,7 @@ describe('SettingsPage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText(/discovers Agentweaver OAuth automatically/i)).toBeDefined();
+    expect(await screen.findByText(/discovers Agentweaver OAuth endpoints automatically/i)).toBeDefined();
     const urlInput = screen.getByRole('textbox', { name: 'MCP server URL' }) as HTMLInputElement;
     expect(urlInput.value).toMatch(/\/mcp$/);
     expect(screen.getByRole('tablist', { name: 'MCP client setup' })).toBeDefined();
@@ -91,7 +91,9 @@ describe('SettingsPage', () => {
     ]) {
       expect(screen.getByRole('tab', { name: clientName })).toBeDefined();
     }
-    expect(screen.getByRole('tabpanel').textContent).toContain('Settings → Connectors');
+    expect(screen.getByRole('tabpanel').textContent).toContain('Customize → Connectors');
+    expect(screen.getByRole('tabpanel').textContent).toContain('OAuth Client ID to agentweaver-claude');
+    expect(screen.getByRole('tabpanel').textContent).toContain('Leave OAuth Client Secret empty');
 
     fireEvent.click(screen.getByRole('tab', { name: 'VS Code' }));
     expect(screen.getByRole('tabpanel').textContent).toContain('MCP: Add Server');

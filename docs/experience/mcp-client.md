@@ -23,12 +23,14 @@ Agentweaver exposes the MCP server in two modes:
 
 For hosted use, copy the exact `https://<deployment-origin>/mcp` URL from
 **Account settings → MCP clients**. The client discovers OAuth and handles
-browser sign-in, consent, PKCE, and token refresh. No authorization header or
+browser sign-in, consent, PKCE, and token refresh. Claude Desktop additionally
+uses the fixed public client ID `agentweaver-claude` from its connector's
+Advanced settings; the client secret stays empty. No authorization header or
 manually copied credential belongs in the client configuration.
 
 | Client mode | What the client points at | Authorization experience |
 |---|---|---|
-| Hosted HTTP | The exact MCP server URL ending in `/mcp` | The client uses OAuth discovery and opens the Agentweaver browser sign-in and consent flow. |
+| Hosted HTTP | The exact MCP server URL ending in `/mcp`; Claude also uses `agentweaver-claude` as its OAuth Client ID | The client uses OAuth discovery and opens the Agentweaver browser sign-in and consent flow. |
 | Local STDIO | A trusted local development command | A repository maintainer supplies `AGENTWEAVER_TOKEN` through the process environment for local testing only. |
 
 The HTTP server also exposes:

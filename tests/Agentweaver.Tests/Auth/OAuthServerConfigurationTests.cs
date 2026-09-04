@@ -49,6 +49,72 @@ public sealed class OAuthServerConfigurationTests
     }
 
     [Fact]
+    public void Resolve_AcceptsOnlyExactTrustedCallbackForKnownClaudeClient()
+    {
+        var configuration = Configuration(
+            ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"));
+
+        var result = OAuthServerConfiguration.Resolve(configuration, Environment("Production"));
+
+        result.EnableClaudeHostedClient.Should().BeTrue();
+        var client = result.StaticClients.Should().ContainSingle().Subject;
+        client.ClientId.Should().Be(OAuthKnownClients.ClaudeHostedClientId);
+        client.RedirectUris.Should().Equal(OAuthKnownClients.ClaudeHostedRedirectUri);
+        client.Scopes.Should().Equal(OAuthServerConfiguration.McpScope);
+    }
+
+    [Theory]
+    [InlineData("https://claude.ai/api/mcp/auth_callback/")]
+    [InlineData("https://claude.ai/api/mcp/auth_callback?next=%2Fmcp")]
+    [InlineData("https://claude.ai.evil.example/api/mcp/auth_callback")]
+    public void Resolve_RejectsClaudeClientCallbackLookalikes(string redirectUri)
+    {
+        var action = () => OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:EnableClaudeHostedClient", "false"),
+                ("Auth:OAuth:Clients:0:ClientId", OAuthKnownClients.ClaudeHostedClientId),
+                ("Auth:OAuth:Clients:0:DisplayName", "Claude hosted connectors"),
+                ("Auth:OAuth:Clients:0:RedirectUris:0", redirectUri)),
+            Environment("Production"));
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*exact trusted Claude callback*");
+    }
+
+    [Fact]
+    public void Resolve_RejectsDuplicateStaticClientIds()
+    {
+        var action = () => OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:EnableClaudeHostedClient", "false"),
+                ("Auth:OAuth:Clients:0:ClientId", "duplicate"),
+                ("Auth:OAuth:Clients:0:DisplayName", "First"),
+                ("Auth:OAuth:Clients:0:RedirectUris:0", "com.example.first:/callback"),
+                ("Auth:OAuth:Clients:1:ClientId", "duplicate"),
+                ("Auth:OAuth:Clients:1:DisplayName", "Second"),
+                ("Auth:OAuth:Clients:1:RedirectUris:0", "com.example.second:/callback")),
+            Environment("Production"));
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*client IDs must be unique*");
+    }
+
+    [Fact]
+    public void Resolve_AllowsExplicitClaudeHostedClientOptOut()
+    {
+        var result = OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:EnableClaudeHostedClient", "false")),
+            Environment("Production"));
+
+        result.EnableClaudeHostedClient.Should().BeFalse();
+        result.StaticClients.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Resolve_RequiresConfiguredProductionTrustedProxyNetworks()
     {
         var action = () => OAuthServerConfiguration.Resolve(

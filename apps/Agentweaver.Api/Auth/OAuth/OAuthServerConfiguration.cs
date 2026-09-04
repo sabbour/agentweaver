@@ -14,6 +14,7 @@ public sealed record OAuthServerConfiguration(
     Uri PublicOrigin,
     Uri Resource,
     IReadOnlyList<OAuthStaticClient> StaticClients,
+    bool EnableClaudeHostedClient,
     int DynamicRegistrationsPerDay,
     int DynamicRegistrationsTotal,
     TimeSpan DynamicRegistrationLifetime,
@@ -53,10 +54,25 @@ public sealed record OAuthServerConfiguration(
 
         var origin = new Uri(uri.GetLeftPart(UriPartial.Authority), UriKind.Absolute);
         var resource = new Uri(origin, "/mcp");
-        var clients = configuration.GetSection("Auth:OAuth:Clients")
+        var enableClaudeHostedClient = configuration.GetValue(
+            "Auth:OAuth:EnableClaudeHostedClient", true);
+        var configuredClients = configuration.GetSection("Auth:OAuth:Clients")
             .Get<OAuthStaticClient[]>() ?? [];
+        var clients = enableClaudeHostedClient
+            ? configuredClients.Prepend(new OAuthStaticClient
+            {
+                ClientId = OAuthKnownClients.ClaudeHostedClientId,
+                DisplayName = "Claude hosted connectors",
+                RedirectUris = [OAuthKnownClients.ClaudeHostedRedirectUri],
+            }).ToArray()
+            : configuredClients;
         foreach (var client in clients)
             client.Validate();
+        if (clients.Select(client => client.ClientId).Distinct(StringComparer.Ordinal).Count() != clients.Length)
+            throw new InvalidOperationException("Static OAuth client IDs must be unique.");
+        if (clients.SelectMany(client => client.RedirectUris).Distinct(StringComparer.Ordinal).Count()
+            != clients.Sum(client => client.RedirectUris.Length))
+            throw new InvalidOperationException("Static OAuth client redirect URIs must be unique.");
 
         var perDay = configuration.GetValue("Auth:OAuth:DynamicRegistration:PerSourcePerDay", 20);
         var total = configuration.GetValue("Auth:OAuth:DynamicRegistration:MaximumActive", 1000);
@@ -85,6 +101,7 @@ public sealed record OAuthServerConfiguration(
             origin,
             resource,
             clients,
+            enableClaudeHostedClient,
             perDay,
             total,
             TimeSpan.FromDays(lifetimeDays),
@@ -165,7 +182,24 @@ public sealed class OAuthStaticClient
         {
             throw new InvalidOperationException($"Invalid static OAuth client '{ClientId}'.");
         }
+
+        if (string.Equals(ClientId, OAuthKnownClients.ClaudeHostedClientId, StringComparison.Ordinal)
+            && (RedirectUris.Length != 1
+                || !string.Equals(
+                    RedirectUris[0],
+                    OAuthKnownClients.ClaudeHostedRedirectUri,
+                    StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                $"Static OAuth client '{OAuthKnownClients.ClaudeHostedClientId}' must use the exact trusted Claude callback.");
+        }
     }
+}
+
+public static class OAuthKnownClients
+{
+    public const string ClaudeHostedClientId = "agentweaver-claude";
+    public const string ClaudeHostedRedirectUri = "https://claude.ai/api/mcp/auth_callback";
 }
 
 public static class OAuthRedirectUriValidator

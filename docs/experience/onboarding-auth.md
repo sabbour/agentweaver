@@ -110,6 +110,10 @@ For a hosted MCP client, the user experience is normally discovery-driven. The u
 The OAuth-capable client may also dynamically register its redirect URI. Local native clients use
 literal loopback redirect URIs such as `http://127.0.0.1:<port>/callback` or
 `http://[::1]:<port>/callback`. Agentweaver rejects hostnames, fragments, and embedded user info.
+Hosted Claude connectors use the fixed public client ID `agentweaver-claude`
+instead of dynamic registration. That client accepts only
+`https://claude.ai/api/mcp/auth_callback`, has no secret, and requires S256
+PKCE.
 
 For loopback redirect URIs, registered URI matching ignores the port when the scheme, host, and path match. This follows RFC 8252: native clients often bind a fresh local port for each sign-in attempt. Token redemption still binds to the exact redirect URI used in the authorization request, so the authorization code cannot be moved to a different redirect target.
 
