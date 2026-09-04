@@ -1,8 +1,30 @@
 {
   "$schema": "./graph-spec.schema.json",
   "title": "API Host Composition and Readiness",
-  "alt": "API Host Composition and Readiness: Clients, Startup and readiness, Auth and middleware, Endpoint modules, Services and registries, Background workers, Stores and providers, External resources",
+  "alt": "API Host Composition and Readiness grouped into Client, Control plane, Execution plane, and External systems: Clients, Startup and readiness, Auth and middleware, Endpoint modules, Services and registries, Background workers, Stores and providers, External resources",
   "direction": "LR",
+  "groups": [
+    {
+      "id": "client",
+      "label": "Client",
+      "tier": 1
+    },
+    {
+      "id": "control",
+      "label": "Control plane",
+      "tier": 1
+    },
+    {
+      "id": "execution",
+      "label": "Execution plane",
+      "tier": 1
+    },
+    {
+      "id": "external",
+      "label": "External systems",
+      "tier": 1
+    }
+  ],
   "nodes": [
     {
       "id": "Clients",
@@ -11,7 +33,8 @@
       "badge": {
         "text": "Client",
         "tone": "lavender"
-      }
+      },
+      "group": "client"
     },
     {
       "id": "Bootstrap",
@@ -21,7 +44,8 @@
         "text": "Service",
         "tone": "green"
       },
-      "subLabel": "Configuration, schema, recovery"
+      "subLabel": "Configuration, schema, recovery",
+      "group": "control"
     },
     {
       "id": "Middleware",
@@ -30,7 +54,8 @@
       "badge": {
         "text": "Security",
         "tone": "marigold"
-      }
+      },
+      "group": "control"
     },
     {
       "id": "Endpoints",
@@ -39,7 +64,8 @@
       "badge": {
         "text": "Gateway",
         "tone": "teal"
-      }
+      },
+      "group": "control"
     },
     {
       "id": "Services",
@@ -48,7 +74,8 @@
       "badge": {
         "text": "Service",
         "tone": "green"
-      }
+      },
+      "group": "control"
     },
     {
       "id": "Workers",
@@ -57,7 +84,8 @@
       "badge": {
         "text": "Runtime",
         "tone": "green"
-      }
+      },
+      "group": "execution"
     },
     {
       "id": "Stores",
@@ -66,7 +94,8 @@
       "badge": {
         "text": "Data",
         "tone": "teal"
-      }
+      },
+      "group": "control"
     },
     {
       "id": "Resources",
@@ -75,7 +104,8 @@
       "badge": {
         "text": "Data",
         "tone": "teal"
-      }
+      },
+      "group": "external"
     }
   ],
   "edges": [
