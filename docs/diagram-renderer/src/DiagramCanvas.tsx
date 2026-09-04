@@ -140,6 +140,10 @@ interface Band {
   layer?: boolean;
   /** Column count for a serpentine (chain) band. */
   snakeCols?: number;
+  /** Structural position used to order sections down the page. */
+  order?: number;
+  /** Declaration index, used to break ties in `order`. */
+  seq?: number;
   x: number;
   y: number;
   w: number;
@@ -154,28 +158,19 @@ function columnsFor(count: number): number {
 }
 
 /**
- * Derives bands from the graph's own structure for specs that declare no
- * groups. A flowchart's meaning IS its sequence, so the layers have to come
- * from the edges: each node is ranked one below the deepest predecessor that
- * can still reach it (longest-path layering, the standard first phase of a
- * Sugiyama layered drawing). That puts every "next step" edge between adjacent
- * ranks, where the router draws it as a short hop, instead of scattering the
- * chain across arbitrary rows of a fixed-width grid.
+ * Ranks nodes by longest path from a source, ignoring edges that close a
+ * cycle. This is the first phase of a Sugiyama layered drawing, and it is the
+ * common foundation of every derived layout here: layer bands, the ORDER of
+ * bands, and where ungrouped nodes sit among authored groups all read from it.
  *
  * Back edges (loops like "request changes" returning to an earlier step) are
- * excluded from ranking -- they are what makes a flowchart cyclic, and using
- * them would push their target below its own successors. They still get drawn;
- * the router just treats them as upward edges.
- *
- * Within a rank, nodes are ordered by the mean position of their predecessors
- * in the rank above (the barycentre heuristic), which is what stops parallel
- * branches from crossing over each other.
+ * what make a flowchart cyclic; ranking through them would push their target
+ * below its own successors. They are excluded from ranking but still drawn.
  */
-function layerNodes(nodes: GraphNode[], edges: GraphSpec['edges']): GraphNode[][] {
+function rankNodes(nodes: GraphNode[], edges: GraphSpec['edges']): Map<string, number> {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const real = (edges ?? []).filter((e) => byId.has(e.from) && byId.has(e.to) && e.from !== e.to);
 
-  // Depth-first pass that ignores any edge closing a cycle, so ranking sees a DAG.
   const outgoing = new Map<string, string[]>();
   for (const e of real) {
     if (!outgoing.has(e.from)) outgoing.set(e.from, []);
@@ -194,10 +189,9 @@ function layerNodes(nodes: GraphNode[], edges: GraphSpec['edges']): GraphNode[][
   };
   for (const n of nodes) if ((state.get(n.id) ?? 0) === 0) visit(n.id);
 
-  const forward = real.filter((e) => !back.has(`${e.from}->${e.to}`));
   const preds = new Map<string, string[]>();
   for (const n of nodes) preds.set(n.id, []);
-  for (const e of forward) preds.get(e.to)!.push(e.from);
+  for (const e of real) if (!back.has(`${e.from}->${e.to}`)) preds.get(e.to)!.push(e.from);
 
   // Longest path from any source. Memoised, and the DAG guarantees termination.
   const rank = new Map<string, number>();
@@ -211,13 +205,42 @@ function layerNodes(nodes: GraphNode[], edges: GraphSpec['edges']): GraphNode[][
     return r;
   };
   for (const n of nodes) rankOf(n.id);
+  return rank;
+}
 
-  const maxRank = Math.max(...nodes.map((n) => rank.get(n.id)!), 0);
-  const layers: GraphNode[][] = Array.from({ length: maxRank + 1 }, () => []);
-  for (const n of nodes) layers[rank.get(n.id)!].push(n);
+/**
+ * Splits nodes into ranked layers, ordering each layer by the mean position of
+ * its predecessors in the layer above (the barycentre heuristic), which is what
+ * stops parallel branches from crossing over each other.
+ *
+ * `outerRank` lets the caller supply ranks computed over the WHOLE graph. That
+ * matters when these nodes are only part of a spec: ranking them against each
+ * other alone would collapse nodes that sit at genuinely different depths into
+ * one layer, because the path connecting them runs through nodes that were
+ * filtered out.
+ */
+function layerNodes(
+  nodes: GraphNode[],
+  edges: GraphSpec['edges'],
+  outerRank?: Map<string, number>,
+): GraphNode[][] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const rank = outerRank ?? rankNodes(nodes, edges);
 
-  // Barycentre ordering, top rank down: each node sits near the average slot of
-  // the predecessors that feed it.
+  const preds = new Map<string, string[]>();
+  for (const n of nodes) preds.set(n.id, []);
+  for (const e of edges ?? []) {
+    if (!byId.has(e.from) || !byId.has(e.to)) continue;
+    if (rank.get(e.from)! < rank.get(e.to)!) preds.get(e.to)!.push(e.from);
+  }
+
+  // Ranks may be sparse when they came from outside, so index by sorted
+  // distinct value rather than by the rank number itself.
+  const levels = [...new Set(nodes.map((n) => rank.get(n.id) ?? 0))].sort((a, b) => a - b);
+  const indexOf = new Map(levels.map((v, i) => [v, i]));
+  const layers: GraphNode[][] = levels.map(() => []);
+  for (const n of nodes) layers[indexOf.get(rank.get(n.id) ?? 0)!].push(n);
+
   const slot = new Map<string, number>();
   layers[0]?.forEach((n, i) => slot.set(n.id, i));
   for (let li = 1; li < layers.length; li += 1) {
@@ -234,41 +257,54 @@ function layerNodes(nodes: GraphNode[], edges: GraphSpec['edges']): GraphNode[][
   return layers;
 }
 
-/**
- * A pure chain -- every node with at most one predecessor and one successor,
- * forming a single path -- is a *sequence*, not a branching flow. Ranking it
- * gives one node per rank, which draws a correct but useless ribbon: thirteen
- * steps become a 2000px column of mostly empty space.
+/** Minimum number of consecutive one-node layers worth folding into a snake.
  *
- * Returns the chain in order when the graph is one, otherwise null.
+ * Two. A pair of ranks stacked vertically costs a whole extra band plus its
+ * gutter -- roughly 250px of height -- to say something a single left-to-right
+ * arrow says in 56px of width that was empty anyway. Holding this at four is
+ * what left landing-product-feature seven bands tall and half its width unused:
+ * the only run long enough to qualify never appeared, because the branch in the
+ * middle chopped the flow into runs of three and two.
  */
-function asChain(nodes: GraphNode[], edges: GraphSpec['edges']): GraphNode[] | null {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const real = (edges ?? []).filter((e) => byId.has(e.from) && byId.has(e.to) && e.from !== e.to);
-  if (nodes.length < 6 || real.length !== nodes.length - 1) return null;
+const SNAKE_MIN = 2;
 
-  const next = new Map<string, string>();
-  const indeg = new Map<string, number>();
-  for (const n of nodes) indeg.set(n.id, 0);
-  for (const e of real) {
-    if (next.has(e.from)) return null;
-    next.set(e.from, e.to);
-    indeg.set(e.to, indeg.get(e.to)! + 1);
-    if (indeg.get(e.to)! > 1) return null;
+/**
+ * Column count for a snaked run.
+ *
+ * The fold is chosen for the SHAPE it produces, not by a fixed table. Each
+ * candidate width is scored on the aspect ratio of the block it would make,
+ * against a mildly landscape target -- a page reads better a little wider than
+ * tall, and a docs image that is 4:1 is as awkward to place as one that is 1:4.
+ * A fixed table is what turned every pure chain into a single 5-card ribbon.
+ *
+ * `budget` is the width, in cards, that the rest of the diagram already spends
+ * -- the widest authored group or multi-node layer. It caps the choice, so a
+ * fold fills width the page has already committed to but never pushes the
+ * canvas wider than it already is. Without one (a spec that is nothing but
+ * chain) the shape target alone decides.
+ */
+const SNAKE_ASPECT = 1.5;
+
+function snakeColsFor(n: number, budget?: number): number {
+  // Width the page is already committed to. Spending it costs nothing -- the
+  // canvas is that wide whatever this run does -- so fill it and stop.
+  if (budget !== undefined && budget > 0) return Math.min(n, budget);
+
+  let best = 1;
+  let bestScore = Infinity;
+  for (let cols = 1; cols <= Math.min(n, 6); cols += 1) {
+    const rows = Math.ceil(n / cols);
+    const w = cols * CARD_WIDTH + (cols - 1) * COL_GAP;
+    const h = rows * CARD_H_2 + (rows - 1) * ROW_GAP;
+    // Compare in log space so "twice too wide" and "twice too tall" cost the
+    // same; a plain difference would always favour the wider option.
+    const score = Math.abs(Math.log(w / h / SNAKE_ASPECT));
+    if (score < bestScore) {
+      bestScore = score;
+      best = cols;
+    }
   }
-
-  const starts = nodes.filter((n) => indeg.get(n.id) === 0);
-  if (starts.length !== 1) return null;
-
-  const chain: GraphNode[] = [];
-  let cur: string | undefined = starts[0].id;
-  const seen = new Set<string>();
-  while (cur && !seen.has(cur)) {
-    seen.add(cur);
-    chain.push(byId.get(cur)!);
-    cur = next.get(cur);
-  }
-  return chain.length === nodes.length ? chain : null;
+  return best;
 }
 
 /**
@@ -306,6 +342,30 @@ function layout(spec: GraphSpec): {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Section assembly.
+  //
+  // One diagram can need more than one layout. A spec may open with a long
+  // linear prologue, branch into a decision flow, and end in a set of
+  // architectural groupings -- and each of those wants a different treatment.
+  // So instead of choosing ONE layout per spec, the graph is cut into sections
+  // and each section picks the layout that suits its own shape:
+  //
+  //   authored group  -> balanced grid   (the author stated the grouping)
+  //   long linear run -> serpentine      (a sequence, not a flow)
+  //   everything else -> ranked layers   (a branching flow)
+  //
+  // The sections are then ordered by where their members actually sit in the
+  // graph, not by declaration order. That ordering is what keeps a section's
+  // edges pointing downward; appending ungrouped nodes at the end (as this
+  // used to) is what made auth-security-fig1 a tangle -- two gate nodes that
+  // belong in the middle of the API flow were parked below every group they
+  // feed, so five edges had to double back up the page.
+  // ---------------------------------------------------------------------
+  const rank = rankNodes(spec.nodes, spec.edges);
+  const meanRank = (ns: GraphNode[]) =>
+    ns.reduce((a, n) => a + (rank.get(n.id) ?? 0), 0) / Math.max(ns.length, 1);
+
   const bands: Band[] = [];
   for (const g of groups) {
     const members = byGroup.get(g.id) ?? [];
@@ -315,57 +375,115 @@ function layout(spec: GraphSpec): {
       label: g.label,
       tier: g.tier ?? 1,
       nodes: members,
+      order: meanRank(members),
       x: 0,
       y: 0,
       w: 0,
       h: 0,
     });
   }
+
   if (ungrouped.length > 0) {
-    // Which layout a spec gets is decided by the spec itself, not by a flag an
-    // author has to remember to set. Declared groups ARE the intended layering
-    // -- an architecture diagram says "these belong together" -- so those become
-    // bands directly. A spec with no groups has only its edges to go on, so the
-    // layering is derived from them. Packing an ungrouped spec into one
-    // fixed-width grid, as this used to, is what made flowcharts unreadable:
-    // a 16-step sequence became four arbitrary rows of five and every step
-    // turned into a long detour through a gutter.
-    if (bands.length === 0) {
-      const chain = asChain(ungrouped, spec.edges);
-      if (chain) {
-        // One band, snaked. Not layered: a sequence has no branches to rank.
-        const cols = chain.length <= 9 ? 3 : 4;
+    // When the spec also has authored groups, these nodes are interleaved
+    // with them, so they must be ranked against the WHOLE graph. Ranking
+    // them only against each other would collapse nodes that sit at
+    // different depths into one band -- which is exactly what parked
+    // auth-security-fig1's two gate nodes together at the bottom of the page
+    // when they belong at two different points inside the API flow.
+    const layers =
+      bands.length > 0
+        ? layerNodes(ungrouped, spec.edges, rank)
+        : layerNodes(ungrouped, spec.edges);
+
+    const linked = new Set((spec.edges ?? []).map((e) => `${e.from}->${e.to}`));
+    const follows = (a: GraphNode, b: GraphNode) => linked.has(`${a.id}->${b.id}`);
+
+    // Width, in cards, that the diagram is already committed to spending: the
+    // widest authored group, or the widest branch in the derived flow. Chains
+    // are folded to match it, so a run fills the width the page already has
+    // instead of adding height to a page that is mostly empty margin. Left
+    // undefined when nothing else establishes a width -- a spec that is pure
+    // chain has no committed width, so the snake picks its own square shape.
+    const otherCols = [
+      ...bands.map((b) => columnsFor(b.nodes.length)),
+      ...layers.filter((l) => l.length > 1).map((l) => Math.min(l.length, 6)),
+    ];
+    const widthBudget = otherCols.length > 0 ? Math.max(...otherCols) : undefined;
+
+    // Fold runs of one-node layers into a serpentine.
+    //
+    // Ranking is correct but it is not a layout: a stretch of the flow where
+    // nothing branches produces one card per rank, and the page then spends its
+    // whole height on a single column while both margins stay empty. That is
+    // the shape every long flowchart here degenerated into, and it is why
+    // detecting whole-graph "pure chains" was not enough -- almost no real
+    // diagram is a pure chain, but nearly all of them contain long unbranched
+    // stretches between their decisions.
+    //
+    // A run is only folded when each step is joined to the next by a real
+    // forward edge. That link is what proves the ranks are genuinely
+    // sequential, and it is also what stops two unrelated single-node layers
+    // (or nodes separated by an authored group) from being pulled into the
+    // same block.
+    let i = 0;
+    while (i < layers.length) {
+      if (layers[i].length === 0) {
+        i += 1;
+        continue;
+      }
+
+      let j = i;
+      while (
+        layers[j].length === 1 &&
+        j + 1 < layers.length &&
+        layers[j + 1].length === 1 &&
+        follows(layers[j][0], layers[j + 1][0])
+      ) {
+        j += 1;
+      }
+
+      const span = j - i + 1;
+      if (span >= SNAKE_MIN) {
+        const run = layers.slice(i, j + 1).map((l) => l[0]);
+        const cols = snakeColsFor(span, widthBudget);
         bands.push({
           id: null,
           label: null,
           tier: 1,
-          nodes: serpentine(chain, cols),
+          nodes: serpentine(run, cols),
           snakeCols: cols,
+          order: meanRank(run),
           x: 0,
           y: 0,
           w: 0,
           h: 0,
         });
-      } else {
-        for (const layer of layerNodes(ungrouped, spec.edges)) {
-          if (layer.length === 0) continue;
-          bands.push({
-            id: null,
-            label: null,
-            tier: 1,
-            nodes: layer,
-            layer: true,
-            x: 0,
-            y: 0,
-            w: 0,
-            h: 0,
-          });
-        }
+        i = j + 1;
+        continue;
       }
-    } else {
-      bands.push({ id: null, label: null, tier: 1, nodes: ungrouped, x: 0, y: 0, w: 0, h: 0 });
+
+      bands.push({
+        id: null,
+        label: null,
+        tier: 1,
+        nodes: layers[i],
+        layer: true,
+        order: meanRank(layers[i]),
+        x: 0,
+        y: 0,
+        w: 0,
+        h: 0,
+      });
+      i += 1;
     }
   }
+
+  // Stable sort by structural position. Ties keep declaration order, so an
+  // author's sequencing still decides between two sections at the same depth.
+  bands.forEach((b, i) => {
+    b.seq = i;
+  });
+  bands.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.seq ?? 0) - (b.seq ?? 0));
 
   const placed: Placed[] = [];
 
@@ -413,9 +531,10 @@ function layout(spec: GraphSpec): {
   const SIDE_CHANNEL = longSpans === 0 ? 40 : Math.min(230, 52 + longSpans * LANE_STEP);
 
   const gutterLanes = new Array(Math.max(bands.length - 1, 0)).fill(0);
-  const bumpGutter = (i: number, labelH: number) => {
+  // Records only how tall a gutter's tallest label is. How many lanes it needs
+  // is settled later, by packing the runs against their horizontal extent.
+  const noteGutter = (i: number, labelH: number) => {
     if (i < 0 || i >= gutterLanes.length) return;
-    gutterLanes[i] += 1;
     gutterLabelH[i] = Math.max(gutterLabelH[i], labelH);
   };
   // In-band traffic, keyed by the row gutter it will travel through. A same-row
@@ -498,11 +617,11 @@ function layout(spec: GraphSpec): {
     }
     if (Math.abs(tb - sb) === 1) {
       // Adjacent hop: one run, in the gutter between the two bands.
-      bumpGutter(Math.min(sb, tb), lh);
+      noteGutter(Math.min(sb, tb), lh);
     } else {
       // Long span: one run leaving the source, one entering the target.
-      bumpGutter(tb > sb ? sb : sb - 1, lh);
-      bumpGutter(tb > sb ? tb - 1 : tb, lh);
+      noteGutter(tb > sb ? sb : sb - 1, lh);
+      noteGutter(tb > sb ? tb - 1 : tb, lh);
     }
   });
 
@@ -533,6 +652,94 @@ function layout(spec: GraphSpec): {
 
   const contentWidth = Math.max(...inners.map((b) => b.width));
 
+  // ---------------------------------------------------------------------
+  // Horizontal geometry, resolved before the vertical stack.
+  //
+  // Where a card sits across the page depends only on its band's grid and the
+  // common content width -- never on how tall any gutter turns out to be. So
+  // x can be settled first, and that is what lets the gutters below be sized
+  // from the actual horizontal extent of the runs they carry.
+  // ---------------------------------------------------------------------
+  const bandInnerX = inners.map((inner) => CANVAS_MARGIN + SIDE_CHANNEL + (contentWidth - inner.width) / 2);
+
+  const rowOriginX = (bi: number, r: number) => {
+    const inner = inners[bi];
+    const len = bands[bi].nodes.slice(r * inner.cols, (r + 1) * inner.cols).length;
+    return bands[bi].snakeCols !== undefined && r % 2 === 1
+      ? bandInnerX[bi] + (inner.cols - len) * (CARD_WIDTH + inner.colGap)
+      : bandInnerX[bi];
+  };
+
+  const cardSpan = new Map<string, [number, number]>();
+  bands.forEach((band, bi) => {
+    const inner = inners[bi];
+    band.nodes.forEach((n, i) => {
+      const x =
+        rowOriginX(bi, Math.floor(i / inner.cols)) +
+        (i % inner.cols) * (CARD_WIDTH + inner.colGap);
+      cardSpan.set(n.id, [x, x + CARD_WIDTH]);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Gutter lane packing.
+  //
+  // A run in a gutter needs its own y only if it would otherwise sit on top of
+  // another run in that same gutter. Handing every edge an unconditional lane
+  // is what made auth-security-fig1 half empty gap by height: seven edges
+  // crossing one gutter reserved seven 34px lanes even though most of them
+  // never pass over the same x as each other.
+  //
+  // Runs are coloured greedily in left-edge order, which is exact for interval
+  // graphs, so a gutter ends up exactly as tall as the deepest genuine pile-up
+  // rather than as tall as its total traffic. Extents are taken as the whole
+  // card, not the port, so the packing stays conservative once ports fan out.
+  // ---------------------------------------------------------------------
+  const LANE_CLEAR = 26;
+  const channelLeft = CANVAS_MARGIN;
+  const channelRight = CANVAS_MARGIN + SIDE_CHANNEL * 2 + contentWidth;
+  const midX = CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2;
+
+  const gutterRuns: { lo: number; hi: number; idx: number }[][] = gutterLanes.map(() => []);
+  const addRun = (g: number, idx: number, a: number, b: number) => {
+    if (g < 0 || g >= gutterRuns.length) return;
+    gutterRuns[g].push({ lo: Math.min(a, b), hi: Math.max(a, b), idx });
+  };
+
+  (spec.edges ?? []).forEach((e, idx) => {
+    const sb = bandOf.get(e.from);
+    const tb = bandOf.get(e.to);
+    if (sb === undefined || tb === undefined || sb === tb) return;
+    const ss = cardSpan.get(e.from)!;
+    const ts = cardSpan.get(e.to)!;
+    if (Math.abs(tb - sb) === 1) {
+      addRun(Math.min(sb, tb), idx, Math.min(ss[0], ts[0]), Math.max(ss[1], ts[1]));
+      return;
+    }
+    // A long span leaves to a side channel and comes back, so it lays down one
+    // run in the gutter it exits and another in the gutter it enters. Which
+    // side it takes is decided by the same midpoint test the router uses.
+    const side = (ss[0] + ss[1] + ts[0] + ts[1]) / 4 >= midX ? channelRight : channelLeft;
+    addRun(tb > sb ? sb : sb - 1, idx, Math.min(ss[0], side), Math.max(ss[1], side));
+    addRun(tb > sb ? tb - 1 : tb, idx, Math.min(ts[0], side), Math.max(ts[1], side));
+  });
+
+  const gutterLane = new Map<string, number>();
+  gutterRuns.forEach((runs, g) => {
+    runs.sort((a, b) => a.lo - b.lo || a.hi - b.hi);
+    const laneEnd: number[] = [];
+    for (const run of runs) {
+      let lane = laneEnd.findIndex((end) => end + LANE_CLEAR <= run.lo);
+      if (lane === -1) {
+        lane = laneEnd.length;
+        laneEnd.push(0);
+      }
+      laneEnd[lane] = run.hi;
+      gutterLane.set(`${run.idx}-${g}`, lane);
+    }
+    gutterLanes[g] = laneEnd.length;
+  });
+
   // A gutter is exactly as tall as the traffic it carries plus a little
   // clearance -- previously a floor of 130 was ADDED to the lane height, so
   // even a gutter holding one plain arrow was 160px+ tall.
@@ -545,7 +752,7 @@ function layout(spec: GraphSpec): {
   let cursorY = CANVAS_MARGIN;
   bands.forEach((band, bi) => {
     const inner = inners[bi];
-    const innerX = CANVAS_MARGIN + SIDE_CHANNEL + (contentWidth - inner.width) / 2;
+    const innerX = bandInnerX[bi];
     const innerY = cursorY + (band.id ? GROUP_PAD_TOP : 0);
 
     band.x = innerX - GROUP_PAD_SIDE;
@@ -561,7 +768,12 @@ function layout(spec: GraphSpec): {
       // column, which turns what should be straight vertical drops between
       // rows into staggered jogs -- that is the whole reason the execution
       // plane (4 + 3 cards) read as messier than the control plane (3 + 3).
-      const rowX = innerX;
+      //
+      // A snake's odd rows are the exception: they run right to left, so their
+      // first card is the RIGHTmost slot. Left-aligning a short one puts it
+      // under the wrong column and the turn from the row above has to travel
+      // the whole band to reach it.
+      const rowX = rowOriginX(bi, r);
       slice.forEach((n, c) => {
         placed.push({
           node: n,
@@ -726,15 +938,17 @@ function layout(spec: GraphSpec): {
   };
 
   // One counter per PHYSICAL gutter, shared by adjacent hops and side-channel
-  // runs alike, so no two horizontal runs in the same gap share a y. Lanes are
-  // spread evenly across the gutter's measured span: with n lanes, lane k sits
-  // at (k+1)/(n+1) of the way down, which keeps clearance at both bands.
-  const laneY = (gutter: number) => {
+  // runs alike. The lane index comes from the packing pass, so two runs that
+  // never pass over the same x share a y instead of each claiming their own.
+  // Lanes are spread evenly across the gutter's measured span: with n lanes,
+  // lane k sits at (k+1)/(n+1) of the way down, which keeps clearance at both
+  // bands.
+  const laneY = (gutter: number, idx: number) => {
     const top = bands[gutter].y + bands[gutter].h;
     const bottom = bands[gutter + 1].y;
     const span = bottom - top;
     const total = Math.max(gutterLanes[gutter] ?? 1, 1);
-    const lane = takeLane(`gutter-${gutter}`);
+    const lane = gutterLane.get(`${idx}-${gutter}`) ?? 0;
     return top + (span * (Math.min(lane, total - 1) + 1)) / (total + 1);
   };
 
@@ -809,7 +1023,7 @@ function layout(spec: GraphSpec): {
       // Adjacent bands: one horizontal run, spread across the gutter between
       // them rather than pinned near the upper band.
       const gutter = Math.min(s.band, t.band);
-      runY = laneY(gutter);
+      runY = laneY(gutter, r.idx);
       points = [
         { x: sx, y: sy },
         { x: sx, y: runY },
@@ -829,8 +1043,8 @@ function layout(spec: GraphSpec): {
 
       const exitGutter = down ? s.band : s.band - 1;
       const enterGutter = down ? t.band - 1 : t.band;
-      runY = laneY(exitGutter);
-      const enterY = laneY(enterGutter);
+      runY = laneY(exitGutter, r.idx);
+      const enterY = laneY(enterGutter, r.idx);
 
       points = [
         { x: sx, y: sy },

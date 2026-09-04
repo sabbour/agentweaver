@@ -1,0 +1,95 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Product Management Discovery workflow",
+  "alt": "Product Management Discovery workflow: Research, Synthesis, Stakeholder Review, Review Gate, Declined, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "research",
+      "label": "Research",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "synthesis",
+      "label": "Synthesis",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "review",
+      "label": "Stakeholder Review",
+      "subLabel": "review",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "review-gate",
+      "label": "Review Gate",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Human gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-declined",
+      "label": "Declined",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "research",
+      "to": "synthesis"
+    },
+    {
+      "from": "synthesis",
+      "to": "review"
+    },
+    {
+      "from": "review",
+      "to": "review-gate"
+    },
+    {
+      "from": "review-gate",
+      "to": "done",
+      "label": "approved"
+    },
+    {
+      "from": "review-gate",
+      "to": "synthesis",
+      "label": "request-changes"
+    },
+    {
+      "from": "review-gate",
+      "to": "terminal-declined",
+      "label": "declined"
+    }
+  ]
+}

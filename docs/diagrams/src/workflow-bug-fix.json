@@ -1,0 +1,170 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Bug Fix workflow",
+  "alt": "Bug Fix workflow: Triage, Fix, Verify, RAI Check, Build & Test, Human Review, Safety Failed, Declined, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "triage",
+      "label": "Triage",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "fix",
+      "label": "Fix",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "verify",
+      "label": "Verify",
+      "subLabel": "qa-engineer · review",
+      "icon": "branch",
+      "badge": {
+        "text": "Peer review",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "rai-check",
+      "label": "RAI Check",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "RAI gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "build-test",
+      "label": "Build & Test",
+      "subLabel": "qa-engineer · review",
+      "icon": "server",
+      "badge": {
+        "text": "Build & test",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "human-review",
+      "label": "Human Review",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Human gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-safety-failed",
+      "label": "Safety Failed",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-declined",
+      "label": "Declined",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "triage",
+      "to": "fix"
+    },
+    {
+      "from": "fix",
+      "to": "verify"
+    },
+    {
+      "from": "verify",
+      "to": "rai-check",
+      "label": "approved"
+    },
+    {
+      "from": "verify",
+      "to": "fix",
+      "label": "request-changes"
+    },
+    {
+      "from": "verify",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "rai-check",
+      "to": "fix",
+      "label": "revise"
+    },
+    {
+      "from": "rai-check",
+      "to": "terminal-safety-failed",
+      "label": "safety-failed"
+    },
+    {
+      "from": "rai-check",
+      "to": "done",
+      "label": "no-changes"
+    },
+    {
+      "from": "rai-check",
+      "to": "build-test",
+      "label": "review"
+    },
+    {
+      "from": "build-test",
+      "to": "human-review",
+      "label": "approved"
+    },
+    {
+      "from": "build-test",
+      "to": "fix",
+      "label": "request-changes"
+    },
+    {
+      "from": "build-test",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "human-review",
+      "to": "done",
+      "label": "approved"
+    },
+    {
+      "from": "human-review",
+      "to": "fix",
+      "label": "request-changes"
+    },
+    {
+      "from": "human-review",
+      "to": "terminal-declined",
+      "label": "declined"
+    }
+  ]
+}

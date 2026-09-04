@@ -1,0 +1,109 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Incident Response workflow",
+  "alt": "Incident Response workflow: Triage, Mitigate, Verify, Review Gate, Postmortem, Declined, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "triage",
+      "label": "Triage",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "mitigate",
+      "label": "Mitigate",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "verify",
+      "label": "Verify",
+      "subLabel": "review",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "review-gate",
+      "label": "Review Gate",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Human gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "postmortem",
+      "label": "Postmortem",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "terminal-declined",
+      "label": "Declined",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "triage",
+      "to": "mitigate"
+    },
+    {
+      "from": "mitigate",
+      "to": "verify"
+    },
+    {
+      "from": "verify",
+      "to": "review-gate"
+    },
+    {
+      "from": "review-gate",
+      "to": "postmortem",
+      "label": "approved"
+    },
+    {
+      "from": "review-gate",
+      "to": "mitigate",
+      "label": "request-changes"
+    },
+    {
+      "from": "review-gate",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "postmortem",
+      "to": "done"
+    }
+  ]
+}
