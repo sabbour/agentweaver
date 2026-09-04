@@ -150,6 +150,21 @@ interface Band {
   h: number;
 }
 
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function unionBoxes(boxes: Box[]): Box {
+  const x = Math.min(...boxes.map((b) => b.x));
+  const y = Math.min(...boxes.map((b) => b.y));
+  const right = Math.max(...boxes.map((b) => b.x + b.w));
+  const bottom = Math.max(...boxes.map((b) => b.y + b.h));
+  return { x, y, w: right - x, h: bottom - y };
+}
+
 function columnsFor(count: number): number {
   if (count <= 4) return count;
   if (count <= 6) return 3;
@@ -798,8 +813,8 @@ function layout(spec: GraphSpec): {
     cursorY = band.y + band.h + gapFor(bi);
   });
 
-  const canvasWidth = contentWidth + CANVAS_MARGIN * 2 + SIDE_CHANNEL * 2;
-  const canvasHeight = cursorY - gapFor(bands.length - 1) + CANVAS_MARGIN;
+  let canvasWidth = contentWidth + CANVAS_MARGIN * 2 + SIDE_CHANNEL * 2;
+  let canvasHeight = cursorY - gapFor(bands.length - 1) + CANVAS_MARGIN;
 
   const posById = new Map<string, Placed>();
   for (const p of placed) posById.set(p.node.id, p);
@@ -1186,28 +1201,116 @@ function layout(spec: GraphSpec): {
     if (data?.labelPos) data.labelPos = { x: fixed.x, y: fixed.y };
   }
 
+  // Authored groups can be nested. Leaf groups use their band rectangle
+  // directly; parent groups enclose both their own direct-node band (when
+  // present) and every child group. Keeping these containers out of the band
+  // ordering preserves the edge-derived layout while retaining the hierarchy
+  // expressed by GraphGroup.parent.
+  const groupById = new Map(groups.map((group) => [group.id, group]));
+  const children = new Map<string, string[]>();
+  for (const group of groups) {
+    if (!group.parent || !groupById.has(group.parent)) continue;
+    if (!children.has(group.parent)) children.set(group.parent, []);
+    children.get(group.parent)!.push(group.id);
+  }
+  const bandBox = new Map<string, Box>();
+  for (const band of bands) {
+    if (band.id) bandBox.set(band.id, { x: band.x, y: band.y, w: band.w, h: band.h });
+  }
+  const groupBoxes = new Map<string, Box>();
+  const resolving = new Set<string>();
+  const resolveGroupBox = (id: string): Box | undefined => {
+    const cached = groupBoxes.get(id);
+    if (cached) return cached;
+    if (resolving.has(id)) return bandBox.get(id);
+    resolving.add(id);
+    const parts = [
+      ...(bandBox.has(id) ? [bandBox.get(id)!] : []),
+      ...(children.get(id) ?? []).map(resolveGroupBox).filter((box): box is Box => box !== undefined),
+    ];
+    resolving.delete(id);
+    if (parts.length === 0) return undefined;
+    const box = unionBoxes(parts);
+    const nested = (children.get(id)?.length ?? 0) > 0;
+    const resolved = nested
+      ? {
+          x: box.x - 20,
+          y: box.y - 44,
+          w: box.w + 40,
+          h: box.h + 64,
+        }
+      : box;
+    groupBoxes.set(id, resolved);
+    return resolved;
+  };
+  for (const group of groups) resolveGroupBox(group.id);
+
+  // Nested containers may extend beyond the original canvas margin. Shift all
+  // rendered geometry together so outer group titles and surfaces are not
+  // clipped, then grow the canvas to include their far edges.
+  const renderedBoxes = [...groupBoxes.values()];
+  if (renderedBoxes.length > 0) {
+    const bounds = unionBoxes(renderedBoxes);
+    const dx = Math.max(0, CANVAS_MARGIN - bounds.x);
+    const dy = Math.max(0, CANVAS_MARGIN - bounds.y);
+    if (dx || dy) {
+      for (const p of placed) {
+        p.x += dx;
+        p.y += dy;
+        p.rowTop += dy;
+        p.rowBottom += dy;
+      }
+      for (const box of groupBoxes.values()) {
+        box.x += dx;
+        box.y += dy;
+      }
+      for (const edge of rfEdges) {
+        const data = edge.data as {
+          points?: Point[];
+          labelPos?: { x: number; y: number };
+        };
+        data.points = data.points?.map((point) => ({ x: point.x + dx, y: point.y + dy }));
+        if (data.labelPos) {
+          data.labelPos = { x: data.labelPos.x + dx, y: data.labelPos.y + dy };
+        }
+      }
+      canvasWidth += dx;
+      canvasHeight += dy;
+    }
+    canvasWidth = Math.max(
+      canvasWidth,
+      ...[...groupBoxes.values()].map((box) => box.x + box.w + CANVAS_MARGIN),
+    );
+    canvasHeight = Math.max(
+      canvasHeight,
+      ...[...groupBoxes.values()].map((box) => box.y + box.h + CANVAS_MARGIN),
+    );
+  }
+
   const rfNodes: Node[] = [];
-  bands.forEach((band) => {
-    if (!band.id) return;
+  [...groups].sort((a, b) => a.tier - b.tier).forEach((group) => {
+    const box = groupBoxes.get(group.id);
+    if (!box) return;
     rfNodes.push({
-      id: `group-${band.id}`,
+      id: `group-${group.id}`,
       type: 'band',
-      position: { x: band.x, y: band.y },
-      data: { label: band.label, tier: band.tier },
-      style: { width: band.w, height: band.h },
+      position: { x: box.x, y: box.y },
+      data: { label: group.label, tier: group.tier },
+      style: { width: box.w, height: box.h },
       draggable: false,
       selectable: false,
-      zIndex: 0,
+      zIndex: -100 + group.tier,
     });
   });
-  bands.forEach((band) => {
-    if (!band.id || !band.label) return;
+  [...groups].sort((a, b) => a.tier - b.tier).forEach((group) => {
+    const box = groupBoxes.get(group.id);
+    if (!box) return;
     // Separate node so the title can outrank the edge layer (see nodes.tsx).
     rfNodes.push({
-      id: `group-label-${band.id}`,
+      id: `group-label-${group.id}`,
       type: 'bandLabel',
-      position: { x: band.x + 40, y: band.y + 30 },
-      data: { label: band.label, tier: band.tier },
+      position: { x: box.x + 40, y: box.y + 30 },
+      data: { label: group.label, tier: group.tier },
       draggable: false,
       selectable: false,
       zIndex: 4,
