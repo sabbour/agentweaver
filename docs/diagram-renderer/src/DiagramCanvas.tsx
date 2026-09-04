@@ -24,11 +24,18 @@ import type { GraphSpec, GraphNode } from './types';
 const CARD_H_2 = CARD_HEIGHT_2;
 const CARD_H_3 = CARD_HEIGHT_3;
 const COL_GAP = 56;
-const ROW_GAP = 104;
-const BAND_GAP_MIN = 130;
+// Gaps are floors, not fixed sizes: the real height of a gutter comes from the
+// lanes and labels it carries (see gapFor / rowGaps below). These floors only
+// have to keep a connector from touching the cards at either end, so they are
+// deliberately small -- an arrow between two steps of a flowchart needs far
+// less room than the old fixed 104/130 reserved, which is what left every
+// layered diagram looking stretched out.
+const ROW_GAP = 62;
+const BAND_GAP_MIN = 58;
+const GAP_PAD = 28;
 const GROUP_PAD_SIDE = 48;
 const GROUP_PAD_TOP = 96;
-const GROUP_PAD_BOTTOM = 56;
+const GROUP_PAD_BOTTOM = 44;
 const CANVAS_MARGIN = 80;
 const LANE_STEP = 34;
 
@@ -131,6 +138,8 @@ interface Band {
   /** True when this band is a derived layer rather than an authored group. A
    * layer is one rank of the flow, so it is always drawn as a single row. */
   layer?: boolean;
+  /** Column count for a serpentine (chain) band. */
+  snakeCols?: number;
   x: number;
   y: number;
   w: number;
@@ -225,6 +234,59 @@ function layerNodes(nodes: GraphNode[], edges: GraphSpec['edges']): GraphNode[][
   return layers;
 }
 
+/**
+ * A pure chain -- every node with at most one predecessor and one successor,
+ * forming a single path -- is a *sequence*, not a branching flow. Ranking it
+ * gives one node per rank, which draws a correct but useless ribbon: thirteen
+ * steps become a 2000px column of mostly empty space.
+ *
+ * Returns the chain in order when the graph is one, otherwise null.
+ */
+function asChain(nodes: GraphNode[], edges: GraphSpec['edges']): GraphNode[] | null {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const real = (edges ?? []).filter((e) => byId.has(e.from) && byId.has(e.to) && e.from !== e.to);
+  if (nodes.length < 6 || real.length !== nodes.length - 1) return null;
+
+  const next = new Map<string, string>();
+  const indeg = new Map<string, number>();
+  for (const n of nodes) indeg.set(n.id, 0);
+  for (const e of real) {
+    if (next.has(e.from)) return null;
+    next.set(e.from, e.to);
+    indeg.set(e.to, indeg.get(e.to)! + 1);
+    if (indeg.get(e.to)! > 1) return null;
+  }
+
+  const starts = nodes.filter((n) => indeg.get(n.id) === 0);
+  if (starts.length !== 1) return null;
+
+  const chain: GraphNode[] = [];
+  let cur: string | undefined = starts[0].id;
+  const seen = new Set<string>();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    chain.push(byId.get(cur)!);
+    cur = next.get(cur);
+  }
+  return chain.length === nodes.length ? chain : null;
+}
+
+/**
+ * Lays a chain out boustrophedon ("as the ox ploughs"): left to right across a
+ * row, down, then right to left across the next. Consecutive steps stay
+ * adjacent, so most links become the short straight side-to-side connections
+ * the router already draws, and the row turns are single short drops. The same
+ * sequence reads in a quarter of the height with no loss of order.
+ */
+function serpentine(chain: GraphNode[], cols: number): GraphNode[] {
+  const out: GraphNode[] = [];
+  for (let r = 0; r * cols < chain.length; r += 1) {
+    const row = chain.slice(r * cols, (r + 1) * cols);
+    out.push(...(r % 2 === 1 ? row.reverse() : row));
+  }
+  return out;
+}
+
 function layout(spec: GraphSpec): {
   nodes: Node[];
   edges: Edge[];
@@ -269,19 +331,36 @@ function layout(spec: GraphSpec): {
     // a 16-step sequence became four arbitrary rows of five and every step
     // turned into a long detour through a gutter.
     if (bands.length === 0) {
-      for (const layer of layerNodes(ungrouped, spec.edges)) {
-        if (layer.length === 0) continue;
+      const chain = asChain(ungrouped, spec.edges);
+      if (chain) {
+        // One band, snaked. Not layered: a sequence has no branches to rank.
+        const cols = chain.length <= 9 ? 3 : 4;
         bands.push({
           id: null,
           label: null,
           tier: 1,
-          nodes: layer,
-          layer: true,
+          nodes: serpentine(chain, cols),
+          snakeCols: cols,
           x: 0,
           y: 0,
           w: 0,
           h: 0,
         });
+      } else {
+        for (const layer of layerNodes(ungrouped, spec.edges)) {
+          if (layer.length === 0) continue;
+          bands.push({
+            id: null,
+            label: null,
+            tier: 1,
+            nodes: layer,
+            layer: true,
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+          });
+        }
       }
     } else {
       bands.push({ id: null, label: null, tier: 1, nodes: ungrouped, x: 0, y: 0, w: 0, h: 0 });
@@ -297,7 +376,9 @@ function layout(spec: GraphSpec): {
     // A derived layer is one rank of the flow, so it stays on one row: that
     // adjacency is the whole point of ranking it. Authored groups keep the
     // balanced grid, which is what an architecture band wants.
-    const cols = band.layer ? Math.min(band.nodes.length, 6) : columnsFor(band.nodes.length);
+    const cols =
+      band.snakeCols ??
+      (band.layer ? Math.min(band.nodes.length, 6) : columnsFor(band.nodes.length));
     const rows = Math.ceil(band.nodes.length / cols);
     const rowHeights: number[] = [];
     for (let r = 0; r < rows; r += 1) {
@@ -307,7 +388,6 @@ function layout(spec: GraphSpec): {
     return { cols, rows, rowHeights };
   });
 
-  const SIDE_CHANNEL = 230;
   // --- Pre-classify edges to size every gutter to its actual traffic. ---
   const bandOf = new Map<string, number>();
   const rowOf = new Map<string, number>();
@@ -319,6 +399,18 @@ function layout(spec: GraphSpec): {
       colOf.set(n.id, i % grids[bi].cols);
     });
   });
+
+  // Width reserved beside the content for edges that skip a band. Sized to the
+  // number of edges that will actually use it, not a fixed slab: a diagram
+  // with one long span used to reserve the same 230px as one with ten, which
+  // pushed that single edge far out to the side and left a large empty
+  // rectangle inside the detour.
+  const longSpans = (spec.edges ?? []).filter((e) => {
+    const sb = bandOf.get(e.from);
+    const tb = bandOf.get(e.to);
+    return sb !== undefined && tb !== undefined && Math.abs(tb - sb) > 1;
+  }).length;
+  const SIDE_CHANNEL = longSpans === 0 ? 40 : Math.min(230, 52 + longSpans * LANE_STEP);
 
   const gutterLanes = new Array(Math.max(bands.length - 1, 0)).fill(0);
   const bumpGutter = (i: number, labelH: number) => {
@@ -420,13 +512,13 @@ function layout(spec: GraphSpec): {
     const colGap = bandColGap[bi];
     const rowGaps: number[] = [];
     for (let r = 0; r < g.rows - 1; r += 1) {
-      rowGaps.push(Math.max(ROW_GAP, 48 + laneCountRow(bi, r) * stepRow(bi, r)));
+      rowGaps.push(Math.max(ROW_GAP, laneCountRow(bi, r) * stepRow(bi, r) + GAP_PAD));
     }
     const height = g.rowHeights.reduce((a, b) => a + b, 0) + rowGaps.reduce((a, b) => a + b, 0);
     const padBottom = bands[bi].id
       ? Math.max(
           GROUP_PAD_BOTTOM,
-          28 + laneCountRow(bi, g.rows - 1) * stepRow(bi, g.rows - 1),
+          laneCountRow(bi, g.rows - 1) * stepRow(bi, g.rows - 1) + GAP_PAD,
         )
       : 0;
     return {
@@ -441,10 +533,11 @@ function layout(spec: GraphSpec): {
 
   const contentWidth = Math.max(...inners.map((b) => b.width));
 
-  // Each gutter needs room for its lanes plus a label row, floored so even an
-  // empty gutter still reads as a separation between bands.
+  // A gutter is exactly as tall as the traffic it carries plus a little
+  // clearance -- previously a floor of 130 was ADDED to the lane height, so
+  // even a gutter holding one plain arrow was 160px+ tall.
   const gapFor = (i: number) =>
-    Math.max(BAND_GAP_MIN, BAND_GAP_MIN + (gutterLanes[i] ?? 0) * stepGutter(i));
+    Math.max(BAND_GAP_MIN, (gutterLanes[i] ?? 0) * stepGutter(i) + GAP_PAD);
 
   // Vertical span available to in-band runs, per row gutter.
   const rowGutter = new Map<string, { top: number; bottom: number }>();
@@ -574,16 +667,54 @@ function layout(spec: GraphSpec): {
   for (const [key, reqs] of ports) {
     const nodeId = key.split('::')[0];
     const placedNode = posById.get(nodeId)!;
-    // Order ports by where the other end sits, so lines leave in the same
-    // left-to-right order they arrive -- that alone removes most crossings.
-    reqs.sort((a, b) => a.toward - b.toward);
-    const usable = placedNode.w - 36;
-    reqs.forEach((req, i) => {
-      const frac = reqs.length === 1 ? 0.5 : (i + 1) / (reqs.length + 1);
-      const x = placedNode.x + 18 + usable * frac;
-      if (req.isSource) req.r.sx = x;
-      else req.r.tx = x;
-    });
+    const outs = reqs.filter((q) => q.isSource);
+    const ins = reqs.filter((q) => !q.isSource);
+
+    // Trunk style. Several edges leaving one side of a card are one decision
+    // fanning out, and several arriving are one confluence -- so each group
+    // shares a single port and leaves/enters as one trunk that splits or
+    // merges out in the gutter. Fanning them across the card edge instead
+    // produces a row of near-parallel stubs that reads as separate,
+    // independent connections and makes the card look like a pin header.
+    // This is the deliberate exception to the no-shared-vertical rule: the
+    // overlap at a trunk is exactly what carries the meaning.
+    //
+    // When a side has both trunks they need distinct ports, otherwise the
+    // outbound and inbound trunks would sit on the same column and an
+    // arrowhead would land on top of a departing line.
+    const both = outs.length > 0 && ins.length > 0;
+    const trunkX = (which: 'out' | 'in') => {
+      if (!both) return placedNode.x + placedNode.w / 2;
+      const frac = which === 'in' ? 0.32 : 0.68;
+      return placedNode.x + placedNode.w * frac;
+    };
+
+    const fanOut = (group: PortReq[], isSource: boolean) => {
+      // Order by where the other end sits, so lines leave in the same
+      // left-to-right order they arrive -- that alone removes most crossings.
+      group.sort((a, b) => a.toward - b.toward);
+      const usable = placedNode.w - 36;
+      group.forEach((req, i) => {
+        const frac = group.length === 1 ? 0.5 : (i + 1) / (group.length + 1);
+        const x = placedNode.x + 18 + usable * frac;
+        if (isSource) req.r.sx = x;
+        else req.r.tx = x;
+      });
+    };
+
+    if (outs.length > 1) {
+      const x = trunkX('out');
+      for (const req of outs) req.r.sx = x;
+    } else {
+      fanOut(outs, true);
+    }
+
+    if (ins.length > 1) {
+      const x = trunkX('in');
+      for (const req of ins) req.r.tx = x;
+    } else {
+      fanOut(ins, false);
+    }
   }
 
   // --- Lane allocation: one distinct horizontal run per edge, per gutter. ---
@@ -693,8 +824,8 @@ function layout(spec: GraphSpec): {
       const goRight = (sx + tx) / 2 >= CANVAS_MARGIN + SIDE_CHANNEL + contentWidth / 2;
       const chanLane = takeLane(`chan-${goRight ? 'r' : 'l'}`);
       const sideX = goRight
-        ? CANVAS_MARGIN + SIDE_CHANNEL + contentWidth + 40 + chanLane * LANE_STEP
-        : CANVAS_MARGIN + SIDE_CHANNEL - 40 - chanLane * LANE_STEP;
+        ? CANVAS_MARGIN + SIDE_CHANNEL + contentWidth + 24 + chanLane * LANE_STEP
+        : CANVAS_MARGIN + SIDE_CHANNEL - 24 - chanLane * LANE_STEP;
 
       const exitGutter = down ? s.band : s.band - 1;
       const enterGutter = down ? t.band - 1 : t.band;
