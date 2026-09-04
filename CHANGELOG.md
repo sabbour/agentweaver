@@ -1,5 +1,129 @@
 # Changelog
 
+## 0.28.0
+
+### Minor Changes
+
+- 292774c: Enforce API authentication through endpoint-bound ASP.NET schemes and deny-by-default policies, including narrowly scoped broker, internal-service, and run-capability credentials.
+- 292774c: Add Entra-backed OAuth authorization for Copilot CLI, GitHub Copilot desktop, and VS Code MCP clients, including discovery, consent, constrained dynamic registration, and rotating refresh tokens.
+- c6c8c0f: Make personal AI Access discoverable during platform setup and proactively guide users to configure it when no model provider is available to them.
+- 7829e4d: Add personal AI Access settings so session chat can use platform BYOK, a user-authorized GitHub Copilot account, or a personal custom-key provider.
+- 292774c: Require Agentweaver broker tokens for MCP, publish standards-based protected-resource discovery and challenges, and remove direct identity-provider and shared-key fallbacks.
+
+### Patch Changes
+
+- 06d152d: Add a working Reconnect GitHub Copilot action when a project's unattended AI authorization is stale or missing.
+- e8cbeee: Restore startup compatibility for static OAuth clients that share an exact callback while keeping Claude's hosted callback reserved.
+- 292774c: Keep BYOK AgentHost runs on their configured model provider during per-turn client refresh and checkpoint restore instead of falling back to GitHub Copilot authentication.
+- dc43ae6: Redeem stored GitHub Copilot OAuth refresh tokens ahead of expiry instead of letting them go stale, fixing recurring forced re-authentication under Platform Settings even when a valid refresh token was already on file. A new `CopilotCredentialRefreshService` redeems the refresh token before the access token's lifetime elapses (redeem-ahead of `GitHubCapabilityBroker.MaximumCapabilityLifetime`), guarded by a concurrency-safe semaphore and ETag-conditional writes so concurrent redemption attempts across requests don't race or clobber each other's result.
+- 4c67da4: Fix blueprint generation for platform-scoped (project-less) runs by allowing `marketplace_copilot_capabilities.project_id` to be null instead of substituting a fake singleton project id, which violated the foreign key constraint and surfaced as an opaque 502.
+- eecd25a: Support Claude hosted MCP connectors with a no-secret public OAuth client bound to Claude's exact callback.
+- ec6baf5: Fix Copilot binding creation so credential secrets are read back before bindings are committed, and log cleanup failures when persistence rolls back after a secret write.
+- 0a33b2b: Return `project_model_provider_reconnect_required` from the project Copilot connection status endpoint when the binding's credential secret is stale or unusable, and update the web UI to say "Reconnect the project GitHub Copilot authorization used for unattended AI work" instead of the misleading "Try again later" message.
+- 4a09011: Emit structured `RunFailed` events for operator assistant provider failures (snapshot, client-creation, client-start, session-creation, streaming) through `IOperatorAssistantTurnSink` so the real error code and message reach the client instead of being masked by a generic "aborted before reporting a structured terminal failure" fallback.
+- a58335a: Fix Create from GitHub repository browsing so a connected GitHub Repo App account can load accessible repositories again.
+- 3ca0379: Make existing assistant sessions pick up platform model-provider changes on their next turn, including platform-default Copilot bindings configured after the session started.
+- 9ad2129: Fix tool-approval prompts so live session views show durable approval requests, and notification links reopen the correct session before approval.
+- 9f1dec2: Add OAuth-first MCP onboarding to Account settings and the Getting Started guide, with client-specific setup for Claude Desktop, VS Code, GitHub Copilot CLI, and GitHub Copilot desktop, plus an Agentweaver Driver definition available anonymously from every deployment.
+- 18a4ae9: Scroll assistant session transcripts to newly sent messages so operators immediately see their own message appear, and keep assistant replies following when the view is already pinned to the latest activity.
+- c911364: Fix "Repository authorization is currently unavailable. Try again later." appearing after authorizing the GitHub Repo App from Create-from-GitHub, project settings, or account settings. `RepoAppUserAuthorizationService` was looking up the authenticated GitHub identity (and revoking grants) against the OAuth-authorize host (`https://github.com`) instead of the REST API host (`https://api.github.com`), which silently returned a 406 and discarded an otherwise-valid access token. Both call sites now use a new `Auth:RepoApp:ApiUrl` config key (defaulting to `https://api.github.com`, mirroring the existing `Auth:CopilotApp:ApiUrl` pattern), and a failure of this kind now logs a redacted diagnostic event instead of failing silently.
+- 022fe1a: Fix Repo App repository selection after GitHub sign-in by listing installation repositories with a GitHub App installation token instead of the user's OAuth token.
+- 94a454f: Ensure Azure deployments replace the OAuth placeholder with the managed AKS hostname and restart both API and MCP when the canonical public origin changes.
+- 292774c: Make API, UI, and MCP harnesses safe for arbitrary HTTPS hosts with mandatory TLS,
+  environment-only credentials, redirect rejection, recursive secret and URL redaction,
+  and failure-safe owned-resource cleanup. Align OAuth certificate deployment and
+  verification with runtime usability rules and roll API pods when certificate families
+  change.
+- aeb37b9: Fix false "too many active assistant conversations" rejections, and the 15-20s of silence before
+  every Session reply.
+  
+  The per-user concurrency bound counted `AssistantRunService`'s IN-MEMORY `_runs` dictionary, which
+  conflates "resident in this process" with "actively running". `RehydrateRunAsync` inserts into that
+  same dictionary, so merely opening or replying to an existing conversation occupied a slot for the
+  next 30 minutes — and with two API replicas and no session affinity, the SAME conversation could
+  occupy a slot on BOTH, so the replicas disagreed about the count. Live logs showed five distinct
+  operator runs against a limit of three. `StartRunAsync` now counts the caller's `InProgress` operator
+  runs in the durable run store (`IRunStore.GetRunsBySubmittingUserAsync`, reusing the query the
+  duplicate-start guard already issued), so one conversation is one row however many replicas have it
+  resident, a parked or finished conversation frees its slot immediately, and rehydration cannot
+  consume a slot at all. In-flight starts, which have no durable row yet, are reserved under the
+  existing `_startLock` so concurrent starts on one replica still cannot slip past the bound. With
+  counting correct the bound is raised 3 → 5: the live report was five legitimately-open
+  conversations, and an open-but-quiet conversation now holds no pod (below), so an extra one costs
+  close to nothing.
+  
+  `RemoteOperatorAssistantAgent` also claimed a warm AgentHost pod and RELEASED it after every single
+  turn, so each message paid claim binding, the A2A handshake, MCP connect, history replay, and a
+  one-shot `/configure` (~8s on its own — it runs `CopilotAIAgent.SetupAsync` and starts a Copilot/BYOK
+  client from scratch). The pod is now HELD for the conversation. `KubernetesSandboxExecutor` reuses an
+  existing operator claim instead of deleting and recreating it whenever this replica still holds the
+  run's turn token. Because `/configure` is genuinely one-shot, the current short-lived MCP broker
+  token is renewed over the authenticated API-to-pod control plane before every turn and immediately
+  before every MCP tool call, without forwarding a browser bearer into the pod. A turn landing on the
+  other replica simply falls back to the old cold-start path.
+  
+  Held pods are given back by a new, deliberately short `Assistant:PodIdleTimeout` (default 5 min,
+  skipped while a tool-approval is armed), by conversation dormancy at `IdleTimeout`, and on turn
+  failure or cancellation — a compare-and-swap guarantees exactly one release, with
+  `AgentHostReaperService` as the existing backstop.
+  
+  Holding the pod across turns also had to be reconciled with mid-conversation provider changes, which
+  it would otherwise have silently defeated. A pod resolves BYOK vs GitHub Copilot and builds its model
+  client EXACTLY ONCE, at its one-shot `/configure`; the per-turn refresh rebuilds only the tool set and
+  system message. So once a pod was held, repointing the run row at a newly-selected provider changed
+  the bookkeeping while the held pod kept serving every turn from the old one. Per-turn re-resolution
+  now compares the full provider IDENTITY (provider kind plus binding / configuration id) rather than
+  the two-value `ModelSource` enum — which cannot see a swapped BYOK configuration or a rebound Copilot
+  account at all — and releases the held pod whenever it really changed, so the next turn cold-starts
+  one configured for the provider now in effect. The cost is exactly one cold start on the turn after
+  an administrator changed the provider.
+  
+  Releasing a held pod is now fenced. Claims are named deterministically from the run id while
+  everything that decides to release one is process-local, so an API replica whose conversation had
+  moved to the other replica could delete a claim that replica was actively serving a turn from. Each
+  conversation's owner stamps a holder token on the claim it creates and a release proceeds only while
+  that stamp still matches, making it a compare-and-swap rather than an unconditional delete. This is
+  deliberately not a distributed lease: the cross-replica `AgentHostReaperService` remains the backstop
+  for genuinely orphaned claims.
+  
+  Finally, a durable `InProgress` assistant run is only ever parked by the owning API pod's in-memory
+  sweep, so a pod that restarted first stranded the row as `InProgress` forever and permanently burned
+  one of that user's concurrency slots. When (and only when) the bound is about to refuse a start, the
+  counted rows are re-examined against the run's last durable event and any silent past
+  `Assistant:StaleActiveRunThreshold` (default 90 min) is discounted and CAS-parked, so the repair is
+  shared cluster-wide without a new background job.
+- 4f166ed: Fix interactive Sessions silently ignoring the platform model provider, and pin-for-life provider
+  selection.
+  
+  Session provider SELECTION resolved against the project the caller happened to be viewing, while the
+  same session's credential CHECK was deliberately PLATFORM-scoped. Per
+  `EffectiveModelProviderResolver`'s documented precedence an active project GitHub Copilot binding
+  always beats platform-level BYOK, so a lingering project binding silently overrode a deployment-wide
+  switch to BYOK — Sessions kept reporting and behaving as GitHub Copilot — and the two scopes could
+  disagree about which provider the run was even on. `AssistantRunService` now resolves the session
+  provider at platform scope (`projectId: null`), matching the credential fence
+  (`platformScoped: true`) that both `AssistantRunService.PrepareAgentHostCapabilityAsync` and
+  `RemoteOperatorAssistantAgent.EnsureAgentHostCapabilityAsync` already used. A session's `ProjectId`
+  stays on the run purely as incidental MCP/UI context.
+  
+  The effective provider is also re-resolved at the START OF EVERY TURN instead of once at session
+  creation, so a mid-conversation platform provider change takes effect on the next message rather than
+  requiring a brand-new session. A changed provider is applied transparently to the next turn: the
+  persisted `ModelSource` is repointed (new `IRunStore.UpdateModelSourceAsync`), the conversation keeps
+  its history, and when the new provider is GitHub Copilot the platform-scoped capability gate runs
+  immediately so an unusable platform connection fails fast with the "Connect GitHub" CTA.
+  
+  `KubernetesSandboxExecutor` no longer undoes that platform scoping when it actually configures the
+  pod: it used to derive the provider-resolution scope from the run row's `ProjectId`, so a personal
+  Session opened from inside a project was labelled and credential-gated as platform BYOK while the pod
+  serving it was configured from that project's GitHub Copilot binding (or the reverse). An
+  `AgentHostPurpose.OperatorAssistant` launch now resolves at platform scope
+  (`AgentHostLaunchContext.ResolvesModelProviderAtPlatformScope`), and the "reconnect" CTA it raises
+  names the platform connection. Project-scoped work (coordinator runs, subtasks, retries, Build/Test)
+  is unchanged and still resolves against its own project.
+- c3611df: Stream operator assistant replies into the session transcript as they are generated, including the opening reply.
+- 81b1c8f: Style the MCP authorization consent page to match the Agentweaver interface and clearly present the client, requested permissions, signed-in identity, and consent actions.
+
 ## 0.27.1
 
 ### Patch Changes
