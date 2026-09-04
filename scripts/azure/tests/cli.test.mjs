@@ -5,7 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HELP_TEXT, run } from "../cli.mjs";
+import { HELP_TEXT, main, run } from "../cli.mjs";
 
 function noopLog() {
   const rec = () => () => {};
@@ -285,4 +285,33 @@ test("run: standalone verify auto-discovers params through the deploy command pa
   });
   assert.equal(paramsPath, "scripts/azure/params.test-user.json");
   assert.equal(resolvedEnv.OAUTH_SIGNING_CERTIFICATE_NAME, "auto-signing");
+});
+
+test("main: standalone verify exits non-zero when health verification returns ok:false", async () => {
+  const processImpl = { exitCode: 0, env: {} };
+  const result = await main(["verify"], {
+    processImpl,
+    log: noopLog(),
+    modules: {
+      verify: { run: async () => ({ ok: false, pass: 4, fail: 1 }) },
+      variables: { resolveVariables: async () => ({ NAMESPACE: "agentweaver" }) },
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(processImpl.exitCode, 1);
+});
+
+test("main: provision-infra exits non-zero when its final verification returns ok:false", async () => {
+  const processImpl = { exitCode: 0, env: {} };
+  const result = await main(["provision-infra"], {
+    processImpl,
+    log: noopLog(),
+    modules: {
+      "provision-infra": { run: async () => ({ ok: false, verify: { pass: 8, fail: 2 } }) },
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(processImpl.exitCode, 1);
 });

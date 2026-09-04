@@ -19,8 +19,12 @@ export const REPO_APP_PRIVATE_KEY_SECRET = Object.freeze({
 
 const SECRET_NOT_FOUND = /SecretNotFound|was not found in this key vault/i;
 const RBAC_PROPAGATING = /Forbidden|ForbiddenByRbac|not authorized/i;
+const DELETED_BUT_RECOVERABLE = /ObjectIsDeletedButRecoverable|deleted but recoverable/i;
+const RECOVERY_IN_PROGRESS = /Conflict|already being recovered|recovery.*in progress/i;
+const RECOVERY_POLL_ATTEMPTS = 60;
+const RECOVERY_POLL_INTERVAL_MS = 500;
 
-export async function inspectKeyVaultSecret(vaultName, name, { exec = execDefault } = {}) {
+async function inspectKeyVaultSecretResult(vaultName, name, { exec = execDefault } = {}) {
   const result = await exec.capture(
     "az",
     [
@@ -38,9 +42,81 @@ export async function inspectKeyVaultSecret(vaultName, name, { exec = execDefaul
     ],
     { allowFailure: true },
   );
-  if (result.code === 0) return { status: "available" };
-  if (SECRET_NOT_FOUND.test(result.stderr || "")) return { status: "missing" };
-  return { status: "inaccessible" };
+  if (result.code === 0) return { status: "available", error: "" };
+  if (SECRET_NOT_FOUND.test(result.stderr || "")) {
+    return { status: "missing", error: result.stderr || "" };
+  }
+  return { status: "inaccessible", error: result.stderr || "" };
+}
+
+export async function inspectKeyVaultSecret(vaultName, name, opts = {}) {
+  const { status } = await inspectKeyVaultSecretResult(vaultName, name, opts);
+  return { status };
+}
+
+async function recoverDeletedSecretAndWait(
+  keyvaultName,
+  name,
+  {
+    exec = execDefault,
+    log = logDefault,
+    maxPollAttempts = RECOVERY_POLL_ATTEMPTS,
+    pollIntervalMs = RECOVERY_POLL_INTERVAL_MS,
+    sleep = defaultSleep,
+  } = {},
+) {
+  const requestRecovery = async () => {
+    const recovered = await exec.capture(
+      "az",
+      [
+        "keyvault",
+        "secret",
+        "recover",
+        "--vault-name",
+        keyvaultName,
+        "--name",
+        name,
+        "--output",
+        "none",
+      ],
+      { allowFailure: true },
+    );
+    const recoveryError = recovered.stderr || "";
+    if (
+      recovered.code !== 0 &&
+      !SECRET_NOT_FOUND.test(recoveryError) &&
+      !DELETED_BUT_RECOVERABLE.test(recoveryError) &&
+      !RECOVERY_IN_PROGRESS.test(recoveryError)
+    ) {
+      throw new Error(`Failed to recover Key Vault secret '${name}': ${recoveryError || "unknown Azure CLI error"}`);
+    }
+  };
+
+  log.info(`  Recovering soft-deleted Key Vault secret '${name}' before replacing it...`);
+  await requestRecovery();
+  for (let attempt = 1; attempt <= maxPollAttempts; attempt++) {
+    const inspected = await inspectKeyVaultSecretResult(keyvaultName, name, { exec });
+    if (inspected.status === "available") return;
+    const retryable =
+      inspected.status === "missing" ||
+      DELETED_BUT_RECOVERABLE.test(inspected.error) ||
+      RECOVERY_IN_PROGRESS.test(inspected.error);
+    if (!retryable) {
+      throw new Error(
+        `Key Vault secret '${name}' is inaccessible while waiting for recovery: ` +
+          `${inspected.error || "unknown Azure CLI error"}`,
+      );
+    }
+    await requestRecovery();
+    if (attempt < maxPollAttempts) {
+      await sleep(pollIntervalMs);
+    }
+  }
+
+  throw new Error(
+    `Key Vault secret '${name}' did not become available after ` +
+      `${maxPollAttempts * pollIntervalMs}ms of bounded recovery polling.`,
+  );
 }
 
 export async function setSecretFileWithRetry(
@@ -84,6 +160,18 @@ export async function setSecretFileWithRetry(
       { allowFailure: true },
     );
     if (result.code === 0) return;
+    if (
+      (DELETED_BUT_RECOVERABLE.test(result.stderr || "") ||
+        RECOVERY_IN_PROGRESS.test(result.stderr || "")) &&
+      attempt < maxAttempts
+    ) {
+      await recoverDeletedSecretAndWait(keyvaultName, name, {
+        exec,
+        log,
+        sleep,
+      });
+      continue;
+    }
     if (RBAC_PROPAGATING.test(result.stderr || "") && attempt < maxAttempts) {
       log.info(`  [retry ${attempt}/${maxAttempts}] Key Vault access for '${name}' is still propagating; waiting 15s...`);
       await sleep(15000);

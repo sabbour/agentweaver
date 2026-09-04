@@ -40,7 +40,10 @@
 //      agenthost.yaml's podTemplate labels + k8s/sandbox-warmpool-
 //      agenthost.yaml) is running the expected image digest/tag. This
 //      function NEVER calls `kubectl delete pod`.
-//   7. Prints a clear summary (image tag, digests, warm-pool status). Never
+//   7. Runs steps/40-verify.mjs after the deployment and warm pool are ready.
+//      A failed verification is returned as ok:false so every executable
+//      caller exits non-zero.
+//   8. Prints a clear summary (image tag, digests, warm-pool status). Never
 //      logs secrets (every value logged here is a tag/digest/count, not a
 //      credential).
 
@@ -51,6 +54,7 @@ import * as kubectlDefault from "./lib/kubectl.mjs";
 import * as buildStepDefault from "./steps/20-build-push-images.mjs";
 import * as provenanceStepDefault from "./steps/25-verify-image-provenance.mjs";
 import * as deployStepDefault from "./steps/30-deploy.mjs";
+import * as verifyStepDefault from "./steps/40-verify.mjs";
 import { imageDigestFromId } from "./steps/25-verify-image-provenance.mjs";
 import { validateImageTag } from "./variables.mjs";
 
@@ -64,7 +68,8 @@ Usage:
 Mints a new image tag from the current HEAD short SHA (never reuses the
 VERSION-derived semver tag -- that belongs to 'release'), builds+pushes
 images, redeploys, verifies provenance, then reapplies and waits for the
-AgentHost warm pool to become ready (never deletes pods manually).
+AgentHost warm pool to become ready (never deletes pods manually), and runs
+post-deploy health verification.
 
 Flags:
   --allow-dirty   Dev/test escape hatch: skip the dirty-working-tree check.
@@ -271,6 +276,7 @@ export async function deployCommittedSha(cfg, opts = {}) {
     buildStep = buildStepDefault,
     provenanceStep = provenanceStepDefault,
     deployStep = deployStepDefault,
+    verifyStep = verifyStepDefault,
     cwd = cfg.repoRoot,
     sectionTitle = "Agentweaver SHA deployment: build + redeploy + warm-pool cycle",
     summaryTitle = "SHA DEPLOYMENT SUMMARY",
@@ -293,11 +299,11 @@ export async function deployCommittedSha(cfg, opts = {}) {
   };
 
   log.info("");
-  log.info("Step 1/4: Building + pushing images...");
+  log.info("Step 1/5: Building + pushing images...");
   const buildResult = await buildStep.run(deploymentCfg, { exec, git, kubectl });
 
   log.info("");
-  log.info("Step 2/4: Redeploying (re-applies SandboxTemplate + SandboxWarmPool)...");
+  log.info("Step 2/5: Redeploying (re-applies SandboxTemplate + SandboxWarmPool)...");
   const deployResult = await deployStep.run(deploymentCfg, {
     run: exec.run,
     capture: exec.capture,
@@ -306,14 +312,14 @@ export async function deployCommittedSha(cfg, opts = {}) {
   });
 
   log.info("");
-  log.info("Step 3/4: Verifying image provenance...");
+  log.info("Step 3/5: Verifying image provenance...");
   const provenanceResult = await provenanceStep.run(
     { ...deploymentCfg, VERIFY_GIT_REF: verifyGitRef },
     { exec, git, kubectl },
   );
 
   log.info("");
-  log.info("Step 4/4: Cycling the AgentHost warm pool (reapply-and-wait; no manual pod deletion)...");
+  log.info("Step 4/5: Cycling the AgentHost warm pool (reapply-and-wait; no manual pod deletion)...");
   const warmPoolStatus = await waitForWarmPoolReady(deploymentCfg.NAMESPACE, { exec, log });
   const warmPoolImageCheck = warmPoolStatus.skipped
     ? { ok: true, pods: [], mismatched: [] }
@@ -323,6 +329,18 @@ export async function deployCommittedSha(cfg, opts = {}) {
         exec,
         acrName: deploymentCfg.ACR_NAME,
       });
+
+  if (!warmPoolImageCheck.ok) {
+    throw new Error(
+      `Warm pool is ready but ${warmPoolImageCheck.mismatched.length} pod(s) do not run the expected AgentHost tag '${imageTag}'. ` +
+        "The SandboxWarmPool controller (updateStrategy: Recreate) should replace these automatically as they cycle -- " +
+        `re-run the ${retryLabel} warm-pool wait step if this persists, but do NOT manually delete these pods.`,
+    );
+  }
+
+  log.info("");
+  log.info("Step 5/5: Verifying deployment health...");
+  const verifyResult = await verifyStep.run(deploymentCfg, { exec, log });
 
   log.info("");
   log.section(summaryTitle);
@@ -340,25 +358,23 @@ export async function deployCommittedSha(cfg, opts = {}) {
   } else {
     log.field(
       "Warm pool",
-      `${warmPoolStatus.readyReplicas}/${warmPoolStatus.replicas} ready, image ${warmPoolImageCheck.ok ? "verified" : "MISMATCHED -- see warnings above"}`,
+      `${warmPoolStatus.readyReplicas}/${warmPoolStatus.replicas} ready, image verified`,
     );
   }
-
-  if (!warmPoolImageCheck.ok) {
-    throw new Error(
-      `Warm pool is ready but ${warmPoolImageCheck.mismatched.length} pod(s) do not run the expected AgentHost tag '${imageTag}'. ` +
-        "The SandboxWarmPool controller (updateStrategy: Recreate) should replace these automatically as they cycle -- " +
-        `re-run the ${retryLabel} warm-pool wait step if this persists, but do NOT manually delete these pods.`,
-    );
-  }
+  log.field(
+    "Verification",
+    `${verifyResult.pass}/${verifyResult.pass + verifyResult.fail} checks passed`,
+  );
 
   return {
+    ok: verifyResult.ok,
     imageTag,
     targetCommit: buildResult?.targetCommit,
     plans: buildResult?.plans,
     provenance: provenanceResult,
     deploy: deployResult,
     warmPool: { ...warmPoolStatus, imageCheck: warmPoolImageCheck },
+    verify: verifyResult,
   };
 }
 
@@ -377,6 +393,7 @@ export async function deployCommittedSha(cfg, opts = {}) {
  * @param {typeof buildStepDefault} [opts.buildStep]
  * @param {typeof provenanceStepDefault} [opts.provenanceStep]
  * @param {typeof deployStepDefault} [opts.deployStep]
+ * @param {typeof verifyStepDefault} [opts.verifyStep]
  * @param {string} [opts.cwd] Repo root for git operations; defaults to cfg.repoRoot or process.cwd().
  */
 export async function run(cfg, opts = {}) {
@@ -389,6 +406,7 @@ export async function run(cfg, opts = {}) {
     buildStep = buildStepDefault,
     provenanceStep = provenanceStepDefault,
     deployStep = deployStepDefault,
+    verifyStep = verifyStepDefault,
     cwd = cfg.repoRoot,
   } = opts;
 
@@ -416,6 +434,7 @@ export async function run(cfg, opts = {}) {
     buildStep,
     provenanceStep,
     deployStep,
+    verifyStep,
     cwd,
     sectionTitle: "Agentweaver local deployment: build + redeploy + warm-pool cycle",
     summaryTitle: "LOCAL DEPLOYMENT SUMMARY",

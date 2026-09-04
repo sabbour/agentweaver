@@ -178,3 +178,115 @@ test("setSecretFileWithRetry retries bounded RBAC propagation failures", async (
     fs.rmSync(scratchRoot, { recursive: true, force: true });
   }
 });
+
+test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret before configured-file import", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-recover-import-"));
+  const sourceFile = path.join(scratchRoot, "repo-app.pem");
+  const secretValue = "configured-private-key-material";
+  fs.writeFileSync(sourceFile, secretValue);
+  let setAttempts = 0;
+  let showAttempts = 0;
+  const messages = [];
+  const exec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    if (operation === "set") {
+      setAttempts += 1;
+      assert.equal(args[args.indexOf("--file") + 1], sourceFile);
+      return setAttempts === 1
+        ? { stdout: "", stderr: "ERROR: (ObjectIsDeletedButRecoverable) Secret is deleted but recoverable.", code: 1 }
+        : { stdout: "", stderr: "", code: 0 };
+    }
+    if (operation === "recover") {
+      assert.equal(requestedSecret(args), REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (operation === "show") {
+      showAttempts += 1;
+      return showAttempts === 1
+        ? { stdout: "", stderr: "ERROR: (SecretNotFound) recovery is not visible yet", code: 3 }
+        : { stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "", code: 0 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  try {
+    const result = await ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv", sourceFile },
+      {
+        exec,
+        log: { ...noopLog(), info: (message) => messages.push(message) },
+        sleep: async () => {},
+      },
+    );
+
+    assert.equal(result.status, "imported");
+    assert.equal(setAttempts, 2);
+    assert.ok(exec.calls.some((call) => call.args[2] === "recover"));
+    assert.equal(exec.calls.some((call) => call.args.includes(secretValue)), false);
+    assert.equal(messages.some((message) => message.includes(secretValue)), false);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret during legacy migration", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-recover-migration-"));
+  const secretValue = "legacy-private-key-material";
+  let canonicalChecks = 0;
+  let setAttempts = 0;
+  const messages = [];
+  const exec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    const name = requestedSecret(args);
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.physicalName) {
+      canonicalChecks += 1;
+      if (canonicalChecks === 1) {
+        return { stdout: "", stderr: "ERROR: (SecretNotFound) canonical secret is absent", code: 3 };
+      }
+      if (canonicalChecks === 2) {
+        return { stdout: "", stderr: "ERROR: (SecretNotFound) recovery is not visible yet", code: 3 };
+      }
+      return { stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "", code: 0 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName) {
+      return { stdout: "https://kv/secrets/repo-app-private-key/version", stderr: "", code: 0 };
+    }
+    if (operation === "download") {
+      fs.writeFileSync(args[args.indexOf("--file") + 1], secretValue);
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (operation === "set") {
+      setAttempts += 1;
+      assert.equal(fs.readFileSync(args[args.indexOf("--file") + 1], "utf8"), secretValue);
+      return setAttempts === 1
+        ? { stdout: "", stderr: "ERROR: (ObjectIsDeletedButRecoverable) Secret is deleted but recoverable.", code: 1 }
+        : { stdout: "", stderr: "", code: 0 };
+    }
+    if (operation === "recover") {
+      assert.equal(name, REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  try {
+    const result = await ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv" },
+      {
+        exec,
+        log: { ...noopLog(), info: (message) => messages.push(message) },
+        scratchRoot,
+        sleep: async () => {},
+      },
+    );
+
+    assert.equal(result.status, "migrated");
+    assert.equal(setAttempts, 2);
+    assert.ok(exec.calls.some((call) => call.args[2] === "recover"));
+    assert.equal(exec.calls.some((call) => call.args.includes(secretValue)), false);
+    assert.equal(messages.some((message) => message.includes(secretValue)), false);
+    assert.deepEqual(fs.readdirSync(scratchRoot), []);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
