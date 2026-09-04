@@ -569,7 +569,13 @@ Cancels and deletes a run record. For any **non-terminal** run, the shared cance
 
 Response `204 No Content`.
 
-Errors: `400` invalid run id; `404` run not found; `403` caller is not the run owner; `500` fetch or delete failed.
+Authorization:
+
+- Platform administrators may delete any run, including one whose persisted project no longer exists.
+- The submitting user may delete their own personal session created by the Assistant endpoints even if its incidental project no longer exists or the user's project role was revoked. Sessions are recognized by their server-authored durable `run.started` event.
+- Other project-owned runs require current project Contributor access.
+
+Errors: `400` invalid run id; `404` run not found; `403` caller lacks deletion authority; `500` fetch or delete failed.
 
 ### POST /api/runs/{id}/cancel
 
