@@ -123,6 +123,41 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
     }
 
     [Fact]
+    public async Task StaticClients_WithDifferentIdsAndSharedRedirect_AreReconciledWithoutConflict()
+    {
+        const string sharedRedirectUri = "com.example.shared:/oauth/callback";
+        var clientIds = new[] { "shared-redirect-first", "shared-redirect-second" };
+        await using var factory = new AgentweaverWebApplicationFactory(bypassAuthentication: false);
+        using var client = factory.CreateClient();
+        var configuration = factory.Services.GetRequiredService<OAuthServerConfiguration>() with
+        {
+            EnableClaudeHostedClient = false,
+            StaticClients = clientIds.Select((clientId, index) => new OAuthStaticClient
+            {
+                ClientId = clientId,
+                DisplayName = $"Shared redirect {index + 1}",
+                RedirectUris = [sharedRedirectUri],
+            }).ToArray(),
+        };
+        var reconciler = new OAuthStaticClientReconciler(
+            factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            configuration,
+            NullLogger<OAuthStaticClientReconciler>.Instance);
+
+        await reconciler.StartAsync(CancellationToken.None);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        foreach (var clientId in clientIds)
+        {
+            var application = await applications.FindByClientIdAsync(clientId);
+            application.Should().NotBeNull();
+            (await applications.GetRedirectUrisAsync(application!))
+                .Should().Equal(sharedRedirectUri);
+        }
+    }
+
+    [Fact]
     public async Task ClaudeHostedClient_AuthorizationAcceptsOnlyExactRedirectWithPkce()
     {
         var exactQuery = ClaudeAuthorizationQuery(OAuthKnownClients.ClaudeHostedRedirectUri);
