@@ -1,6 +1,7 @@
 import {
   type ModelProviderConnectionRequirement,
   isProjectScopedModelProviderRequirement,
+  isUserScopedModelProviderRequirement,
 } from '../api/modelProviderConnectionRequirement';
 import { ProjectModelProviderSettings } from './ProjectModelProviderSettings';
 import { Button } from '@fluentui/react-components';
@@ -16,6 +17,7 @@ export function ModelProviderRequiredAction({
 }) {
   const navigate = useNavigate();
   const isProjectScoped = isProjectScopedModelProviderRequirement(requirement);
+  const isUserScoped = isUserScopedModelProviderRequirement(requirement);
   const projectId = requirement.action.project_id;
   return (
     <SetupReadiness
@@ -29,13 +31,19 @@ export function ModelProviderRequiredAction({
           title: 'Model provider',
           description: isProjectScoped
             ? 'Choose the GitHub Copilot account for this project.'
-            : 'A Platform Admin must choose the model provider for this deployment.',
+            : isUserScoped
+              ? 'Choose a provider for your personal session chat.'
+              : 'A Platform Admin must choose the model provider for this deployment.',
           requirement: 'required',
           status: 'action-required',
         }],
       }}
       primaryAction={isProjectScoped ? (
         <ProjectModelProviderSettings projectId={projectId} triggerLabel="Set up model provider" />
+      ) : isUserScoped ? (
+        <Button appearance="primary" onClick={() => navigate('/settings')}>
+          Open AI Access settings
+        </Button>
       ) : (
         <Button appearance="primary" onClick={() => navigate('/platform-settings')}>
           Open Platform settings

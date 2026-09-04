@@ -194,7 +194,9 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             authorshipCapabilityStore: _authorshipCapabilityStore,
             runStore: _runStore,
             byokProviderConfiguration: _byokProviderConfiguration,
-            effectiveProviderResolver: ResolveEffectiveProviderAsync);
+            effectiveProviderResolver: ResolveEffectiveProviderAsync,
+            sessionEffectiveProviderResolver: ResolveSessionEffectiveProviderAsync,
+            userByokProviderResolver: ResolveUserByokProviderAsync);
 
     private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderAsync(
         ProjectId? projectId,
@@ -207,6 +209,28 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         return await scope.ServiceProvider
             .GetRequiredService<EffectiveModelProviderResolver>()
             .ResolveAsync(projectId, ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<EffectiveModelProviderResult> ResolveSessionEffectiveProviderAsync(
+        string userId,
+        CancellationToken ct)
+    {
+        using var scope = _serviceScopeFactory.CreateScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<EffectiveModelProviderResolver>()
+            .ResolveForSessionAsync(userId, ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<ByokProviderConfiguration?> ResolveUserByokProviderAsync(
+        string userId,
+        CancellationToken ct)
+    {
+        using var scope = _serviceScopeFactory.CreateScope();
+        return await scope.ServiceProvider
+            .GetRequiredService<UserModelProviderSettingsService>()
+            .GetActiveByokAsync(userId, ct)
             .ConfigureAwait(false);
     }
 

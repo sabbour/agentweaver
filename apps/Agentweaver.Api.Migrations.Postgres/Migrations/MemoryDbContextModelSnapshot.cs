@@ -2639,6 +2639,109 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.ToTable("SubtaskDependencies");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.UserCopilotBindingRecord", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("text")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("BoundAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("bound_at");
+
+                    b.Property<string>("CredentialReference")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("credential_reference");
+
+                    b.Property<string>("CredentialVersion")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("credential_version");
+
+                    b.Property<DateTimeOffset?>("DeactivatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deactivated_at");
+
+                    b.Property<string>("EntraObjectId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("entra_object_id");
+
+                    b.Property<string>("GrantDigest")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("grant_digest");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EntraObjectId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_user_copilot_bindings_active_user")
+                        .HasFilter("status = 0");
+
+                    b.ToTable("user_copilot_bindings", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.UserModelProviderSettingsRecord", b =>
+                {
+                    b.Property<string>("EntraObjectId")
+                        .HasColumnType("text")
+                        .HasColumnName("entra_object_id");
+
+                    b.Property<string>("ByokAzureApiVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_azure_api_version");
+
+                    b.Property<string>("ByokBaseUrl")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_base_url");
+
+                    b.Property<string>("ByokCredentialReference")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_credential_reference");
+
+                    b.Property<string>("ByokHeadersJson")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_headers_json");
+
+                    b.Property<string>("ByokModel")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_model");
+
+                    b.Property<string>("ByokName")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_name");
+
+                    b.Property<string>("ByokProviderId")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_provider_id");
+
+                    b.Property<string>("ByokType")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_type");
+
+                    b.Property<string>("ByokWireApi")
+                        .HasColumnType("text")
+                        .HasColumnName("byok_wire_api");
+
+                    b.Property<int>("Preference")
+                        .HasColumnType("integer")
+                        .HasColumnName("preference");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("EntraObjectId");
+
+                    b.ToTable("user_model_provider_settings", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.WorkPlan", b =>
                 {
                     b.Property<int>("Id")

@@ -57,18 +57,25 @@ When you create a project from GitHub, authorize the Repo App. Then select a rep
 
 Agentweaver verifies the repository selection on the server. It does not accept an unverified repository identifier.
 
-A project can use a project GitHub Copilot account. Otherwise, it inherits the active platform
-GitHub Copilot account or custom-key provider. This is the provider hierarchy shown in readiness
-status: a valid project binding takes precedence; without one, the active platform provider is
-used for both interactive and unattended work.
+A project can use a project GitHub Copilot account. Otherwise, project work inherits the active
+platform GitHub Copilot account or custom-key provider. This project hierarchy applies to
+orchestration and background work.
 
 Open **Project settings → Background** to see the effective model provider. The status identifies the provider and its project or platform scope.
 
 Project and platform Copilot authorization creates a durable server-side binding. Agentweaver
 does not borrow the token of whichever user is currently signed in, and the Copilot App has no
 repository installation screen. Repository authorization remains a separate Repo App capability.
-Platform-default Copilot consent supplies AI access to all users, projects, and background runs
-that inherit it. It grants no repository access.
+Personal session chat uses a separate account-level hierarchy:
+
+1. An active platform custom-key provider applies automatically to every user.
+2. Otherwise, the user can select a personal custom-key provider.
+3. Otherwise, the user must authorize their own GitHub Copilot account.
+
+Agentweaver does not use the platform-default Copilot credential for personal session chat because
+Copilot entitlement belongs to the individual GitHub account. Open **Account settings → AI Access**
+to authorize Copilot or add a personal provider. These settings do not change project background
+execution.
 
 A Copilot binding keeps the refresh token that GitHub returns with its access token. GitHub
 access tokens expire after about eight hours. Agentweaver redeems the refresh token
@@ -83,9 +90,9 @@ Copilot capabilities are granted only through their respective GitHub Apps.
 
 ## Callback registration
 
-For v0.23.1 and later, one exact Copilot App callback serves exactly two OAuth
-completion flows: project-scoped and platform-default. The MCP browser handoff
-enters the project-scoped flow; it is not a third completion flow.
+One exact Copilot App callback serves project-scoped, platform-default, and personal-user OAuth
+completion flows. Persisted one-time state selects the correct flow. The MCP browser handoff enters
+the project-scoped flow.
 
 ```
 https://<public-host>/auth/github/copilot-app/callback

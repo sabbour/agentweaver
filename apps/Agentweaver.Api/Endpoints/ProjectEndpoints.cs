@@ -161,12 +161,15 @@ app.MapGet("/auth/github/copilot-app/callback", async (
     CopilotAppRegistrationService registration,
     ILogger<ProjectCopilotBindingService> logger,
     ILogger<PlatformDefaultCopilotBindingService> platformLogger,
+    ILogger<UserCopilotBindingService> userLogger,
     CancellationToken ct) =>
 {
     var projectCookie = ProjectCopilotBindingService.ReadCallbackCookie(httpContext);
     ProjectCopilotBindingService.ClearCallbackCookie(httpContext);
     var platformCookie = PlatformDefaultCopilotBindingService.ReadCallbackCookie(httpContext);
     PlatformDefaultCopilotBindingService.ClearCallbackCookie(httpContext);
+    var userCookie = UserCopilotBindingService.ReadCallbackCookie(httpContext);
+    UserCopilotBindingService.ClearCallbackCookie(httpContext);
     var browserSession = await browserSessions.GetCurrentAsync(httpContext, ct).ConfigureAwait(false);
     var resolvedCode = string.IsNullOrWhiteSpace(error) ? code : null;
     var projectTransaction = string.IsNullOrWhiteSpace(state)
@@ -175,6 +178,9 @@ app.MapGet("/auth/github/copilot-app/callback", async (
     var platformTransaction = string.IsNullOrWhiteSpace(state)
         ? null
         : await persistence.GetPlatformDefaultCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
+    var userTransaction = string.IsNullOrWhiteSpace(state)
+        ? null
+        : await persistence.GetUserCopilotAuthorizationTransactionAsync(state, ct).ConfigureAwait(false);
     if (projectTransaction is not null)
     {
         var projectService = new ProjectCopilotBindingService(
@@ -200,6 +206,34 @@ app.MapGet("/auth/github/copilot-app/callback", async (
             platformCookie,
             ct).ConfigureAwait(false);
         return Results.Redirect(await platformService.GetCallbackRedirectAsync(platformOutcome, ct).ConfigureAwait(false));
+    }
+
+    if (userTransaction is not null)
+    {
+        var userService = new UserCopilotBindingService(
+            configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, userLogger);
+        var userOutcome = await userService.CompleteBrowserCallbackAsync(
+            browserSession,
+            state,
+            resolvedCode,
+            userCookie,
+            ct).ConfigureAwait(false);
+        return Results.Redirect(await userService.GetCallbackRedirectAsync(userOutcome, ct).ConfigureAwait(false));
+    }
+
+    if (!string.IsNullOrWhiteSpace(userCookie) &&
+        string.IsNullOrWhiteSpace(platformCookie) &&
+        string.IsNullOrWhiteSpace(projectCookie))
+    {
+        var userService = new UserCopilotBindingService(
+            configuration, persistence, secretStore, credentialVault, httpClientFactory, registration, userLogger);
+        var userOutcome = await userService.CompleteBrowserCallbackAsync(
+            browserSession,
+            state,
+            resolvedCode,
+            userCookie,
+            ct).ConfigureAwait(false);
+        return Results.Redirect(await userService.GetCallbackRedirectAsync(userOutcome, ct).ConfigureAwait(false));
     }
 
     if (!string.IsNullOrWhiteSpace(platformCookie) && string.IsNullOrWhiteSpace(projectCookie))

@@ -279,6 +279,24 @@ describe('AppShell navigation', () => {
     expect(await screen.findByText('Platform settings page')).toBeDefined();
   });
 
+  it('routes a personal session provider requirement to AI Access in Account settings', async () => {
+    renderShellAt('/sessions');
+
+    window.dispatchEvent(new CustomEvent(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, {
+      detail: {
+        code: 'model_provider_connection_required',
+        message: 'Configure a model provider for your personal session chat to continue.',
+        action: { type: 'configure_user_model_provider', project_id: '' },
+      },
+    }));
+
+    expect(await screen.findByText(
+      'Configure a model provider for your personal session chat to continue.',
+    )).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Open AI Access settings' }));
+    expect(await screen.findByText('Account settings page')).toBeDefined();
+  });
+
   it('resolves the active nav item from the route', () => {
     expect(resolveActiveKey('/projects/p1', 'p1')).toBe('dashboard');
     expect(resolveActiveKey('/projects/p1/board', 'p1')).toBe('board');

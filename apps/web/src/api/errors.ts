@@ -37,8 +37,8 @@ const REPOSITORY_ACCESS_ERROR_MESSAGES: Record<string, string> = {
 // Model-provider-domain error codes: raised when the caller's AI inference source (GitHub
 // Copilot, unless a deployment-wide or project override is active) is not connected or usable.
 const MODEL_PROVIDER_ERROR_MESSAGES: Record<string, string> = {
-  github_copilot_auth_required: 'Authorize GitHub Copilot to use it as the model provider.',
-  model_provider_connection_required: 'Connect a model provider to continue.',
+  github_copilot_auth_required: 'Configure a model provider to continue.',
+  model_provider_connection_required: 'Configure a model provider to continue.',
   project_model_provider_reconnect_required: 'Reconnect the project GitHub Copilot authorization used for unattended AI work.',
 };
 

@@ -21,6 +21,8 @@ public sealed record ModelProviderConnectionRequirement(
         "Connect the project's GitHub Copilot App to continue.";
     public const string PlatformDefaultRequirementMessage =
         "Connect the platform-default GitHub Copilot account to continue.";
+    public const string UserRequirementMessage =
+        "Configure a model provider for your personal session chat to continue.";
 
     public static ModelProviderConnectionRequirement ForProject(ProjectId projectId) =>
         new(
@@ -36,6 +38,14 @@ public sealed record ModelProviderConnectionRequirement(
             PlatformDefaultRequirementMessage,
             new ModelProviderConnectionAction(
                 ModelProviderConnectionAction.ConfigurePlatformModelProvider,
+                string.Empty));
+
+    public static ModelProviderConnectionRequirement ForUser() =>
+        new(
+            RequirementCode,
+            UserRequirementMessage,
+            new ModelProviderConnectionAction(
+                ModelProviderConnectionAction.ConfigureUserModelProvider,
                 string.Empty));
 }
 
@@ -55,6 +65,9 @@ public sealed class ModelProviderConnectionRequiredException : AgentProviderExce
         : this(ModelProviderConnectionRequirement.ForPlatformDefault())
     {
     }
+
+    public static ModelProviderConnectionRequiredException ForUser() =>
+        new(ModelProviderConnectionRequirement.ForUser());
 
     private ModelProviderConnectionRequiredException(ModelProviderConnectionRequirement requirement)
         : base(
@@ -84,4 +97,5 @@ public sealed record ModelProviderConnectionAction(
 {
     public const string ConfigureProjectModelProvider = "configure_project_model_provider";
     public const string ConfigurePlatformModelProvider = "configure_platform_model_provider";
+    public const string ConfigureUserModelProvider = "configure_user_model_provider";
 }

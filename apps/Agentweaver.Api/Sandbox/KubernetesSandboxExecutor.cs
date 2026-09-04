@@ -207,6 +207,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     private readonly IGitHubCopilotCapabilityCredentialProvider? _copilotCredentials;
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     private readonly Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? _effectiveProviderResolver;
+    private readonly Func<string, CancellationToken, Task<EffectiveModelProviderResult>>? _sessionEffectiveProviderResolver;
+    private readonly Func<string, CancellationToken, Task<ByokProviderConfiguration?>>? _userByokProviderResolver;
     // Replica-safe run secret store used to persist the per-run preview-runner credential so a
     // reconcile/keepalive on either API replica can re-fetch it, and to durably DELETE it on pod
     // release (spec-006 decouple-preview, BLOCKER A / RESIDUAL). Null in unit tests → no minting.
@@ -257,7 +259,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
         IRunStore? runStore = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-        Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null)
+        Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
+        Func<string, CancellationToken, Task<EffectiveModelProviderResult>>? sessionEffectiveProviderResolver = null,
+        Func<string, CancellationToken, Task<ByokProviderConfiguration?>>? userByokProviderResolver = null)
     {
         _client = client;
         _options = options;
@@ -277,6 +281,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _runStore = runStore;
         _byokProviderConfiguration = byokProviderConfiguration;
         _effectiveProviderResolver = effectiveProviderResolver;
+        _sessionEffectiveProviderResolver = sessionEffectiveProviderResolver;
+        _userByokProviderResolver = userByokProviderResolver;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -474,8 +480,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         // is BYOK-configured and — when authorization fails below — WHICH Copilot binding the human
         // must reconnect. Deriving that scope from "does the project id string parse" instead named
         // the project's App even for platform-default binding failures.
-        var effectiveProvider = await ResolveEffectiveProviderAsync(providerScopeProjectId, ct).ConfigureAwait(false);
-        var byokProvider = await GetByokProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
+        var effectiveProvider = launchContext.ResolvesModelProviderAtPlatformScope &&
+            !string.IsNullOrWhiteSpace(submittingUser) &&
+            _sessionEffectiveProviderResolver is not null
+            ? await _sessionEffectiveProviderResolver(submittingUser, ct).ConfigureAwait(false)
+            : await ResolveEffectiveProviderAsync(providerScopeProjectId, ct).ConfigureAwait(false);
+        var byokProvider = await GetByokProviderAsync(runId, submittingUser, effectiveProvider, ct).ConfigureAwait(false);
         if (byokProvider is null && string.IsNullOrWhiteSpace(submittingUser))
         {
             throw new InvalidOperationException(
@@ -742,9 +752,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
     private async Task<ByokProviderConfiguration?> GetByokProviderAsync(
         string runId,
+        string? submittingUser,
         EffectiveModelProviderResult? effectiveProvider,
         CancellationToken ct)
     {
+        if (effectiveProvider is EffectiveModelProviderResult.UserByok &&
+            !string.IsNullOrWhiteSpace(submittingUser))
+        {
+            var personalProvider = _userByokProviderResolver is null
+                ? null
+                : await _userByokProviderResolver(submittingUser, ct).ConfigureAwait(false);
+            return personalProvider ?? throw new InvalidOperationException(
+                $"Cannot launch AgentHost pod for BYOK run '{runId}' because its personal provider configuration is unavailable.");
+        }
+
         var requiresByok = false;
         if (_effectiveProviderResolver is not null)
         {

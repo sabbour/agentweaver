@@ -25,6 +25,7 @@ import {
   MCP_CLIENT_IDS,
   type McpClientId,
 } from './mcpClientGuidance';
+import { UserAiAccessSettings } from '../components/UserAiAccessSettings';
 import {
   Body,
   Label,
@@ -183,7 +184,7 @@ export function SettingsPage() {
     <PageContainer width="readable">
       <PageHeader
         title="Account settings"
-        description="Review authentication and MCP access."
+        description="Manage your authentication, personal AI access, repository access, and MCP clients."
       />
 
       <PageSection
@@ -239,14 +240,21 @@ export function SettingsPage() {
       </PageSection>
 
       <PageSection
+        title="AI Access"
+        description="Choose the model provider for your personal session chat."
+      >
+        <UserAiAccessSettings />
+      </PageSection>
+
+      <PageSection
         title="GitHub connections"
-        description="GitHub Copilot provides AI access. The separate Repo App provides repository access."
+        description="Manage project Copilot connections and connect the GitHub Repo App for repository access."
       >
         <div className={styles.section}>
           <div className={styles.subBlock}>
             <TitleText>GitHub Copilot App</TitleText>
             <Body tone="muted">
-              Copilot connections are selected per project, so the account used for AI can match that project’s needs.
+              Project Copilot connections remain separate from the personal AI access used by session chat.
             </Body>
             <div className={styles.formActions}>
               <Button
