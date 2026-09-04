@@ -13,11 +13,29 @@ namespace Agentweaver.Tests.Helpers;
 public sealed class FakeCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 {
     public CoordinatorDraftInput? LastInput { get; private set; }
+    public bool BlockUntilCancelled { get; set; }
+    public bool CancellationObserved { get; private set; }
+    public Exception? ExceptionToThrow { get; set; }
 
-    public Task<OutcomeSpecDraft> DraftAsync(
+    public async Task<OutcomeSpecDraft> DraftAsync(
         CoordinatorDraftInput input, string charter, string? memoryContext, CancellationToken ct)
     {
         LastInput = input;
+        if (ExceptionToThrow is not null)
+            throw ExceptionToThrow;
+        if (BlockUntilCancelled)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                CancellationObserved = true;
+                throw;
+            }
+        }
+
         var goal = input.Goal.Trim();
         var hasContext = !string.IsNullOrWhiteSpace(memoryContext);
 
@@ -46,6 +64,6 @@ public sealed class FakeCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 : null)
             : "Revision requested: " + input.ReviseFeedback.Trim();
 
-        return Task.FromResult(new OutcomeSpecDraft(desired, scope, assumptions, questions));
+        return new OutcomeSpecDraft(desired, scope, assumptions, questions);
     }
 }

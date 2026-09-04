@@ -361,6 +361,12 @@ function readEventTimestamp(p: Record<string, unknown>): string | undefined {
   return readStr(p, ['timestamp_utc', 'timestampUtc', 'updated_at', 'updatedAt', 'timestamp']);
 }
 
+function parseTimestamp(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function readChildRunId(node: GraphDescriptor['nodes'][number]): string | undefined {
   return node.child_run_id
     ?? readStr(node.data ?? {}, ['child_run_id', 'childRunId'])
@@ -2264,6 +2270,13 @@ export function CoordinatorRunPage() {
   const setRunLevelStatus = useCallback((status: RunStatus | undefined) => {
     setRunLevelStatusState({ runId: runId ?? '', status });
   }, [runId]);
+  const [runTimingState, setRunTimingState] = useState<{
+    runId: string;
+    startedAt: number | undefined;
+    endedAt: number | undefined;
+  }>({ runId: '', startedAt: undefined, endedAt: undefined });
+  const runStartedAt = runTimingState.runId === (runId ?? '') ? runTimingState.startedAt : undefined;
+  const runEndedAt = runTimingState.runId === (runId ?? '') ? runTimingState.endedAt : undefined;
 
   const {
     events,
@@ -2447,6 +2460,7 @@ export function CoordinatorRunPage() {
       setWorkPlanError(null);
       setNoWorkPlan(false);
       setRunLevelStatus(undefined);
+      setRunTimingState({ runId: runId ?? '', startedAt: undefined, endedAt: undefined });
       setCoordStatusField(undefined);
       setCoordStatusReason(undefined);
       setCoordinatorSteerable(undefined);
@@ -2513,6 +2527,11 @@ export function CoordinatorRunPage() {
       setCoordinatorSteerable(typeof detail?.coordinator_steerable === 'boolean' ? detail.coordinator_steerable : undefined);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
+      setRunTimingState({
+        runId,
+        startedAt: parseTimestamp(detail?.started_at),
+        endedAt: parseTimestamp(detail?.ended_at),
+      });
       if (wp) consecutiveWorkPlanNotReady = 0;
       // Seed the option toggles once from the run detail; subsequent user toggles own the state.
       if (!seededToggles.current && detail) {
@@ -3508,12 +3527,14 @@ export function CoordinatorRunPage() {
     { pending: 0, waiting: 0, blocked: 0, failed: 0 },
   );
   const hasRunningSessionItem = flatSessionTree.some((node) => node.startedAt !== undefined && node.completedAt === undefined);
-  const elapsedNow = useTickingNow(hasRunningSessionItem);
-  const earliestStart = flatSessionTree.reduce<number | undefined>(
+  const earliestNodeStart = flatSessionTree.reduce<number | undefined>(
     (min, node) => (node.startedAt == null ? min : min == null ? node.startedAt : Math.min(min, node.startedAt)),
     undefined,
   );
-  const elapsedLabel = earliestStart ? fmtTotal(elapsedNow - earliestStart) : '0s';
+  const earliestStart = earliestNodeStart ?? runStartedAt;
+  const elapsedNow = useTickingNow(hasRunningSessionItem || (!viewState.terminal && earliestStart !== undefined));
+  const elapsedEnd = viewState.terminal ? (runEndedAt ?? elapsedNow) : elapsedNow;
+  const elapsedLabel = earliestStart ? fmtTotal(Math.max(0, elapsedEnd - earliestStart)) : '0s';
   const runStatusText = viewState.label;
   const taskCountsLabel = `${taskRows.length} tasks · ${taskStatusSummary.pending} pending · ${taskStatusSummary.waiting} waiting`;
 

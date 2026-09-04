@@ -31,6 +31,7 @@ public sealed class CoordinatorWorkflowFactory
     private const string InputStateKey = "coordinator-input";
     private const string InputStateScope = "run-context";
     private const string CoordinatorAgentName = "Coordinator";
+    private const int DefaultOutcomeSpecDraftTimeoutSeconds = 120;
 
     private const string FallbackCharter =
         "You are the Coordinator, the built-in orchestration agent. Restate the human's goal as a " +
@@ -46,6 +47,7 @@ public sealed class CoordinatorWorkflowFactory
     private readonly string _checkpointDir;
     private readonly ICheckpointStoreFactory _checkpointStoreFactory;
     private readonly CoordinatorOrchestratorExecutor _orchestrator;
+    private readonly TimeSpan _outcomeSpecDraftTimeout;
 
     public CoordinatorWorkflowFactory(
         IWorkflowAgentFactory agentFactory,
@@ -63,6 +65,14 @@ public sealed class CoordinatorWorkflowFactory
         _scopeFactory = scopeFactory;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CoordinatorWorkflowFactory>();
+
+        var outcomeSpecDraftTimeoutSeconds = configuration.GetValue(
+            "Coordinator:OutcomeSpecDraftTimeoutSeconds",
+            DefaultOutcomeSpecDraftTimeoutSeconds);
+        if (outcomeSpecDraftTimeoutSeconds <= 0)
+            throw new InvalidOperationException(
+                "Coordinator:OutcomeSpecDraftTimeoutSeconds must be greater than zero.");
+        _outcomeSpecDraftTimeout = TimeSpan.FromSeconds(outcomeSpecDraftTimeoutSeconds);
 
         _checkpointDir = configuration["Coordinator:Checkpoints:Path"]
             ?? Path.Combine(AppPaths.DataDirectory, "coordinator-checkpoints");
@@ -338,7 +348,7 @@ public sealed class CoordinatorWorkflowFactory
         var memoryContext = await CompileMemoryContextAsync(input.ProjectId, ct).ConfigureAwait(false);
         var charter = BuiltInCharterResolver.Resolve(input.RepositoryPath, "coordinator") ?? FallbackCharter;
 
-        var draft = await _drafter.DraftAsync(input, charter, memoryContext, ct).ConfigureAwait(false);
+        var draft = await DraftWithTimeoutAsync(input, charter, memoryContext, ct).ConfigureAwait(false);
 
         var (specId, status) = await PersistDraftAsync(input, draft, ct).ConfigureAwait(false);
 
@@ -360,6 +370,39 @@ public sealed class CoordinatorWorkflowFactory
         return new CoordinatorOutcomeSpecRequest(
             input.RunId, specId, input.Goal,
             draft.DesiredOutcome, draft.Scope, draft.Assumptions, draft.ClarifyingQuestions, status);
+    }
+
+    private async Task<OutcomeSpecDraft> DraftWithTimeoutAsync(
+        CoordinatorDraftInput input,
+        string charter,
+        string? memoryContext,
+        CancellationToken ct)
+    {
+        using var draftCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var draftTask = _drafter.DraftAsync(input, charter, memoryContext, draftCts.Token);
+        var timeoutTask = Task.Delay(_outcomeSpecDraftTimeout, ct);
+
+        if (await Task.WhenAny(draftTask, timeoutTask).ConfigureAwait(false) == draftTask)
+            return await draftTask.ConfigureAwait(false);
+
+        ct.ThrowIfCancellationRequested();
+        await draftCts.CancelAsync().ConfigureAwait(false);
+        _ = draftTask.ContinueWith(
+            task => _logger.LogWarning(
+                task.Exception,
+                "Outcome-spec drafter faulted after its timeout for coordinator run {RunId}",
+                input.RunId),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        _logger.LogError(
+            "Outcome-spec drafting timed out after {TimeoutSeconds}s for coordinator run {RunId}",
+            _outcomeSpecDraftTimeout.TotalSeconds,
+            input.RunId);
+        throw new CoordinatorOutcomeSpecDraftTimeoutException(
+            input.RunId,
+            _outcomeSpecDraftTimeout);
     }
 
     /// <summary>
