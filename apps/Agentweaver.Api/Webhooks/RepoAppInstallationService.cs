@@ -84,7 +84,7 @@ public sealed class RepoAppInstallationTokenService(
             if (appJwt is null)
                 return RepoAppInstallationOutcome.ConfigurationUnavailable;
             var installationToken = await GetInstallationTokenAsync(
-                appJwt, installationId, repositoryId, requestedPermissions, ct).ConfigureAwait(false);
+                appJwt, installationId, [repositoryId], requestedPermissions, ct).ConfigureAwait(false);
             if (installationToken is null)
                 return RepoAppInstallationOutcome.ProviderUnavailable;
 
@@ -108,6 +108,27 @@ public sealed class RepoAppInstallationTokenService(
         long repositoryId,
         CancellationToken ct = default)
         => await GetRepositoryAuthorityAsync(installationId, repositoryId, ct).ConfigureAwait(false) is not null;
+
+    internal async Task<RepoAppInstallationToken?> MintMetadataInstallationTokenAsync(
+        long installationId,
+        CancellationToken ct = default)
+    {
+        if (installationId <= 0)
+            return null;
+
+        var appJwt = await CreateAppJwtAsync(ct).ConfigureAwait(false);
+        if (appJwt is null)
+            return null;
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        return await GetInstallationTokenAsync(
+            appJwt,
+            installationId,
+            repositoryIds: null,
+            RepositoryMetadataPermissionScope,
+            timeout.Token).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Resolves the numeric repository ID for a display full name (e.g. "owner/repo") within a
@@ -241,7 +262,7 @@ public sealed class RepoAppInstallationTokenService(
                 return null;
 
             var metadataToken = await GetInstallationTokenAsync(
-                appJwt, installationId, repositoryId, RepositoryMetadataPermissionScope, timeout.Token)
+                appJwt, installationId, [repositoryId], RepositoryMetadataPermissionScope, timeout.Token)
                 .ConfigureAwait(false);
             if (metadataToken is null)
                 return null;
@@ -310,13 +331,18 @@ public sealed class RepoAppInstallationTokenService(
     private async Task<RepoAppInstallationToken?> GetInstallationTokenAsync(
         string appJwt,
         long installationId,
-        long repositoryId,
+        IReadOnlyList<long>? repositoryIds,
         IReadOnlyDictionary<string, string> permissions,
         CancellationToken ct)
     {
         using var request = CreateGitHubRequest(
             HttpMethod.Post, $"/app/installations/{installationId}/access_tokens", appJwt);
-        request.Content = JsonContent.Create(new { repository_ids = new[] { repositoryId }, permissions });
+        var payload = new Dictionary<string, object>();
+        if (repositoryIds is { Count: > 0 })
+            payload["repository_ids"] = repositoryIds;
+        if (permissions.Count > 0)
+            payload["permissions"] = permissions;
+        request.Content = JsonContent.Create(payload);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         using var response = await httpClientFactory.CreateClient("github").SendAsync(request, timeout.Token)

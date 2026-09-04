@@ -46,6 +46,7 @@ internal sealed class PlatformDefaultCopilotBindingService(
 {
     private const string CookieName = "__Host-agentweaver-platform-copilot-app-auth";
     private const string CallbackSuffix = "/auth/github/copilot-app/callback";
+    private const string TombstoneSecretValue = """{"status":"revoked"}""";
     private static readonly TimeSpan TransactionLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(10);
 
@@ -278,7 +279,10 @@ internal sealed class PlatformDefaultCopilotBindingService(
             logger.LogWarning(
                 "Platform-default Copilot binding failed: registration validation returned {RegistrationState} instead of Ready.",
                 registrationState);
-            await WriteTombstoneAsync(transaction.PkceVerifierProtected, CancellationToken.None).ConfigureAwait(false);
+            await TryWriteTombstoneAsync(
+                transaction.PkceVerifierProtected,
+                "platform-default registration failure cleanup",
+                CancellationToken.None).ConfigureAwait(false);
             await CompleteFailureAsync(transaction, GitHubAuditReasonCode.BindingUnavailable, CancellationToken.None)
                 .ConfigureAwait(false);
             return PlatformDefaultCopilotBindingOutcome.GitHubBindingUnavailable;
@@ -299,10 +303,8 @@ internal sealed class PlatformDefaultCopilotBindingService(
 
             var version = CreateRandomValue();
             credentialReference = $"copilot-app-platform-default-{version}";
-            await credentialVault.WriteAsync(
-                GitHubConnectionsCredentialLocator.ForCopilotBinding(credentialReference),
-                JsonSerializer.Serialize(credential with { Status = "signed-in" }),
-                ct).ConfigureAwait(false);
+            var credentialValue = JsonSerializer.Serialize(credential with { Status = "signed-in" });
+            await WriteCredentialAndVerifyAsync(credentialReference, credentialValue, ct).ConfigureAwait(false);
             var completed = await persistence.CompletePlatformDefaultCopilotAuthorizationAsync(
                 transaction.State,
                 new PlatformDefaultCopilotBindingRecord
@@ -331,8 +333,11 @@ internal sealed class PlatformDefaultCopilotBindingService(
         {
             logger.LogWarning(ex, "Platform-default Copilot binding failed to complete.");
             if (!string.IsNullOrWhiteSpace(credentialReference))
-                await DeleteCredentialAsync(credentialReference, CancellationToken.None).ConfigureAwait(false);
-            await WriteTombstoneAsync(transaction.PkceVerifierProtected, CancellationToken.None).ConfigureAwait(false);
+                await TryDeleteCredentialAsync(credentialReference, CancellationToken.None).ConfigureAwait(false);
+            await TryWriteTombstoneAsync(
+                transaction.PkceVerifierProtected,
+                "platform-default PKCE verifier cleanup",
+                CancellationToken.None).ConfigureAwait(false);
             await CompleteFailureAsync(transaction, GitHubAuditReasonCode.BindingUnavailable, CancellationToken.None).ConfigureAwait(false);
             return PlatformDefaultCopilotBindingOutcome.GitHubBindingUnavailable;
         }
@@ -481,8 +486,64 @@ internal sealed class PlatformDefaultCopilotBindingService(
     private static string CreateGrantDigest(string version) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"copilot:platform-default:{version}"))).ToLowerInvariant();
 
+    private async Task WriteCredentialAndVerifyAsync(string reference, string value, CancellationToken ct)
+    {
+        var locator = GitHubConnectionsCredentialLocator.ForCopilotBinding(reference);
+        await credentialVault.WriteAsync(locator, value, ct).ConfigureAwait(false);
+        var persisted = await credentialVault.ReadCurrentAsync(locator, ct).ConfigureAwait(false);
+        if (!persisted.Found || !string.Equals(persisted.Value, value, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Credential secret '{reference}' could not be verified after writing.");
+    }
+
+    private async Task TryDeleteCredentialAsync(string reference, CancellationToken ct)
+    {
+        var locator = GitHubConnectionsCredentialLocator.ForCopilotBinding(reference);
+        try
+        {
+            await DeleteCredentialAsync(reference, ct).ConfigureAwait(false);
+            var persisted = await credentialVault.ReadCurrentAsync(locator, ct).ConfigureAwait(false);
+            if (persisted.Found)
+            {
+                logger.LogError(
+                    "Platform-default Copilot cleanup could not verify credential removal for {Reference}.",
+                    reference);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Platform-default Copilot cleanup failed to remove credential secret {Reference}.",
+                reference);
+        }
+    }
+
+    private async Task TryWriteTombstoneAsync(string reference, string purpose, CancellationToken ct)
+    {
+        try
+        {
+            await WriteTombstoneAsync(reference, ct).ConfigureAwait(false);
+            var persisted = await secretStore.GetSecretAsync(reference, ct).ConfigureAwait(false);
+            if (!persisted.Found || !string.Equals(persisted.Value, TombstoneSecretValue, StringComparison.Ordinal))
+            {
+                logger.LogError(
+                    "Platform-default Copilot cleanup could not verify tombstone secret write for {Reference} during {Purpose}.",
+                    reference,
+                    purpose);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Platform-default Copilot cleanup failed to tombstone secret {Reference} during {Purpose}.",
+                reference,
+                purpose);
+        }
+    }
+
     private async Task WriteTombstoneAsync(string reference, CancellationToken ct) =>
-        await secretStore.SetSecretAsync(reference, """{"status":"revoked"}""", ct: ct).ConfigureAwait(false);
+        await secretStore.SetSecretAsync(reference, TombstoneSecretValue, ct: ct).ConfigureAwait(false);
 
     private async Task DeleteCredentialAsync(string reference, CancellationToken ct) =>
         await credentialVault.TombstoneAndDeleteAsync(
