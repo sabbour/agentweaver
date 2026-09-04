@@ -434,3 +434,28 @@ at a different API.
 9. Review the assembled diff. Merge it when you approve the result.
 
 For full end-to-end walkthroughs, see [Example walkthroughs](./example-scenarios).
+
+## 5. Connect an MCP client
+
+You can also operate Agentweaver from Claude Desktop, VS Code, GitHub Copilot CLI,
+or GitHub Copilot desktop.
+
+1. Sign in to the Agentweaver web app first. On deployments that use Microsoft
+   Entra ID, complete the Entra sign-in.
+2. Open **Account settings → MCP clients** and copy the displayed URL. For a
+   hosted deployment, it is exactly `https://<deployment-origin>/mcp`.
+3. Add that URL as a remote HTTP MCP server in your client. Do not add an
+   authorization header or copy a bearer token.
+4. Connect. The client discovers Agentweaver's OAuth metadata, opens a browser
+   when sign-in is required, and completes authorization code + PKCE after you
+   approve the `mcp:invoke` consent request.
+5. Return to the client and confirm that the Agentweaver server is connected and
+   its tools are listed.
+6. In a GitHub Copilot client, install and select the **Agentweaver Driver**
+   custom agent so Copilot uses the MCP tools with the correct discovery,
+   confirmation, supervision, and review workflow.
+
+The client stores and refreshes its OAuth credentials. Credentials do not belong
+in the URL, shell command, or checked-in configuration. See
+[Connect an MCP client](./mcp-cli) for the current setup path and validation step
+for each supported client.

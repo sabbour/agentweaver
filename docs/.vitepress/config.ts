@@ -56,6 +56,7 @@ export default withMermaid({
           text: 'Getting Started',
           items: [
             { text: 'Getting started', link: '/guide/getting-started' },
+            { text: 'Connect an MCP client', link: '/guide/mcp-cli' },
             { text: 'Example walkthroughs', link: '/guide/example-scenarios' },
           ],
         },
@@ -72,7 +73,6 @@ export default withMermaid({
             { text: 'Runs', link: '/guide/runs' },
             { text: 'Review & Merge', link: '/guide/review' },
             { text: 'The Assistant and Sessions', link: '/guide/assistant' },
-            { text: 'MCP CLI', link: '/guide/mcp-cli' },
           ],
         },
         {

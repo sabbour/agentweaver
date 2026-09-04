@@ -116,9 +116,9 @@ excluded from prompt compilation until explicitly approved.
 
 ### MCP server
 
-The full Agentweaver feature set is available programmatically through an MCP server. Any MCP-compatible client (including Copilot CLI) can drive the complete lifecycle — projects, runs, board, workflows, blueprints, casting, memory, decisions, sandbox, and diagnostics.
+The full Agentweaver feature set is available programmatically through an MCP server. Claude Desktop, VS Code, GitHub Copilot CLI, and GitHub Copilot desktop can connect to the hosted `/mcp` endpoint and complete OAuth sign-in without a manually copied bearer token. GitHub Copilot users can install the Agentweaver Driver definition from the public docs URL and select it for tool-aware operation.
 
-→ [MCP server](/reference/mcp)
+→ [Connect an MCP client](./mcp-cli)
 
 ## Why Agentweaver
 
@@ -137,3 +137,4 @@ The full Agentweaver feature set is available programmatically through an MCP se
 - [Create your first project](./projects)
 - [Learn about workflows](./workflows)
 - [Submit your first run](./runs)
+- [Connect an MCP client](./mcp-cli)

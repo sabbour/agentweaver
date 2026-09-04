@@ -1,113 +1,156 @@
 ---
-title: MCP CLI operator guide
+title: Connect an MCP client
 ---
 
-# MCP CLI operator guide
+# Connect an MCP client
 
-Use this guide when driving Agentweaver from Copilot CLI, Claude Desktop, or another MCP client.
+Connect Claude Desktop, VS Code, GitHub Copilot CLI, or GitHub Copilot desktop
+to Agentweaver through the hosted MCP endpoint.
 
-## Connecting a client
+## Before you connect
 
-The hosted MCP endpoint is `https://<your-agentweaver-host>/mcp`. In the web app,
-open **Account settings → MCP clients** to copy the URL and a client-specific configuration.
+- Use a current client version that supports remote HTTP MCP servers and OAuth.
+- Sign in to the Agentweaver web app. On deployments that use Microsoft Entra
+  ID, complete the Entra sign-in before authorizing the client.
+- In Agentweaver, open **Account settings → MCP clients** and copy the displayed
+  URL. For a hosted deployment, the exact form is
+  `https://<deployment-origin>/mcp`.
 
-The MCP server accepts only Agentweaver-issued broker access tokens for the exact
-`https://<your-agentweaver-host>/mcp` resource and `mcp:invoke` scope. Microsoft Entra remains
-the upstream product sign-in boundary; its access tokens are not MCP credentials. Do not commit
-broker tokens to a configuration file.
+The `/mcp` path is required. Do not add a trailing slash, URL credentials,
+authorization headers, or query parameters.
 
-### Local (stdio)
+## How authorization works
 
-For a locally launched server (`dotnet run --project apps/Agentweaver.Mcp -- --stdio`, which is what
-Copilot CLI does via the workspace `.mcp.json`), there is no interactive OAuth handshake and no
-inbound HTTP request to carry your identity. Provide an Agentweaver broker token:
+Configure only the MCP URL for normal hosted use. On connection, the client:
 
-```jsonc
-{
-  "mcpServers": {
-    "agentweaver": {
-      "command": "dotnet",
-      "args": ["run", "--project", "apps/Agentweaver.Mcp", "--no-build"],
-      "env": {
-        "AGENTWEAVER_API_URL": "http://localhost:5000",
-        // Agentweaver broker token for the MCP resource and mcp:invoke scope.
-        "AGENTWEAVER_TOKEN": "${input:agentweaver-token}"
-      }
-    }
-  }
-}
+1. discovers the anonymous OAuth protected-resource metadata for `/mcp`;
+2. discovers Agentweaver's same-origin authorization server;
+3. opens a browser for Agentweaver sign-in when required;
+4. asks you to approve the least-privilege `mcp:invoke` scope; and
+5. completes authorization code + PKCE S256 and manages token refresh.
+
+You do not copy or paste an Entra token, broker access token, API key, or other
+credential. The MCP client completes OAuth and keeps credentials out of URLs,
+commands, and checked-in configuration.
+
+## Install the Agentweaver Driver
+
+GitHub Copilot clients work best with the **Agentweaver Driver** custom agent.
+Its definition includes the current MCP tool map and the safe playbooks for
+discovery, confirmation, run supervision, review, retries, and credential
+handling.
+
+Every hosted Agentweaver deployment serves the definition without
+authentication from the same origin:
+
+`https://<deployment-origin>/agents/agentweaver.agent.md`
+
+For example, if the MCP URL is `https://agentweaver.example.com/mcp`, the agent
+definition is
+`https://agentweaver.example.com/agents/agentweaver.agent.md`.
+
+For Copilot CLI, save it as a user-level agent:
+
+::: code-group
+
+```powershell [Windows PowerShell]
+$agentDirectory = Join-Path $HOME ".copilot\agents"
+New-Item -ItemType Directory -Force $agentDirectory | Out-Null
+Invoke-WebRequest `
+  -Uri "https://<deployment-origin>/agents/agentweaver.agent.md" `
+  -OutFile (Join-Path $agentDirectory "agentweaver.agent.md")
 ```
 
-::: danger Broker tokens only
-Raw Entra access tokens, GitHub tokens, and API keys are rejected. Stdio mode refuses to start
-without `AGENTWEAVER_TOKEN`; the API independently validates the configured broker token and
-applies project authorization on every tool call.
+```shell [macOS and Linux]
+install -d "$HOME/.copilot/agents"
+curl --fail --proto '=https' --tlsv1.2 \
+  --output "$HOME/.copilot/agents/agentweaver.agent.md" \
+  "https://<deployment-origin>/agents/agentweaver.agent.md"
+```
+
 :::
 
-### Claude Desktop
+Review the downloaded definition, restart Copilot CLI, run `/agent`, and select
+`agentweaver`. You can also invoke it directly with
+`copilot --agent=agentweaver --prompt "<your Agentweaver task>"`.
 
-Add this to `claude_desktop_config.json`:
+For VS Code or GitHub Copilot desktop, place the same file at
+`.github/agents/agentweaver.agent.md` in the repository where you will work,
+then select **Agentweaver Driver** from the agent picker. Agentweaver-created
+projects already receive this repository-level definition, so no separate
+install is needed there.
 
-```json
-{
-  "mcpServers": {
-    "agentweaver": {
-      "url": "https://<your-agentweaver-host>/mcp",
-      "headers": {
-        "Authorization": "Bearer ${AGENTWEAVER_TOKEN}"
-      }
-    }
-  }
-}
+## Claude Desktop
+
+1. Open **Settings → Connectors**.
+2. Add a custom connector named **Agentweaver**.
+3. Enter the MCP server URL from Agentweaver Account settings.
+4. Connect, complete browser sign-in and consent, then confirm that the
+   connector lists Agentweaver tools.
+
+Claude manages the connector configuration and OAuth session. Its UI and
+availability can vary by plan and managed-organization policy, so use the
+current connector settings rather than editing a desktop JSON file or adding a
+static authorization header.
+
+## VS Code
+
+1. Open the Command Palette and run **MCP: Add Server**.
+2. Choose **HTTP**, enter the MCP server URL, and select the user or workspace
+   configuration scope.
+3. Start the server and complete the browser sign-in and consent flow.
+4. Run **MCP: List Servers** and confirm that Agentweaver is running and exposes
+   tools.
+5. Select **Agentweaver Driver** from the Copilot Chat agent picker after the
+   repository-level definition is installed.
+
+VS Code writes its client-managed `mcp.json` entry. No input variable or
+authorization header is required for Agentweaver OAuth.
+
+## GitHub Copilot CLI
+
+1. Start an interactive Copilot CLI session and run `/mcp add`.
+2. Name the server `agentweaver`, choose **HTTP**, enter the MCP server URL,
+   leave HTTP headers empty, and save.
+3. Complete the browser sign-in and consent flow.
+4. Run `/mcp show agentweaver` and confirm that the server is connected and its
+   tools are listed.
+
+The non-interactive equivalent is:
+
+```shell
+copilot mcp add --transport http agentweaver https://<deployment-origin>/mcp
 ```
 
-### VS Code
+Do not add `--header` or put credentials in the command.
 
-Add this to your `mcp.json`:
+## GitHub Copilot desktop
 
-```json
-{
-  "servers": {
-    "agentweaver": {
-      "type": "http",
-      "url": "https://<your-agentweaver-host>/mcp",
-      "headers": {
-        "Authorization": "Bearer ${input:agentweaver-token}"
-      }
-    }
-  },
-  "inputs": [
-    {
-      "id": "agentweaver-token",
-      "type": "promptString",
-      "description": "Your authenticated Agentweaver caller bearer",
-      "password": true
-    }
-  ]
-}
-```
+1. Open **Customize → MCP servers**.
+2. Add a custom remote HTTP server named **Agentweaver** and enter the MCP
+   server URL.
+3. Connect and complete the browser sign-in and consent flow.
+4. Start a session and confirm that Agentweaver tools appear in the tool picker.
 
-### GitHub Copilot CLI
+GitHub manages this configuration surface, and labels can move between desktop
+releases. If the placement changes, search the **Customize** view for MCP
+servers; do not replace OAuth with a copied token. Select **Agentweaver Driver**
+from the agent picker after the repository-level definition is installed.
 
-Add this to `.copilot/mcp-config.json` (or `~/.copilot/mcp-config.json`):
+## Local repository development only
 
-```json
-{
-  "mcpServers": {
-    "agentweaver": {
-      "type": "http",
-      "url": "https://<your-agentweaver-host>/mcp",
-      "headers": {
-        "Authorization": "Bearer ${AGENTWEAVER_TOKEN}"
-      }
-    }
-  }
-}
-```
+The hosted flow above is the supported onboarding path. A repository developer
+who intentionally launches `apps/Agentweaver.Mcp` over stdio does not have an
+HTTP browser callback and must supply an Agentweaver broker token through the
+process environment. This is for trusted local development and deterministic
+test harnesses only, not hosted client setup. Never place the token in command
+arguments, source control, or a URL. Raw Entra access tokens, GitHub tokens, and
+API keys are rejected.
 
-## Sign-in and GitHub capabilities
+## GitHub capabilities after MCP sign-in
 
-Sign in to Agentweaver as a human Entra subject before using MCP. Authorize each GitHub capability separately:
+MCP sign-in authorizes Agentweaver tool calls. Repository and AI access are
+separate GitHub capabilities. Authorize each one only when a workflow needs it:
 
 `github_repo_app_connect → open browser_url → github_repo_app_authorization_status`
 
@@ -117,7 +160,9 @@ and verifies `project_github_capability_status`. Handoff and polling return only
 transaction identifiers and lifecycle state; credentials, OAuth state, installations,
 repositories, and permissions never appear in MCP output.
 
-If a call fails with `401`, do not show the raw error. Sign in to Agentweaver, then retry.
+If the client reports `401`, reconnect the MCP server and complete the browser
+OAuth flow. Do not work around the failure by pasting a token into client
+settings.
 
 ## Recommended entry points
 
@@ -160,6 +205,10 @@ Use `coordinator_start` instead of `run_task` when the operator wants manual con
 Always call `run_show_artifacts` before `run_get_file`. The artifact list tells you which file paths are valid inputs for `run_get_file`.
 
 ## Testing the MCP path
+
+This section is for repository maintainers testing a deployment, not for client
+onboarding. Put the short-lived broker token in the process environment, never
+in command arguments or source control.
 
 Run the deterministic CLI-to-MCP smoke test from the repository root:
 

@@ -9,6 +9,8 @@ import {
   MessageBar,
   MessageBarBody,
   Spinner,
+  Tab,
+  TabList,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
@@ -16,6 +18,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { getLastActiveProjectId } from '../components/shell/projectContext';
 import type { AuthConfigResponse, AuthSessionResponse, RepoAppConnectionStatus } from '../api/types';
+import { CopyButton } from '../copilot-fluent-system';
+import {
+  AGENTWEAVER_AGENT_URL,
+  MCP_CLIENT_GUIDANCE,
+  MCP_CLIENT_IDS,
+  type McpClientId,
+} from './mcpClientGuidance';
 import {
   Body,
   Label,
@@ -52,6 +61,20 @@ const useStyles = makeStyles({
     display: 'flex',
     gap: tokens.spacingHorizontalS,
   },
+  mcpUrlRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  mcpUrlInput: {
+    flexGrow: 1,
+  },
+  clientPanel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalXS,
+  },
 });
 
 function formatError(err: unknown): string {
@@ -73,6 +96,8 @@ export function SettingsPage() {
   const [repoAppError, setRepoAppError] = useState<string | null>(null);
   const [repoAppConnection, setRepoAppConnection] = useState<RepoAppConnectionStatus | null>(null);
   const [repoAppStatusLoading, setRepoAppStatusLoading] = useState(true);
+  const [mcpClientId, setMcpClientId] = useState<McpClientId>('claude-desktop');
+  const mcpClient = MCP_CLIENT_GUIDANCE[mcpClientId];
 
   useEffect(() => {
     let cancelled = false;
@@ -265,15 +290,83 @@ export function SettingsPage() {
 
       <PageSection
         title="MCP clients"
-        description="Connect an external MCP client to Agentweaver. This connection is associated with your signed-in account, not a single project."
+        description="Connect a supported MCP client to Agentweaver with your signed-in account."
       >
         <div className={styles.section}>
+          <Body tone="muted">
+            The client discovers Agentweaver OAuth automatically. It opens a browser for Entra sign-in
+            when required and asks you to approve MCP access. Do not paste access tokens into the URL,
+            headers, or client configuration.
+          </Body>
           <Field
             label="MCP server URL"
-            hint="Use this URL in your MCP client configuration."
+            hint="Use this exact URL. The /mcp path is required."
           >
-            <Input value={MCP_URL} readOnly data-testid="mcp-server-url" />
+            <div className={styles.mcpUrlRow}>
+              <Input
+                className={styles.mcpUrlInput}
+                value={MCP_URL}
+                readOnly
+                aria-label="MCP server URL"
+                data-testid="mcp-server-url"
+              />
+              <CopyButton
+                value={MCP_URL}
+                label="Copy URL"
+                ariaLabel="Copy MCP server URL"
+              />
+            </div>
           </Field>
+          <TabList
+            selectedValue={mcpClientId}
+            onTabSelect={(_, data) => setMcpClientId(data.value as McpClientId)}
+            aria-label="MCP client setup"
+          >
+            {MCP_CLIENT_IDS.map((clientId) => (
+              <Tab
+                key={clientId}
+                id={`mcp-client-tab-${clientId}`}
+                value={clientId}
+              >
+                {MCP_CLIENT_GUIDANCE[clientId].label}
+              </Tab>
+            ))}
+          </TabList>
+          <div
+            className={styles.clientPanel}
+            role="tabpanel"
+            aria-labelledby={`mcp-client-tab-${mcpClientId}`}
+          >
+            <TitleText>{mcpClient.label}</TitleText>
+            <Body>{mcpClient.setup}</Body>
+            <Body tone="muted">
+              When the client connects, complete the browser sign-in and consent flow. {mcpClient.verification}
+            </Body>
+          </div>
+          <Divider />
+          <div className={styles.clientPanel}>
+            <TitleText>Recommended operator agent</TitleText>
+            <Body>
+              In GitHub Copilot clients, install and select the Agentweaver Driver custom agent.
+              It knows the MCP tool set, confirmation gates, and safe run workflow.
+            </Body>
+            <div className={styles.formActions}>
+              <Button
+                as="a"
+                appearance="secondary"
+                href={AGENTWEAVER_AGENT_URL}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open agent definition
+              </Button>
+              <CopyButton
+                value={AGENTWEAVER_AGENT_URL}
+                label="Copy agent URL"
+                ariaLabel="Copy Agentweaver Driver URL"
+              />
+            </div>
+          </div>
         </div>
       </PageSection>
     </PageContainer>
