@@ -1,0 +1,91 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "A2A Turn Transport",
+  "alt": "A2A Turn Transport: Orchestration graph, RemoteAgentProxy, AgentHost, Leaf agent turn",
+  "direction": "LR",
+  "groups": [
+    {
+      "id": "Worker",
+      "label": "Worker",
+      "tier": 1
+    },
+    {
+      "id": "Pod",
+      "label": "Sandbox pod",
+      "tier": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "WF",
+      "label": "Orchestration graph",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "subLabel": "gates · resume · assembly",
+      "group": "Worker"
+    },
+    {
+      "id": "RP",
+      "label": "RemoteAgentProxy",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "group": "Worker"
+    },
+    {
+      "id": "AH",
+      "label": "AgentHost",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      },
+      "group": "Pod"
+    },
+    {
+      "id": "AG",
+      "label": "Leaf agent turn",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "+ tools / shell / files",
+      "group": "Pod"
+    }
+  ],
+  "edges": [
+    {
+      "from": "WF",
+      "to": "RP"
+    },
+    {
+      "from": "RP",
+      "to": "AH",
+      "label": "one agent turn over A2A"
+    },
+    {
+      "from": "AH",
+      "to": "AG"
+    },
+    {
+      "from": "AG",
+      "to": "AH",
+      "label": "turn output stream"
+    },
+    {
+      "from": "AH",
+      "to": "RP",
+      "label": "A2A response"
+    },
+    {
+      "from": "RP",
+      "to": "WF"
+    }
+  ]
+}

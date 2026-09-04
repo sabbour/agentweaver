@@ -287,13 +287,6 @@ Beyond the static tool names and descriptions summarized here, the protocol-leve
 
 The Kubernetes design has one public host and routes selected paths to the MCP service.
 
-![6. Kubernetes routing: expose `/mcp`, but do not hide discovery: MCP client, Gateway / HTTPRoute, Rewrite to /healthz, agentweaver-mcp Service, Agentweaver.Mcp pod, agentweaver-api Service](../diagrams/mcp-server-fig1.png)
-
-<!-- Rendered from ../diagrams/src/mcp-server-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 There are three important routing shapes:
 
 1. **Health:** public `/mcp/health` is rewritten to the pod's internal `/healthz`. This gives operators a stable public health URL without making the app serve health under the MCP protocol path.

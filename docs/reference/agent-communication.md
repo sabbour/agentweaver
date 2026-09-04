@@ -20,13 +20,6 @@ The three channels are:
 > surface is `RemoteAgentProxy → Authorization: Bearer {per-run token} →
 > AgentHost message:stream`; each AgentHost pod accepts only its own run's token.
 
-![Agent Communication — Reference: inbox_submit / inbox_list, decision_create / decision_list, memory_add / memory_list, coordinator_start, worker ↔ sandbox pod](../diagrams/reference-agent-communication-fig1.png)
-
-<!-- Rendered from ../diagrams/src/reference-agent-communication-fig1.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ---
 
 ## Channel 1 — Shared-state coordination
