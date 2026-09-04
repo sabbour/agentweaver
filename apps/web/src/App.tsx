@@ -86,7 +86,10 @@ function Shell({
 
         {/* Project-scoped */}
         <Route path="/projects/:projectId" element={<DashboardPage />} />
-        <Route path="/projects/:projectId/board" element={<ProjectPage />} />
+        <Route
+          path="/projects/:projectId/board"
+          element={<ProjectPage currentUserKey={tourUserKey} />}
+        />
         <Route path="/projects/:projectId/flow" element={<FlowPage />} />
         <Route path="/projects/:projectId/orchestrations" element={<OrchestrationsPage />} />
         <Route path="/projects/:projectId/sessions" element={<LegacyProjectSessionsRedirect />} />

@@ -17,6 +17,7 @@ import { DismissRegular } from '@fluentui/react-icons';
 import { AddRegular, DeleteRegular } from '@fluentui/react-icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
+import { createNewAssistantSessionState } from '../routes/assistantNavigation';
 import { ApiError } from '../api/client';
 import type { AssistantRunSummary } from '../api/types';
 import { PageHeader } from '../components/PageHeader';
@@ -147,7 +148,10 @@ export function SessionsPage() {
     params.set('runId', runId);
     navigate(`/assistant?${params.toString()}`);
   };
-  const startNew = () => navigate(assistantBasePath);
+  const startNew = () => navigate(
+    assistantBasePath,
+    { state: createNewAssistantSessionState() },
+  );
 
   const requestDelete = (run: AssistantRunSummary) => {
     setDeleteError(null);
