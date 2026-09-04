@@ -153,17 +153,21 @@ the App permissions and wait for the server to verify a new grant.
 Installation tokens are scoped to Agentweaver's server-declared unattended repository
 permissions and never inherit unrelated installation permissions.
 
-For Azure provisioning, pass the PEM by file so it never appears in a command argument
-or params-file value:
+For Azure provisioning, pass the PEM by file so its contents never appear in a command
+argument or params-file value:
 
 ```powershell
 npm run azure:provision-infra -- --repo-app-private-key-file C:\secure\agentweaver-repo-app.pem
 ```
 
-You can also set `REPO_APP_PRIVATE_KEY_FILE` in the environment or params file. The path
-is resolved by the deployment process, and the file content is imported as
-`ghtok-repo-app-private-key`. This explicit import replaces the canonical value, so run
-it from one serialized operator or CI step.
+You can also set `REPO_APP_PRIVATE_KEY_FILE` in the environment or params file for this
+one import only. The path is resolved by the deployment process, and the file content is
+imported as `ghtok-repo-app-private-key`. This explicit import replaces the canonical
+value, so run it from one serialized operator or CI step. After the command reports a
+successful canonical import, unset `REPO_APP_PRIVATE_KEY_FILE` in the environment.
+Remove it from every params file used for the import. Then delete the PEM. A stale
+setting makes a future deploy try the deleted file before it checks the valid canonical
+secret.
 
 Automatic migration from legacy physical secret `repo-app-private-key` is disabled.
 Azure Key Vault secret set has no create-only condition that protects the canonical
@@ -176,13 +180,16 @@ $keyFile = "C:\secure\agentweaver-repo-app.pem"
 az keyvault secret download --vault-name $vaultName --name repo-app-private-key `
   --file $keyFile --encoding utf-8 --overwrite
 npm run azure:provision-infra -- --repo-app-private-key-file $keyFile
+Remove-Item Env:REPO_APP_PRIVATE_KEY_FILE -ErrorAction SilentlyContinue
+# Remove REPO_APP_PRIVATE_KEY_FILE from any params file used for this import.
 Remove-Item $keyFile
 ```
 
-Use a protected local path, serialize the explicit import in CI, and remove the file
-afterward. Provisioning and deployment also stop before applying manifests when neither
-secret exists or Key Vault access cannot be verified. `npm run azure:verify` checks the
-canonical physical secret again after deployment.
+Use a protected local path and serialize the explicit import in CI. After the canonical
+import succeeds, unset the environment variable. Remove the params-file property. Then
+remove the PEM. Provisioning and deployment also stop before applying manifests when
+neither secret exists or Key Vault access cannot be verified.
+`npm run azure:verify` checks the canonical physical secret again after deployment.
 
 ##### Required manual step: register the installation Setup URL
 

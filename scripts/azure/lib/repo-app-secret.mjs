@@ -361,8 +361,9 @@ export async function ensureRepoAppPrivateKeySecret(
       "--encoding utf-8 --overwrite\n" +
       "then rerun the deployment with:\n" +
       "  npm run azure:provision-infra -- --repo-app-private-key-file <protected-repo-app-private-key.pem>\n" +
-      "The configured-file import intentionally replaces the canonical secret. Serialize that explicit import " +
-      "in CI and delete the protected local file afterward.",
+      "The configured-file import is one-shot and intentionally replaces the canonical secret. Serialize that " +
+      "explicit import in CI. After it succeeds, unset REPO_APP_PRIVATE_KEY_FILE. Remove it from every params " +
+      "file used for the import. Then delete the protected local file.",
   );
 }
 

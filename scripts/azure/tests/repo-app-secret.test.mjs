@@ -87,6 +87,9 @@ test("ensureRepoAppPrivateKeySecret refuses automatic legacy migration without r
       assert.match(error.message, /automatic legacy migration is disabled/i);
       assert.match(error.message, /az keyvault secret download/);
       assert.match(error.message, /--repo-app-private-key-file/);
+      assert.match(error.message, /one-shot/i);
+      assert.match(error.message, /unset REPO_APP_PRIVATE_KEY_FILE/);
+      assert.match(error.message, /remove it from every params file/i);
       return true;
     },
   );
