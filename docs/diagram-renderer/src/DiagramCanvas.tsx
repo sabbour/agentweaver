@@ -128,6 +128,9 @@ interface Band {
   label: string | null;
   tier: number;
   nodes: GraphNode[];
+  /** True when this band is a derived layer rather than an authored group. A
+   * layer is one rank of the flow, so it is always drawn as a single row. */
+  layer?: boolean;
   x: number;
   y: number;
   w: number;
@@ -139,6 +142,87 @@ function columnsFor(count: number): number {
   if (count <= 6) return 3;
   if (count <= 8) return 4;
   return 5;
+}
+
+/**
+ * Derives bands from the graph's own structure for specs that declare no
+ * groups. A flowchart's meaning IS its sequence, so the layers have to come
+ * from the edges: each node is ranked one below the deepest predecessor that
+ * can still reach it (longest-path layering, the standard first phase of a
+ * Sugiyama layered drawing). That puts every "next step" edge between adjacent
+ * ranks, where the router draws it as a short hop, instead of scattering the
+ * chain across arbitrary rows of a fixed-width grid.
+ *
+ * Back edges (loops like "request changes" returning to an earlier step) are
+ * excluded from ranking -- they are what makes a flowchart cyclic, and using
+ * them would push their target below its own successors. They still get drawn;
+ * the router just treats them as upward edges.
+ *
+ * Within a rank, nodes are ordered by the mean position of their predecessors
+ * in the rank above (the barycentre heuristic), which is what stops parallel
+ * branches from crossing over each other.
+ */
+function layerNodes(nodes: GraphNode[], edges: GraphSpec['edges']): GraphNode[][] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const real = (edges ?? []).filter((e) => byId.has(e.from) && byId.has(e.to) && e.from !== e.to);
+
+  // Depth-first pass that ignores any edge closing a cycle, so ranking sees a DAG.
+  const outgoing = new Map<string, string[]>();
+  for (const e of real) {
+    if (!outgoing.has(e.from)) outgoing.set(e.from, []);
+    outgoing.get(e.from)!.push(e.to);
+  }
+  const back = new Set<string>();
+  const state = new Map<string, 0 | 1 | 2>();
+  const visit = (id: string) => {
+    state.set(id, 1);
+    for (const next of outgoing.get(id) ?? []) {
+      const st = state.get(next) ?? 0;
+      if (st === 1) back.add(`${id}->${next}`);
+      else if (st === 0) visit(next);
+    }
+    state.set(id, 2);
+  };
+  for (const n of nodes) if ((state.get(n.id) ?? 0) === 0) visit(n.id);
+
+  const forward = real.filter((e) => !back.has(`${e.from}->${e.to}`));
+  const preds = new Map<string, string[]>();
+  for (const n of nodes) preds.set(n.id, []);
+  for (const e of forward) preds.get(e.to)!.push(e.from);
+
+  // Longest path from any source. Memoised, and the DAG guarantees termination.
+  const rank = new Map<string, number>();
+  const rankOf = (id: string): number => {
+    const seen = rank.get(id);
+    if (seen !== undefined) return seen;
+    rank.set(id, 0);
+    const ps = preds.get(id) ?? [];
+    const r = ps.length === 0 ? 0 : Math.max(...ps.map(rankOf)) + 1;
+    rank.set(id, r);
+    return r;
+  };
+  for (const n of nodes) rankOf(n.id);
+
+  const maxRank = Math.max(...nodes.map((n) => rank.get(n.id)!), 0);
+  const layers: GraphNode[][] = Array.from({ length: maxRank + 1 }, () => []);
+  for (const n of nodes) layers[rank.get(n.id)!].push(n);
+
+  // Barycentre ordering, top rank down: each node sits near the average slot of
+  // the predecessors that feed it.
+  const slot = new Map<string, number>();
+  layers[0]?.forEach((n, i) => slot.set(n.id, i));
+  for (let li = 1; li < layers.length; li += 1) {
+    const scored = layers[li].map((n, i) => {
+      const ps = (preds.get(n.id) ?? []).filter((p) => slot.has(p));
+      const bary = ps.length === 0 ? i : ps.reduce((a, p) => a + slot.get(p)!, 0) / ps.length;
+      return { n, bary, i };
+    });
+    scored.sort((a, b) => a.bary - b.bary || a.i - b.i);
+    layers[li] = scored.map((s) => s.n);
+    layers[li].forEach((n, i) => slot.set(n.id, i));
+  }
+
+  return layers;
 }
 
 function layout(spec: GraphSpec): {
@@ -176,7 +260,32 @@ function layout(spec: GraphSpec): {
     });
   }
   if (ungrouped.length > 0) {
-    bands.push({ id: null, label: null, tier: 1, nodes: ungrouped, x: 0, y: 0, w: 0, h: 0 });
+    // Which layout a spec gets is decided by the spec itself, not by a flag an
+    // author has to remember to set. Declared groups ARE the intended layering
+    // -- an architecture diagram says "these belong together" -- so those become
+    // bands directly. A spec with no groups has only its edges to go on, so the
+    // layering is derived from them. Packing an ungrouped spec into one
+    // fixed-width grid, as this used to, is what made flowcharts unreadable:
+    // a 16-step sequence became four arbitrary rows of five and every step
+    // turned into a long detour through a gutter.
+    if (bands.length === 0) {
+      for (const layer of layerNodes(ungrouped, spec.edges)) {
+        if (layer.length === 0) continue;
+        bands.push({
+          id: null,
+          label: null,
+          tier: 1,
+          nodes: layer,
+          layer: true,
+          x: 0,
+          y: 0,
+          w: 0,
+          h: 0,
+        });
+      }
+    } else {
+      bands.push({ id: null, label: null, tier: 1, nodes: ungrouped, x: 0, y: 0, w: 0, h: 0 });
+    }
   }
 
   const placed: Placed[] = [];
@@ -185,7 +294,10 @@ function layout(spec: GraphSpec): {
   // because in-band edges are counted per row gutter and those counts are what
   // decide how tall each row gutter must be.
   const grids = bands.map((band) => {
-    const cols = columnsFor(band.nodes.length);
+    // A derived layer is one rank of the flow, so it stays on one row: that
+    // adjacency is the whole point of ranking it. Authored groups keep the
+    // balanced grid, which is what an architecture band wants.
+    const cols = band.layer ? Math.min(band.nodes.length, 6) : columnsFor(band.nodes.length);
     const rows = Math.ceil(band.nodes.length / cols);
     const rowHeights: number[] = [];
     for (let r = 0; r < rows; r += 1) {
