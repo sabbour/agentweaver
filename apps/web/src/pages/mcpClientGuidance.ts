@@ -1,10 +1,10 @@
 import { resolvePublicApiOrigin } from '../config';
 
 export const MCP_CLIENT_IDS = [
-  'claude-desktop',
-  'vs-code',
   'copilot-cli',
   'copilot-desktop',
+  'vs-code',
+  'claude-desktop',
 ] as const;
 
 export type McpClientId = (typeof MCP_CLIENT_IDS)[number];
