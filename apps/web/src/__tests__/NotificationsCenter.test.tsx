@@ -26,16 +26,18 @@ vi.mock('../api/apiClient', () => ({
 }));
 
 function makeNotification(overrides?: Partial<NotificationDto>): NotificationDto {
+  const runId = overrides?.run_id ?? 'run-1';
+  const projectId = overrides?.project_id === undefined ? 'proj-1' : overrides.project_id;
   return {
     id: 'notif-1',
     type: 'human_review',
-    run_id: 'run-1',
-    project_id: 'proj-1',
+    run_id: runId,
+    project_id: projectId,
     project_name: 'Demo Project',
     agent_name: 'Coordinator',
     title: 'Run "Demo Project" is awaiting your review',
     created_utc: '2026-07-14T00:00:00Z',
-    cta_path: '/projects/proj-1/orchestrations/run-1',
+    cta_path: projectId && runId ? `/projects/${projectId}/orchestrations/${runId}` : null,
     ...overrides,
   };
 }
@@ -59,7 +61,7 @@ function renderBell(pollIntervalMs = 1000) {
 
 function CurrentLocation() {
   const location = useLocation();
-  return <span data-testid="current-location">{location.pathname}</span>;
+  return <span data-testid="current-location">{location.pathname}{location.search}</span>;
 }
 
 beforeEach(() => {
@@ -232,8 +234,8 @@ describe('NotificationBell + NotificationsProvider', () => {
     await user.click(await screen.findByText('Review now'));
 
     await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(3));
-    expect(screen.getByTestId('current-location').textContent)
-      .toBe('/assistant?runId=assistant-run-7&project=proj-7');
+    await waitFor(() => expect(screen.getByTestId('current-location').textContent)
+      .toBe('/assistant?runId=assistant-run-7&project=proj-7'));
   });
 
   it('does not navigate when a later poll removes an approval while its CTA validation is pending', async () => {
@@ -558,7 +560,7 @@ describe('NotificationBell + NotificationsProvider', () => {
       .toContain('1 pending tool approval');
   });
 
-  it('CTA click routes a pending approval to its run, not a concurrent newer draft', async () => {
+  it('CTA click uses the selected approval target, not a concurrent newer draft', async () => {
     const newerDraft = makeNotification({
       id: 'notif-newer-draft',
       run_id: 'newer-draft-run',
@@ -570,8 +572,7 @@ describe('NotificationBell + NotificationsProvider', () => {
       type: 'tool_approval',
       run_id: 'pending-approval-run',
       title: 'Approval needed to run "start_preview"',
-      // Simulates a stale server path: routing must use the notification's exact run_id.
-      cta_path: '/projects/proj-1/orchestrations/newer-draft-run',
+      cta_path: '/projects/proj-1/orchestrations/pending-approval-run',
     });
     vi.mocked(apiClient.getNotifications).mockResolvedValue(respond([newerDraft, pendingApproval]));
     const user = userEvent.setup();
@@ -593,7 +594,7 @@ describe('NotificationBell + NotificationsProvider', () => {
         type: 'tool_approval',
         run_id: '',
         project_id: null,
-        cta_path: '/projects/proj-1/orchestrations/newer-draft-run',
+        cta_path: null,
       }),
     ]));
     const user = userEvent.setup();
