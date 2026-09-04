@@ -61,6 +61,12 @@ public sealed class AssistantRunEndpointsTests
         run.Status.Should().Be(RunStatus.InProgress);
 
         var events = await GetEventsAsync(client, runId!);
+        var marker = events[0];
+        marker.Sequence.Should().Be(AssistantRunService.PersonalSessionMarkerSequence);
+        marker.Type.Should().Be(EventTypes.RunStarted);
+        marker.Payload.GetProperty("runId").GetString().Should().Be(runId);
+        marker.Payload.GetProperty("agentName").GetString().Should().Be(AssistantRunService.OperatorAgentName);
+        marker.Payload.GetProperty("kind").GetString().Should().Be(AssistantRunService.PersonalSessionMarkerKind);
         events.Should().Contain(e => e.Type == EventTypes.RunModelProviderResolved,
             "Assistant creation must publish the provider context before any optional opening turn");
 

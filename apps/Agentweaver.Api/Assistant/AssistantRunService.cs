@@ -149,6 +149,9 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     /// <summary>Sentinel AgentName that marks a run as an operator chat (mirrors "Coordinator").</summary>
     public const string OperatorAgentName = "Operator";
 
+    internal const int PersonalSessionMarkerSequence = 1;
+    internal const string PersonalSessionMarkerKind = "operator";
+
     private const int MaxHistoryMessages = 24;
 
     /// <summary>How many of the caller's newest operator runs are read to evaluate the concurrency
@@ -366,15 +369,18 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             };
 
             await PrepareAgentHostCapabilityAsync(run, ct).ConfigureAwait(false);
-            await AppendAsync(key, EventTypes.RunStarted, new
-            {
-                runId = key,
-                kind = "operator",
-                agentName = OperatorAgentName,
-                projectId,
-                contextRunId,
-                resumedFromRunId = resumeFromRunId,
-            }, ct).ConfigureAwait(false);
+            _ = await _eventStream.AppendAsync(
+                key,
+                new RunEvent(PersonalSessionMarkerSequence, EventTypes.RunStarted, new
+                {
+                    runId = key,
+                    kind = PersonalSessionMarkerKind,
+                    agentName = OperatorAgentName,
+                    projectId,
+                    contextRunId,
+                    resumedFromRunId = resumeFromRunId,
+                }),
+                ct).ConfigureAwait(false);
             await AppendAsync(
                 key,
                 EventTypes.RunModelProviderResolved,

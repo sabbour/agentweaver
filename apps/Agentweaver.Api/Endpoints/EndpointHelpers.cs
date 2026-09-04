@@ -71,10 +71,11 @@ internal static async Task<IResult?> RequireRunAccessAsync(
 
 /// <summary>
 /// Authorizes permanent deletion without making an Operator session's incidental project context
-/// authoritative. Platform administrators may delete any run. A personal Operator session is
-/// exclusively deletable by its submitting user or a platform administrator, even when another user
-/// has Contributor access to its incidental project. Every other run retains normal project
-/// Contributor authorization.
+/// authoritative. Dedicated internal-service identities may never delete runs, including when their
+/// synthetic caller carries the PlatformAdmin role. A personal Operator session is exclusively
+/// deletable by its submitting human or a human platform administrator, even when another user has
+/// Contributor access to its incidental project. Every other run retains normal project Contributor
+/// authorization.
 /// </summary>
 internal static async Task<IResult?> RequireRunDeletionAccessAsync(
     HttpContext context,
@@ -82,6 +83,9 @@ internal static async Task<IResult?> RequireRunDeletionAccessAsync(
     CancellationToken ct)
 {
     var caller = context.GetCaller();
+    if (ProjectAuthorization.IsDedicatedInternalServiceCaller(context, caller))
+        return Results.StatusCode(StatusCodes.Status403Forbidden);
+
     var projectRoles = context.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
     if (projectRoles.IsPlatformAdmin(caller))
         return null;
@@ -105,26 +109,37 @@ private static async Task<bool> IsPersonalAssistantSessionAsync(
         return false;
 
     var db = context.RequestServices.GetRequiredService<MemoryDbContext>();
-    var payloadJson = await db.RunEvents.AsNoTracking()
-        .Where(evt => evt.RunId == run.Id.ToString() && evt.EventType == EventTypes.RunStarted)
+    var firstEvent = await db.RunEvents.AsNoTracking()
+        .Where(evt => evt.RunId == run.Id.ToString())
         .OrderBy(evt => evt.Sequence)
-        .Select(evt => evt.PayloadJson)
+        .Select(evt => new { evt.Sequence, evt.EventType, evt.PayloadJson })
         .FirstOrDefaultAsync(ct)
         .ConfigureAwait(false);
-    if (string.IsNullOrWhiteSpace(payloadJson))
+    if (firstEvent is null
+        || firstEvent.Sequence != AssistantRunService.PersonalSessionMarkerSequence
+        || !string.Equals(firstEvent.EventType, EventTypes.RunStarted, StringComparison.Ordinal)
+        || string.IsNullOrWhiteSpace(firstEvent.PayloadJson))
         return false;
 
     try
     {
-        using var payload = JsonDocument.Parse(payloadJson);
-        return payload.RootElement.TryGetProperty("kind", out var kind)
-            && string.Equals(kind.GetString(), "operator", StringComparison.Ordinal);
+        using var payload = JsonDocument.Parse(firstEvent.PayloadJson);
+        var root = payload.RootElement;
+        return root.ValueKind == JsonValueKind.Object
+            && HasExpectedStringProperty(root, "runId", run.Id.ToString())
+            && HasExpectedStringProperty(root, "agentName", AssistantRunService.OperatorAgentName)
+            && HasExpectedStringProperty(root, "kind", AssistantRunService.PersonalSessionMarkerKind);
     }
     catch (JsonException)
     {
         return false;
     }
 }
+
+private static bool HasExpectedStringProperty(JsonElement payload, string name, string expected) =>
+    payload.TryGetProperty(name, out var value)
+    && value.ValueKind == JsonValueKind.String
+    && string.Equals(value.GetString(), expected, StringComparison.Ordinal);
 
 /// <summary>
 /// Resolves the run that actually OWNS a tool-approval <paramref name="requestId"/>. The approval

@@ -87,7 +87,7 @@ public static class ProjectAuthorization
         };
     }
 
-    private static bool IsDedicatedInternalServiceCaller(HttpContext httpContext, CallerContext caller) =>
+    internal static bool IsDedicatedInternalServiceCaller(HttpContext httpContext, CallerContext caller) =>
         string.Equals(
             caller.AuthenticationScheme,
             AgentweaverAuthenticationSchemes.InternalServiceKey,

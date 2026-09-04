@@ -231,6 +231,44 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
     }
 
     [Fact]
+    public async Task ProjectContributor_CanDeleteNormalProjectRun()
+    {
+        var projectId = await CreateProjectAsync(
+            VictimOwnerOid,
+            (ContributorOid, ProjectRole.Contributor));
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            agentName: "Coordinator",
+            status: RunStatus.Completed);
+        using var contributor = CreateEntraClient(ContributorOid, PlatformRoles.Contributor);
+
+        var response = await contributor.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProjectViewer_CannotDeleteNormalProjectRun()
+    {
+        var projectId = await CreateProjectAsync(
+            VictimOwnerOid,
+            (ViewerOid, ProjectRole.Viewer));
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            agentName: "Coordinator",
+            status: RunStatus.Completed);
+        using var viewer = CreateEntraClient(ViewerOid, PlatformRoles.Viewer);
+
+        var response = await viewer.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task SubmittingUser_CanDeletePersonalSessionAfterProjectDeleted()
     {
         var runId = await InsertRunAsync(
@@ -323,6 +361,119 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
 
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
         (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DedicatedInternalService_CannotDeleteRunDespitePlatformAdminRole(bool personalSession)
+    {
+        var projectId = await CreateProjectAsync(VictimOwnerOid);
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            agentName: personalSession ? AssistantRunService.OperatorAgentName : "Coordinator",
+            status: RunStatus.Completed,
+            addOperatorStartMarker: personalSession);
+        using var internalService = _factory.CreateClient();
+        internalService.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", "internal-test-api-key");
+
+        var response = await internalService.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task LaterSpoofedMarker_CannotTurnOperatorNamedProjectRunIntoPersonalSession()
+    {
+        var projectId = await CreateProjectAsync(
+            VictimOwnerOid,
+            (UnlinkedOwnerOid, ProjectRole.Contributor));
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            agentName: AssistantRunService.OperatorAgentName,
+            status: RunStatus.Completed);
+        await AppendEventAsync(runId, new RunEvent(1, EventTypes.AgentMessage, new
+        {
+            role = "assistant",
+            content = "AgentHost event persisted before the spoofed marker",
+        }));
+        await AppendPersonalSessionMarkerAsync(runId, sequence: 2);
+        var assignments = _factory.Services.GetRequiredService<IProjectRoleAssignmentStore>();
+        (await assignments.DeleteAsync(projectId, UnlinkedOwnerOid)).Should().BeTrue();
+        using var submitter = CreateEntraClient(UnlinkedOwnerOid, PlatformRoles.Viewer);
+
+        var response = await submitter.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(2, null, "operator", "Operator")]
+    [InlineData(1, "different-run", "operator", "Operator")]
+    [InlineData(1, null, "project", "Operator")]
+    [InlineData(1, null, "operator", "AgentHost")]
+    public async Task InvalidFirstMarker_DoesNotGrantPersonalSessionOwnershipBypass(
+        int sequence,
+        string? markerRunId,
+        string kind,
+        string agentName)
+    {
+        var projectId = await CreateProjectAsync(
+            VictimOwnerOid,
+            (UnlinkedOwnerOid, ProjectRole.Contributor));
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            agentName: AssistantRunService.OperatorAgentName,
+            status: RunStatus.Completed);
+        await AppendPersonalSessionMarkerAsync(runId, sequence, markerRunId, kind, agentName);
+        var assignments = _factory.Services.GetRequiredService<IProjectRoleAssignmentStore>();
+        (await assignments.DeleteAsync(projectId, UnlinkedOwnerOid)).Should().BeTrue();
+        using var submitter = CreateEntraClient(UnlinkedOwnerOid, PlatformRoles.Viewer);
+
+        var response = await submitter.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().NotBeNull();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShapeInvalidFirstMarker_IsRejectedWithoutCrashingDeletionAuthorization(bool nonObjectPayload)
+    {
+        var projectId = await CreateProjectAsync(
+            VictimOwnerOid,
+            (UnlinkedOwnerOid, ProjectRole.Contributor));
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            agentName: AssistantRunService.OperatorAgentName,
+            status: RunStatus.Completed);
+        object payload = nonObjectPayload
+            ? new[] { "not", "a", "marker", "object" }
+            : new
+            {
+                runId = 42,
+                kind = AssistantRunService.PersonalSessionMarkerKind,
+                agentName = AssistantRunService.OperatorAgentName,
+            };
+        await AppendEventAsync(
+            runId,
+            new RunEvent(AssistantRunService.PersonalSessionMarkerSequence, EventTypes.RunStarted, payload));
+        var assignments = _factory.Services.GetRequiredService<IProjectRoleAssignmentStore>();
+        (await assignments.DeleteAsync(projectId, UnlinkedOwnerOid)).Should().BeTrue();
+        using var submitter = CreateEntraClient(UnlinkedOwnerOid, PlatformRoles.Viewer);
+
+        var response = await submitter.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().NotBeNull();
     }
 
     [Fact]
@@ -422,18 +573,25 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         };
         await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(run);
         if (addOperatorStartMarker)
-        {
-            await _factory.Services.GetRequiredService<IRunEventStream>().AppendAsync(
-                run.Id.ToString(),
-                new RunEvent(0, EventTypes.RunStarted, new
-                {
-                    runId = run.Id.ToString(),
-                    kind = "operator",
-                    agentName = AssistantRunService.OperatorAgentName,
-                }));
-        }
+            await AppendPersonalSessionMarkerAsync(run.Id.ToString());
         return run.Id.ToString();
     }
+
+    private Task AppendPersonalSessionMarkerAsync(
+        string runId,
+        int sequence = AssistantRunService.PersonalSessionMarkerSequence,
+        string? markerRunId = null,
+        string kind = AssistantRunService.PersonalSessionMarkerKind,
+        string agentName = AssistantRunService.OperatorAgentName) =>
+        AppendEventAsync(runId, new RunEvent(sequence, EventTypes.RunStarted, new
+        {
+            runId = markerRunId ?? runId,
+            kind,
+            agentName,
+        }));
+
+    private async Task AppendEventAsync(string runId, RunEvent evt) =>
+        _ = await _factory.Services.GetRequiredService<IRunEventStream>().AppendAsync(runId, evt);
 
     private async Task<Run> GetRunAsync(string runId) =>
         (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId)))!;
