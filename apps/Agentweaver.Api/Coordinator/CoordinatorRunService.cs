@@ -846,6 +846,14 @@ public sealed class CoordinatorRunService
                     "User must re-link their GitHub account.", runId);
                 await FailRunSafeAsync(runId, entry, GitHubCopilotUnauthorizedException.AuthRequiredErrorCode).ConfigureAwait(false);
             }
+            catch (Exception ex) when (ContainsOutcomeSpecDraftTimeout(ex))
+            {
+                _logger.LogError(
+                    ex,
+                    "Coordinator run {RunId} exceeded the outcome-spec drafting deadline; transitioning to Failed",
+                    runId);
+                await FailRunSafeAsync(runId, entry, "outcome_spec_draft_timeout").ConfigureAwait(false);
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Coordinator watch loop failed for run {RunId}; transitioning to Failed", runId);
@@ -854,6 +862,10 @@ public sealed class CoordinatorRunService
         }, _appStopping);
     }
 
+    private static bool ContainsOutcomeSpecDraftTimeout(Exception? exception) =>
+        exception is CoordinatorOutcomeSpecDraftTimeoutException
+        || (exception?.InnerException is not null && ContainsOutcomeSpecDraftTimeout(exception.InnerException));
+
     private async Task WatchAsync(
         string runId, StreamingRun streamingRun, RunStreamEntry entry, string ownerUser, CancellationToken ct)
     {
@@ -861,6 +873,19 @@ public sealed class CoordinatorRunService
         {
             switch (evt)
             {
+                case ExecutorFailedEvent failed:
+                    var reason = ContainsOutcomeSpecDraftTimeout(failed.Data)
+                        ? "outcome_spec_draft_timeout"
+                        : $"coordinator_executor_failed:{failed.ExecutorId}";
+                    _logger.LogError(
+                        failed.Data,
+                        "Coordinator executor {ExecutorId} failed for run {RunId}; transitioning to Failed with {Reason}",
+                        failed.ExecutorId,
+                        runId,
+                        reason);
+                    await FailRunSafeAsync(runId, entry, reason).ConfigureAwait(false);
+                    return;
+
                 case RequestInfoEvent rie:
                     // Suspended at the await-confirmation gate. The draft executor already emitted
                     // coordinator.outcome_spec and marked the entry awaiting-review.

@@ -1134,6 +1134,23 @@ describe('CoordinatorRunPage — graph during outcome-plan drafting', () => {
     expect(screen.queryByLabelText('Select Outcome plan: Pending')).toBeNull();
   });
 
+  it('uses the durable run start while drafting so elapsed time does not remain at zero', async () => {
+    vi.setSystemTime(new Date('2026-07-07T00:02:05.000Z'));
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'in_progress',
+      coordinator_status: 'drafting',
+      started_at: '2026-07-07T00:01:00.000Z',
+      ended_at: null,
+    } as never);
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const progress = await screen.findByTestId('run-progress-chips', undefined, { timeout: 4000 });
+    expect(progress.textContent).toContain('1m 5s elapsed');
+  });
+
   it('hides the assembly pipeline stages and shows a caption while drafting the spec', async () => {
     // Drafting state: coordinator + planned assembly stages, no subtasks, no confirmed spec.
     vi.mocked(apiClient.getRunGraph).mockResolvedValue(COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR);

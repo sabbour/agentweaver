@@ -55,3 +55,16 @@ public sealed record CoordinatorOutcomeSpecDecision(
 
 /// <summary>Terminal workflow output for a coordinator run.</summary>
 public sealed record CoordinatorOutcome(string RunId, int SpecId, string Status);
+
+/// <summary>
+/// Raised when outcome-spec drafting exceeds its coordinator-level wall-clock bound. The bound
+/// covers provider setup and session creation as well as the model turn, which have looser runtime
+/// defaults and can otherwise leave the durable coordinator run in <c>drafting</c> indefinitely.
+/// </summary>
+public sealed class CoordinatorOutcomeSpecDraftTimeoutException(
+    string runId,
+    TimeSpan timeout,
+    Exception? innerException = null)
+    : TimeoutException(
+        $"Coordinator outcome-spec drafting for run '{runId}' exceeded {timeout.TotalSeconds:n0} seconds.",
+        innerException);

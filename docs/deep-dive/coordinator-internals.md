@@ -584,6 +584,18 @@ re-arms the correct service. For `dispatching` plans it honors the distributed `
 lease first, skipping freshly owned plans and stealing only stale ones. Each candidate is isolated
 by try/catch so one corrupt plan does not stop the sweep.
 
+### Bounded outcome-spec drafting
+
+Outcome-spec drafting has its own wall-clock bound because it includes provider setup and session
+creation before the normal streaming-turn watchdog begins. `Coordinator:OutcomeSpecDraftTimeoutSeconds`
+defaults to **120 seconds** and must be greater than zero. When it expires, the coordinator cancels
+the draft, transitions the durable run to `failed`, and emits `run.failed` with reason
+`outcome_spec_draft_timeout` instead of leaving the run indefinitely in `drafting`.
+
+| Configuration key | Default | Effect |
+|---|---:|---|
+| `Coordinator:OutcomeSpecDraftTimeoutSeconds` | `120` | Maximum wall-clock time for provider setup, session creation, and the outcome-spec model turn before the coordinator fails with `outcome_spec_draft_timeout`; must be greater than zero. |
+
 ### Bounded final-Scribe recovery
 
 At startup, recovery checks terminal coordinator runs for a missing final Scribe. It skips runs that

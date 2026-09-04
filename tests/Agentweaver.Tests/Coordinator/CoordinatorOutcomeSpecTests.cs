@@ -138,6 +138,79 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_DraftExceedsDeadline_FailsRunAndEmitsTypedTerminal()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.BlockUntilCancelled = true;
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "A provider startup that never completes must not strand outcome planning");
+
+        RunResponse? run = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+        drafter.CancellationObserved.Should().BeTrue(
+            "the coordinator deadline must cancel provider setup/session work before failing the run");
+
+        var spec = await GetOutcomeSpecAsync(_owner, runId);
+        spec.Should().NotBeNull();
+        spec!.Status.Should().Be("drafting",
+            "the persisted drafting row should remain diagnostic evidence rather than masquerade as a completed plan");
+
+        var eventsResponse = await _owner.GetAsync($"/api/runs/{runId}/events");
+        eventsResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var events = await eventsResponse.Content.ReadFromJsonAsync<JsonElement[]>();
+        var failedEvent = events.Should().NotBeNull().And.Subject
+            .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
+        failedEvent.GetProperty("payload").GetProperty("reason").GetString()
+            .Should().Be("outcome_spec_draft_timeout");
+    }
+
+    [Fact]
+    public async Task Start_DrafterThrowsTimeout_DoesNotMislabelCoordinatorDeadline()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.ExceptionToThrow = new TimeoutException("simulated provider timeout");
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "An immediate provider timeout must keep its executor-failure classification");
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        RunResponse? run = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+
+        var events = await _owner.GetFromJsonAsync<JsonElement[]>($"/api/runs/{runId}/events");
+        var failedEvent = events.Should().NotBeNull().And.Subject
+            .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
+        failedEvent.GetProperty("payload").GetProperty("reason").GetString()
+            .Should().Be("coordinator_executor_failed:coordinator-draft");
+    }
+
+    [Fact]
     public async Task Start_DefineOutcomeMode_DraftsSpecAndSuspendsAtGate()
     {
         var projectId = await CreateProjectAsync();
