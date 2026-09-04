@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   MessageBar,
+  MessageBarActions,
   MessageBarBody,
   Spinner,
   Text,
@@ -145,7 +146,7 @@ interface OptimisticUserMessage {
   runId: string;
   text: string;
   normalizedText: string;
-  expectedServerOccurrence: number;
+  expectedServerOccurrence: number | null;
   status: 'sending' | 'syncing';
 }
 
@@ -307,6 +308,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reconciliationError, setReconciliationError] = useState<string | null>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<OptimisticUserMessage[]>([]);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -325,6 +327,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const pendingResumeFromRunIdRef = useRef<string | null>(null);
   const sendingRef = useRef(false);
   const optimisticMessageIdRef = useRef(0);
+  const automaticReconciliationAttemptedRef = useRef(new Set<string>());
 
   // Populate (not submit) the composer with an example prompt — the user still reviews
   // and hits send themselves, matching the Composer's normal edit-then-submit flow rather
@@ -341,7 +344,16 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     });
   }, []);
 
-  const { events, status: streamStatus } = useSeededRunStream(runId);
+  const {
+    events,
+    baselineEvents,
+    baselineReady,
+    status: streamStatus,
+    error: streamError,
+    seedError,
+    reconnect,
+    refresh,
+  } = useSeededRunStream(runId);
 
   const timelineModel = useMemo(
     () => buildRunTimeline(events, { stripSerializedWorkPlan: false }),
@@ -364,18 +376,80 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     }
     return counts;
   }, [renderedMessages]);
+  const baselineUserMessageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    const baselineTimeline = buildRunTimeline(
+      baselineEvents,
+      { stripSerializedWorkPlan: false },
+    );
+    for (const step of baselineTimeline.steps) {
+      for (const message of step.messages) {
+        if (message.role !== 'user') continue;
+        const normalizedText = normalizeMessageText(message.text);
+        counts.set(normalizedText, (counts.get(normalizedText) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [baselineEvents]);
+  const optimisticExpectedOccurrences = useMemo(() => {
+    const nextExpectedOccurrence = new Map(baselineUserMessageCounts);
+    const expectedByMessageId = new Map<string, number>();
+    for (const message of optimisticMessages) {
+      if (message.runId !== runId) continue;
+      const currentMaximum = nextExpectedOccurrence.get(message.normalizedText) ?? 0;
+      const expectedServerOccurrence = message.expectedServerOccurrence
+        ?? (baselineReady ? currentMaximum + 1 : null);
+      if (expectedServerOccurrence === null) continue;
+      nextExpectedOccurrence.set(
+        message.normalizedText,
+        Math.max(currentMaximum, expectedServerOccurrence),
+      );
+      expectedByMessageId.set(message.id, expectedServerOccurrence);
+    }
+    return expectedByMessageId;
+  }, [baselineReady, baselineUserMessageCounts, optimisticMessages, runId]);
   const visibleOptimisticMessages = useMemo(
-    () => optimisticMessages.filter((message) => (
-      message.runId === runId
-      && (serverUserMessageCounts.get(message.normalizedText) ?? 0)
-          < message.expectedServerOccurrence
-    )),
-    [optimisticMessages, runId, serverUserMessageCounts],
+    () => optimisticMessages.filter((message) => {
+      if (message.runId !== runId) return false;
+      const expectedServerOccurrence = optimisticExpectedOccurrences.get(message.id);
+      return expectedServerOccurrence === undefined
+        || (serverUserMessageCounts.get(message.normalizedText) ?? 0)
+            < expectedServerOccurrence;
+    }),
+    [optimisticExpectedOccurrences, optimisticMessages, runId, serverUserMessageCounts],
   );
   const pendingApprovals = useMemo(
     () => (runId ? derivePendingApprovals(events, runId) : []),
     [events, runId],
   );
+
+  const reconcileDurableHistory = useCallback(async () => {
+    setReconciliationError(null);
+    try {
+      await refresh();
+    } catch {
+      setReconciliationError(
+        'The sent message could not be confirmed from saved history. Retry sync to reconcile it.',
+      );
+    } finally {
+      reconnect();
+    }
+  }, [reconnect, refresh]);
+
+  useEffect(() => {
+    if (!runId || streamStatus !== 'error') return;
+    const candidates = optimisticMessages.filter(
+      (message) => message.runId === runId && message.status === 'syncing',
+    );
+    const unattempted = candidates.filter(
+      (message) => !automaticReconciliationAttemptedRef.current.has(message.id),
+    );
+    if (unattempted.length === 0) return;
+    for (const message of unattempted) {
+      automaticReconciliationAttemptedRef.current.add(message.id);
+    }
+    void reconcileDurableHistory();
+  }, [optimisticMessages, reconcileDurableHistory, runId, streamStatus]);
 
   const updateShouldStickToBottom = useCallback(() => {
     const node = transcriptRef.current;
@@ -435,19 +509,28 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     setBusy(true);
     setError(null);
     const normalizedText = normalizeMessageText(message);
+    const isNewRun = !runId;
+    const isResumingPriorConversation = isNewRun
+      && pendingResumeFromRunIdRef.current !== null;
     const existingExpectedOccurrence = optimisticMessages
       .filter((candidate) => (
         candidate.runId === runId
         && candidate.normalizedText === normalizedText
+        && candidate.expectedServerOccurrence !== null
       ))
       .reduce(
-        (maximum, candidate) => Math.max(maximum, candidate.expectedServerOccurrence),
+        (maximum, candidate) => Math.max(
+          maximum,
+          candidate.expectedServerOccurrence ?? 0,
+        ),
         0,
       );
-    const expectedServerOccurrence = Math.max(
-      serverUserMessageCounts.get(normalizedText) ?? 0,
-      existingExpectedOccurrence,
-    ) + 1;
+    const expectedServerOccurrence = baselineReady && !isResumingPriorConversation
+      ? Math.max(
+          serverUserMessageCounts.get(normalizedText) ?? 0,
+          existingExpectedOccurrence,
+        ) + 1
+      : null;
     const optimisticMessage: OptimisticUserMessage = {
       id: `pending-${++optimisticMessageIdRef.current}`,
       runId,
@@ -457,7 +540,6 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       status: 'sending',
     };
     setOptimisticMessages((current) => [...current, optimisticMessage]);
-    const isNewRun = !runId;
     try {
       if (isNewRun) {
         const created = await apiClient.createAssistantRun({
@@ -546,6 +628,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     effectiveProjectId,
     input,
     optimisticMessages,
+    baselineReady,
     runId,
     searchParams,
     serverUserMessageCounts,
@@ -630,6 +713,25 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         {error && (
           <MessageBar intent="error">
             <MessageBarBody data-testid="assistant-error">{error}</MessageBarBody>
+          </MessageBar>
+        )}
+        {runId && (streamStatus === 'error' || seedError || reconciliationError) && (
+          <MessageBar intent="warning" data-testid="assistant-reconciliation-warning">
+            <MessageBarBody>
+              {reconciliationError
+                ?? (seedError
+                  ? `Saved conversation history could not be refreshed: ${seedError}`
+                  : `Live updates disconnected${streamError ? `: ${streamError}` : '.'} Sent messages are reconciled from saved history.`)}
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button
+                appearance="transparent"
+                size="small"
+                onClick={() => void reconcileDurableHistory()}
+              >
+                Retry sync
+              </Button>
+            </MessageBarActions>
           </MessageBar>
         )}
         <Composer

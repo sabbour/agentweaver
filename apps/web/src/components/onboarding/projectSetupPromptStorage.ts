@@ -3,11 +3,11 @@ const PROMPT_VERSION = 'v1';
 export interface ProjectSetupPromptState {
   projectId: string;
   userKey: string;
-  projectUpdatedAt: string;
   origin: string;
   sourceRepository: string | null;
   repositoryAccessRequired: boolean;
   repositoryAccessStatus: string;
+  repositoryAccessReasonCode: string;
 }
 
 function normalizeKeyPart(value: string): string {
@@ -22,11 +22,11 @@ export function projectSetupPromptStorageKey(
 
 export function projectSetupPromptFingerprint(state: ProjectSetupPromptState): string {
   return JSON.stringify([
-    state.projectUpdatedAt,
     state.origin,
     state.sourceRepository,
     state.repositoryAccessRequired,
     state.repositoryAccessStatus,
+    state.repositoryAccessReasonCode,
   ]);
 }
 

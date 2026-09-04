@@ -41,7 +41,7 @@ import { DeleteRegular, DismissCircleRegular } from '@fluentui/react-icons';
 import { ErrorState, MetricRow, SetupReadiness } from '../components/ui';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import type { Project, WorkflowRunDto } from '../api/types';
+import type { Project, UnattendedReadiness, WorkflowRunDto } from '../api/types';
 import { isTerminalRunStatus, normalizeRunStatus } from '../utils/runStatus';
 import {
   hasDismissedProjectSetupPrompt,
@@ -413,15 +413,48 @@ export interface ProjectPageProps {
 function projectSetupPromptState(
   project: Project,
   currentUserKey: string | null | undefined,
+  repository: NonNullable<UnattendedReadiness['repository']>,
 ): ProjectSetupPromptState {
   return {
     projectId: project.project_id,
     userKey: currentUserKey ?? project.owner,
-    projectUpdatedAt: project.updated_at,
     origin: project.origin,
     sourceRepository: project.source_repository,
-    repositoryAccessRequired: false,
-    repositoryAccessStatus: 'optional',
+    repositoryAccessRequired: repository.required,
+    repositoryAccessStatus: repository.status,
+    repositoryAccessReasonCode: repository.reason_code,
+  };
+}
+
+function projectRepositoryReadiness(
+  project: Project,
+  readiness: UnattendedReadiness,
+): NonNullable<UnattendedReadiness['repository']> {
+  if (readiness.repository) return readiness.repository;
+  if (!project.source_repository) {
+    return {
+      required: false,
+      status: 'not_required',
+      reason_code: 'not_required',
+      repo_app_installation_connected: readiness.repo_app_installation_connected,
+    };
+  }
+  if (!readiness.repo_app_installation_connected) {
+    return {
+      required: true,
+      status: 'not_ready',
+      reason_code: 'repo_app_installation_required',
+      repo_app_installation_connected: false,
+    };
+  }
+  const reasonCode = readiness.reason_code === 'repo_app_repository_grant_required'
+    ? 'repo_app_repository_grant_required'
+    : 'ready';
+  return {
+    required: true,
+    status: reasonCode === 'ready' ? 'ready' : 'not_ready',
+    reason_code: reasonCode,
+    repo_app_installation_connected: true,
   };
 }
 
@@ -435,6 +468,9 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
   const [error, setError] = useState<string | null>(null);
   const [connectRepoOpen, setConnectRepoOpen] = useState(false);
   const [projectSetupDismissed, setProjectSetupDismissed] = useState(false);
+  const [repositorySetup, setRepositorySetup] = useState<
+    NonNullable<UnattendedReadiness['repository']> | null
+  >(null);
 
   const handleRunDeleted = (workflowRunId: string) => {
     setRuns((prev) => prev.filter((r) => r.workflow_run_id !== workflowRunId));
@@ -458,15 +494,18 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
     Promise.all([
       apiClient.getProject(projectId),
       fetchRuns(),
+      apiClient.getUnattendedReadiness(projectId),
     ])
-      .then(([proj, runList]) => {
+      .then(([proj, runList, readiness]) => {
         if (!cancelled) {
-          const setupState = projectSetupPromptState(proj, currentUserKey);
+          const repository = projectRepositoryReadiness(proj, readiness);
+          const setupState = projectSetupPromptState(proj, currentUserKey, repository);
           const storageKey = projectSetupPromptStorageKey(setupState);
           const fingerprint = projectSetupPromptFingerprint(setupState);
           setProjectSetupDismissed(
             hasDismissedProjectSetupPrompt(storageKey, fingerprint),
           );
+          setRepositorySetup(repository);
           setProject(proj);
         }
         // Kick off polling while any run is non-terminal
@@ -504,7 +543,14 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
   if (!projectId) return null;
   const liveRuns = runs.filter((run) => !isTerminalRunStatus(run.status));
   const completedRuns = runs.length - liveRuns.length;
-  const setupState = project ? projectSetupPromptState(project, currentUserKey) : null;
+  const setupState = project && repositorySetup
+    ? projectSetupPromptState(project, currentUserKey, repositorySetup)
+    : null;
+  const repositoryStatus = setupState?.repositoryAccessStatus === 'ready'
+    ? 'ready'
+    : setupState?.repositoryAccessStatus === 'not_required'
+      ? 'optional'
+      : 'action-required';
 
   return (
     <div className={styles.root}>
@@ -541,9 +587,11 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
             items: [{
               id: 'repository-access',
               title: 'Repository access',
-              description: 'Local agent work can continue without a repository. Pull-request publishing requires repository access.',
-              requirement: 'optional',
-              status: 'optional',
+              description: setupState.repositoryAccessRequired
+                ? 'Repository access is required for this project and must be completed before repository operations can run.'
+                : 'Local agent work can continue without a repository. Pull-request publishing requires repository access.',
+              requirement: setupState.repositoryAccessRequired ? 'required' : 'optional',
+              status: repositoryStatus,
             }],
           }}
           primaryAction={(

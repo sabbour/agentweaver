@@ -10,11 +10,11 @@ import type { ProjectSetupPromptState } from '../components/onboarding/projectSe
 const optionalState: ProjectSetupPromptState = {
   projectId: 'project-1',
   userKey: 'user-1',
-  projectUpdatedAt: '2026-09-01T00:00:00Z',
   origin: 'blank',
   sourceRepository: null,
   repositoryAccessRequired: false,
-  repositoryAccessStatus: 'optional',
+  repositoryAccessStatus: 'not_required',
+  repositoryAccessReasonCode: 'not_required',
 };
 
 beforeEach(() => {
@@ -30,7 +30,8 @@ describe('project setup prompt storage', () => {
     const requiredFingerprint = projectSetupPromptFingerprint({
       ...optionalState,
       repositoryAccessRequired: true,
-      repositoryAccessStatus: 'action-required',
+      repositoryAccessStatus: 'not_ready',
+      repositoryAccessReasonCode: 'repo_app_installation_required',
     });
 
     expect(hasDismissedProjectSetupPrompt(storageKey, optionalFingerprint)).toBe(true);

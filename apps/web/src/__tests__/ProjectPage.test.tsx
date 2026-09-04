@@ -22,6 +22,7 @@ vi.mock('../api/apiClient', () => ({
     getBoard: vi.fn(),
     getBacklogSettings: vi.fn(),
     getTeam: vi.fn(),
+    getUnattendedReadiness: vi.fn(),
   },
 }));
 
@@ -77,6 +78,18 @@ beforeEach(() => {
     pickup_auto_approve_tools: false,
   });
   vi.mocked(apiClient.getTeam).mockResolvedValue({ members: [] } as never);
+  vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
+    status: 'ready',
+    reason_code: 'ready',
+    message: 'Ready.',
+    repo_app_installation_connected: false,
+    repository: {
+      required: false,
+      status: 'not_required',
+      reason_code: 'not_required',
+      repo_app_installation_connected: false,
+    },
+  });
 });
 
 afterEach(() => {
@@ -118,7 +131,7 @@ describe('ProjectPage board (board-dedupe)', () => {
     expect(screen.queryByText('Project setup')).toBeNull();
   });
 
-  it('shows setup again when the project setup state changes', async () => {
+  it('does not show setup again after an unrelated project update', async () => {
     vi.mocked(apiClient.getProject).mockResolvedValue({
       ...project,
       origin: 'blank',
@@ -137,7 +150,38 @@ describe('ProjectPage board (board-dedupe)', () => {
     } as Project);
     renderPage();
 
+    await waitFor(() => expect(apiClient.getProject).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('Project setup')).toBeNull();
+  });
+
+  it('shows setup again when repository access becomes required', async () => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      ...project,
+      origin: 'blank',
+      source_repository: null,
+    } as Project);
+
+    const firstRender = renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss Project setup' }));
+    firstRender.unmount();
+
+    vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
+      status: 'not_ready',
+      reason_code: 'repo_app_installation_required',
+      message: 'Repository access is required.',
+      repo_app_installation_connected: false,
+      repository: {
+        required: true,
+        status: 'not_ready',
+        reason_code: 'repo_app_installation_required',
+        repo_app_installation_connected: false,
+      },
+    });
+    renderPage();
+
     expect(await screen.findByText('Project setup')).toBeDefined();
+    expect(screen.getAllByText('Required').length).toBeGreaterThan(0);
+    expect(screen.getByText('Action required')).toBeDefined();
   });
 
   it('keeps setup dismissal scoped to the signed-in user', async () => {

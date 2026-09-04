@@ -22,6 +22,9 @@ Open **Sessions** in the left nav (it's a collapsible top-level section, next to
 Your message remains visible while the new session connects and while persisted history is
 reconciled. When the server copy arrives, Agentweaver replaces the pending presentation without
 showing the message twice.
+If live updates disconnect after a send succeeds, Agentweaver refreshes the durable
+conversation history and reconnects automatically. A **Retry sync** action remains available
+until the transcript can be reconciled.
 
 The Assistant uses the same signed-in Agentweaver identity as the browser request. The API
 validates that identity and current project access, then issues a five-minute Agentweaver broker

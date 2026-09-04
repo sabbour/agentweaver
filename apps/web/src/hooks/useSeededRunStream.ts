@@ -10,6 +10,10 @@ export interface SeededRunStream {
   liveEvents: RunStreamEvent[];
   /** The REST-seeded persisted history (empty until a parked/terminal run is seeded). */
   seedEvents: RunStreamEvent[];
+  /** The first durable snapshot requested for this run, used as a stable reconciliation baseline. */
+  baselineEvents: RunStreamEvent[];
+  /** Whether the first durable snapshot for the current run has loaded successfully. */
+  baselineReady: boolean;
   status: StreamStatus;
   error: string | null;
   /** Failure loading the durable event history; live SSE events remain available. */
@@ -42,20 +46,34 @@ export function useSeededRunStream(runId: string): SeededRunStream {
   } = useRunStream(runId);
 
   const [seedEvents, setSeedEvents] = useState<RunStreamEvent[]>([]);
+  const [seedRunId, setSeedRunId] = useState('');
+  const [baselineEvents, setBaselineEvents] = useState<RunStreamEvent[]>([]);
+  const [baselineRunId, setBaselineRunId] = useState<string | null>(null);
   const [seedError, setSeedError] = useState<string | null>(null);
   const refreshGenerationRef = useRef(0);
+  const runGenerationRef = useRef(0);
 
   useEffect(() => {
     refreshGenerationRef.current += 1;
+    runGenerationRef.current += 1;
   }, [runId]);
 
-  const refresh = useCallback(async (): Promise<RunStreamEvent[]> => {
+  const loadPersistedEvents = useCallback(async (
+    establishBaseline: boolean,
+  ): Promise<RunStreamEvent[]> => {
     const refreshGeneration = ++refreshGenerationRef.current;
+    const runGeneration = runGenerationRef.current;
     const isCurrentRefresh = () => refreshGeneration === refreshGenerationRef.current;
+    const isCurrentRun = () => runGeneration === runGenerationRef.current;
     if (isCurrentRefresh()) setSeedError(null);
     if (!runId) {
       if (isCurrentRefresh()) {
         setSeedEvents([]);
+        setSeedRunId('');
+      }
+      if (establishBaseline && isCurrentRun()) {
+        setBaselineEvents([]);
+        setBaselineRunId('');
       }
       return [];
     }
@@ -66,8 +84,13 @@ export function useSeededRunStream(runId: string): SeededRunStream {
         type: e.type as EventType,
         payload: e.payload,
       }));
+      if (establishBaseline && isCurrentRun()) {
+        setBaselineEvents(refreshed);
+        setBaselineRunId(runId);
+      }
       if (isCurrentRefresh()) {
         setSeedEvents(refreshed);
+        setSeedRunId(runId);
         setSeedError(null);
       }
       return refreshed;
@@ -78,14 +101,36 @@ export function useSeededRunStream(runId: string): SeededRunStream {
     }
   }, [runId]);
 
-  useEffect(() => {
-    void refresh().catch(() => {});
-  }, [refresh]);
-
-  const events = useMemo<RunStreamEvent[]>(
-    () => mergeRunEvents(seedEvents, liveEvents),
-    [seedEvents, liveEvents],
+  const refresh = useCallback(
+    () => loadPersistedEvents(false),
+    [loadPersistedEvents],
   );
 
-  return { events, liveEvents, seedEvents, status: streamStatus, error, seedError, droppedEventCount, reconnect, refresh };
+  useEffect(() => {
+    void loadPersistedEvents(true).catch(() => {});
+  }, [loadPersistedEvents]);
+
+  const currentSeedEvents = useMemo(
+    () => (seedRunId === runId ? seedEvents : []),
+    [runId, seedEvents, seedRunId],
+  );
+
+  const events = useMemo<RunStreamEvent[]>(
+    () => mergeRunEvents(currentSeedEvents, liveEvents),
+    [currentSeedEvents, liveEvents],
+  );
+
+  return {
+    events,
+    liveEvents,
+    seedEvents: currentSeedEvents,
+    baselineEvents: baselineRunId === runId ? baselineEvents : [],
+    baselineReady: baselineRunId === runId,
+    status: streamStatus,
+    error,
+    seedError,
+    droppedEventCount,
+    reconnect,
+    refresh,
+  };
 }
