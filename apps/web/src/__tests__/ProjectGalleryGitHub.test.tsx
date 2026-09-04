@@ -43,13 +43,23 @@ function LocationProbe() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data', workspace_auto_assigned: false } as never);
+  vi.mocked(apiClient.getServerInfo).mockResolvedValue({
+    data_directory: '/data',
+    workspace_auto_assigned: false,
+    repo_app_install_url: 'https://github.com/apps/agentweaver/installations/new',
+  } as never);
   vi.mocked(apiClient.listProjects).mockResolvedValue({ items: [], page: 1, page_size: 100, total_count: 0, total_pages: 1 } as never);
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([]);
   vi.mocked(apiClient.suggestBlueprint).mockResolvedValue({ recommended_blueprint: null, rationale: '', confidence: 0, signals: [], fallback: true });
   vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
     installations: [],
     repositories: [{ full_name: 'octocat/hello-world', owner_login: 'octocat', private: false, default_branch: 'main', pushed_at: null }],
+    installations: [{
+      account_login: 'octocat',
+      account_type: 'user',
+      repository_selection: 'selected',
+      management_url: 'https://github.com/settings/installations/123',
+    }],
   } as never);
   vi.mocked(apiClient.issueGitHubRepositorySelection).mockResolvedValue({
     selection_code: 'opaque-selection-code',
@@ -65,6 +75,8 @@ describe('ProjectGalleryPage repository authorization', () => {
     render(<Wrapper><ProjectGalleryPage /></Wrapper>);
     fireEvent.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
     await screen.findByText('Search repositories that the Repo App can access.');
+    expect(screen.getByText(/Repositories shown here are limited to repositories available to both/)).toBeDefined();
+    expect(screen.getByText('Agentweaver has access only to selected repositories for octocat.')).toBeDefined();
 
     fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'Hello World' } });
     fireEvent.input(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'octocat/hello-world' } });
@@ -75,6 +87,54 @@ describe('ProjectGalleryPage repository authorization', () => {
     await waitFor(() => expect(apiClient.createProject).toHaveBeenCalledWith(expect.objectContaining({
       repository_selection_code: 'opaque-selection-code',
     })));
+  });
+
+  it('renders all and selected installation management actions without changing the flat repository list', async () => {
+    vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+      repositories: [
+        { full_name: 'octocat/hello-world', owner_login: 'octocat', private: false, default_branch: 'main', pushed_at: null },
+        { full_name: 'octo-org/service', owner_login: 'octo-org', private: true, default_branch: 'main', pushed_at: null },
+      ],
+      installations: [
+        {
+          account_login: 'octocat',
+          account_type: 'user',
+          repository_selection: 'selected',
+          management_url: 'https://github.com/settings/installations/123',
+        },
+        {
+          account_login: 'octo-org',
+          account_type: 'organization',
+          repository_selection: 'all',
+          management_url: 'https://github.com/organizations/octo-org/settings/installations/456',
+        },
+      ],
+    } as never);
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
+
+    expect(await screen.findByText('Agentweaver has access only to selected repositories for octocat.')).toBeDefined();
+    expect(screen.getByText('Manage repository access in GitHub')).toBeDefined();
+    expect(screen.getByText('Agentweaver has access to all repositories for octo-org.')).toBeDefined();
+    expect(screen.getAllByText('Open GitHub installation settings')).toHaveLength(2);
+    expect(screen.getByRole('combobox', { name: 'Repository' })).toBeDefined();
+  });
+
+  it('explains an empty installation set and uses the server-provided install URL', async () => {
+    vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+      repositories: [],
+      installations: [],
+    });
+
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
+
+    expect(await screen.findByText(/not installed for an account you can access/)).toBeDefined();
+    const installLink = screen.getByRole('link', { name: 'Install Agentweaver GitHub App' });
+    expect(installLink.getAttribute('href')).toBe('https://github.com/apps/agentweaver/installations/new');
+    expect(installLink.getAttribute('target')).toBe('_blank');
+    expect(installLink.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
   it('clears GitHub creation intent after creating a project', async () => {

@@ -26,7 +26,12 @@ import {
 import { DismissRegular } from '@fluentui/react-icons';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import type { GitHubRepositorySelectionCandidate, RepositoryOwner } from '../api/types';
+import type {
+  GitHubRepositoryInstallation,
+  GitHubRepositorySelectionCandidate,
+  RepositoryOwner,
+} from '../api/types';
+import { GitHubRepositoryAccessNotice } from './GitHubRepositoryAccessNotice';
 
 const useStyles = makeStyles({
   stack: {
@@ -92,6 +97,8 @@ export function ConnectGitHubRepositoryDialog({
   const [ownersError, setOwnersError] = useState<string | null>(null);
   const [ownersConnectionRequired, setOwnersConnectionRequired] = useState(false);
   const [repos, setRepos] = useState<GitHubRepositorySelectionCandidate[]>([]);
+  const [installations, setInstallations] = useState<GitHubRepositoryInstallation[] | null>(null);
+  const [repoAppInstallUrl, setRepoAppInstallUrl] = useState<string | null>(null);
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string | null>(null);
   const [reposConnectionRequired, setReposConnectionRequired] = useState(false);
@@ -161,13 +168,28 @@ export function ConnectGitHubRepositoryDialog({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    void apiClient.getServerInfo()
+      .then((info) => {
+        if (!cancelled) setRepoAppInstallUrl(info.repo_app_install_url ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setRepoAppInstallUrl(null);
+      });
+    return () => { cancelled = true; };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
     setReposLoading(true); // eslint-disable-line react-hooks/set-state-in-effect
     setReposError(null);
     setReposConnectionRequired(false);
+    setInstallations(null);
     void apiClient.listGitHubRepositorySelections()
       .then((list) => {
         if (cancelled) return;
         setRepos(list.repositories);
+        setInstallations(list.installations ?? null);
         if (list.repositories.length > 0) {
           setSelectedRepository((prev) => prev || list.repositories[0].full_name);
         }
@@ -367,6 +389,11 @@ export function ConnectGitHubRepositoryDialog({
                     )}
                     {!reposLoading && !reposError && (
                       <>
+                        <GitHubRepositoryAccessNotice
+                          installations={installations}
+                          repositoryCount={repos.length}
+                          repoAppInstallUrl={repoAppInstallUrl}
+                        />
                         <Field label="Find repository">
                           <Input
                             value={repoFilter}
