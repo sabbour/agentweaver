@@ -49,6 +49,7 @@ Hover a row and click the delete icon (or open the conversation and use the equi
 > **Delete this conversation?** This removes the session and its history. This cannot be undone.
 
 Confirming calls the same generic run-delete endpoint used elsewhere in the product (`DELETE /api/runs/{id}`) — a session is stored as a run record under the hood, just one with `AgentName == "Operator"`.
+The submitting user can still delete that personal session if its incidental project was later deleted or their project access changed. Project-owned runs continue to require project Contributor access.
 
 ## Resuming after a gap
 

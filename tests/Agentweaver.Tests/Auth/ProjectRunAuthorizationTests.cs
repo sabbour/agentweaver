@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
@@ -213,6 +214,82 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
+    [Fact]
+    public async Task PlatformAdmin_CanDeleteRunWithMissingPersistedProject()
+    {
+        var runId = await InsertRunAsync(
+            ProjectId.New(),
+            VictimOwnerOid,
+            agentName: "Coordinator",
+            status: RunStatus.Completed);
+        using var platformAdmin = CreateEntraClient(UnlinkedOwnerOid, PlatformRoles.PlatformAdmin);
+
+        var response = await platformAdmin.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SubmittingUser_CanDeletePersonalSessionAfterProjectDeleted()
+    {
+        var runId = await InsertRunAsync(
+            ProjectId.New(),
+            UnlinkedOwnerOid,
+            AssistantRunService.OperatorAgentName,
+            RunStatus.Completed,
+            addOperatorStartMarker: true);
+        using var owner = CreateEntraClient(UnlinkedOwnerOid, PlatformRoles.Viewer);
+
+        var response = await owner.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SubmittingUser_CanDeletePersonalSessionAfterProjectRoleRevoked()
+    {
+        var projectId = await CreateProjectAsync(
+            VictimOwnerOid,
+            (UnlinkedOwnerOid, ProjectRole.Contributor));
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            AssistantRunService.OperatorAgentName,
+            RunStatus.Completed,
+            addOperatorStartMarker: true);
+        var assignments = _factory.Services.GetRequiredService<IProjectRoleAssignmentStore>();
+        (await assignments.DeleteAsync(projectId, UnlinkedOwnerOid)).Should().BeTrue();
+        using var owner = CreateEntraClient(UnlinkedOwnerOid, PlatformRoles.Viewer);
+
+        var response = await owner.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SubmittingUser_CannotDeleteProjectRunNamedOperatorAfterProjectRoleRevoked()
+    {
+        var projectId = await CreateProjectAsync(
+            VictimOwnerOid,
+            (UnlinkedOwnerOid, ProjectRole.Contributor));
+        var runId = await InsertRunAsync(
+            projectId,
+            UnlinkedOwnerOid,
+            agentName: AssistantRunService.OperatorAgentName,
+            status: RunStatus.Completed);
+        var assignments = _factory.Services.GetRequiredService<IProjectRoleAssignmentStore>();
+        (await assignments.DeleteAsync(projectId, UnlinkedOwnerOid)).Should().BeTrue();
+        using var submitter = CreateEntraClient(UnlinkedOwnerOid, PlatformRoles.Viewer);
+
+        var response = await submitter.DeleteAsync($"/api/runs/{runId}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(RunId.Parse(runId))).Should().NotBeNull();
+    }
+
     private HttpClient CreateEntraClient(string objectId, params string[] platformRoles) =>
         _factory.CreateAuthenticatedClientForObjectId(objectId, platformRoles);
 
@@ -267,22 +344,38 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         return projectId;
     }
 
-    private async Task<string> InsertRunAsync(ProjectId? projectId, string submittingUser)
+    private async Task<string> InsertRunAsync(
+        ProjectId? projectId,
+        string submittingUser,
+        string agentName = "Coordinator",
+        RunStatus status = RunStatus.Pending,
+        bool addOperatorStartMarker = false)
     {
         var run = new Run
         {
             Id = RunId.New(),
-            RepositoryPath = "unused",
-            OriginatingBranch = "main",
+            RepositoryPath = agentName == AssistantRunService.OperatorAgentName ? string.Empty : "unused",
+            OriginatingBranch = agentName == AssistantRunService.OperatorAgentName ? string.Empty : "main",
             ModelSource = ModelSource.GitHubCopilot,
             Task = "project run authorization",
             SubmittingUser = submittingUser,
-            Status = RunStatus.Pending,
+            Status = status,
             StartedAt = DateTimeOffset.UtcNow,
             ProjectId = projectId,
-            AgentName = "Coordinator",
+            AgentName = agentName,
         };
         await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(run);
+        if (addOperatorStartMarker)
+        {
+            await _factory.Services.GetRequiredService<IRunEventStream>().AppendAsync(
+                run.Id.ToString(),
+                new RunEvent(0, EventTypes.RunStarted, new
+                {
+                    runId = run.Id.ToString(),
+                    kind = "operator",
+                    agentName = AssistantRunService.OperatorAgentName,
+                }));
+        }
         return run.Id.ToString();
     }
 

@@ -6,6 +6,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Memory;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
@@ -66,6 +67,59 @@ internal static async Task<IResult?> RequireRunAccessAsync(
             ct,
             allowInternalService)
         .ConfigureAwait(false);
+}
+
+/// <summary>
+/// Authorizes permanent deletion without making an Operator session's incidental project context
+/// authoritative. Platform administrators may delete any run. The submitting user may delete their
+/// own personal Operator session even after that project is deleted or their project role changes.
+/// Every other run retains normal project Contributor authorization.
+/// </summary>
+internal static async Task<IResult?> RequireRunDeletionAccessAsync(
+    HttpContext context,
+    Run run,
+    CancellationToken ct)
+{
+    var caller = context.GetCaller();
+    var projectRoles = context.RequestServices.GetRequiredService<IProjectRoleAuthorizationService>();
+    if (projectRoles.IsPlatformAdmin(caller))
+        return null;
+
+    if (caller.Owns(run.SubmittingUser)
+        && await IsPersonalAssistantSessionAsync(context, run, ct).ConfigureAwait(false))
+        return null;
+
+    return await RequireRunAccessAsync(context, run, ProjectRole.Contributor, ct).ConfigureAwait(false);
+}
+
+private static async Task<bool> IsPersonalAssistantSessionAsync(
+    HttpContext context,
+    Run run,
+    CancellationToken ct)
+{
+    if (!string.Equals(run.AgentName, AssistantRunService.OperatorAgentName, StringComparison.Ordinal))
+        return false;
+
+    var db = context.RequestServices.GetRequiredService<MemoryDbContext>();
+    var payloadJson = await db.RunEvents.AsNoTracking()
+        .Where(evt => evt.RunId == run.Id.ToString() && evt.EventType == EventTypes.RunStarted)
+        .OrderBy(evt => evt.Sequence)
+        .Select(evt => evt.PayloadJson)
+        .FirstOrDefaultAsync(ct)
+        .ConfigureAwait(false);
+    if (string.IsNullOrWhiteSpace(payloadJson))
+        return false;
+
+    try
+    {
+        using var payload = JsonDocument.Parse(payloadJson);
+        return payload.RootElement.TryGetProperty("kind", out var kind)
+            && string.Equals(kind.GetString(), "operator", StringComparison.Ordinal);
+    }
+    catch (JsonException)
+    {
+        return false;
+    }
 }
 
 /// <summary>
