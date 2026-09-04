@@ -437,6 +437,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       if (isNewRun) {
         const created = await apiClient.createAssistantRun({
           message,
+          defer_first_turn: true,
           project_id: effectiveProjectId,
           resume_from_run_id: pendingResumeFromRunIdRef.current ?? undefined,
         });
@@ -444,6 +445,10 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         // conversation (e.g. one started via "New Session" from the Sessions page).
         pendingResumeFromRunIdRef.current = null;
         setRunId(created.run_id);
+        // Create the conversation first so React can bind its SSE stream while this request is
+        // still running. Supplying the opening message to createAssistantRun would keep the run id
+        // hidden until the entire model turn completed, making the first reply impossible to stream.
+        await apiClient.sendAssistantMessage(created.run_id, { message });
       } else {
         await apiClient.sendAssistantMessage(runId, { message });
       }

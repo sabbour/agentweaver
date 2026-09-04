@@ -935,8 +935,10 @@ export interface SteerCoordinatorResponse {
 // POST /api/assistant/runs + POST /api/assistant/runs/{id}/messages.
 // The transcript streams over the existing run-stream endpoints (GET /api/runs/{id}/stream + /events).
 export interface CreateAssistantRunRequest {
-  /** The operator's first message; creating the run also seeds this turn. */
-  message: string;
+  /** Optional opening message used for the conversation title and, by default, the first turn. */
+  message?: string;
+  /** Create and return the run before executing `message`, so the caller can attach its stream first. */
+  defer_first_turn?: boolean;
   /** Optional project scope for MCP tool calls that need a project context. */
   project_id?: string;
   /**

@@ -197,12 +197,15 @@ describe('AssistantRunPage', () => {
       expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1);
     });
     const [firstCallArgs] = vi.mocked(apiClient.createAssistantRun).mock.calls[0];
-    expect(firstCallArgs).toEqual(
-      expect.objectContaining({
-        message: 'what projects exist?',
-      }),
-    );
+    expect(firstCallArgs.message).toBe('what projects exist?');
+    expect(firstCallArgs.defer_first_turn).toBe(true);
     expect(firstCallArgs.project_id).toBeUndefined();
+    await waitFor(() => {
+      expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
+        'assistant-run-1',
+        { message: 'what projects exist?' },
+      );
+    });
   });
 
   it('still uses an explicit project query when one is present', async () => {
@@ -224,29 +227,59 @@ describe('AssistantRunPage', () => {
     expect(apiClient.createAssistantRun).toHaveBeenCalledWith(
       expect.objectContaining({
         message: 'project-scoped request',
+        defer_first_turn: true,
         project_id: 'proj-7',
       }),
     );
+    await waitFor(() => {
+      expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
+        'assistant-run-1',
+        { message: 'project-scoped request' },
+      );
+    });
   });
 
-  it('creates a run on the first composer submit using real backend shape', async () => {
+  it('creates the run before sending the opening message so its stream can attach', async () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
     typeAndSend('what projects exist?');
 
     await waitFor(() => {
       expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1);
     });
-    expect(apiClient.createAssistantRun).toHaveBeenCalledWith(
-      expect.objectContaining({ message: 'what projects exist?' }),
-    );
-    // A normal first-ever conversation never had a prior run to resume from.
     const [firstCallArgs] = vi.mocked(apiClient.createAssistantRun).mock.calls[0];
+    expect(firstCallArgs.message).toBe('what projects exist?');
+    expect(firstCallArgs.defer_first_turn).toBe(true);
+    // A normal first-ever conversation never had a prior run to resume from.
     expect(firstCallArgs.resume_from_run_id).toBeUndefined();
-    expect(apiClient.sendAssistantMessage).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
+        'assistant-run-1',
+        { message: 'what projects exist?' },
+      );
+    });
     // Once the run exists the empty state is replaced by the transcript.
     await waitFor(() => {
       expect(screen.queryByTestId('assistant-empty-state')).toBeNull();
     });
+  });
+
+  it('binds the transcript to the new run while the opening message is still running', async () => {
+    const openingTurn = deferred<typeof REAL_MESSAGE_RESPONSE>();
+    vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(openingTurn.promise);
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+    typeAndSend('stream the first reply');
+
+    await waitFor(() => {
+      expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
+        'assistant-run-1',
+        { message: 'stream the first reply' },
+      );
+      expect(screen.queryByTestId('assistant-empty-state')).toBeNull();
+      expect(screen.getByText(/Connected to operator run assistant-run-1/)).toBeTruthy();
+    });
+
+    openingTurn.resolve(REAL_MESSAGE_RESPONSE);
   });
 
   it('clears the textarea before the first-run create request settles', async () => {
@@ -258,7 +291,10 @@ describe('AssistantRunPage', () => {
 
     await waitFor(() => {
       expect(apiClient.createAssistantRun).toHaveBeenCalledWith(
-        expect.objectContaining({ message: 'what projects exist?' }),
+        expect.objectContaining({
+          message: 'what projects exist?',
+          defer_first_turn: true,
+        }),
       );
       expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
     });
@@ -295,13 +331,13 @@ describe('AssistantRunPage', () => {
     render(<Wrapper><AssistantRunPage /></Wrapper>);
 
     typeAndSend('first message');
-    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(apiClient.sendAssistantMessage).toHaveBeenCalledTimes(1));
 
     typeAndSend('second message');
     await waitFor(() => {
-      expect(apiClient.sendAssistantMessage).toHaveBeenCalledTimes(1);
+      expect(apiClient.sendAssistantMessage).toHaveBeenCalledTimes(2);
     });
-    expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
+    expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
       'assistant-run-1',
       expect.objectContaining({ message: 'second message' }),
     );
@@ -311,11 +347,11 @@ describe('AssistantRunPage', () => {
 
   it('clears the textarea before a follow-up request settles', async () => {
     const messageRequest = deferred<typeof REAL_MESSAGE_RESPONSE>();
-    vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(messageRequest.promise);
 
     render(<Wrapper><AssistantRunPage /></Wrapper>);
     typeAndSend('first message');
-    await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(apiClient.sendAssistantMessage).toHaveBeenCalledTimes(1));
+    vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(messageRequest.promise);
 
     typeAndSend('  second message  ');
     await waitFor(() => {
@@ -511,10 +547,15 @@ describe('AssistantRunPage', () => {
     await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(2));
     expect(apiClient.createAssistantRun).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        message: 'continuing message',
         resume_from_run_id: 'assistant-run-1',
       }),
     );
+    await waitFor(() => {
+      expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
+        'assistant-run-1',
+        { message: 'continuing message' },
+      );
+    });
   });
 
   it('shows a conversation-ended message and resets on 409 operator_run_closed from sendAssistantMessage', async () => {
@@ -568,9 +609,14 @@ describe('AssistantRunPage', () => {
     await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(2));
     expect(apiClient.createAssistantRun).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        message: 'continuing message',
         resume_from_run_id: 'assistant-run-1',
       }),
     );
+    await waitFor(() => {
+      expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
+        'assistant-run-1',
+        { message: 'continuing message' },
+      );
+    });
   });
 });

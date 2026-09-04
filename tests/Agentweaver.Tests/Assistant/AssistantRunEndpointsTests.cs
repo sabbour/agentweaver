@@ -59,6 +59,35 @@ public sealed class AssistantRunEndpointsTests
     }
 
     [Fact]
+    public async Task StartRun_WithDeferredFirstTurn_ReturnsRunBeforeExecutingMessage()
+    {
+        await using var factory = new AssistantWebApplicationFactory();
+        var client = AuthedClient(factory);
+
+        var response = await client.PostAsJsonAsync("/api/assistant/runs", new
+        {
+            message = "stream this opening reply",
+            defer_first_turn = true,
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("message").ValueKind.Should().Be(JsonValueKind.Null);
+        factory.Agent.Requests.Should().BeEmpty(
+            "the caller must receive the run id and attach SSE before it dispatches the opening turn");
+
+        var runId = body.GetProperty("run_id").GetString()!;
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var run = await runStore.GetAsync(RunId.Parse(runId), CancellationToken.None);
+        run!.Task.Should().Be("stream this opening reply",
+            "deferring execution must not lose the opening message used as the session title");
+
+        var events = await GetEventsAsync(client, runId);
+        events.Should().ContainSingle(e => e.Type == EventTypes.RunStarted);
+        events.Should().NotContain(e => e.Type == EventTypes.AgentMessage);
+    }
+
+    [Fact]
     public async Task StartRun_AgentHostWithIncidentalProject_IgnoresProjectBinding_ReturnsPlatformConnectionRequirement()
     {
         // Personal/Operator ("Assistant") sessions are never project-scoped work: an attached
@@ -400,7 +429,12 @@ public sealed class AssistantRunEndpointsTests
         types.Should().Contain(EventTypes.RunStarted);
         types.Should().Contain(EventTypes.ToolCall);
         types.Should().Contain(EventTypes.ToolResult);
+        types.Should().Contain(EventTypes.AgentMessageDelta);
         types.Count(t => t == EventTypes.AgentMessage).Should().BeGreaterThanOrEqualTo(2, "one user turn + one assistant turn");
+
+        var assistantDelta = events.Single(e => e.Type == EventTypes.AgentMessageDelta);
+        assistantDelta.Payload.GetProperty("role").GetString().Should().Be("assistant");
+        assistantDelta.Payload.GetProperty("delta").GetString().Should().Be("Here are your projects.");
 
         var assistantMessage = events.Last(e => e.Type == EventTypes.AgentMessage);
         assistantMessage.Payload.GetProperty("role").GetString().Should().Be("assistant");
