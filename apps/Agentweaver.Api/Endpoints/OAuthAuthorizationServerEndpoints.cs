@@ -82,6 +82,7 @@ public static class OAuthAuthorizationServerEndpoints
         HttpContext context,
         BrowserEntraSessionService browserSessions,
         MemoryDbContext db,
+        IOpenIddictApplicationManager applications,
         OAuthServerConfiguration configuration,
         CancellationToken ct)
     {
@@ -130,10 +131,18 @@ public static class OAuthAuthorizationServerEndpoints
 
         var consentHandle = await SaveTransactionAsync(
             db, request, scope, browser.Id, browser.EntraObjectId, ct).ConfigureAwait(false);
+        var application = await applications.FindByClientIdAsync(request.ClientId!, ct).ConfigureAwait(false);
+        var descriptor = new OpenIddictApplicationDescriptor();
+        if (application is not null)
+            await applications.PopulateAsync(descriptor, application, ct).ConfigureAwait(false);
+        var clientName = descriptor.DisplayName ?? request.ClientId!;
+        var styleNonce = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers.ContentSecurityPolicy =
-            "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
-        return Results.Content(RenderConsent(request, scope, consentHandle), "text/html; charset=utf-8");
+            $"default-src 'none'; style-src 'nonce-{styleNonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+        return Results.Content(
+            RenderConsent(request, scope, consentHandle, clientName, browser.EntraObjectId, styleNonce),
+            "text/html; charset=utf-8");
     }
 
     private static async Task<IResult> ResumeAsync(
@@ -335,9 +344,26 @@ public static class OAuthAuthorizationServerEndpoints
             && string.Equals(parsed[0], expected, StringComparison.Ordinal);
     }
 
-    private static string RenderConsent(OpenIddictRequest request, string[] scopes, string handle)
+    private static string RenderConsent(
+        OpenIddictRequest request,
+        string[] scopes,
+        string handle,
+        string clientName,
+        string signedInIdentity,
+        string styleNonce)
     {
         static string Encode(string value) => HtmlEncoder.Default.Encode(value);
+        static (string Title, string Description) DescribeScope(string scope) => scope switch
+        {
+            OAuthServerConfiguration.McpScope => (
+                "Use Agentweaver MCP tools",
+                "Read project context and perform actions through the Agentweaver MCP server."),
+            Scopes.OfflineAccess => (
+                "Stay connected",
+                "Refresh this connection without asking you to sign in again."),
+            _ => (scope, "Use this permission when connecting to Agentweaver."),
+        };
+
         var inputs = new Dictionary<string, string?>
         {
             ["client_id"] = request.ClientId,
@@ -352,10 +378,83 @@ public static class OAuthAuthorizationServerEndpoints
         };
         var hidden = string.Join("", inputs.Where(x => x.Value is not null)
             .Select(x => $"<input type=\"hidden\" name=\"{Encode(x.Key)}\" value=\"{Encode(x.Value!)}\">"));
-        return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorize Agentweaver</title></head>" +
-            $"<body><main><h1>Authorize MCP access</h1><p>Client <code>{Encode(request.ClientId!)}</code> " +
-            $"requests <code>{Encode(string.Join(' ', scopes))}</code>.</p><form method=\"post\" action=\"/oauth/authorize\">" +
-            hidden + "<button name=\"decision\" value=\"approve\">Approve</button>" +
-            "<button name=\"decision\" value=\"deny\">Deny</button></form></main></body></html>";
+        var permissions = string.Join("", scopes.Select(scope =>
+        {
+            var (title, description) = DescribeScope(scope);
+            return $"""
+                <li class="permission">
+                  <span class="permission-icon" aria-hidden="true">✓</span>
+                  <span><strong>{Encode(title)}</strong><small>{Encode(description)}</small><code>{Encode(scope)}</code></span>
+                </li>
+                """;
+        }));
+
+        return $$"""
+            <!doctype html>
+            <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>Authorize {{Encode(clientName)}} | Agentweaver</title>
+              <style nonce="{{Encode(styleNonce)}}">
+                :root { color-scheme: light; font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif; }
+                * { box-sizing: border-box; }
+                body { min-height: 100vh; margin: 0; padding: 32px 20px; display: grid; place-items: center; background: #f3f1ed; color: #242424; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+                .card { width: min(560px, 100%); overflow: hidden; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
+                .content { padding: 32px; }
+                .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; font-size: 16px; font-weight: 600; }
+                .brand-mark { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; background: #242424; color: #faf8f5; font-size: 12px; font-weight: 700; letter-spacing: -.03em; }
+                h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
+                .intro { margin: 10px 0 0; color: #3c3c3c; font-size: 15px; }
+                .client { margin: 24px 0; padding: 16px; background: #f3f1ed; border: 1px solid #e6e6e6; border-radius: 10px; }
+                .label { display: block; margin-bottom: 4px; color: #707070; font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; }
+                .client-name { display: block; font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+                .client-id { display: block; margin-top: 4px; color: #707070; font: 12px/1.4 Consolas, "Courier New", monospace; overflow-wrap: anywhere; }
+                h2 { margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+                .permissions { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+                .permission { display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; }
+                .permission-icon { width: 20px; height: 20px; display: grid; place-items: center; margin-top: 1px; border-radius: 50%; background: #e8f5ed; color: #107c41; font-size: 12px; font-weight: 700; }
+                .permission strong, .permission small, .permission code { display: block; }
+                .permission strong { font-size: 14px; font-weight: 600; }
+                .permission small { margin-top: 2px; color: #3c3c3c; font-size: 13px; }
+                .permission code { width: fit-content; margin-top: 5px; padding: 2px 6px; border-radius: 4px; background: #f3f1ed; color: #707070; font: 11px/1.4 Consolas, "Courier New", monospace; }
+                .identity { margin-top: 24px; padding-top: 18px; border-top: 1px solid #dedede; color: #3c3c3c; font-size: 13px; }
+                .identity strong { display: block; margin-top: 3px; color: #242424; font-weight: 600; overflow-wrap: anywhere; }
+                .actions { display: flex; justify-content: flex-end; gap: 10px; padding: 20px 32px; background: #faf8f5; border-top: 1px solid #dedede; }
+                button { min-width: 96px; min-height: 34px; padding: 7px 16px; border: 1px solid #c7c7c7; border-radius: 8px; background: #fcfcfa; color: #242424; font: 600 14px/1.2 inherit; cursor: pointer; }
+                button:hover { background: #f3f1ed; border-color: #adadad; }
+                button:active { transform: translateY(1px); }
+                button:focus-visible { outline: 2px solid #242424; outline-offset: 2px; }
+                .primary { border-color: #242424; background: #242424; color: #faf8f5; }
+                .primary:hover { border-color: #3c3c3c; background: #3c3c3c; }
+                @media (max-width: 480px) { body { padding: 16px; } .content { padding: 24px; } .actions { padding: 18px 24px; } .actions button { flex: 1; } }
+              </style>
+            </head>
+            <body>
+              <main class="card" aria-labelledby="consent-title">
+                <section class="content">
+                  <div class="brand"><span class="brand-mark" aria-hidden="true">AW</span><span>Agentweaver</span></div>
+                  <h1 id="consent-title">Allow access to Agentweaver?</h1>
+                  <p class="intro">An MCP client wants to connect to your Agentweaver account.</p>
+                  <div class="client">
+                    <span class="label">Requesting application</span>
+                    <span class="client-name">{{Encode(clientName)}}</span>
+                    <span class="client-id">Client ID: {{Encode(request.ClientId!)}}</span>
+                  </div>
+                  <h2>This application will be able to:</h2>
+                  <ul class="permissions">{{permissions}}</ul>
+                  <div class="identity"><span class="label">Signed in as</span><strong>{{Encode(signedInIdentity)}}</strong></div>
+                </section>
+                <form method="post" action="/oauth/authorize">
+                  {{hidden}}
+                  <div class="actions">
+                    <button type="submit" name="decision" value="deny">Deny</button>
+                    <button class="primary" type="submit" name="decision" value="approve">Allow</button>
+                  </div>
+                </form>
+              </main>
+            </body>
+            </html>
+            """;
     }
 }
