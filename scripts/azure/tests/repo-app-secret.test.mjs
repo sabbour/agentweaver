@@ -29,6 +29,25 @@ function requestedSecret(args) {
   return index >= 0 ? args[index + 1] : "";
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function serializedLock() {
+  let tail = Promise.resolve();
+  return async () => {
+    const previous = tail;
+    const released = deferred();
+    tail = released.promise;
+    await previous;
+    return released.resolve;
+  };
+}
+
 test("Repo App secret contract keeps the application logical name distinct from the physical Key Vault name", () => {
   assert.deepEqual(REPO_APP_PRIVATE_KEY_SECRET, {
     logicalName: "repo-app-private-key",
@@ -95,6 +114,47 @@ test("ensureRepoAppPrivateKeySecret migrates the legacy secret and preserves it"
     assert.equal(result.status, "migrated");
     assert.equal(exec.calls.some((call) => call.args.includes("delete")), false);
     assert.equal(exec.calls.some((call) => call.args.includes("recover")), false);
+    assert.deepEqual(fs.readdirSync(scratchRoot), []);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("ensureRepoAppPrivateKeySecret uses canonical when it appears after legacy download", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-canonical-race-"));
+  let canonicalChecks = 0;
+  const exec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    const name = requestedSecret(args);
+    if (operation === "show-deleted") {
+      assert.equal(name, REPO_APP_PRIVATE_KEY_SECRET.physicalName);
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) deleted secret was not found", code: 3 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.physicalName) {
+      canonicalChecks += 1;
+      return canonicalChecks < 4
+        ? { stdout: "", stderr: "ERROR: (SecretNotFound) canonical secret is absent", code: 3 }
+        : { stdout: "https://kv/secrets/ghtok-repo-app-private-key/concurrent", stderr: "", code: 0 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName) {
+      return { stdout: "https://kv/secrets/repo-app-private-key/version", stderr: "", code: 0 };
+    }
+    if (operation === "download") {
+      fs.writeFileSync(args[args.indexOf("--file") + 1], "legacy-private-key-material");
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  try {
+    const result = await ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv" },
+      { exec, log: noopLog(), scratchRoot },
+    );
+
+    assert.equal(result.status, "available");
+    assert.equal(exec.calls.filter((call) => call.args[2] === "download").length, 1);
+    assert.equal(exec.calls.some((call) => call.args[2] === "set"), false);
     assert.deepEqual(fs.readdirSync(scratchRoot), []);
   } finally {
     fs.rmSync(scratchRoot, { recursive: true, force: true });
@@ -414,10 +474,11 @@ test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret bef
   }
 });
 
-test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret during legacy migration", async () => {
+test("ensureRepoAppPrivateKeySecret recovers canonical during migration without retrying the legacy write", async () => {
   const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-recover-migration-"));
   const secretValue = "legacy-private-key-material";
   let canonicalChecks = 0;
+  let deletedChecks = 0;
   let setAttempts = 0;
   const messages = [];
   const exec = fakeExec((_cmd, args) => {
@@ -425,15 +486,15 @@ test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret dur
     const name = requestedSecret(args);
     if (operation === "show-deleted") {
       assert.equal(name, REPO_APP_PRIVATE_KEY_SECRET.physicalName);
-      return { stdout: "", stderr: "ERROR: (SecretNotFound) deleted secret was not found", code: 3 };
+      deletedChecks += 1;
+      return deletedChecks < 3
+        ? { stdout: "", stderr: "ERROR: (SecretNotFound) deleted secret was not found", code: 3 }
+        : { stdout: "https://kv/deletedsecrets/ghtok-repo-app-private-key", stderr: "", code: 0 };
     }
     if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.physicalName) {
       canonicalChecks += 1;
-      if (canonicalChecks === 1) {
+      if (canonicalChecks < 6) {
         return { stdout: "", stderr: "ERROR: (SecretNotFound) canonical secret is absent", code: 3 };
-      }
-      if (canonicalChecks === 2) {
-        return { stdout: "", stderr: "ERROR: (SecretNotFound) recovery is not visible yet", code: 3 };
       }
       return { stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "", code: 0 };
     }
@@ -447,9 +508,7 @@ test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret dur
     if (operation === "set") {
       setAttempts += 1;
       assert.equal(fs.readFileSync(args[args.indexOf("--file") + 1], "utf8"), secretValue);
-      return setAttempts === 1
-        ? { stdout: "", stderr: "ERROR: (ObjectIsDeletedButRecoverable) Secret is deleted but recoverable.", code: 1 }
-        : { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: "ERROR: (ObjectIsDeletedButRecoverable) Secret is deleted but recoverable.", code: 1 };
     }
     if (operation === "recover") {
       assert.equal(name, REPO_APP_PRIVATE_KEY_SECRET.physicalName);
@@ -469,11 +528,178 @@ test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret dur
       },
     );
 
-    assert.equal(result.status, "migrated");
-    assert.equal(setAttempts, 2);
-    assert.ok(exec.calls.some((call) => call.args[2] === "recover"));
+    assert.equal(result.status, "recovered");
+    assert.equal(setAttempts, 1);
+    assert.equal(exec.calls.filter((call) => call.args[2] === "recover").length, 1);
     assert.equal(exec.calls.some((call) => call.args.includes(secretValue)), false);
     assert.equal(messages.some((message) => message.includes(secretValue)), false);
+    assert.deepEqual(fs.readdirSync(scratchRoot), []);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("ensureRepoAppPrivateKeySecret fails closed when a migration conflict leaves canonical state ambiguous", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-ambiguous-race-"));
+  let setAttempts = 0;
+  const exec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    const name = requestedSecret(args);
+    if (operation === "show-deleted") {
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) deleted secret was not found", code: 3 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.physicalName) {
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) canonical secret is absent", code: 3 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName) {
+      return { stdout: "https://kv/secrets/repo-app-private-key/version", stderr: "", code: 0 };
+    }
+    if (operation === "download") {
+      fs.writeFileSync(args[args.indexOf("--file") + 1], "legacy-private-key-material");
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (operation === "set") {
+      setAttempts += 1;
+      return { stdout: "", stderr: "ERROR: (Conflict) canonical recovery is in progress", code: 1 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  try {
+    await assert.rejects(
+      ensureRepoAppPrivateKeySecret(
+        { vaultName: "kv" },
+        { exec, log: noopLog(), scratchRoot },
+      ),
+      /refusing to retry the legacy write/i,
+    );
+    assert.equal(setAttempts, 1);
+    assert.equal(exec.calls.some((call) => call.args[2] === "recover"), false);
+    assert.deepEqual(fs.readdirSync(scratchRoot), []);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("ensureRepoAppPrivateKeySecret serializes a writer that arrives between the final check and legacy set", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-writer-race-"));
+  const configuredFile = path.join(scratchRoot, "configured.pem");
+  fs.writeFileSync(configuredFile, "configured-private-key-material");
+  const finalCheckReached = deferred();
+  const allowFinalCheckToReturn = deferred();
+  const acquireLock = serializedLock();
+  const writeOrder = [];
+  let canonicalAvailable = false;
+  let canonicalValue = "";
+  let canonicalChecks = 0;
+
+  const migrationExec = fakeExec(async (_cmd, args) => {
+    const operation = args[2];
+    const name = requestedSecret(args);
+    if (operation === "show-deleted") {
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) deleted secret was not found", code: 3 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.physicalName) {
+      canonicalChecks += 1;
+      if (canonicalAvailable) {
+        return { stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "", code: 0 };
+      }
+      if (canonicalChecks === 4) {
+        finalCheckReached.resolve();
+        await allowFinalCheckToReturn.promise;
+      }
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) canonical secret is absent", code: 3 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName) {
+      return { stdout: "https://kv/secrets/repo-app-private-key/version", stderr: "", code: 0 };
+    }
+    if (operation === "download") {
+      fs.writeFileSync(args[args.indexOf("--file") + 1], "legacy-private-key-material");
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (operation === "set") {
+      assert.equal(canonicalAvailable, false);
+      canonicalAvailable = true;
+      canonicalValue = fs.readFileSync(args[args.indexOf("--file") + 1], "utf8");
+      writeOrder.push("legacy");
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+  const writerExec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    if (operation === "set") {
+      canonicalAvailable = true;
+      canonicalValue = fs.readFileSync(args[args.indexOf("--file") + 1], "utf8");
+      writeOrder.push("configured");
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (operation === "show") {
+      return canonicalAvailable
+        ? { stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "", code: 0 }
+        : { stdout: "", stderr: "ERROR: (SecretNotFound) canonical secret is absent", code: 3 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  try {
+    const migration = ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv" },
+      { exec: migrationExec, log: noopLog(), scratchRoot, acquireLock },
+    );
+    await finalCheckReached.promise;
+    const writer = ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv", sourceFile: configuredFile },
+      { exec: writerExec, log: noopLog(), acquireLock },
+    );
+    allowFinalCheckToReturn.resolve();
+
+    const [migrationResult, writerResult] = await Promise.all([migration, writer]);
+
+    assert.equal(migrationResult.status, "migrated");
+    assert.equal(writerResult.status, "imported");
+    assert.deepEqual(writeOrder, ["legacy", "configured"]);
+    assert.equal(canonicalValue, "configured-private-key-material");
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("ensureRepoAppPrivateKeySecret fails closed when canonical access is lost after legacy download", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-access-race-"));
+  let canonicalChecks = 0;
+  const exec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    const name = requestedSecret(args);
+    if (operation === "show-deleted") {
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) deleted secret was not found", code: 3 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.physicalName) {
+      canonicalChecks += 1;
+      return canonicalChecks < 4
+        ? { stdout: "", stderr: "ERROR: (SecretNotFound) canonical secret is absent", code: 3 }
+        : { stdout: "", stderr: "ERROR: (ForbiddenByRbac) canonical inspection denied", code: 1 };
+    }
+    if (operation === "show" && name === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName) {
+      return { stdout: "https://kv/secrets/repo-app-private-key/version", stderr: "", code: 0 };
+    }
+    if (operation === "download") {
+      fs.writeFileSync(args[args.indexOf("--file") + 1], "legacy-private-key-material");
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  try {
+    await assert.rejects(
+      ensureRepoAppPrivateKeySecret(
+        { vaultName: "kv" },
+        { exec, log: noopLog(), scratchRoot },
+      ),
+      /canonical.*inaccessible/i,
+    );
+    assert.equal(exec.calls.filter((call) => call.args[2] === "download").length, 1);
+    assert.equal(exec.calls.some((call) => call.args[2] === "set"), false);
     assert.deepEqual(fs.readdirSync(scratchRoot), []);
   } finally {
     fs.rmSync(scratchRoot, { recursive: true, force: true });

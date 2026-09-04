@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { acquireLock as acquireProcessLock } from "../../ci/shared-deps.mjs";
 import * as execDefault from "./exec.mjs";
 import * as logDefault from "./log.mjs";
 import * as secretDefault from "./secret.mjs";
@@ -24,6 +25,11 @@ const RECOVERY_IN_PROGRESS = /Conflict|already being recovered|recovery.*in prog
 const RECOVERY_ALREADY_COMPLETED = /already (?:been )?recovered|already (?:in )?(?:an? )?active(?: state)?/i;
 const RECOVERY_POLL_ATTEMPTS = 60;
 const RECOVERY_POLL_INTERVAL_MS = 500;
+// Key Vault secret set has no create-only primitive, so all deployment-side
+// canonical mutations share the existing process lock before migration rechecks.
+const RECONCILIATION_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
+const RECONCILIATION_STALE_LOCK_MS = 30 * 60 * 1000;
+const RECONCILIATION_LOCK_ROOT = path.join(os.tmpdir(), "agentweaver-azure-locks");
 
 async function inspectActiveKeyVaultSecretResult(vaultName, name, { exec = execDefault } = {}) {
   const result = await exec.capture(
@@ -243,7 +249,109 @@ export async function setSecretWithRetry(
   );
 }
 
-export async function ensureRepoAppPrivateKeySecret(
+async function reconcileCanonicalSecret(
+  vaultName,
+  {
+    exec = execDefault,
+    log = logDefault,
+    sleep = defaultSleep,
+  } = {},
+) {
+  const canonical = await inspectKeyVaultSecretResult(
+    vaultName,
+    REPO_APP_PRIVATE_KEY_SECRET.physicalName,
+    { exec },
+  );
+  if (canonical.status === "available") return "available";
+  if (canonical.status === "recoverable") {
+    await recoverDeletedSecretAndWait(
+      vaultName,
+      REPO_APP_PRIVATE_KEY_SECRET.physicalName,
+      { exec, log, sleep },
+    );
+    return "recovered";
+  }
+  if (canonical.status === "inaccessible") {
+    throw new Error(
+      `Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is inaccessible. ` +
+        "Verify the active Azure identity has Key Vault secret get permission.",
+    );
+  }
+  return "missing";
+}
+
+function logCanonicalStatus(status, log) {
+  if (status === "available") {
+    log.ok(`Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is accessible.`);
+  } else if (status === "recovered") {
+    log.ok(`Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' recovered.`);
+  }
+}
+
+async function migrateLegacySecretFileWithRetry(
+  vaultName,
+  filePath,
+  {
+    exec = execDefault,
+    log = logDefault,
+    maxAttempts = 12,
+    sleep = defaultSleep,
+  } = {},
+) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const canonical = await reconcileCanonicalSecret(vaultName, { exec, log, sleep });
+    if (canonical !== "missing") return canonical;
+
+    const result = await exec.capture(
+      "az",
+      [
+        "keyvault",
+        "secret",
+        "set",
+        "--vault-name",
+        vaultName,
+        "--name",
+        REPO_APP_PRIVATE_KEY_SECRET.physicalName,
+        "--file",
+        filePath,
+        "--output",
+        "none",
+      ],
+      { allowFailure: true },
+    );
+    if (result.code === 0) return "migrated";
+
+    const canonicalAfterFailure = await reconcileCanonicalSecret(vaultName, { exec, log, sleep });
+    if (canonicalAfterFailure !== "missing") return canonicalAfterFailure;
+
+    const writeError = result.stderr || "";
+    if (RBAC_PROPAGATING.test(writeError) && attempt < maxAttempts) {
+      log.info(
+        `  [retry ${attempt}/${maxAttempts}] Key Vault access for ` +
+          `'${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is still propagating; waiting 15s...`,
+      );
+      await sleep(15000);
+      continue;
+    }
+    if (
+      DELETED_BUT_RECOVERABLE.test(writeError) ||
+      RECOVERY_IN_PROGRESS.test(writeError) ||
+      RECOVERY_ALREADY_COMPLETED.test(writeError)
+    ) {
+      throw new Error(
+        `Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' changed state ` +
+          "during legacy migration, but its active or recoverable value could not be confirmed. " +
+          "Refusing to retry the legacy write.",
+      );
+    }
+    throw new Error(
+      `Failed to migrate legacy Repo App private-key secret to ` +
+        `'${REPO_APP_PRIVATE_KEY_SECRET.physicalName}': ${writeError || "unknown Azure CLI error"}`,
+    );
+  }
+}
+
+async function ensureRepoAppPrivateKeySecretUnlocked(
   {
     vaultName,
     sourceFile = "",
@@ -282,29 +390,10 @@ export async function ensureRepoAppPrivateKeySecret(
     return { status: "imported", ...REPO_APP_PRIVATE_KEY_SECRET };
   }
 
-  const canonical = await inspectKeyVaultSecret(
-    vaultName,
-    REPO_APP_PRIVATE_KEY_SECRET.physicalName,
-    { exec },
-  );
-  if (canonical.status === "available") {
-    log.ok(`Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is accessible.`);
-    return { status: "available", ...REPO_APP_PRIVATE_KEY_SECRET };
-  }
-  if (canonical.status === "recoverable") {
-    await recoverDeletedSecretAndWait(
-      vaultName,
-      REPO_APP_PRIVATE_KEY_SECRET.physicalName,
-      { exec, log, sleep },
-    );
-    log.ok(`Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' recovered.`);
-    return { status: "recovered", ...REPO_APP_PRIVATE_KEY_SECRET };
-  }
-  if (canonical.status === "inaccessible") {
-    throw new Error(
-      `Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is inaccessible. ` +
-        "Verify the active Azure identity has Key Vault secret get permission.",
-    );
+  const canonicalStatus = await reconcileCanonicalSecret(vaultName, { exec, log, sleep });
+  if (canonicalStatus !== "missing") {
+    logCanonicalStatus(canonicalStatus, log);
+    return { status: canonicalStatus, ...REPO_APP_PRIVATE_KEY_SECRET };
   }
 
   const legacy = await inspectKeyVaultSecret(
@@ -354,12 +443,15 @@ export async function ensureRepoAppPrivateKeySecret(
           `could not be downloaded for migration: ${downloaded.stderr || "unknown Azure CLI error"}`,
       );
     }
-    await setSecretFileWithRetry(
+    const migrationStatus = await migrateLegacySecretFileWithRetry(
       vaultName,
-      REPO_APP_PRIVATE_KEY_SECRET.physicalName,
       migrationFile,
-      { exec, log, fsImpl, sleep },
+      { exec, log, sleep },
     );
+    if (migrationStatus !== "migrated") {
+      logCanonicalStatus(migrationStatus, log);
+      return { status: migrationStatus, ...REPO_APP_PRIVATE_KEY_SECRET };
+    }
   } finally {
     fsImpl.rmSync(scratchDir, { recursive: true, force: true });
   }
@@ -380,6 +472,44 @@ export async function ensureRepoAppPrivateKeySecret(
       `'${REPO_APP_PRIVATE_KEY_SECRET.physicalName}'; the legacy secret was preserved.`,
   );
   return { status: "migrated", ...REPO_APP_PRIVATE_KEY_SECRET };
+}
+
+export async function ensureRepoAppPrivateKeySecret(
+  params,
+  {
+    acquireLock = acquireProcessLock,
+    lockRoot = RECONCILIATION_LOCK_ROOT,
+    lockTimeoutMs = RECONCILIATION_LOCK_TIMEOUT_MS,
+    staleLockMs = RECONCILIATION_STALE_LOCK_MS,
+    ...opts
+  } = {},
+) {
+  const vaultName = String(params?.vaultName ?? "").trim();
+  if (!vaultName) throw new Error("KEYVAULT_NAME is required to verify the Repo App private key.");
+
+  const lockPath = path.join(
+    lockRoot,
+    `${vaultName.toLowerCase()}-${REPO_APP_PRIVATE_KEY_SECRET.physicalName}.lock`,
+  );
+  let releaseLock;
+  try {
+    releaseLock = await acquireLock(lockPath, {
+      timeoutMs: lockTimeoutMs,
+      staleAfterMs: staleLockMs,
+    });
+  } catch (error) {
+    throw new Error(
+      `Could not acquire the Repo App private-key reconciliation lock for Key Vault '${vaultName}': ` +
+        `${error?.message || error}`,
+      { cause: error },
+    );
+  }
+
+  try {
+    return await ensureRepoAppPrivateKeySecretUnlocked(params, opts);
+  } finally {
+    releaseLock();
+  }
 }
 
 function defaultSleep(ms) {
