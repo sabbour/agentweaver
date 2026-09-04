@@ -420,4 +420,23 @@ describe('WorkflowGraphPanel — topology connector routing', () => {
     ]);
     expect(route.path).not.toMatch(/\sC\s/);
   });
+
+  it('offsets parallel routes onto distinct lanes within the same gutter', () => {
+    const route = buildSteppedConnectorRoute({
+      sourceX: 240,
+      sourceY: 180,
+      targetX: 560,
+      targetY: 420,
+      orientation: 'horizontal',
+      laneOffset: 18,
+    });
+
+    expect(route.points).toEqual([
+      { x: 240, y: 180 },
+      { x: 418, y: 180 },
+      { x: 418, y: 420 },
+      { x: 560, y: 420 },
+    ]);
+    expect(route.labelX).toBe(418);
+  });
 });

@@ -52,9 +52,8 @@ export const WORKFLOW_EDITOR_ACTIONS_HEIGHT = 44;
 export const WORKFLOW_FIT_VIEW_OPTIONS = { padding: 0.1, maxZoom: 1.8 } as const;
 export const WORKFLOW_LONG_LINEAR_MIN_RANKS = 5;
 
-// Stair tread length: how many nodes advance along the SAME row (LR) / column (TB) before the stair
-// steps down/right to the next tread. A value of 2 keeps chunky, clearly-horizontal treads (instead of
-// stepping after every single node → a fine 45° diagonal) while still packing into a square-ish box.
+// Back-compat export retained for consumers that used the former staircase
+// tuning constant. Banded-lane wrapping now derives its width from aspect.
 export const STAIR_RUN = 2;
 
 // Per-node-type layout dimensions. Keep in sync with WorkflowGraphPanel card widths.
@@ -205,28 +204,29 @@ export function buildSteppedConnectorRoute(input: {
   targetX: number;
   targetY: number;
   orientation?: 'auto' | 'horizontal' | 'vertical';
+  laneOffset?: number;
 }): SteppedConnectorRoute {
-  const { sourceX, sourceY, targetX, targetY, orientation = 'auto' } = input;
+  const { sourceX, sourceY, targetX, targetY, orientation = 'auto', laneOffset = 0 } = input;
   const vertical = orientation === 'vertical'
     || (orientation === 'auto' && Math.abs(targetY - sourceY) >= Math.abs(targetX - sourceX));
   const points = vertical
     ? [
         { x: sourceX, y: sourceY },
-        { x: sourceX, y: (sourceY + targetY) / 2 },
-        { x: targetX, y: (sourceY + targetY) / 2 },
+        { x: sourceX, y: (sourceY + targetY) / 2 + laneOffset },
+        { x: targetX, y: (sourceY + targetY) / 2 + laneOffset },
         { x: targetX, y: targetY },
       ]
     : [
         { x: sourceX, y: sourceY },
-        { x: (sourceX + targetX) / 2, y: sourceY },
-        { x: (sourceX + targetX) / 2, y: targetY },
+        { x: (sourceX + targetX) / 2 + laneOffset, y: sourceY },
+        { x: (sourceX + targetX) / 2 + laneOffset, y: targetY },
         { x: targetX, y: targetY },
       ];
   const clean = dedupePoints(points);
   return {
     path: roundedOrthogonalPath(clean),
-    labelX: (sourceX + targetX) / 2,
-    labelY: (sourceY + targetY) / 2,
+    labelX: (sourceX + targetX) / 2 + (vertical ? 0 : laneOffset),
+    labelY: (sourceY + targetY) / 2 + (vertical ? laneOffset : 0),
     points: clean,
   };
 }
@@ -257,6 +257,335 @@ export interface WorkflowDefinitionLayoutResult {
   mode: WorkflowDefinitionLayoutMode;
   bbox: { w: number; h: number };
   analysis: WorkflowLayoutAnalysis;
+}
+
+interface BandedSection {
+  nodeIds: string[];
+  cols: number;
+  rows: number;
+}
+
+interface BandedLayoutOptions {
+  rankdir: 'LR' | 'TB';
+  rankGap: number;
+  nodeGap: number;
+  snakeMinRanks: number;
+  targetAspect: number;
+}
+
+const BANDED_MARGIN = 24;
+const BANDED_LANE_STEP = 18;
+const BANDED_LABEL_CHAR_W = 7;
+
+function edgeLabelSize(edge: Edge): NodeSizeHint {
+  if (typeof edge.label !== 'string' && typeof edge.label !== 'number') {
+    return { width: 0, height: 0 };
+  }
+  const text = String(edge.label).trim();
+  if (!text) return { width: 0, height: 0 };
+  return {
+    width: text.length * BANDED_LABEL_CHAR_W + 20,
+    height: 26,
+  };
+}
+
+/**
+ * Stable longest-path ranks. DFS back edges are ignored for ranking so loops
+ * remain visible without pushing their target below its own descendants.
+ */
+function rankBandedNodes(nodes: Node[], edges: Edge[]): Map<string, number> {
+  const index = new Map(nodes.map((node, i) => [node.id, i]));
+  const ids = new Set(index.keys());
+  const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target) || edge.source === edge.target) continue;
+    outgoing.get(edge.source)!.push(edge.target);
+  }
+  for (const targets of outgoing.values()) {
+    targets.sort((a, b) => (index.get(a) ?? 0) - (index.get(b) ?? 0));
+  }
+
+  const backEdges = new Set<string>();
+  const state = new Map<string, 0 | 1 | 2>();
+  const visit = (id: string) => {
+    state.set(id, 1);
+    for (const target of outgoing.get(id) ?? []) {
+      const targetState = state.get(target) ?? 0;
+      if (targetState === 1) backEdges.add(`${id}\0${target}`);
+      else if (targetState === 0) visit(target);
+    }
+    state.set(id, 2);
+  };
+  for (const node of nodes) {
+    if ((state.get(node.id) ?? 0) === 0) visit(node.id);
+  }
+
+  const predecessors = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
+    if (!backEdges.has(`${edge.source}\0${edge.target}`)) {
+      predecessors.get(edge.target)!.push(edge.source);
+    }
+  }
+
+  const ranks = new Map<string, number>();
+  const rankOf = (id: string): number => {
+    const known = ranks.get(id);
+    if (known !== undefined) return known;
+    ranks.set(id, 0);
+    const parents = predecessors.get(id) ?? [];
+    const rank = parents.length === 0 ? 0 : Math.max(...parents.map(rankOf)) + 1;
+    ranks.set(id, rank);
+    return rank;
+  };
+  for (const node of nodes) rankOf(node.id);
+  return ranks;
+}
+
+function bandedLayers(nodes: Node[], edges: Edge[], ranks: Map<string, number>): string[][] {
+  const index = new Map(nodes.map((node, i) => [node.id, i]));
+  const ids = new Set(index.keys());
+  const rankValues = [...new Set(nodes.map((node) => ranks.get(node.id) ?? 0))].sort((a, b) => a - b);
+  const layerIndex = new Map(rankValues.map((rank, i) => [rank, i]));
+  const layers = rankValues.map(() => [] as string[]);
+  for (const node of nodes) layers[layerIndex.get(ranks.get(node.id) ?? 0)!].push(node.id);
+
+  const predecessors = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
+    if ((ranks.get(edge.source) ?? 0) < (ranks.get(edge.target) ?? 0)) {
+      predecessors.get(edge.target)!.push(edge.source);
+    }
+  }
+
+  const slots = new Map<string, number>();
+  layers[0]?.forEach((id, i) => slots.set(id, i));
+  for (let layer = 1; layer < layers.length; layer += 1) {
+    layers[layer] = layers[layer]
+      .map((id, original) => {
+        const parents = (predecessors.get(id) ?? []).filter((parent) => slots.has(parent));
+        const barycenter = parents.length === 0
+          ? original
+          : parents.reduce((sum, parent) => sum + slots.get(parent)!, 0) / parents.length;
+        return { id, original, barycenter };
+      })
+      .sort((a, b) =>
+        a.barycenter - b.barycenter
+        || a.original - b.original
+        || (index.get(a.id) ?? 0) - (index.get(b.id) ?? 0))
+      .map(({ id }) => id);
+    layers[layer].forEach((id, i) => slots.set(id, i));
+  }
+  return layers;
+}
+
+function snakeColumns(
+  count: number,
+  sizes: Map<string, NodeSizeHint>,
+  ids: string[],
+  nodeGap: number,
+  targetAspect: number,
+  rankdir: 'LR' | 'TB',
+): number {
+  let best = 1;
+  let bestScore = Infinity;
+  const typicalWidth = Math.max(1, median(ids.map((id) => sizes.get(id)!.width)));
+  const typicalHeight = Math.max(1, median(ids.map((id) => sizes.get(id)!.height)));
+  const maxPrimarySlots = Math.min(count, 6, Math.max(1, count - 1));
+  for (let cols = 1; cols <= maxPrimarySlots; cols += 1) {
+    const rows = Math.ceil(count / cols);
+    const width = (rankdir === 'LR' ? cols : rows) * typicalWidth
+      + Math.max(0, (rankdir === 'LR' ? cols : rows) - 1) * nodeGap;
+    const height = (rankdir === 'LR' ? rows : cols) * typicalHeight
+      + Math.max(0, (rankdir === 'LR' ? rows : cols) - 1) * nodeGap;
+    const desiredAspect = rankdir === 'LR'
+      ? targetAspect
+      : typicalHeight / typicalWidth / targetAspect;
+    const score = Math.abs(Math.log(width / height / desiredAspect));
+    if (score < bestScore) {
+      bestScore = score;
+      best = cols;
+    }
+  }
+  return best;
+}
+
+function serpentineIds(ids: string[], cols: number): string[] {
+  const ordered: string[] = [];
+  for (let row = 0; row * cols < ids.length; row += 1) {
+    const slice = ids.slice(row * cols, (row + 1) * cols);
+    ordered.push(...(row % 2 === 1 ? slice.reverse() : slice));
+  }
+  return ordered;
+}
+
+function layoutBandedLane(
+  nodes: Node[],
+  edges: Edge[],
+  options: BandedLayoutOptions,
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): Node[] {
+  if (nodes.length === 0) return nodes;
+
+  const sizes = new Map<string, NodeSizeHint>();
+  for (const node of nodes) {
+    const hint = nodeSizeHints?.[node.id];
+    sizes.set(node.id, {
+      width: hint?.width ?? NODE_W,
+      height: hint?.height ?? NODE_H,
+    });
+  }
+
+  const ranks = rankBandedNodes(nodes, edges);
+  const layers = bandedLayers(nodes, edges, ranks);
+  const linked = new Set(edges.map((edge) => `${edge.source}\0${edge.target}`));
+  const aspect = Number.isFinite(options.targetAspect) && options.targetAspect > 0
+    ? options.targetAspect
+    : 1.4;
+  const snakeMin = Math.max(2, Math.floor(options.snakeMinRanks));
+  const sections: BandedSection[] = [];
+
+  let layer = 0;
+  while (layer < layers.length) {
+    let end = layer;
+    while (
+      layers[end]?.length === 1
+      && layers[end + 1]?.length === 1
+      && linked.has(`${layers[end][0]}\0${layers[end + 1][0]}`)
+    ) {
+      end += 1;
+    }
+    const runLength = end - layer + 1;
+    if (runLength > snakeMin) {
+      const ids = layers.slice(layer, end + 1).map((rank) => rank[0]);
+      const cols = snakeColumns(ids.length, sizes, ids, options.nodeGap, aspect, options.rankdir);
+      sections.push({
+        nodeIds: serpentineIds(ids, cols),
+        cols,
+        rows: Math.ceil(ids.length / cols),
+      });
+      layer = end + 1;
+      continue;
+    }
+
+    sections.push({
+      nodeIds: layers[layer],
+      cols: 1,
+      rows: layers[layer].length,
+    });
+    layer += 1;
+  }
+
+  const sectionByNode = new Map<string, number>();
+  sections.forEach((section, sectionIndex) => {
+    section.nodeIds.forEach((id) => sectionByNode.set(id, sectionIndex));
+  });
+
+  const boundaryEdges = Array.from({ length: Math.max(0, sections.length - 1) }, () => [] as Edge[]);
+  for (const edge of edges) {
+    const sourceSection = sectionByNode.get(edge.source);
+    const targetSection = sectionByNode.get(edge.target);
+    if (sourceSection === undefined || targetSection === undefined || sourceSection === targetSection) continue;
+    const lo = Math.min(sourceSection, targetSection);
+    const hi = Math.max(sourceSection, targetSection);
+    for (let boundary = lo; boundary < hi; boundary += 1) boundaryEdges[boundary].push(edge);
+  }
+  const boundaryGap = boundaryEdges.map((crossing) => {
+    const labelExtent = crossing.reduce((max, edge) => {
+      const label = edgeLabelSize(edge);
+      return Math.max(max, options.rankdir === 'LR' ? label.width : label.height);
+    }, 0);
+    return Math.max(
+      options.rankGap,
+      options.rankGap + Math.max(0, crossing.length - 1) * BANDED_LANE_STEP,
+      labelExtent + 24 + Math.max(0, crossing.length - 1) * BANDED_LANE_STEP,
+    );
+  });
+
+  const sectionGeometry = sections.map((section, sectionIndex) => {
+    const internalLabels = edges
+      .filter((edge) =>
+        sectionByNode.get(edge.source) === sectionByNode.get(edge.target)
+        && sectionByNode.get(edge.source) === sectionIndex)
+      .map(edgeLabelSize);
+    const primaryGap = Math.max(
+      options.nodeGap,
+      ...internalLabels.map((label) =>
+        (options.rankdir === 'LR' ? label.width : label.height) + 24),
+    );
+    const crossGap = Math.max(
+      options.nodeGap,
+      ...internalLabels.map((label) =>
+        (options.rankdir === 'LR' ? label.height : label.width) + 24),
+    );
+    const primaryExtents = Array.from({ length: section.cols }, () => 0);
+    const crossExtents = Array.from({ length: section.rows }, () => 0);
+    section.nodeIds.forEach((id, i) => {
+      const crossSlot = Math.floor(i / section.cols);
+      const rowLength = Math.min(section.cols, section.nodeIds.length - crossSlot * section.cols);
+      const primarySlot = i % section.cols
+        + (crossSlot % 2 === 1 ? section.cols - rowLength : 0);
+      const size = sizes.get(id)!;
+      const primarySize = options.rankdir === 'LR' ? size.width : size.height;
+      const crossSize = options.rankdir === 'LR' ? size.height : size.width;
+      primaryExtents[primarySlot] = Math.max(primaryExtents[primarySlot], primarySize);
+      crossExtents[crossSlot] = Math.max(crossExtents[crossSlot], crossSize);
+    });
+    const primaryStarts: number[] = [];
+    const crossStarts: number[] = [];
+    primaryExtents.reduce((cursor, extent, i) => {
+      primaryStarts[i] = cursor;
+      return cursor + extent + primaryGap;
+    }, 0);
+    crossExtents.reduce((cursor, extent, i) => {
+      crossStarts[i] = cursor;
+      return cursor + extent + crossGap;
+    }, 0);
+    const primaryExtent = primaryExtents.reduce((sum, extent) => sum + extent, 0)
+      + Math.max(0, section.cols - 1) * primaryGap;
+    const crossExtent = crossExtents.reduce((sum, extent) => sum + extent, 0)
+      + Math.max(0, section.rows - 1) * crossGap;
+    return { primaryExtents, crossExtents, primaryStarts, crossStarts, primaryExtent, crossExtent };
+  });
+  const maxCrossExtent = Math.max(...sectionGeometry.map((geometry) => geometry.crossExtent));
+
+  const positions = new Map<string, { x: number; y: number }>();
+  let primaryCursor = BANDED_MARGIN;
+  for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
+    const section = sections[sectionIndex];
+    const geometry = sectionGeometry[sectionIndex];
+    const crossOrigin = BANDED_MARGIN + (maxCrossExtent - geometry.crossExtent) / 2;
+    section.nodeIds.forEach((id, i) => {
+      const crossSlot = Math.floor(i / section.cols);
+      const rowLength = Math.min(section.cols, section.nodeIds.length - crossSlot * section.cols);
+      const primarySlot = i % section.cols
+        + (crossSlot % 2 === 1 ? section.cols - rowLength : 0);
+      const size = sizes.get(id)!;
+      const primarySize = options.rankdir === 'LR' ? size.width : size.height;
+      const crossSize = options.rankdir === 'LR' ? size.height : size.width;
+      const primary = primaryCursor
+        + geometry.primaryStarts[primarySlot]
+        + (geometry.primaryExtents[primarySlot] - primarySize) / 2;
+      const cross = crossOrigin
+        + geometry.crossStarts[crossSlot]
+        + (geometry.crossExtents[crossSlot] - crossSize) / 2;
+      positions.set(id, options.rankdir === 'LR'
+        ? { x: primary, y: cross }
+        : { x: cross, y: primary });
+    });
+
+    primaryCursor += geometry.primaryExtent + (boundaryGap[sectionIndex] ?? 0);
+  }
+
+  return nodes.map((node) => {
+    const size = sizes.get(node.id)!;
+    return {
+      ...node,
+      position: positions.get(node.id) ?? node.position,
+      initialWidth: size.width,
+      initialHeight: size.height,
+    };
+  });
 }
 
 export function analyzeWorkflowLayout(nodes: Node[], edges: Edge[]): WorkflowLayoutAnalysis {
@@ -335,19 +664,18 @@ export function layoutWorkflowDefinitionNodes(
 ): WorkflowDefinitionLayoutResult {
   const analysis = analyzeWorkflowLayout(nodes, edges);
   const mode: WorkflowDefinitionLayoutMode = analysis.isLongLinear ? 'staircase' : 'columns';
-  const laidOut = mode === 'staircase'
-    ? layoutDagStaircase(
-        nodes,
-        edges,
-        { rankdir: 'LR', rankSep: 64, nodeSep: 40, targetAspect: 1.35, minStepRanks: 3 },
-        nodeSizeHints,
-      )
-    : layoutDagColumns(
-        nodes,
-        edges,
-        { rankdir: 'LR', rankSep: 72, nodeSep: 48, crossAlign: 'center' },
-        nodeSizeHints,
-      );
+  const laidOut = layoutBandedLane(
+    nodes,
+    edges,
+    {
+      rankdir: 'LR',
+      rankGap: mode === 'staircase' ? 64 : 72,
+      nodeGap: mode === 'staircase' ? 40 : 48,
+      snakeMinRanks: mode === 'staircase' ? 3 : Number.MAX_SAFE_INTEGER,
+      targetAspect: 1.35,
+    },
+    nodeSizeHints,
+  );
 
   return {
     nodes: laidOut,
@@ -750,23 +1078,12 @@ export function layoutDagColumns(
 }
 
 /**
- * Staircase (stepped / monotonic diagonal) DAG layout for long, mostly-linear runs.
+ * Deterministic banded-lane layout for runtime and landing DAGs.
  *
- * A pure LR row (Coordinator → Outcome → Work plan → subagents → RAI → Review → Merge → Scribe)
- * overflows width while leaving the panel's height empty; once fit-to-view scales that wide-and-short
- * shape down, the nodes become unreadably small. This layout keeps dagre's data-driven rank + ordering
- * (so true parallel branches still fan out within a rank) but walks the ranks as an ALTERNATING
- * orthogonal stair so the sequence uses BOTH dimensions and packs into a square-ish box.
- *
- * Rather than a uniform 45° diagonal (which leaves two large empty triangles), each step advances only
- * ONE axis, alternating: odd steps advance the primary axis, even steps advance the cross axis. The flow
- * is monotonic — both axes only ever increase, so it always progresses one way (never wraps/reverses):
- *   • `rankdir: 'LR'` — right, down, right, down… (primary axis = X): the spine steps right, then down,
- *     then right, then down, descending to the right in a compact staircase.
- *   • `rankdir: 'TB'` — down, right, down, right… (primary axis = Y): mirrored, descending down-right.
- *
- * Every column hosts at most two ranks (a right-arrival and the following down-departure), separated by
- * a cross advance sized to clear the previous rank's full sibling stack, so ranks can never collide.
+ * Long one-node rank runs fold into a serpentine grid; branching ranks remain
+ * fixed bands ordered by stable longest-path rank and predecessor barycenter.
+ * Inter-band spacing reserves orthogonal routing gutters, including additional
+ * lanes for parallel crossings and room for rendered edge labels.
  */
 export function layoutDagStaircase(
   nodes: Node[],
@@ -774,139 +1091,20 @@ export function layoutDagStaircase(
   opts: StaircaseLayoutOpts = {},
   nodeSizeHints?: Record<string, NodeSizeHint>,
 ): Node[] {
-  if (nodes.length === 0) return nodes;
-
-  const rankdir = opts.rankdir ?? 'LR';
-  const horizontal = rankdir !== 'TB'; // LR ⇒ primary axis is X (spine runs left→right)
-
-  // 1. Dagre determines the rank (depth) of every node and the cross-axis ordering within a rank.
-  const g = new Dagre.graphlib.Graph();
-  g.setGraph({
-    rankdir,
-    ranksep: opts.rankSep ?? 80,
-    nodesep: opts.nodeSep ?? 40,
-    marginx: 24,
-    marginy: 24,
-  });
-  g.setDefaultEdgeLabel(() => ({}));
-  for (const n of nodes) {
-    const hint = nodeSizeHints?.[n.id];
-    g.setNode(n.id, { width: hint?.width ?? NODE_W, height: hint?.height ?? NODE_H });
-  }
-  for (const e of edges) {
-    g.setEdge(e.source, e.target);
-  }
-  Dagre.layout(g);
-
-  const primaryOf = (id: string) => (horizontal ? g.node(id).x : g.node(id).y);
-  const crossOf = (id: string) => (horizontal ? g.node(id).y : g.node(id).x);
-
-  // Node size projected onto the primary axis (advances rank-to-rank) and the cross axis (stacks
-  // parallel nodes within a rank).
-  const primarySize = (id: string) => {
-    const hint = nodeSizeHints?.[id];
-    return horizontal ? (hint?.width ?? NODE_W) : (hint?.height ?? NODE_H);
-  };
-  const crossSize = (id: string) => {
-    const hint = nodeSizeHints?.[id];
-    return horizontal ? (hint?.height ?? NODE_H) : (hint?.width ?? NODE_W);
-  };
-
-  // Stable emission index (the descriptor's declared node order) drives a deterministic tie-break so
-  // repeated layouts (e.g. Tidy) never reshuffle siblings that share a rank/cross coordinate.
-  const emissionIndex = new Map<string, number>();
-  nodes.forEach((n, i) => emissionIndex.set(n.id, i));
-
-  // 2. Group nodes by dagre rank; order within a rank by cross coordinate, then by emission index so
-  //    identical input always yields identical ordering (independent of Array.sort stability).
-  const byRank = new Map<number, string[]>();
-  for (const n of nodes) {
-    const key = Math.round(primaryOf(n.id));
-    if (!byRank.has(key)) byRank.set(key, []);
-    byRank.get(key)!.push(n.id);
-  }
-  const rankKeys = [...byRank.keys()].sort((a, b) => a - b);
-  for (const key of rankKeys) {
-    byRank.get(key)!.sort((a, b) => {
-      const dc = crossOf(a) - crossOf(b);
-      if (Math.abs(dc) > 0.5) return dc;
-      return (emissionIndex.get(a) ?? 0) - (emissionIndex.get(b) ?? 0);
-    });
-  }
-  const ranks = rankKeys.map((key) => byRank.get(key)!);
-  const R = ranks.length;
-
-  const laneGap = opts.rankSep ?? 72;   // primary-axis gap between successive ranks
-  const crossGap = opts.nodeSep ?? 40;  // cross-axis gap between stacked parallel nodes
-  const MARGIN = 24;
-
-  // Primary-axis pitch is computed PER adjacent-rank transition so compact→compact steps do not inherit
-  // the spacing required by a tall/wide subtask elsewhere in the graph. Each transition still reserves
-  // enough room for the larger of the two participating ranks plus the configured lane gap.
-  const rankPrimaryExtent = ranks.map((ids) => ids.reduce((max, id) => Math.max(max, primarySize(id)), 0));
-
-  const rankCrossExtent = (ids: string[]) =>
-    ids.reduce((sum, id) => sum + crossSize(id), 0) + Math.max(0, ids.length - 1) * crossGap;
-  const maxRankCross = ranks.reduce((m, ids) => Math.max(m, rankCrossExtent(ids)), 0);
-
-  // Normalize public options so a caller can never poison coordinates: targetAspect must be positive
-  // & finite, and an explicit stepOffset is coerced to a finite value and clamped to [0, ceil].
-  const rawAspect = opts.targetAspect ?? 1.4;
-  const targetAspect = Number.isFinite(rawAspect) && rawAspect > 0 ? rawAspect : 1.4;
-  void targetAspect; // retained for API compatibility; the orthogonal stair is self-distributing
-  const minStepRanks = opts.minStepRanks ?? 3;
-  const stepCeil = maxRankCross + crossGap; // don't out-run a full rank stack per step
-
-  // 3. Optional explicit cross-advance floor. Short chains stay a straight line (all right steps).
-  const straight = R <= minStepRanks;
-  const explicitStep =
-    opts.stepOffset != null
-      ? Math.round(
-          Math.min(stepCeil, Math.max(0, Number.isFinite(opts.stepOffset) ? opts.stepOffset : 0)),
-        )
-      : 0;
-
-  // 4. Alternating orthogonal stair with chunky treads. Advance the primary axis (→ right) for a run of
-  //    STAIR_RUN successive ranks (one tread), then take a single cross-axis step (↓ down) to the next
-  //    tread, and repeat. This holds 2+ nodes per row instead of stepping after every node, while both
-  //    axes still accumulate monotonically (never decrease) and parallel siblings fan out on the cross
-  //    axis at their shared rank. A down step clears the previous rank's full sibling stack, and because
-  //    the down step keeps the primary column, each column hosts at most a right-arrival + a down-
-  //    departure (separated by that clearance), so ranks can never collide.
-  const run = Math.max(1, STAIR_RUN);
-  const positions = new Map<string, { x: number; y: number }>();
-  let primaryPos = MARGIN;
-  let crossPos = MARGIN;
-  for (let rankIndex = 0; rankIndex < R; rankIndex += 1) {
-    if (rankIndex > 0) {
-      // Step down only when starting a new tread (every `run` ranks); otherwise advance along the tread.
-      const advancePrimary = straight || rankIndex % run !== 0;
-      if (advancePrimary) {
-        primaryPos += Math.max(rankPrimaryExtent[rankIndex - 1], rankPrimaryExtent[rankIndex]) + laneGap;
-      } else {
-        const prevExtent = rankCrossExtent(ranks[rankIndex - 1]);
-        crossPos += Math.max(prevExtent + crossGap, explicitStep);
-      }
-    }
-    const ids = ranks[rankIndex];
-    let cross = crossPos;
-    for (const id of ids) {
-      const x = horizontal ? primaryPos : cross;
-      const y = horizontal ? cross : primaryPos;
-      positions.set(id, { x: Math.round(x), y: Math.round(y) });
-      cross += crossSize(id) + crossGap;
-    }
-  }
-
-  return nodes.map((n) => {
-    const hint = nodeSizeHints?.[n.id];
-    return {
-      ...n,
-      position: positions.get(n.id) ?? n.position,
-      initialWidth: hint?.width ?? NODE_W,
-      initialHeight: hint?.height ?? NODE_H,
-    };
-  });
+  const rawStep = opts.stepOffset;
+  const extraGap = rawStep != null && Number.isFinite(rawStep) ? Math.max(0, rawStep) : 0;
+  return layoutBandedLane(
+    nodes,
+    edges,
+    {
+      rankdir: opts.rankdir ?? 'LR',
+      rankGap: Math.max(opts.rankSep ?? 72, extraGap),
+      nodeGap: opts.nodeSep ?? 40,
+      snakeMinRanks: opts.minStepRanks ?? 3,
+      targetAspect: opts.targetAspect ?? 1.4,
+    },
+    nodeSizeHints,
+  );
 }
 
 /**
@@ -980,6 +1178,34 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
       y: node.position.y + size.height / 2,
     };
   };
+  const laneOffsets = new Map<string, number>();
+  const gutterGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
+  for (const edge of edges) {
+    if (edge.type !== 'spine') continue;
+    const source = byId.get(edge.source);
+    const target = byId.get(edge.target);
+    if (!source || !target) continue;
+    const sourceCenter = center(source);
+    const targetCenter = center(target);
+    const horizontal = Math.abs(targetCenter.x - sourceCenter.x)
+      >= Math.abs(targetCenter.y - sourceCenter.y);
+    const midpoint = horizontal
+      ? (sourceCenter.x + targetCenter.x) / 2
+      : (sourceCenter.y + targetCenter.y) / 2;
+    const cross = horizontal
+      ? (sourceCenter.y + targetCenter.y) / 2
+      : (sourceCenter.x + targetCenter.x) / 2;
+    const key = `${horizontal ? 'h' : 'v'}:${Math.round(midpoint / 4)}`;
+    if (!gutterGroups.has(key)) gutterGroups.set(key, []);
+    gutterGroups.get(key)!.push({ edge, cross });
+  }
+  for (const group of gutterGroups.values()) {
+    group.sort((a, b) => a.cross - b.cross || a.edge.id.localeCompare(b.edge.id));
+    group.forEach(({ edge }, index) => {
+      laneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
+    });
+  }
+
   return edges.map((edge) => {
     const source = byId.get(edge.source);
     const target = byId.get(edge.target);
@@ -1065,14 +1291,23 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
           ...edge,
           sourceHandle: `source-${side}`,
           targetHandle: `target-${side}`,
-          data: { ...(edge.data ?? {}), flowDirection: 'horizontal', reroutedAround: side },
+          data: {
+            ...(edge.data ?? {}),
+            flowDirection: 'horizontal',
+            reroutedAround: side,
+            gutterLaneOffset: laneOffsets.get(edge.id) ?? 0,
+          },
         };
       }
       return {
         ...edge,
         sourceHandle: forward ? 'source-right' : 'source-left',
         targetHandle: forward ? 'target-left' : 'target-right',
-        data: { ...(edge.data ?? {}), flowDirection: 'horizontal' },
+        data: {
+          ...(edge.data ?? {}),
+          flowDirection: 'horizontal',
+          gutterLaneOffset: laneOffsets.get(edge.id) ?? 0,
+        },
       };
     }
     const down = dy >= 0;
@@ -1087,14 +1322,23 @@ export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
         ...edge,
         sourceHandle: `source-${side}`,
         targetHandle: `target-${side}`,
-        data: { ...(edge.data ?? {}), flowDirection: 'vertical', reroutedAround: side },
+        data: {
+          ...(edge.data ?? {}),
+          flowDirection: 'vertical',
+          reroutedAround: side,
+          gutterLaneOffset: laneOffsets.get(edge.id) ?? 0,
+        },
       };
     }
     return {
       ...edge,
       sourceHandle: down ? 'source-bottom' : 'source-top',
       targetHandle: down ? 'target-top' : 'target-bottom',
-      data: { ...(edge.data ?? {}), flowDirection: 'vertical' },
+      data: {
+        ...(edge.data ?? {}),
+        flowDirection: 'vertical',
+        gutterLaneOffset: laneOffsets.get(edge.id) ?? 0,
+      },
     };
   });
 }

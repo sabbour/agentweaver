@@ -2925,7 +2925,7 @@ export function CoordinatorRunPage() {
     const nodeSizeHints: Record<string, NodeSizeHint> = {};
     const raw: Node[] = planningDescriptor.nodes.map((node) => {
       const nt = node.node_type;
-      // Per-node dagre height hints so the staircase packs variable-height nodes tightly. Fixed
+      // Per-node height hints so the banded layout packs variable-height nodes tightly. Fixed
       // stage/gate/system nodes are short by default; subtask (agent) nodes get the tall hint below;
       // the Human Review gate gets an expanded hint while it awaits a decision (on-face buttons).
       // Default per-node hint: the NARROW compact card (gate/system/coordinator nodes are icon +
@@ -3080,7 +3080,7 @@ export function CoordinatorRunPage() {
       }
 
       // Human Review gate awaiting a decision renders on-face action buttons and grows — reserve the
-      // room in the layout so the staircase keeps clear of it. (Matches WorkflowNode's isHumanWaiting.)
+      // room in the layout so neighboring bands keep clear of it. (Matches WorkflowNode's isHumanWaiting.)
       if (roleKey === 'review' && !nodePlanned && stepStatus === 'started') {
         nodeSizeHints[node.id].height = REVIEW_EXPANDED_NODE_H;
       }
@@ -3131,9 +3131,8 @@ export function CoordinatorRunPage() {
     const staircaseOpts = {
       rankSep: COORD_GRAPH_RANK_SEP,
       nodeSep: COORD_GRAPH_NODE_SEP,
-      // Cascade the long mostly-linear spine diagonally so the run uses the panel's height (not
-      // just its width). True parallel ranks still fan out; the sequence steps consistently one
-      // way (LR ⇒ down-right, TB ⇒ down-right) and never reverses.
+      // Fold long linear runs into serpentine bands so the graph uses both panel dimensions.
+      // True parallel ranks remain aligned in deterministic columns with routing gutters between them.
       targetAspect: 1.35,
       minStepRanks: 3,
     };
@@ -3565,7 +3564,7 @@ export function CoordinatorRunPage() {
     }
   }, [topologyPanelOpen]);
 
-  // Auto-pick the DEFAULT orientation to fill the most of the panel. For each staircase footprint the
+  // Auto-pick the DEFAULT orientation to fill the most of the panel. For each banded-layout footprint the
   // fit scale into the container is min(cw/bw, ch/bh); the larger scale fills more area. We only drive
   // the default here — a manual toolbar toggle sets orientationUserChose and wins from then on. This
   // never touches the run-tree ordering (that is derived from dependency edges, not graph layout).
@@ -3575,8 +3574,11 @@ export function CoordinatorRunPage() {
     if (!size || bboxLR.w <= 0 || bboxTB.w <= 0) return;
     const scaleLR = Math.min(size.w / bboxLR.w, size.h / bboxLR.h);
     const scaleTB = Math.min(size.w / bboxTB.w, size.h / bboxTB.h);
-    // Tie-break toward LR (landscape default) when the two fits are effectively equal.
-    const best: 'LR' | 'TB' = scaleTB > scaleLR * 1.001 ? 'TB' : 'LR';
+    const effectivelyEqual = Math.abs(scaleTB - scaleLR) <= Math.max(scaleLR, scaleTB) * 0.001;
+    const best: 'LR' | 'TB' = scaleTB > scaleLR * 1.001
+      || (effectivelyEqual && size.h > size.w)
+      ? 'TB'
+      : 'LR';
     const syncGraphOrientation = async () => {
       setGraphOrientation((prev) => (prev === best ? prev : best));
     };
