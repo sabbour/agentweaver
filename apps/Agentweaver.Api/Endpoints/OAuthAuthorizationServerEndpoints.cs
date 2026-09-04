@@ -8,6 +8,7 @@ using Agentweaver.Api.Memory;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
@@ -26,6 +27,7 @@ public static class OAuthAuthorizationServerEndpoints
             .RequireRateLimiting("oauth-registration")
             .ProtocolManaged();
         app.MapGet("/oauth/resume", ResumeAsync).ProtocolManaged();
+        app.MapGet("/oauth/continue", ContinueAsync).ProtocolManaged();
         app.MapPost("/oauth/token", TokenAsync).ProtocolManaged();
     }
 
@@ -102,7 +104,23 @@ public static class OAuthAuthorizationServerEndpoints
         if (browser is null)
         {
             var handle = await SaveTransactionAsync(
-                db, request, scope, browserSessionId: null, subject: null, ct).ConfigureAwait(false);
+                db,
+                request,
+                scope,
+                browserSessionId: null,
+                subject: null,
+                continuationDecision: HttpMethods.IsPost(context.Request.Method) ? "reauthenticate" : null,
+                ct).ConfigureAwait(false);
+            if (HttpMethods.IsPost(context.Request.Method))
+            {
+                var reauthenticationStyleNonce = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
+                context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.ContentSecurityPolicy =
+                    $"default-src 'none'; style-src 'nonce-{reauthenticationStyleNonce}'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'";
+                return Results.Content(
+                    RenderReauthentication(handle, reauthenticationStyleNonce),
+                    "text/html; charset=utf-8");
+            }
             return Results.Redirect($"/auth/entra/authorize?oauth_return_handle={Uri.EscapeDataString(handle)}");
         }
 
@@ -114,7 +132,23 @@ public static class OAuthAuthorizationServerEndpoints
             var transaction = await ClaimTransactionAsync(db, handle, browser, request, ct).ConfigureAwait(false);
             if (transaction is null)
                 return OAuthForbid(Errors.InvalidRequest, "The consent transaction is invalid or expired.");
-            if (decision != "approve")
+            var consentApproved = decision == "approve";
+            if (IsIpv6CallbackRedirect(transaction.RedirectUri))
+            {
+                if (consentApproved)
+                    await UpsertConsentAsync(db, browser.EntraObjectId, request.ClientId!, scope, ct).ConfigureAwait(false);
+                var continuationHandle = await SaveContinuationAsync(
+                    db, transaction, consentApproved ? "approve" : "deny", ct).ConfigureAwait(false);
+                var continuationStyleNonce = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
+                context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers["Referrer-Policy"] = "no-referrer";
+                context.Response.Headers.ContentSecurityPolicy =
+                    $"default-src 'none'; style-src 'nonce-{continuationStyleNonce}'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'";
+                return Results.Content(
+                    RenderCallbackContinuation(continuationHandle, consentApproved, continuationStyleNonce),
+                    "text/html; charset=utf-8");
+            }
+            if (!consentApproved)
                 return OAuthForbid(Errors.AccessDenied, "The resource owner denied the request.");
 
             await UpsertConsentAsync(db, browser.EntraObjectId, request.ClientId!, scope, ct).ConfigureAwait(false);
@@ -130,16 +164,22 @@ public static class OAuthAuthorizationServerEndpoints
             return SignIn(browser.EntraObjectId, scope, configuration.Resource.AbsoluteUri);
 
         var consentHandle = await SaveTransactionAsync(
-            db, request, scope, browser.Id, browser.EntraObjectId, ct).ConfigureAwait(false);
+            db, request, scope, browser.Id, browser.EntraObjectId, continuationDecision: null, ct)
+            .ConfigureAwait(false);
         var application = await applications.FindByClientIdAsync(request.ClientId!, ct).ConfigureAwait(false);
+        if (application is null)
+            return OAuthForbid(Errors.InvalidRequest, "The OAuth client is not registered.");
+        var registeredRedirects = await applications.GetRedirectUrisAsync(application, ct).ConfigureAwait(false);
+        var formAction = BuildConsentFormActionDirective(request.RedirectUri!, registeredRedirects);
+        if (formAction is null)
+            return OAuthForbid(Errors.InvalidRequest, "The OAuth client redirect is invalid.");
         var descriptor = new OpenIddictApplicationDescriptor();
-        if (application is not null)
-            await applications.PopulateAsync(descriptor, application, ct).ConfigureAwait(false);
+        await applications.PopulateAsync(descriptor, application, ct).ConfigureAwait(false);
         var clientName = descriptor.DisplayName ?? request.ClientId!;
         var styleNonce = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(18));
         context.Response.Headers.CacheControl = "no-store";
         context.Response.Headers.ContentSecurityPolicy =
-            $"default-src 'none'; style-src 'nonce-{styleNonce}'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+            $"default-src 'none'; style-src 'nonce-{styleNonce}'; img-src 'self'; form-action {formAction}; base-uri 'none'; frame-ancestors 'none'";
         return Results.Content(
             RenderConsent(request, scope, consentHandle, clientName, browser.EntraObjectId, styleNonce),
             "text/html; charset=utf-8");
@@ -161,6 +201,7 @@ public static class OAuthAuthorizationServerEndpoints
         var transaction = await db.OAuthAuthorizationTransactions.AsNoTracking()
             .SingleOrDefaultAsync(x => x.HandleHash == hash, ct).ConfigureAwait(false);
         var claimed = transaction is not null
+            && transaction.ContinuationDecision is null or "reauthenticate"
             && transaction.ExpiresAt > DateTimeOffset.UtcNow
             && await db.OAuthAuthorizationTransactions
                 .Where(x => x.HandleHash == hash && x.ConsumedAt == null)
@@ -177,6 +218,73 @@ public static class OAuthAuthorizationServerEndpoints
             ["scope"] = transaction.Scope,
             ["state"] = transaction.ClientState,
             ["code_challenge"] = transaction.CodeChallenge,
+            ["code_challenge_method"] = CodeChallengeMethods.Sha256,
+            ["resource"] = configuration.Resource.AbsoluteUri,
+            ["prompt"] = transaction.ContinuationDecision == "reauthenticate" ? "consent" : null,
+        };
+        return Results.Redirect(QueryString.Create(query!).ToUriComponent().Insert(0, "/oauth/authorize"));
+    }
+
+    private static async Task<IResult> ContinueAsync(
+        HttpContext context,
+        string? handle,
+        BrowserEntraSessionService browserSessions,
+        MemoryDbContext db,
+        IOpenIddictApplicationManager applications,
+        OAuthServerConfiguration configuration,
+        CancellationToken ct)
+    {
+        var browser = await browserSessions.GetCurrentAsync(context, ct).ConfigureAwait(false);
+        if (browser is null || string.IsNullOrWhiteSpace(handle))
+            return Results.Unauthorized();
+
+        var hash = OAuthCertificateLoader.HashOpaque(handle);
+        var continuation = await db.OAuthAuthorizationTransactions.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.HandleHash == hash, ct).ConfigureAwait(false);
+        if (continuation is null
+            || continuation.ExpiresAt <= DateTimeOffset.UtcNow
+            || continuation.ConsumedAt is not null
+            || continuation.BrowserSessionId != browser.Id
+            || continuation.Subject != browser.EntraObjectId
+            || continuation.ContinuationDecision is not ("approve" or "deny")
+            || !IsIpv6CallbackRedirect(continuation.RedirectUri))
+            return Results.BadRequest(new { error = "invalid_request" });
+
+        var application = await applications.FindByClientIdAsync(continuation.ClientId, ct).ConfigureAwait(false);
+        if (application is null)
+            return Results.BadRequest(new { error = "invalid_request" });
+        var redirects = await applications.GetRedirectUrisAsync(application, ct).ConfigureAwait(false);
+        if (!redirects.Contains(continuation.RedirectUri, StringComparer.Ordinal))
+            return Results.BadRequest(new { error = "invalid_request" });
+
+        var claimed = await db.OAuthAuthorizationTransactions
+            .Where(x => x.HandleHash == hash && x.ConsumedAt == null)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                x => x.ConsumedAt, DateTimeOffset.UtcNow), ct).ConfigureAwait(false);
+        if (claimed != 1)
+            return Results.BadRequest(new { error = "invalid_request" });
+
+        if (continuation.ContinuationDecision == "deny")
+        {
+            return Results.Redirect(QueryHelpers.AddQueryString(
+                continuation.RedirectUri,
+                new Dictionary<string, string?>
+                {
+                    ["error"] = Errors.AccessDenied,
+                    ["error_description"] = "The resource owner denied the request.",
+                    ["state"] = continuation.ClientState,
+                    ["iss"] = configuration.PublicOrigin.AbsoluteUri,
+                }));
+        }
+
+        var query = new Dictionary<string, string?>
+        {
+            ["client_id"] = continuation.ClientId,
+            ["redirect_uri"] = continuation.RedirectUri,
+            ["response_type"] = ResponseTypes.Code,
+            ["scope"] = continuation.Scope,
+            ["state"] = continuation.ClientState,
+            ["code_challenge"] = continuation.CodeChallenge,
             ["code_challenge_method"] = CodeChallengeMethods.Sha256,
             ["resource"] = configuration.Resource.AbsoluteUri,
         };
@@ -248,6 +356,7 @@ public static class OAuthAuthorizationServerEndpoints
         string[] scopes,
         string? browserSessionId,
         string? subject,
+        string? continuationDecision,
         CancellationToken ct)
     {
         var handle = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
@@ -261,6 +370,7 @@ public static class OAuthAuthorizationServerEndpoints
             ClientState = request.State,
             BrowserSessionId = browserSessionId,
             Subject = subject,
+            ContinuationDecision = continuationDecision,
             ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
         });
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
@@ -280,6 +390,7 @@ public static class OAuthAuthorizationServerEndpoints
         var transaction = await db.OAuthAuthorizationTransactions.AsNoTracking()
             .SingleOrDefaultAsync(x => x.HandleHash == hash, ct).ConfigureAwait(false);
         if (transaction is null
+            || transaction.ContinuationDecision is not null
             || transaction.ExpiresAt <= DateTimeOffset.UtcNow
             || transaction.BrowserSessionId != browser.Id
             || transaction.Subject != browser.EntraObjectId
@@ -293,6 +404,30 @@ public static class OAuthAuthorizationServerEndpoints
             .ExecuteUpdateAsync(setters => setters.SetProperty(
                 x => x.ConsumedAt, DateTimeOffset.UtcNow), ct).ConfigureAwait(false);
         return changed == 1 ? transaction : null;
+    }
+
+    private static async Task<string> SaveContinuationAsync(
+        MemoryDbContext db,
+        OAuthAuthorizationTransaction transaction,
+        string decision,
+        CancellationToken ct)
+    {
+        var handle = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
+        db.OAuthAuthorizationTransactions.Add(new OAuthAuthorizationTransaction
+        {
+            HandleHash = OAuthCertificateLoader.HashOpaque(handle),
+            ClientId = transaction.ClientId,
+            RedirectUri = transaction.RedirectUri,
+            CodeChallenge = transaction.CodeChallenge,
+            Scope = transaction.Scope,
+            ClientState = transaction.ClientState,
+            BrowserSessionId = transaction.BrowserSessionId,
+            Subject = transaction.Subject,
+            ContinuationDecision = decision,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(2),
+        });
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return handle;
     }
 
     private static async Task UpsertConsentAsync(
@@ -323,6 +458,35 @@ public static class OAuthAuthorizationServerEndpoints
 
     private static string[] NormalizeScopes(IEnumerable<string> scopes) =>
         scopes.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+    internal static string? BuildConsentFormActionDirective(
+        string requestedRedirectUri,
+        IEnumerable<string> registeredRedirectUris)
+    {
+        var registered = registeredRedirectUris.FirstOrDefault(uri =>
+            string.Equals(uri, requestedRedirectUri, StringComparison.Ordinal));
+        if (registered is null
+            || registered.Any(c => char.IsWhiteSpace(c) || char.IsControl(c))
+            || !OAuthRedirectUriValidator.IsValid(registered, allowDynamicLoopbackPort: true)
+            || !Uri.TryCreate(registered, UriKind.Absolute, out var uri))
+            return null;
+
+        if (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal)
+            || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
+        {
+            if (uri.HostNameType == UriHostNameType.IPv6)
+                return "'self'";
+            return $"'self' {uri.GetLeftPart(UriPartial.Authority)}";
+        }
+
+        return $"{uri.Scheme}:";
+    }
+
+    private static bool IsIpv6CallbackRedirect(string redirectUri) =>
+        Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri)
+        && (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal)
+            || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
+        && uri.HostNameType == UriHostNameType.IPv6;
 
     private static async Task<bool> HasExactResourceAsync(
         HttpContext context,
@@ -452,6 +616,76 @@ public static class OAuthAuthorizationServerEndpoints
                     <button class="primary" type="submit" name="decision" value="approve">Allow</button>
                   </div>
                 </form>
+              </main>
+            </body>
+            </html>
+            """;
+    }
+
+    private static string RenderReauthentication(string handle, string styleNonce)
+    {
+        static string Encode(string value) => HtmlEncoder.Default.Encode(value);
+        var href = $"/auth/entra/authorize?oauth_return_handle={Uri.EscapeDataString(handle)}";
+        return $$"""
+            <!doctype html>
+            <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>Sign in again | Agentweaver</title>
+              <style nonce="{{Encode(styleNonce)}}">
+                :root { color-scheme: light; font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif; }
+                * { box-sizing: border-box; }
+                body { min-height: 100vh; margin: 0; padding: 32px 20px; display: grid; place-items: center; background: #f3f1ed; color: #242424; line-height: 1.45; }
+                main { width: min(480px, 100%); padding: 32px; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
+                h1 { margin: 0; font-size: 24px; line-height: 1.25; }
+                p { margin: 12px 0 24px; color: #3c3c3c; }
+                a { display: inline-block; padding: 9px 18px; border-radius: 8px; background: #242424; color: #faf8f5; font-weight: 600; text-decoration: none; }
+                a:focus-visible { outline: 2px solid #242424; outline-offset: 3px; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>Sign in again</h1>
+                <p>Your Agentweaver browser session expired before consent was submitted.</p>
+                <a href="{{Encode(href)}}">Continue to sign in</a>
+              </main>
+            </body>
+            </html>
+            """;
+    }
+
+    private static string RenderCallbackContinuation(string handle, bool approved, string styleNonce)
+    {
+        static string Encode(string value) => HtmlEncoder.Default.Encode(value);
+        var href = $"/oauth/continue?handle={Uri.EscapeDataString(handle)}";
+        var title = approved ? "Access approved" : "Request denied";
+        var description = approved
+            ? "Continue to return to your MCP client and finish connecting."
+            : "Continue to return to your MCP client.";
+        return $$"""
+            <!doctype html>
+            <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>{{Encode(title)}} | Agentweaver</title>
+              <style nonce="{{Encode(styleNonce)}}">
+                :root { color-scheme: light; font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif; }
+                * { box-sizing: border-box; }
+                body { min-height: 100vh; margin: 0; padding: 32px 20px; display: grid; place-items: center; background: #f3f1ed; color: #242424; line-height: 1.45; }
+                main { width: min(480px, 100%); padding: 32px; background: #fcfcfa; border: 1px solid #dedede; border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
+                h1 { margin: 0; font-size: 24px; line-height: 1.25; }
+                p { margin: 12px 0 24px; color: #3c3c3c; }
+                a { display: inline-block; padding: 9px 18px; border-radius: 8px; background: #242424; color: #faf8f5; font-weight: 600; text-decoration: none; }
+                a:focus-visible { outline: 2px solid #242424; outline-offset: 3px; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>{{Encode(title)}}</h1>
+                <p>{{Encode(description)}}</p>
+                <a href="{{Encode(href)}}">Continue</a>
               </main>
             </body>
             </html>
