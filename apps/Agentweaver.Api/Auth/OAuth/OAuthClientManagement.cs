@@ -16,8 +16,17 @@ public sealed class OAuthStaticClientReconciler(
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
         var configuredIds = configuration.StaticClients.Select(x => x.ClientId).ToHashSet(StringComparer.Ordinal);
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+        if (db.Database.IsNpgsql())
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "SELECT pg_advisory_xact_lock(hashtext('agentweaver:oauth:static-clients'))",
+                cancellationToken).ConfigureAwait(false);
+        }
 
         foreach (var client in configuration.StaticClients)
         {
@@ -43,6 +52,8 @@ public sealed class OAuthStaticClientReconciler(
             await manager.UpdateAsync(application, descriptor, cancellationToken).ConfigureAwait(false);
             logger.LogInformation("Disabled removed static OAuth client {ClientId}.", descriptor.ClientId);
         }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -112,6 +123,16 @@ public sealed class OAuthDynamicClientRegistrationService(
             throw new OAuthRegistrationException("invalid_client_metadata", "Unsupported client metadata.");
 
         var redirects = ReadStringArray(document, "redirect_uris");
+        if (redirects is { Length: 1 }
+            && string.Equals(
+                redirects[0],
+                OAuthKnownClients.ClaudeHostedRedirectUri,
+                StringComparison.Ordinal))
+        {
+            throw new OAuthRegistrationException(
+                "invalid_redirect_uri",
+                $"Claude hosted connectors must use OAuth Client ID '{OAuthKnownClients.ClaudeHostedClientId}' with no client secret.");
+        }
         if (redirects is not { Length: > 0 and <= 10 }
             || redirects.Distinct(StringComparer.Ordinal).Count() != redirects.Length
             || redirects.Any(uri => !OAuthRedirectUriValidator.IsValid(

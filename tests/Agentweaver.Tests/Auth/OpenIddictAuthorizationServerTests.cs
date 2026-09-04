@@ -104,6 +104,113 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
             "the durable application metadata must retain the exact advertised expiration");
     }
 
+    [Fact]
+    public async Task ClaudeHostedClient_IsReconciledAsPublicPkceClientWithExactRedirect()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        var application = await applications.FindByClientIdAsync(OAuthKnownClients.ClaudeHostedClientId);
+        application.Should().NotBeNull();
+
+        var descriptor = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(descriptor, application!);
+        descriptor.ClientType.Should().Be(OpenIddictConstants.ClientTypes.Public);
+        descriptor.ClientSecret.Should().BeNull();
+        descriptor.RedirectUris.Select(uri => uri.AbsoluteUri)
+            .Should().Equal(OAuthKnownClients.ClaudeHostedRedirectUri);
+        descriptor.Requirements.Should().Contain(OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange);
+        descriptor.Properties["agentweaver_static"].GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ClaudeHostedClient_AuthorizationAcceptsOnlyExactRedirectWithPkce()
+    {
+        var exactQuery = ClaudeAuthorizationQuery(OAuthKnownClients.ClaudeHostedRedirectUri);
+        using var accepted = await _client.GetAsync("/oauth/authorize" + exactQuery);
+        accepted.StatusCode.Should().Be(HttpStatusCode.Redirect);
+        accepted.Headers.Location!.OriginalString.Should().StartWith("/auth/entra/authorize?");
+
+        foreach (var redirectUri in new[]
+                 {
+                     "https://claude.ai/api/mcp/auth_callback/",
+                     "https://claude.ai/api/mcp/auth_callback?next=%2Fmcp",
+                     "https://claude.ai.evil.example/api/mcp/auth_callback",
+                 })
+        {
+            using var rejected = await _client.GetAsync(
+                "/oauth/authorize" + ClaudeAuthorizationQuery(redirectUri));
+            rejected.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+
+        var missingPkce = QueryString.Create(new Dictionary<string, string?>
+        {
+            ["client_id"] = OAuthKnownClients.ClaudeHostedClientId,
+            ["redirect_uri"] = OAuthKnownClients.ClaudeHostedRedirectUri,
+            ["response_type"] = "code",
+            ["scope"] = OAuthServerConfiguration.McpScope,
+            ["resource"] = "http://localhost:5000/mcp",
+        });
+        using var rejectedWithoutPkce = await _client.GetAsync("/oauth/authorize" + missingPkce);
+        rejectedWithoutPkce.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ClaudeHostedClient_RedeemsAndRefreshesWithoutClientSecret()
+    {
+        var (code, verifier) = await IssueAuthorizationCodeAsync(
+            OAuthKnownClients.ClaudeHostedClientId,
+            OAuthKnownClients.ClaudeHostedRedirectUri,
+            "mcp:invoke offline_access");
+
+        using var tokenResponse = await _client.PostAsync(
+            "/oauth/token",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["grant_type"] = "authorization_code",
+                ["client_id"] = OAuthKnownClients.ClaudeHostedClientId,
+                ["code"] = code,
+                ["redirect_uri"] = OAuthKnownClients.ClaudeHostedRedirectUri,
+                ["code_verifier"] = verifier,
+                ["resource"] = "http://localhost:5000/mcp",
+            }));
+        tokenResponse.StatusCode.Should().Be(
+            HttpStatusCode.OK, await tokenResponse.Content.ReadAsStringAsync());
+        var token = await tokenResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var refreshToken = token.GetProperty("refresh_token").GetString();
+        refreshToken.Should().NotBeNullOrWhiteSpace();
+
+        using var refreshResponse = await _client.PostAsync(
+            "/oauth/token",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["grant_type"] = "refresh_token",
+                ["client_id"] = OAuthKnownClients.ClaudeHostedClientId,
+                ["refresh_token"] = refreshToken!,
+                ["resource"] = "http://localhost:5000/mcp",
+            }));
+        refreshResponse.StatusCode.Should().Be(
+            HttpStatusCode.OK, await refreshResponse.Content.ReadAsStringAsync());
+        var refreshed = await refreshResponse.Content.ReadFromJsonAsync<JsonElement>();
+        refreshed.GetProperty("access_token").GetString().Should().NotBeNullOrWhiteSpace();
+        refreshed.GetProperty("refresh_token").GetString().Should().NotBe(refreshToken);
+    }
+
+    [Fact]
+    public async Task DynamicRegistration_RejectsClaudeHostedHttpsRedirect()
+    {
+        using var response = await _client.PostAsJsonAsync("/oauth/register", new
+        {
+            client_name = "Claude hosted connector",
+            redirect_uris = new[] { OAuthKnownClients.ClaudeHostedRedirectUri },
+            token_endpoint_auth_method = "none",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("invalid_redirect_uri");
+        body.Should().Contain(OAuthKnownClients.ClaudeHostedClientId);
+    }
+
     [Theory]
     [InlineData("http://localhost:49152/callback")]
     [InlineData("https://login.microsoftonline.com/common/oauth2/nativeclient")]
@@ -626,6 +733,18 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         return (await registration.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("client_id").GetString()!;
     }
+
+    private static QueryString ClaudeAuthorizationQuery(string redirectUri) =>
+        QueryString.Create(new Dictionary<string, string?>
+        {
+            ["client_id"] = OAuthKnownClients.ClaudeHostedClientId,
+            ["redirect_uri"] = redirectUri,
+            ["response_type"] = "code",
+            ["scope"] = OAuthServerConfiguration.McpScope,
+            ["code_challenge"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ["code_challenge_method"] = "S256",
+            ["resource"] = "http://localhost:5000/mcp",
+        });
 
     private async Task<(string Code, string Verifier)> IssueAuthorizationCodeAsync(
         string clientId,

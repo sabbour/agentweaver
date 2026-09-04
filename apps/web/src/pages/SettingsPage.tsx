@@ -294,9 +294,9 @@ export function SettingsPage() {
       >
         <div className={styles.section}>
           <Body tone="muted">
-            The client discovers Agentweaver OAuth automatically. It opens a browser for Entra sign-in
-            when required and asks you to approve MCP access. Do not paste access tokens into the URL,
-            headers, or client configuration.
+            The client discovers Agentweaver OAuth endpoints automatically. Follow the selected client’s
+            setup instructions, then complete Entra sign-in and approve MCP access. Do not paste access
+            tokens into the URL, headers, or client configuration.
           </Body>
           <Field
             label="MCP server URL"

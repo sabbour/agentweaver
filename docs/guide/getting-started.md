@@ -445,7 +445,9 @@ or GitHub Copilot desktop.
 2. Open **Account settings → MCP clients** and copy the displayed URL. For a
    hosted deployment, it is exactly `https://<deployment-origin>/mcp`.
 3. Add that URL as a remote HTTP MCP server in your client. Do not add an
-   authorization header or copy a bearer token.
+   authorization header or copy a bearer token. In Claude Desktop, open the
+   connector's **Advanced settings**, set **OAuth Client ID** to
+   `agentweaver-claude`, and leave **OAuth Client Secret** empty.
 4. Connect. The client discovers Agentweaver's OAuth metadata, opens a browser
    when sign-in is required, and completes authorization code + PKCE after you
    approve the `mcp:invoke` consent request.

@@ -11,6 +11,7 @@ export type McpClientId = (typeof MCP_CLIENT_IDS)[number];
 
 export const AGENTWEAVER_AGENT_URL =
   `${resolvePublicApiOrigin()}/agents/agentweaver.agent.md`;
+export const CLAUDE_OAUTH_CLIENT_ID = 'agentweaver-claude';
 
 export interface McpClientGuidance {
   label: string;
@@ -21,7 +22,7 @@ export interface McpClientGuidance {
 export const MCP_CLIENT_GUIDANCE: Record<McpClientId, McpClientGuidance> = {
   'claude-desktop': {
     label: 'Claude Desktop',
-    setup: 'Open Settings → Connectors, add a custom connector named Agentweaver, and enter the MCP server URL.',
+    setup: `Open Customize → Connectors, add a custom connector named Agentweaver, enter the MCP server URL, then open Advanced settings and set OAuth Client ID to ${CLAUDE_OAUTH_CLIENT_ID}. Leave OAuth Client Secret empty.`,
     verification: 'Open the connector details and confirm that Agentweaver tools are available.',
   },
   'vs-code': {

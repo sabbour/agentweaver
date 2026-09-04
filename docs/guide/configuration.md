@@ -50,18 +50,25 @@ identity. The clients receive only short-lived Agentweaver access tokens for the
 | `Auth:OAuth:Certificates:EncryptionName` | none | Azure Key Vault certificate family for protocol artifact encryption; the newest two usable secret versions provide active/previous overlap |
 | `Auth:OAuth:DynamicRegistration:PerSourcePerDay` | `20` | Database-backed daily RFC 7591 quota per source address |
 | `Auth:OAuth:DynamicRegistration:MaximumActive` | `1000` | Deployment-wide active dynamic-client quota |
+| `Auth:OAuth:EnableClaudeHostedClient` | `true` | Registers the built-in no-secret public client `agentweaver-claude` for only `https://claude.ai/api/mcp/auth_callback`; set to `false` to remove Claude hosted connector support |
 
 The MCP resource server has no direct-Entra, raw-GitHub, API-key, or shared-key fallback.
 It accepts only Agentweaver broker JWTs for `mcp:invoke`.
 | `Auth:OAuth:DynamicRegistration:LifetimeDays` | `30` | Active lifetime for anonymous dynamic registrations; maintenance disables the OpenIddict application and reclaims quota |
 | `Auth:OAuth:ForwardedHeaders:TrustedNetworks` | loopback in Development; required elsewhere | Comma-separated private CIDRs containing the TLS-terminating proxies. Forwarded scheme/host values from every other source are ignored. AKS deployment derives this from the cluster pod CIDRs. |
-| `Auth:OAuth:Clients` | empty | Statically known public native clients, each with `ClientId`, `DisplayName`, exact `RedirectUris`, and optional `Scopes` |
+| `Auth:OAuth:Clients` | empty | Additional statically known public clients. Every client uses exact redirect matching, no secret, and S256 PKCE. Client IDs and redirect URIs must be unique. |
 
 The resource identifier is always the exact canonical origin plus `/mcp`; it
 cannot be configured independently or inferred from request headers. Production
 startup fails when either durable certificate is unavailable. The API loads the
 active and previous enabled Key Vault versions so a rotation overlap remains
 published. Development alone may use process-ephemeral certificates.
+
+The authorization server keeps anonymous dynamic registration restricted to
+native private-use and literal loopback callbacks. It does not permit arbitrary
+HTTPS callbacks. Hosted Claude surfaces instead use the built-in fixed public
+client ID `agentweaver-claude`; its callback is not configurable. A configured
+client with that reserved ID and any different callback fails validation.
 
 Azure tooling exposes those names as `OAUTH_SIGNING_CERTIFICATE_NAME` and
 `OAUTH_ENCRYPTION_CERTIFICATE_NAME` in environment/params files and as matching

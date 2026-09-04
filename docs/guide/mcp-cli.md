@@ -82,16 +82,21 @@ install is needed there.
 
 ## Claude Desktop
 
-1. Open **Settings → Connectors**.
+1. Open **Customize → Connectors**.
 2. Add a custom connector named **Agentweaver**.
 3. Enter the MCP server URL from Agentweaver Account settings.
-4. Connect, complete browser sign-in and consent, then confirm that the
+4. Open **Advanced settings** and enter `agentweaver-claude` as the
+   **OAuth Client ID**. Leave **OAuth Client Secret** empty.
+5. Connect, complete browser sign-in and consent, then confirm that the
    connector lists Agentweaver tools.
 
-Claude manages the connector configuration and OAuth session. Its UI and
-availability can vary by plan and managed-organization policy, so use the
-current connector settings rather than editing a desktop JSON file or adding a
-static authorization header.
+Agentweaver registers `agentweaver-claude` as a public OAuth client for only
+Claude's exact hosted callback,
+`https://claude.ai/api/mcp/auth_callback`. Claude sends S256 PKCE on the
+authorization request, so no client secret, static authorization header, or
+manually copied token is used. URL-only setup is not supported because
+Agentweaver intentionally rejects HTTPS callbacks submitted through anonymous
+dynamic client registration.
 
 ## VS Code
 
