@@ -26,7 +26,7 @@ The operational control plane lives in `SqliteDb` (projects, runs, backlog tasks
 
 ## Design Goals
 
-The persistence design optimizes for a single Agentweaver API instance coordinating many durable workflows:
+The persistence design supports durable workflows across production replicas while retaining a low-overhead local development mode:
 
 - **Recoverable runs**: after a process restart, Agentweaver should know which runs exist, where their worktrees are, what status they were in, and what events already happened.
 - **Auditable decisions**: durable team decisions and rejected/merged inbox items should explain the current operating rules.
@@ -223,7 +223,7 @@ It should hold:
 - **Backlog tasks**: ordered project work items, claim state, and run linkage.
 - **Run revisions**: immutable review feedback history.
 - **Cast proposals**: persisted casting proposals that should survive API restarts.
-- **Token usage records** (`token_usage_records`): one row per `agent.turn.usage` event, storing `run_id`, `workflow_run_id`, `project_id`, `model_id`, `input_tokens`, `output_tokens`, `total_tokens`, `total_nano_aiu`, and a UTC timestamp. Enables efficient aggregation at run, workflow-run, project, and app levels without scanning the raw event payload columns. Schema added in `apps/Agentweaver.Api/Infrastructure/SqliteDb.cs`; also backed by an EF Core entity in `apps/Agentweaver.Api/Infrastructure/Ef/EfTokenUsageStore.cs`.
+- **Model-usage events**: durable `agent.turn.usage` events record per-turn token and nano-AIU data. Metrics and trace endpoints query telemetry and supported stored data.
 
 ### Consistency model
 
@@ -437,7 +437,7 @@ Where this lives: `k8s/base/api-deployment.yaml`, `k8s/base/pvc-workspace.yaml`.
 
 If rebuilding Agentweaver’s data layer from these concepts, preserve these decisions first:
 
-1. **Separate operational state from memory/orchestration state** unless you deliberately migrate both to one coherent server database.
+1. **Use the configured provider-aware stores** for operational, memory, orchestration, and event state.
 2. **Keep run lifecycle transitions explicit and guarded**. Do not let arbitrary writes mutate terminal or merge states.
 3. **Persist worktree path/branch before agent execution** so in-flight work can be recovered.
 4. **Use git for file content and the database for metadata**. Do not duplicate large diffs as the only source of truth.
@@ -448,20 +448,18 @@ If rebuilding Agentweaver’s data layer from these concepts, preserve these dec
 9. **Bound memory injection** by importance, recency, item count, and approximate prompt budget.
 10. **Close older open sessions when starting a new session** for the same project.
 11. **Use repository-level locking and tree-hash verification for merges**.
-12. **Align deployment topology with database semantics**: one SQLite writer on an RWO PVC, or move to a server database before scaling writers.
-13. **Back up every authoritative database file**. In the production deployment that means `agentweaver.db` and `memory.db`, not just the operational database.
+12. **Align deployment topology with database semantics**: production replicas require PostgreSQL and durable leases. SQLite is for local development.
+13. **Use PostgreSQL automated backups and point-in-time restore** for production data.
 
 ## Common Gotchas
 
-- `memory.db` is not just memory; it also holds run events, coordinator planning, steering, and OAuth state.
-- The two databases have different migration systems: hand-written additive schema setup for `agentweaver.db`, EF migrations for `memory.db`.
-- SQLite WAL improves concurrency but does not make SQLite a multi-writer distributed database.
-- File exports are mirrors. The API should read authoritative memory from SQLite.
+- PostgreSQL is the authoritative production store for runs, projects, memory, plans, steering, OAuth state, and run events.
+- SQLite is a local-development provider. It is not a multi-writer distributed database.
+- File exports are mirrors. The API reads authoritative memory from its configured store.
 - Child coordinator runs intentionally receive a narrower context than full agents: team boundaries and task-specific instructions matter more than bloating every child prompt with all memory layers.
 - A missing worktree directory is recoverable only if the database metadata and git branch still exist.
 - Successful merges clean up worktrees; conflicted merges preserve them for inspection.
-- The backup CronJob covers `agentweaver.db` only.
 
 ## See also
 
-- [Token usage monitoring — Deep Dive](./token-usage-monitoring.md) — the `token_usage_records` schema, projection service, and aggregation hierarchy.
+- [Token usage monitoring — Deep Dive](./token-usage-monitoring.md) — telemetry events, metrics, and traces.

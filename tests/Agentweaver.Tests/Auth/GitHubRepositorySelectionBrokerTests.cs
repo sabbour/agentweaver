@@ -1,9 +1,11 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Webhooks;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -139,6 +141,8 @@ public sealed class GitHubRepositorySelectionBrokerTests
         await using var connection = await OpenDatabaseAsync();
         var options = Options(connection);
         var secrets = new InMemorySecretStore();
+        using var rsa = RSA.Create(2048);
+        await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
         await secrets.SetSecretAsync(
             "repo-app-user-credential-version",
             JsonSerializer.Serialize(new { Status = "signed-in", AccessToken = "test-token" }));
@@ -176,7 +180,13 @@ public sealed class GitHubRepositorySelectionBrokerTests
 
         var owners = await broker.TryUseCredentialAsync(
             new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
-            token => new GitHubRepositorySelectionClient(new StubHttpClientFactory(RepositoriesAndInstallations(42)))
+            token => new GitHubRepositorySelectionClient(
+                    new StubHttpClientFactory(RepositoriesAndInstallations(42)),
+                    new RepoAppInstallationTokenService(
+                        Config(),
+                        new MemoryDbContext(options),
+                        secrets,
+                        new StubHttpClientFactory(RepositoriesAndInstallations(42))))
                 .ListOwnersAsync(token, CancellationToken.None),
             CancellationToken.None);
 
@@ -209,7 +219,13 @@ public sealed class GitHubRepositorySelectionBrokerTests
 
         var owners = await broker.TryUseCredentialAsync(
             new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
-            token => new GitHubRepositorySelectionClient(new StubHttpClientFactory(new ThrowingHttpHandler()))
+            token => new GitHubRepositorySelectionClient(
+                    new StubHttpClientFactory(new ThrowingHttpHandler()),
+                    new RepoAppInstallationTokenService(
+                        Config(),
+                        new MemoryDbContext(options),
+                        secrets,
+                        new StubHttpClientFactory(new ThrowingHttpHandler())))
                 .ListOwnersAsync(token, CancellationToken.None),
             CancellationToken.None);
 
@@ -223,13 +239,21 @@ public sealed class GitHubRepositorySelectionBrokerTests
         new(
             new GitHubConnectionsPersistenceStore(new MemoryDbContext(options)),
             new GitHubConnectionsCredentialVault(secrets),
-            new GitHubRepositorySelectionClient(new StubHttpClientFactory(handler)));
+            new GitHubRepositorySelectionClient(
+                new StubHttpClientFactory(handler),
+                new RepoAppInstallationTokenService(
+                    Config(),
+                    new MemoryDbContext(options),
+                    secrets,
+                    new StubHttpClientFactory(handler))));
 
     private static async Task SeedLiveAuthorizationAsync(
         DbContextOptions<MemoryDbContext> options,
         InMemorySecretStore secrets,
         string subject)
     {
+        using var rsa = RSA.Create(2048);
+        await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
         await secrets.SetSecretAsync(
             "repo-app-user-credential-version",
             """{"status":"signed-in","accessToken":"test-token"}""");
@@ -248,13 +272,21 @@ public sealed class GitHubRepositorySelectionBrokerTests
         await db.SaveChangesAsync();
     }
 
+    private static IConfiguration Config() => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+    {
+        ["Auth:RepoApp:AppId"] = "123",
+        ["Auth:RepoApp:PrivateKeySecretName"] = "repo-app-pem",
+        ["Auth:RepoApp:ApiUrl"] = "https://api.github.test",
+    }).Build();
+
     private static HttpMessageHandler Repositories(long id) => RepositoriesAndInstallations(id);
 
     private static HttpMessageHandler RepositoriesAndInstallations(long id) => new RouteHttpHandler(request =>
         request.RequestUri!.AbsolutePath switch
         {
-            "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/user/installations/72/repositories","permissions":{"administration":"write"}}]}""",
-            "/user/installations/72/repositories" => $$"""{"repositories":[{"id":{{id}},"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+            "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repositories_url":"https://api.github.com/installation/repositories","permissions":{"administration":"write"}}]}""",
+            "/app/installations/72/access_tokens" => """{"token":"ghs_installation_token","expires_at":"2030-01-01T00:00:00Z"}""",
+            "/installation/repositories" => $$"""{"repositories":[{"id":{{id}},"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
             _ => "{}",
         });
 

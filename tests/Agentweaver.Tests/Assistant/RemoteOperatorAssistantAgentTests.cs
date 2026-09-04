@@ -63,6 +63,43 @@ public sealed class RemoteOperatorAssistantAgentTests
         lifecycle.Releases.Should().BeEmpty();
     }
 
+    [Fact]
+    public void ClassifyOrWrap_WhenProxyReportsCopilotAuthFailure_PreservesProviderDetails()
+    {
+        var classified = RemoteOperatorAssistantAgent.ClassifyOrWrap(
+            new WorkflowAgentInfrastructureException(
+                "github_copilot_auth_required",
+                "Run run-auth-1: GitHub Copilot is not authorized for this user. Sign in with a Copilot-entitled GitHub account and retry.",
+                isRetryable: false),
+            "run-auth-1",
+            "Operator assistant turn failed on the AgentHost pod");
+
+        classified.Should().BeOfType<AgentProviderException>();
+        var provider = (AgentProviderException)classified;
+        provider.ErrorCode.Should().Be("github_copilot_auth_required");
+        provider.FailureKind.Should().Be(AgentProviderFailureKind.Authorization);
+        provider.IsRetryable.Should().BeFalse();
+        provider.UserMessage.Should().Contain("not authorized");
+    }
+
+    [Fact]
+    public void ClassifyOrWrap_WhenProxyReportsCopilotRateLimit_PreservesProviderDetails()
+    {
+        var classified = RemoteOperatorAssistantAgent.ClassifyOrWrap(
+            new WorkflowAgentInfrastructureException(
+                "github_copilot_rate_limited",
+                "Run run-rate-1: GitHub Copilot rate-limited the model request. Retry after the provider limit resets.",
+                isRetryable: true),
+            "run-rate-1",
+            "Operator assistant turn failed on the AgentHost pod");
+
+        classified.Should().BeOfType<AgentProviderException>();
+        var provider = (AgentProviderException)classified;
+        provider.ErrorCode.Should().Be("github_copilot_rate_limited");
+        provider.FailureKind.Should().Be(AgentProviderFailureKind.RateLimited);
+        provider.IsRetryable.Should().BeTrue();
+    }
+
     private static RemoteOperatorAssistantAgent NewAgent(RecordingPodLifecycle lifecycle) =>
         new(
             new MissingEndpointResolver(),

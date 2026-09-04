@@ -61,7 +61,7 @@ function makeFakes({
   workerRolloutFails = false,
   ddcExists = true,
   keyvaultFound = true,
-  domain = "*.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io",
+  domain = "*.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io",
   podCidrs = "10.244.0.0/16",
 } = {}) {
   const calls = [];
@@ -278,7 +278,7 @@ test("run(): prints the exact non-secret Copilot callback registration guidance"
   await run(CFG, { run: execRun, capture: execCapture, log, az, fs: fsImpl, repoRoot: DEFAULT_REPO_ROOT });
   const infoMessages = calls.filter((call) => call.type === "info").map((call) => call.msg);
   const callbackUrl =
-    "https://agentweaver.6a3de4fe60529400010f3fba.westus2.staging.aksapp.io/auth/github/copilot-app/callback";
+    "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/auth/github/copilot-app/callback";
 
   assert.ok(infoMessages.includes(`  Copilot callback to register: ${callbackUrl}`));
   assert.ok(infoMessages.includes("  GitHub App callback matching: exact URL; wildcard matching disabled."));
@@ -297,11 +297,21 @@ test("run(): applied manifests carry real kustomize-resolved values, not the com
 
   const runtimeConfig = writtenFiles.get("agentweaver-runtime-config.yaml");
   assert.ok(runtimeConfig, "expected the synthetic runtime-config ConfigMap to have been written before apply");
-  assert.match(runtimeConfig, /OAUTH_PUBLIC_ORIGIN/);
+  assert.match(
+    runtimeConfig,
+    /OAUTH_PUBLIC_ORIGIN: https:\/\/agentweaver\.6a6f0602b81a5700010708e7\.eastus2euap\.aksapp\.io/,
+  );
   assert.match(runtimeConfig, /OAUTH_TRUSTED_PROXY_NETWORKS.*10\.244\.0\.0\/16/);
   assert.match(runtimeConfig, /OAUTH_SIGNING_CERTIFICATE_NAME/);
   assert.match(runtimeConfig, /oauth-signing-custom/);
   assert.match(runtimeConfig, /oauth-encryption-custom/);
+  const checksum = runtimeConfig.match(/OAUTH_RUNTIME_CONFIG_CHECKSUM:\s*([a-f0-9]{64})/)?.[1];
+  assert.ok(checksum, "runtime ConfigMap must carry the canonical OAuth configuration checksum");
+  assert.match(apiDeployment, new RegExp(`agentweaver\\.io/oauth-runtime-config-checksum: ${checksum}`));
+  const mcpDeployment = writtenFiles.get("mcp-deployment.yaml");
+  assert.ok(mcpDeployment, "expected mcp-deployment.yaml to have been written before apply");
+  assert.match(mcpDeployment, new RegExp(`agentweaver\\.io/oauth-runtime-config-checksum: ${checksum}`));
+  assert.doesNotMatch(runtimeConfig, /agentweaver\.example\.com|placeholder/);
   assert.doesNotMatch(runtimeConfig, /mcp-oauth-signing-key|Auth__OAuth__(?:SigningKey|Issuer|Audience)|OAUTH_ISSUER|OAUTH_AUDIENCE/);
 
   const secretProviderClass = writtenFiles.get("secret-provider-class.yaml");

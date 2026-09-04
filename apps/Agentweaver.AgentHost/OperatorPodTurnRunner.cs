@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Threading.Channels;
 using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Domain;
 using Microsoft.Extensions.Logging;
 
@@ -143,6 +144,17 @@ internal sealed class OperatorPodTurnRunner : IPodTurnRunner
                 ct).ConfigureAwait(false);
             await runtimeState.WaitForMcpBrokerTokenRefreshAsync(observedVersion, ct).ConfigureAwait(false);
         }
+
+        public ValueTask OnRunFailedAsync(AgentProviderException providerFailure, CancellationToken ct) =>
+            writer.WriteAsync(
+                new RunEvent(0, EventTypes.RunFailed, new
+                {
+                    message = providerFailure.UserMessage,
+                    category = providerFailure.FailureKind.ToString(),
+                    errorCode = providerFailure.ErrorCode,
+                    retryable = providerFailure.IsRetryable,
+                }),
+                ct);
 
         public async ValueTask<bool> OnApprovalRequiredAsync(
             string requestId, string toolName, string? argumentsJson, CancellationToken ct)

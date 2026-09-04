@@ -57,8 +57,10 @@ take longer while the Kata agent relays the signal.
 
 ## Tool architecture
 
-The GitHub Copilot SDK runner registers the custom `AIFunction` tools assembled by
-`SandboxToolRegistry.Build`. There are nine tool names total:
+The GitHub Copilot SDK runner registers custom `AIFunction` tools from
+`SandboxToolRegistry.Build`. The registry has ten unconditional tools and adds
+`run_command` when the policy permits it. AgentHost contributes five preview
+lifecycle tools, for 15 or 16 available tools.
 
 | Tool | Purpose | Conditional |
 | --- | --- | --- |
@@ -68,9 +70,11 @@ The GitHub Copilot SDK runner registers the custom `AIFunction` tools assembled 
 | `file_search` | Find files by name pattern | No |
 | `str_replace_editor` | Make targeted line or text replacements | No |
 | `apply_patch` | Apply a unified-diff patch | No |
-| `create` | Create a new file | No |
-| `edit` | Overwrite or insert in an existing file | No |
+| `create_file` | Create a new file | No |
+| `write_file` | Write a file inside the sandbox root | No |
 | `report_intent` | Emit an `agent.intent` event for UI display | No |
+| `report_outcome` | Report the completed outcome | No |
+| `ask_question` | Request a user answer through the run gate | No |
 
 ### Permission-gated native tools
 
