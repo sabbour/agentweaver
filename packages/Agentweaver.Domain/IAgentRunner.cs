@@ -8,11 +8,11 @@ namespace Agentweaver.Domain;
 /// generation) have no <c>Run</c> entity and therefore no run-bound capability snapshot to redeem; they
 /// must not fabricate a synthetic run id and expect a GitHub-Copilot-sourced call to succeed. When this
 /// is supplied, the runner redeems it via the project-operation capability mechanism instead of the
-/// run-snapshot mechanism.
+/// run-snapshot mechanism. <c>ProjectId</c> is null for platform-scoped generation.
 /// </summary>
 public sealed record CopilotOperationCapability(
     string CapabilityReference,
-    string ProjectId,
+    string? ProjectId,
     string EntraObjectId,
     ProjectModelProviderCapabilityPurpose Purpose);
 

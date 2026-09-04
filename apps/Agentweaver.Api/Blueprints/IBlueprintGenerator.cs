@@ -37,6 +37,7 @@ public enum BlueprintGenerationFailureKind
     ProviderUnavailable,
     ProviderRateLimited,
     ModelRunFailed,
+    InternalError,
 }
 
 /// <summary>The outcome of parsing a model-produced blueprint response.</summary>

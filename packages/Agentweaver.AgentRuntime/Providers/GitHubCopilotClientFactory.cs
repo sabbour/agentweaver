@@ -92,11 +92,12 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
 
     /// <summary>
     /// Resolves one explicit, purpose-bound non-run capability. This deliberately does not accept
-    /// a run id and cannot fall back to an ambient or installation-scoped credential.
+    /// a run id and cannot fall back to an ambient or installation-scoped credential. The scope is
+    /// project-bound when <paramref name="projectId"/> is supplied and platform-bound otherwise.
     /// </summary>
     public async Task<CopilotClient> CreateProjectOperationClientAsync(
         string capabilityReference,
-        string projectId,
+        string? projectId,
         string entraObjectId,
         ProjectModelProviderCapabilityPurpose purpose,
         string? modelId,
@@ -104,10 +105,10 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
     {
         if (!Enum.IsDefined(purpose) ||
             string.IsNullOrWhiteSpace(capabilityReference) ||
-            string.IsNullOrWhiteSpace(projectId) ||
+            (projectId is not null && string.IsNullOrWhiteSpace(projectId)) ||
             string.IsNullOrWhiteSpace(entraObjectId))
             throw new GitHubCopilotUnauthorizedException(
-                "GitHub Copilot requires a live project-bound capability.");
+                "GitHub Copilot requires a live project-scoped or platform-default capability.");
 
         var options = new CopilotClientOptions();
         ApplyRuntimeConnection(options);
@@ -118,7 +119,7 @@ public sealed class GitHubCopilotClientFactory : IAsyncDisposable
         if (credential is null || string.IsNullOrWhiteSpace(credential.AccessToken) ||
             credential.ExpiresAt <= DateTimeOffset.UtcNow)
             throw new GitHubCopilotUnauthorizedException(
-                "GitHub Copilot requires a live project-bound capability.");
+                "GitHub Copilot requires a live project-scoped or platform-default capability.");
         options.GitHubToken = credential.AccessToken;
         return new CopilotClient(options);
     }

@@ -138,13 +138,13 @@ internal sealed class GitHubCapabilityBroker(
             ct).ConfigureAwait(false);
 
     /// <summary>
-    /// Redeems a single-use non-run capability only for its persisted project operation purpose.
+    /// Redeems a single-use non-run capability only for its persisted operation purpose and scope.
     /// The caller receives a credential solely via the broker-owned callback.
     /// </summary>
     internal async Task<GitHubCapabilityBrokerOutcome> TryUseProjectCopilotCredentialAsync(
         SnapshotRef capabilityReference,
         ProjectModelProviderCapabilityPurpose purpose,
-        string projectId,
+        string? projectId,
         string entraObjectId,
         DateTimeOffset now,
         Func<string, DateTimeOffset, Task> useCredential,
