@@ -18,9 +18,9 @@ A run that executes its agent turns inside pods produces the **same timeline, in
 
 There is no "distributed mode" toggle in the UI, no different progress bar, no transport indicator. A user cannot tell from the experience whether a turn ran in the worker process or in a pod across the cluster. **That is the design goal, not a happy accident.**
 
-![1. The headline: runs behave identically to in-process: User / operator, Web UI run timeline, Same SSE event stream, Same events,, Turn ran in worker, Turn ran in a pod](../diagrams/experience-a2a-distributed-agents-fig1.png)
+![1. The headline: runs behave identically to in-process: User / operator, Web UI run timeline, Same SSE event stream, Same events,, Turn ran in worker, Turn ran in a pod](../diagrams/canonical-a2a-execution.png)
 
-<!-- Rendered from ../diagrams/src/experience-a2a-distributed-agents-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-a2a-execution.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

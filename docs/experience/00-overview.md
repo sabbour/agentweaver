@@ -136,9 +136,9 @@ Standalone workflow and execution pages are not part of the web UI. Run details 
 
 Most human work starts with a project and ends with review:
 
-![Common web journey: project → board → orchestration → review: Projects gallery, Project Dashboard, Board, Start work, Coordinator run, Confirm or revise outcome spec, Watch work plan and child runs, Review assembly state, Embedded timeline, graph, files, approvals, Review needed?, Merge / complete, Revise, retry, steer, or decline, …](../diagrams/experience-00-overview-fig2.png)
+![Common web journey: project → board → orchestration → review: Projects gallery, Project Dashboard, Board, Start work, Coordinator run, Confirm or revise outcome spec, Watch work plan and child runs, Review assembly state, Embedded timeline, graph, files, approvals, Review needed?, Merge / complete, Revise, retry, steer, or decline, …](../diagrams/canonical-coordinator-journey.png)
 
-<!-- Rendered from ../diagrams/src/experience-00-overview-fig2.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-coordinator-journey.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

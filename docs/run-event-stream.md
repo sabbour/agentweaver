@@ -8,9 +8,9 @@ For the scaling story, see [Distributed execution & scaling](./deep-dive/distrib
 
 ## Architecture — shared store, cursor stream
 
-![Architecture — shared store, cursor stream: Run producer, RunStreamEntry, RunEvents, Replica A, Replica B, Browser / MCP watcher](diagrams/docs-run-event-stream-fig1.png)
+![Architecture — shared store, cursor stream: Run producer, RunStreamEntry, RunEvents, Replica A, Replica B, Browser / MCP watcher](diagrams/canonical-durable-event-stream.png)
 
-<!-- Rendered from diagrams/src/docs-run-event-stream-fig1.json by docs/diagram-renderer +
+<!-- Rendered from diagrams/src/canonical-durable-event-stream.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

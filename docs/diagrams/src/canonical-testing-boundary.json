@@ -1,0 +1,98 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Real Dependencies and Deterministic Test Seams",
+  "alt": "Real Dependencies and Deterministic Test Seams: Test case, Real API host, Real stores and workflow services, Real temporary Git repositories, Real validators and sandbox policy, Network or model dependency?, Deterministic fake or stub",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Test",
+      "label": "Test case",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Host",
+      "label": "Real API host",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Stores",
+      "label": "Real stores and workflow services",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Git",
+      "label": "Real temporary Git repositories",
+      "icon": "branch",
+      "badge": {
+        "text": "Git",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Policy",
+      "label": "Real validators and sandbox policy",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "External",
+      "label": "Network or model dependency?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Fake",
+      "label": "Deterministic fake or stub",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Test",
+      "to": "Host"
+    },
+    {
+      "from": "Host",
+      "to": "Stores"
+    },
+    {
+      "from": "Stores",
+      "to": "Git"
+    },
+    {
+      "from": "Stores",
+      "to": "Policy"
+    },
+    {
+      "from": "Host",
+      "to": "External"
+    },
+    {
+      "from": "External",
+      "to": "Fake",
+      "label": "yes"
+    }
+  ]
+}

@@ -261,9 +261,9 @@ generation keeps that target repository in the prompt context so the draft acts 
 
 The generated workflow is preview-first: Agentweaver opens the YAML draft in the editor and does not write it to `.agentweaver/workflows/` until you save. If validation fails after the server's correction pass, the API returns an error instead of saving a broken workflow.
 
-![Generate from description: Describe workflow, LLM generates YAML, Review in editor, Validate, Save to .agentweaver/workflows/](../diagrams/guide-workflows-fig1.png)
+![Generate from description: Describe workflow, LLM generates YAML, Review in editor, Validate, Save to .agentweaver/workflows/](../diagrams/canonical-workflow-authoring.png)
 
-<!-- Rendered from ../diagrams/src/guide-workflows-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-workflow-authoring.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

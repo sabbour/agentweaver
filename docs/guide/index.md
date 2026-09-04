@@ -27,9 +27,9 @@ Submit a goal. The coordinator:
 9. Routes through a **single review gate** (RAI + human approval)
 10. Runs a **Scribe pass** after merge to record what the team learned
 
-![Coordinator orchestration: Submit goal, Coordinator drafts OutcomeSpec, Selects workflow, You confirm?, WorkPlan: subtask DAG, Parallel child runs, RAI check per agent, Assembled result, Human review, Merge, Declined, Scribe memory pass](../diagrams/guide-index-fig1.png)
+![Coordinator orchestration: Submit goal, Coordinator drafts OutcomeSpec, Selects workflow, You confirm?, WorkPlan: subtask DAG, Parallel child runs, RAI check per agent, Assembled result, Human review, Merge, Declined, Scribe memory pass](../diagrams/canonical-coordinator-journey.png)
 
-<!-- Rendered from ../diagrams/src/guide-index-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-coordinator-journey.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

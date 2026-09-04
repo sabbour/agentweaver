@@ -10,9 +10,9 @@ Every Agentweaver project has a **Kanban board** — a six-column view of all wo
 
 ## The six columns
 
-![The six columns: Backlog, Ready, Active, Problems, Human Review, Done](../diagrams/guide-board-fig1.png)
+![The six columns: Backlog, Ready, Active, Problems, Human Review, Done](../diagrams/canonical-board-lifecycle.png)
 
-<!-- Rendered from ../diagrams/src/guide-board-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-board-lifecycle.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

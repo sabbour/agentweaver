@@ -1,0 +1,159 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Durable Run Event Stream",
+  "alt": "Durable Run Event Stream: Agent runtime and workflow executors, Run event stream, Coordinator services, Durable RunEvents table, In-process fan-out channel, Replay by sequence, Live tail, SSE run stream, Frontend reducers, Timeline, graph, approvals, status, REST seed snapshots",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Runtime",
+      "label": "Agent runtime and workflow executors",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Stream",
+      "label": "Run event stream",
+      "icon": "box",
+      "badge": {
+        "text": "Events",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Coordinator",
+      "label": "Coordinator services",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Store",
+      "label": "Durable RunEvents table",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Live",
+      "label": "In-process fan-out channel",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Replay",
+      "label": "Replay by sequence",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Tail",
+      "label": "Live tail",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "SSE",
+      "label": "SSE run stream",
+      "icon": "route",
+      "badge": {
+        "text": "Network",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "UI",
+      "label": "Frontend reducers",
+      "icon": "window",
+      "badge": {
+        "text": "UI",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Projection",
+      "label": "Timeline, graph, approvals, status",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Seeds",
+      "label": "REST seed snapshots",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Runtime",
+      "to": "Stream",
+      "label": "emit facts"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Stream",
+      "label": "emit orchestration facts"
+    },
+    {
+      "from": "Stream",
+      "to": "Store"
+    },
+    {
+      "from": "Stream",
+      "to": "Live"
+    },
+    {
+      "from": "Store",
+      "to": "Replay"
+    },
+    {
+      "from": "Live",
+      "to": "Tail"
+    },
+    {
+      "from": "Replay",
+      "to": "SSE"
+    },
+    {
+      "from": "Tail",
+      "to": "SSE"
+    },
+    {
+      "from": "SSE",
+      "to": "UI"
+    },
+    {
+      "from": "UI",
+      "to": "Projection"
+    },
+    {
+      "from": "Store",
+      "to": "Seeds"
+    },
+    {
+      "from": "Seeds",
+      "to": "UI"
+    }
+  ]
+}

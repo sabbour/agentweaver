@@ -12,9 +12,9 @@ The general principle: the system confirms real isolation is available before pe
 
 Once a backend is selected (see the [sandbox deep dive](./sandbox.md)), a `run_command` invocation flows through the triple-layer governance gate, into the chosen executor, and back out as redacted output events:
 
-![Overview: Model, Gov, Exec, Branch, Work, Wxc, Spawn, Pool, Claim, Bound, Kata, Local, …](../diagrams/sandboxed-execution-fig1.png)
+![Overview: Model, Gov, Exec, Branch, Work, Wxc, Spawn, Pool, Claim, Bound, Kata, Local, …](../diagrams/canonical-sandbox-boundary.png)
 
-<!-- Rendered from ../diagrams/src/sandboxed-execution-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-sandbox-boundary.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

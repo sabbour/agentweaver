@@ -328,9 +328,9 @@ Agentweaver solves this by layering data:
 3. **Deduplication** — avoid showing the same event twice, usually by sequence id.
 4. **Reducer fold** — derive display state from the merged event list.
 
-![Snapshot + Stream Synchronization: Open orchestration page, Read project/run route params, Load project/team/run metadata, Load REST seeds, Open SSE stream, Merge seed events before live events, Deduplicate by sequence/type, Fold through reducers, Render timeline, graph, status, approvals](../diagrams/frontend-fig4.png)
+![Snapshot + Stream Synchronization: Open orchestration page, Read project/run route params, Load project/team/run metadata, Load REST seeds, Open SSE stream, Merge seed events before live events, Deduplicate by sequence/type, Fold through reducers, Render timeline, graph, status, approvals](../diagrams/canonical-event-replay-tail.png)
 
-<!-- Rendered from ../diagrams/src/frontend-fig4.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-event-replay-tail.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -382,9 +382,9 @@ Conceptually:
 6. The coordinator stream re-projects the all-up lifecycle so the user can monitor and steer from one page.
 7. When children are ready, assembly/review/merge phases progress through coordinator events.
 
-![Coordinator Orchestration Flow: User goal, Coordinator run, Outcome spec, Work plan, Server-authored topology, Child run A, Child run B, Child run N, Coordinator event stream, All-up coordinator page, Steering / answers / approvals](../diagrams/frontend-fig5.png)
+![Coordinator Orchestration Flow: User goal, Coordinator run, Outcome spec, Work plan, Server-authored topology, Child run A, Child run B, Child run N, Coordinator event stream, All-up coordinator page, Steering / answers / approvals](../diagrams/canonical-coordinator-architecture.png)
 
-<!-- Rendered from ../diagrams/src/frontend-fig5.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-coordinator-architecture.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

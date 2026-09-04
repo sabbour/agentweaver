@@ -12,27 +12,16 @@ For step-by-step deployment instructions see [Deploy to AKS](/guide/deployment-a
 
 ## Component diagram
 
-![AKS component diagram (simplified overview): Client through the Gateway to Frontend, API, MCP; API and Worker to the AgentHost warm pool; shared Workspace PVC and CSI SecretProviderClass; PostgreSQL, Key Vault, ACR, and GitHub](../diagrams/aks-component-simplified.png)
+![Agentweaver AKS components: Browser and AI clients connect through the Gateway to the Frontend, API, Worker, and MCP services; the services use PostgreSQL, workspaces, Key Vault, ACR, GitHub, and the AgentHost warm pool](../diagrams/canonical-aks-components.png)
 
 <!--
-  Pre-rendered as a static PNG from ../diagrams/src/aks-component-simplified.json
+  Pre-rendered as a static PNG from ../diagrams/src/canonical-aks-components.json
   by docs/diagram-renderer (a Fluent-styled React Flow app) + Playwright, so
-  it matches the same card/icon/badge look used live in the product UI
-  instead of generic Mermaid/mermaid-cli output. To edit: change the
+  it matches the same card/icon/badge look used live in the product UI.
+  To edit: change the
   graph-spec JSON, run `npm run docs:render-diagrams`, and commit the
   regenerated PNG + .hash.txt. CI fails if the spec's content hash drifts
   from the committed .hash.txt (see scripts/docs/capture-diagrams.mjs).
--->
-
-> This is a simplified overview. See the detailed diagram below for the full request/data flow.
-
-![AKS component diagram (detailed): full request/data flow between the Browser/AI client, AKS Gateway, Frontend, API, Worker, MCP, the Kata VM AgentHost warm pool, Workspace PVC, CSI SecretProviderClass, Azure Key Vault, Azure PostgreSQL, Azure Container Registry, and GitHub](../diagrams/aks-component-detailed.png)
-
-<!--
-  Pre-rendered the same way as the simplified diagram above, from
-  ../diagrams/src/aks-component-detailed.json. To edit: change the
-  graph-spec JSON, run `npm run docs:render-diagrams`, and commit the
-  regenerated PNG + .hash.txt.
 -->
 
 ---
@@ -63,9 +52,9 @@ The live sandbox path binds claims to the AgentHost warm pool (`AgentHostWarmPoo
 
 ### Inbound request path
 
-![Inbound request path: 🌐 Client, Public LoadBalancer IP, Gateway: agentweaver-gateway, Service: agentweaver-api, Service: agentweaver-mcp, Service: agentweaver-frontend, API Pod :8080, MCP Pod :8080, Frontend Pod :8080](../diagrams/guide-architecture-aks-fig2.png)
+![Inbound request path: 🌐 Client, Public LoadBalancer IP, Gateway: agentweaver-gateway, Service: agentweaver-api, Service: agentweaver-mcp, Service: agentweaver-frontend, API Pod :8080, MCP Pod :8080, Frontend Pod :8080](../diagrams/canonical-aks-network.png)
 
-<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig2.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-aks-network.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -73,13 +62,6 @@ The live sandbox path binds claims to the AgentHost warm pool (`AgentHostWarmPoo
 Route specificity: `/api` and `/mcp` (longer prefixes) win over `/` — no conflict.
 
 ### Gateway API resource relationships
-
-![Gateway API resource relationships: Gateway, HTTPRoute, HTTPRoute, HTTPRoute, agentweaver-api :8080, agentweaver-mcp :8080, agentweaver-frontend :80](../diagrams/guide-architecture-aks-fig3.png)
-
-<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 ---
 
@@ -94,13 +76,6 @@ The `approuting-istio` gateway class means the Application Routing add-on uses a
 ### Security policies
 
 #### Network traffic diagram
-
-![Network traffic diagram: Gateway Pod, API Pod, MCP Pod, Frontend Pods, AgentHost sandbox pod, worker, api.github.com, Azure Key Vault, kube-dns, External Services](../diagrams/guide-architecture-aks-fig4.png)
-
-<!-- Rendered from ../diagrams/src/guide-architecture-aks-fig4.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 #### NetworkPolicy rules
 

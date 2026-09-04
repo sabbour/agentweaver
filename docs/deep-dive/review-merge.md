@@ -56,9 +56,9 @@ The policy composer performs a graph transform:
 
 If the workflow has no merge node, there is no irreversible merge action to gate, so the policy composition returns the workflow unchanged. That is a deliberate distinction: review policies gate merge; they are not a universal wrapper around every workflow shape.
 
-![Review Policy as a Safety Overlay: Producer, Existing pre-merge gates, Injected policy gates, Merge, Terminal](../diagrams/review-merge-fig2.png)
+![Review Policy as a Safety Overlay: Producer, Existing pre-merge gates, Injected policy gates, Merge, Terminal](../diagrams/canonical-review-policy.png)
 
-<!-- Rendered from ../diagrams/src/review-merge-fig2.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-review-policy.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

@@ -127,9 +127,9 @@ An override never escapes the candidate safety boundary: it cannot run a workflo
 
 Whenever the multi-candidate path runs, the coordinator emits a `coordinator.workflow_selected` event (`EmitWorkflowSelectedEvent`) carrying `selectedId`, `selectedName`, `rationale`, `wasAutoSelected`, an `overrideHint` (`Reply 'use {other-id}' to change...`), and the list of `available` workflows. If `SelectWorkflowAsync` throws anywhere, it logs a warning and returns the resolved project default so the caller always knows which workflow it is planning against.
 
-![The LLM selector and its fallbacks (`apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs`): SelectWorkflowAsync, ResolveDefault, GetOrLoad.Available, ResolveInvocationKindAsync, Backlog WorkflowOverrideId, Use override workflow, Filter by, Eligible count, Return project default, Use the only candidate, Revise feedback, Use requested workflow, …](../diagrams/reference-coordinator-fig1.png)
+![The LLM selector and its fallbacks (`apps/Agentweaver.Api/Coordinator/WorkflowSelector.cs`): SelectWorkflowAsync, ResolveDefault, GetOrLoad.Available, ResolveInvocationKindAsync, Backlog WorkflowOverrideId, Use override workflow, Filter by, Eligible count, Return project default, Use the only candidate, Revise feedback, Use requested workflow, …](../diagrams/canonical-workflow-selection.png)
 
-<!-- Rendered from ../diagrams/src/reference-coordinator-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-workflow-selection.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
