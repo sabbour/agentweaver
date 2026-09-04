@@ -208,7 +208,7 @@ describe('App auth gate', () => {
     expect(sessionStorage.getItem('agentweaver.requiredSetup.pending')).toBeNull();
   });
 
-  it('shows a non-admin lockout message when AI is not configured', async () => {
+  it('lets a non-admin enter the app when platform AI is not configured', async () => {
     vi.mocked(apiClient.getAuthSession).mockResolvedValue({
       authenticated: true,
       auth_mode: 'entra',
@@ -223,9 +223,8 @@ describe('App auth gate', () => {
 
     render(<App />);
 
-    expect(await screen.findByText('Model provider setup required')).toBeDefined();
-    expect(screen.getByText('Unavailable to you')).toBeDefined();
-    expect(screen.getByText('Ask a Platform Admin to complete this setup.')).toBeDefined();
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(screen.queryByText('Model provider setup required')).toBeNull();
     expect(screen.queryByText('Platform settings')).toBeNull();
   });
 

@@ -8,6 +8,7 @@ import {
 } from '../../api/modelProviderConnectionRequirement';
 import { LeftNav } from './LeftNav';
 import { FirstRunTour } from '../onboarding/FirstRunTour';
+import { PersonalAiAccessPrompt } from '../onboarding/PersonalAiAccessPrompt';
 import {
   firstRunTourStorageKey,
   hasCompletedFirstRunTour,
@@ -158,6 +159,7 @@ export function AppShell({
                 />
               </div>
               <div className="aw-shell-scroll">
+                {tourUserKey && <PersonalAiAccessPrompt userKey={tourUserKey} />}
                 {connectionRequirement && (
                   <ModelProviderRequiredAction
                     requirement={connectionRequirement}

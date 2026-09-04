@@ -75,7 +75,8 @@ Personal session chat uses a separate account-level hierarchy:
 Agentweaver does not use the platform-default Copilot credential for personal session chat because
 Copilot entitlement belongs to the individual GitHub account. Open **Account settings → AI Access**
 to authorize Copilot or add a personal provider. These settings do not change project background
-execution.
+execution. When the resolved account-level hierarchy has no usable provider, Agentweaver shows a
+one-time, dismissible setup prompt that links directly to these settings.
 
 A Copilot binding keeps the refresh token that GitHub returns with its access token. GitHub
 access tokens expire after about eight hours. Agentweaver redeems the refresh token

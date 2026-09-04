@@ -529,6 +529,15 @@ export function PlatformSettingsPage({
           </Button>
         )}
       >
+        {setupRequired && (
+          <MessageBar intent="info">
+            <MessageBarBody>
+              Individual users can also configure their own provider or GitHub Copilot account
+              later under Account settings → AI Access. Personal settings are used when no
+              platform BYOK provider is active.
+            </MessageBarBody>
+          </MessageBar>
+        )}
         {authorizationResult && (
           <MessageBar intent={authorizationResult.intent}>
             <MessageBarBody>{authorizationResult.message}</MessageBarBody>

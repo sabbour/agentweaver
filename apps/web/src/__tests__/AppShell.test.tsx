@@ -30,6 +30,7 @@ vi.mock('../api/apiClient', () => ({
     checkHealth: vi.fn(),
     getAuthSession: vi.fn(),
     getProjectAccessOverview: vi.fn(),
+    getUserAiAccess: vi.fn(),
     getNotifications: vi.fn(),
     beginProjectCopilotAuthorization: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
@@ -125,6 +126,17 @@ beforeEach(() => {
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'not_connected',
     github_login: null,
+  });
+  vi.mocked(apiClient.getUserAiAccess).mockResolvedValue({
+    effective_source: 'platform_byok',
+    platform_byok: { name: 'Platform provider', type: 'openai', model: 'gpt-4o' },
+    preference: 'github_copilot',
+    personal_byok: null,
+    copilot: {
+      connected: false,
+      github_login: null,
+      reconnect_required: false,
+    },
   });
 });
 
@@ -295,6 +307,98 @@ describe('AppShell navigation', () => {
     )).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Open AI Access settings' }));
     expect(await screen.findByText('Account settings page')).toBeDefined();
+  });
+
+  it('proactively prompts a user with no effective personal AI access and persists dismissal', async () => {
+    vi.mocked(apiClient.getUserAiAccess).mockResolvedValue({
+      effective_source: 'none',
+      platform_byok: null,
+      preference: 'github_copilot',
+      personal_byok: null,
+      copilot: {
+        connected: false,
+        github_login: null,
+        reconnect_required: false,
+      },
+    });
+
+    renderShellAt('/sessions', false, { tourUserKey: ' User@Example.COM ' });
+
+    expect(await screen.findByRole('heading', { name: 'Set up personal AI access' })).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Set up personal AI access' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Set up personal AI access' })).toBeNull(),
+    );
+    expect(localStorage.getItem(
+      'agentweaver.personalAiAccessPrompt.v1.user%40example.com',
+    )).toBe('dismissed');
+
+    cleanup();
+    renderShellAt('/sessions', false, { tourUserKey: 'user@example.com' });
+    await Promise.resolve();
+
+    expect(screen.queryByRole('heading', { name: 'Set up personal AI access' })).toBeNull();
+    expect(apiClient.getUserAiAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens Account settings from the proactive personal AI access prompt', async () => {
+    vi.mocked(apiClient.getUserAiAccess).mockResolvedValue({
+      effective_source: 'none',
+      platform_byok: null,
+      preference: 'github_copilot',
+      personal_byok: null,
+      copilot: {
+        connected: false,
+        github_login: null,
+        reconnect_required: false,
+      },
+    });
+
+    renderShellAt('/sessions', false, { tourUserKey: 'entra-user' });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open AI Access settings' }));
+
+    expect(await screen.findByText('Account settings page')).toBeDefined();
+    expect(localStorage.getItem(
+      'agentweaver.personalAiAccessPrompt.v1.entra-user',
+    )).toBe('dismissed');
+  });
+
+  it.each([
+    'platform_byok',
+    'user_byok',
+    'user_github_copilot',
+  ] as const)('does not prompt when access is available through %s', async (effectiveSource) => {
+    vi.mocked(apiClient.getUserAiAccess).mockResolvedValue({
+      effective_source: effectiveSource,
+      platform_byok: effectiveSource === 'platform_byok'
+        ? { name: 'Platform provider', type: 'openai', model: 'gpt-4o' }
+        : null,
+      preference: effectiveSource === 'user_byok' ? 'byok' : 'github_copilot',
+      personal_byok: effectiveSource === 'user_byok'
+        ? {
+          id: 'personal-provider',
+          name: 'Personal provider',
+          type: 'openai',
+          base_url: 'https://example.test/v1',
+          model: 'gpt-4o',
+          wire_api: 'responses',
+          azure_api_version: null,
+          headers: null,
+          has_api_key: true,
+        }
+        : null,
+      copilot: {
+        connected: effectiveSource === 'user_github_copilot',
+        github_login: effectiveSource === 'user_github_copilot' ? 'octocat' : null,
+        reconnect_required: false,
+      },
+    });
+
+    renderShellAt('/sessions', false, { tourUserKey: `user-${effectiveSource}` });
+
+    await waitFor(() => expect(apiClient.getUserAiAccess).toHaveBeenCalled());
+    expect(screen.queryByRole('heading', { name: 'Set up personal AI access' })).toBeNull();
   });
 
   it('resolves the active nav item from the route', () => {
