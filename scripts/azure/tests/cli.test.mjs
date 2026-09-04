@@ -140,6 +140,73 @@ test("run: 'deploy-from-commit' and 'deploy-from-release' auto-load the params f
   assert.equal(receivedReleaseOpts.env.KEYVAULT_NAME, "kv-from-params-file");
 });
 
+test("run: deploy-from-commit consumes an explicit --params-file before forwarding argv", async () => {
+  let loadedPath;
+  let received;
+  const modules = {
+    "deploy-from-commit": {
+      run: async (opts) => {
+        received = opts;
+        return { ok: true };
+      },
+    },
+    config: {
+      loadParamsFile: (value) => {
+        loadedPath = value;
+        return { KEYVAULT_NAME: "commit-kv" };
+      },
+    },
+  };
+
+  await run([
+    "deploy-from-commit",
+    "--params-file",
+    "scripts/azure/params.commit.json",
+    "origin/dev",
+  ], { log: noopLog(), modules });
+
+  assert.equal(loadedPath, "scripts/azure/params.commit.json");
+  assert.equal(received.env.KEYVAULT_NAME, "commit-kv");
+  assert.deepEqual(received.argv, ["origin/dev"]);
+});
+
+test("run: deploy-from-release consumes --params-file=<path> and preserves every other argument", async () => {
+  let loadedPath;
+  let received;
+  const modules = {
+    "deploy-from-release": {
+      run: async (opts) => {
+        received = opts;
+        return { ok: true };
+      },
+    },
+    config: {
+      loadParamsFile: (value) => {
+        loadedPath = value;
+        return { KEYVAULT_NAME: "release-kv" };
+      },
+    },
+  };
+
+  await run([
+    "deploy-from-release",
+    "v1.2.3",
+    "--params-file=scripts/azure/params.release.json",
+    "--image-source",
+    "acr-build",
+    "--dry-run",
+  ], { log: noopLog(), modules });
+
+  assert.equal(loadedPath, "scripts/azure/params.release.json");
+  assert.equal(received.env.KEYVAULT_NAME, "release-kv");
+  assert.deepEqual(received.argv, [
+    "v1.2.3",
+    "--image-source",
+    "acr-build",
+    "--dry-run",
+  ]);
+});
+
 test("run: 'deploy-from-commit --help' and 'deploy-from-release --help' print help without loading params or calling run()", async () => {
   for (const command of ["deploy-from-commit", "deploy-from-release"]) {
     const messages = [];
