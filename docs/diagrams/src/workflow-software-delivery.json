@@ -1,0 +1,199 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Software Delivery workflow",
+  "alt": "Software Delivery workflow: Plan, Implement, Test Gate, RAI Check, Rubberduck Review, Code Review, Build & Test, Review Gate, Safety Failed, Declined, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "plan",
+      "label": "Plan",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "implement",
+      "label": "Implement",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "test-gate",
+      "label": "Test Gate",
+      "subLabel": "qa-engineer · review",
+      "icon": "branch",
+      "badge": {
+        "text": "Peer review",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "rai-check",
+      "label": "RAI Check",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "RAI gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "rubberduck",
+      "label": "Rubberduck Review",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Rubberduck gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "code-review",
+      "label": "Code Review",
+      "subLabel": "review",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "build-test",
+      "label": "Build & Test",
+      "subLabel": "qa-engineer · review",
+      "icon": "server",
+      "badge": {
+        "text": "Build & test",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "review-gate",
+      "label": "Review Gate",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "Human gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-safety-failed",
+      "label": "Safety Failed",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "terminal-declined",
+      "label": "Declined",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "plan",
+      "to": "implement"
+    },
+    {
+      "from": "implement",
+      "to": "test-gate"
+    },
+    {
+      "from": "test-gate",
+      "to": "rai-check",
+      "label": "pass"
+    },
+    {
+      "from": "test-gate",
+      "to": "implement",
+      "label": "fail"
+    },
+    {
+      "from": "rai-check",
+      "to": "implement",
+      "label": "revise"
+    },
+    {
+      "from": "rai-check",
+      "to": "terminal-safety-failed",
+      "label": "safety-failed"
+    },
+    {
+      "from": "rai-check",
+      "to": "done",
+      "label": "no-changes"
+    },
+    {
+      "from": "rai-check",
+      "to": "rubberduck",
+      "label": "review"
+    },
+    {
+      "from": "rubberduck",
+      "to": "code-review",
+      "label": "pass"
+    },
+    {
+      "from": "rubberduck",
+      "to": "implement",
+      "label": "revise"
+    },
+    {
+      "from": "code-review",
+      "to": "build-test"
+    },
+    {
+      "from": "build-test",
+      "to": "review-gate",
+      "label": "approved"
+    },
+    {
+      "from": "build-test",
+      "to": "implement",
+      "label": "request-changes"
+    },
+    {
+      "from": "build-test",
+      "to": "terminal-declined",
+      "label": "declined"
+    },
+    {
+      "from": "review-gate",
+      "to": "done",
+      "label": "approved"
+    },
+    {
+      "from": "review-gate",
+      "to": "implement",
+      "label": "request-changes"
+    },
+    {
+      "from": "review-gate",
+      "to": "terminal-declined",
+      "label": "declined"
+    }
+  ]
+}

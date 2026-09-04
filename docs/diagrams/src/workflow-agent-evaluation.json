@@ -1,0 +1,114 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Agent Evaluation workflow",
+  "alt": "Agent Evaluation workflow: Evaluation Setup, Evaluation Runs, Collect Results, Safety Gate, Evaluation Report, Safety Failed, Done.",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "eval-setup",
+      "label": "Evaluation Setup",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "eval-run",
+      "label": "Evaluation Runs",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "eval-collect",
+      "label": "Collect Results",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "safety-gate",
+      "label": "Safety Gate",
+      "subLabel": "review",
+      "icon": "branch",
+      "badge": {
+        "text": "RAI gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "report",
+      "label": "Evaluation Report",
+      "subLabel": "agent",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "terminal-safety-failed",
+      "label": "Safety Failed",
+      "icon": "window",
+      "badge": {
+        "text": "Stopped",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "done",
+      "label": "Done",
+      "icon": "window",
+      "badge": {
+        "text": "Done",
+        "tone": "green"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "eval-setup",
+      "to": "eval-run"
+    },
+    {
+      "from": "eval-run",
+      "to": "eval-collect"
+    },
+    {
+      "from": "eval-collect",
+      "to": "safety-gate"
+    },
+    {
+      "from": "safety-gate",
+      "to": "eval-setup",
+      "label": "revise"
+    },
+    {
+      "from": "safety-gate",
+      "to": "terminal-safety-failed",
+      "label": "safety-failed"
+    },
+    {
+      "from": "safety-gate",
+      "to": "done",
+      "label": "no-changes"
+    },
+    {
+      "from": "safety-gate",
+      "to": "report",
+      "label": "review"
+    },
+    {
+      "from": "report",
+      "to": "done"
+    }
+  ]
+}
