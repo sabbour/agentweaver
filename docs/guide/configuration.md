@@ -162,12 +162,27 @@ npm run azure:provision-infra -- --repo-app-private-key-file C:\secure\agentweav
 
 You can also set `REPO_APP_PRIVATE_KEY_FILE` in the environment or params file. The path
 is resolved by the deployment process, and the file content is imported as
-`ghtok-repo-app-private-key`. During upgrades, if the canonical physical secret is
-missing but the legacy physical `repo-app-private-key` exists and is readable, the Azure
-pipeline copies it to the canonical name and preserves the legacy secret. Provisioning
-and deployment stop before applying manifests when neither secret exists or Key Vault
-access cannot be verified. `npm run azure:verify` checks the canonical physical secret
-again after deployment.
+`ghtok-repo-app-private-key`. This explicit import replaces the canonical value, so run
+it from one serialized operator or CI step.
+
+Automatic migration from legacy physical secret `repo-app-private-key` is disabled.
+Azure Key Vault secret set has no create-only condition that protects the canonical
+value across deployment runners. If only the legacy secret exists, provisioning and
+deployment stop with these migration instructions:
+
+```powershell
+$vaultName = "your-vault-name"
+$keyFile = "C:\secure\agentweaver-repo-app.pem"
+az keyvault secret download --vault-name $vaultName --name repo-app-private-key `
+  --file $keyFile --encoding utf-8 --overwrite
+npm run azure:provision-infra -- --repo-app-private-key-file $keyFile
+Remove-Item $keyFile
+```
+
+Use a protected local path, serialize the explicit import in CI, and remove the file
+afterward. Provisioning and deployment also stop before applying manifests when neither
+secret exists or Key Vault access cannot be verified. `npm run azure:verify` checks the
+canonical physical secret again after deployment.
 
 ##### Required manual step: register the installation Setup URL
 

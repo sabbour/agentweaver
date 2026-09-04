@@ -41,9 +41,10 @@
   "OAUTH_SIGNING_CERTIFICATE_NAME": "agentweaver-oauth-signing",
   "OAUTH_ENCRYPTION_CERTIFICATE_NAME": "agentweaver-oauth-encryption",
   // Optional path to the GitHub Repo App PEM. Provision/deploy imports it as the canonical
-  // physical Key Vault secret `ghtok-repo-app-private-key`. If omitted, the deploy accepts an
-  // existing canonical secret or migrates the legacy physical `repo-app-private-key` secret.
-  // The legacy secret is preserved after migration.
+  // physical Key Vault secret `ghtok-repo-app-private-key`, replacing its value. Serialize this
+  // explicit import in CI. If omitted, deploy accepts an existing canonical secret but refuses
+  // unsafe automatic migration from legacy physical secret `repo-app-private-key` and prints
+  // explicit download-and-file-import instructions.
   // "REPO_APP_PRIVATE_KEY_FILE": "C:\\secure\\agentweaver-repo-app.pem",
 
   // Optional overrides.
