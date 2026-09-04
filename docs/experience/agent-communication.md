@@ -13,9 +13,9 @@ the [Agent Communication deep dive](../deep-dive/agent-communication.md); for th
 exact tools and endpoints, see the
 [Agent Communication reference](../reference/agent-communication.md).
 
-![Agent Communication — Experience: You, watching, Decisions page, Team Memory page, Coordinator graph](../diagrams/experience-agent-communication-fig1.png)
+![Agent Communication — Experience: You, watching, Decisions page, Team Memory page, Coordinator graph](../diagrams/canonical-agent-communication-handoff.png)
 
-<!-- Rendered from ../diagrams/src/experience-agent-communication-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-agent-communication-handoff.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -106,13 +106,6 @@ handoffs — becomes visual. You first watch the coordinator draft an **OutcomeS
 and pause at a confirmation gate; nothing fans out until you confirm. After
 confirmation, the goal **decomposes into subtask nodes** connected by dependency
 edges, laid out left-to-right as a DAG.
-
-![The coordinator graph: handoffs you can see: Coordinator, Subtask: API, Subtask: UI, Subtask: tests](../diagrams/experience-agent-communication-fig2.png)
-
-<!-- Rendered from ../diagrams/src/experience-agent-communication-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 As work runs, the graph animates:
 

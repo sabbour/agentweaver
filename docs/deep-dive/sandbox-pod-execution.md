@@ -35,9 +35,9 @@ created and driven **inside the Worker process**. The workflow graph ran in-proc
 the sandbox pod was used only to **exec one shell command at a time** through a warm-pool claim.
 The pod was a place to run `run_command`; it was *not* where the agent lived.
 
-![Before pod-per-run: single-Worker-pod execution: Workflow graph, Agent + live Copilot SDK session, In-memory run-event history, Sandbox pod, SSE to clients](../diagrams/sandbox-pod-execution-fig1.png)
+![Before pod-per-run: single-Worker-pod execution: Workflow graph, Agent + live Copilot SDK session, In-memory run-event history, Sandbox pod, SSE to clients](../diagrams/canonical-sandbox-pod-evolution.png)
 
-<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-sandbox-pod-evolution.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -50,13 +50,6 @@ why production had to keep subtasks on one shared in-process owner.
 Under pod-per-run, the **leaf agent turn relocates into the pod**. The orchestration graph and its
 human-in-the-loop (HITL) gates stay in the worker tier; only the agent *turn* — the part that holds the
 SDK session and runs tools — moves out.
-
-![Now: per-run sandbox pod: Orchestration graph, Remote agent proxy, In-pod AgentHost, Agent + live Copilot SDK session, tool / shell / file exec, Brokered checkpoint store](../diagrams/sandbox-pod-execution-fig2.png)
-
-<!-- Rendered from ../diagrams/src/sandbox-pod-execution-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 The decisive architectural fact: **the coordinator's orchestration loop stays in the API/worker tier.
 Only agent turns are sandboxed.** Remoting happens at the **AIAgent leaf seam** — the workflow graph,

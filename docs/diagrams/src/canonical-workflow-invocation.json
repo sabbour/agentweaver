@@ -1,0 +1,131 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Workflow Invocation and Override Resolution",
+  "alt": "Workflow Invocation and Override Resolution: Run origin, Manual or interactive, Backlog pickup, Record invocation kind, Valid available workflows, Valid workflow override?, Use override, Select from candidates, Safe fallback",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Origin",
+      "label": "Run origin",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Manual",
+      "label": "Manual or interactive",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Heartbeat",
+      "label": "Backlog pickup",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Kind",
+      "label": "Record invocation kind",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      },
+      "subLabel": "Metadata, not an eligibility gate"
+    },
+    {
+      "id": "Available",
+      "label": "Valid available workflows",
+      "icon": "window",
+      "badge": {
+        "text": "Service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Override",
+      "label": "Valid workflow override?",
+      "icon": "branch",
+      "badge": {
+        "text": "Decision",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Use",
+      "label": "Use override",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Candidates",
+      "label": "Select from candidates",
+      "icon": "server",
+      "badge": {
+        "text": "Compute",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "Fallback",
+      "label": "Safe fallback",
+      "icon": "box",
+      "badge": {
+        "text": "Terminal",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Origin",
+      "to": "Manual"
+    },
+    {
+      "from": "Origin",
+      "to": "Heartbeat"
+    },
+    {
+      "from": "Manual",
+      "to": "Kind"
+    },
+    {
+      "from": "Heartbeat",
+      "to": "Kind"
+    },
+    {
+      "from": "Kind",
+      "to": "Available"
+    },
+    {
+      "from": "Available",
+      "to": "Override"
+    },
+    {
+      "from": "Override",
+      "to": "Use",
+      "label": "yes"
+    },
+    {
+      "from": "Override",
+      "to": "Candidates",
+      "label": "no"
+    },
+    {
+      "from": "Candidates",
+      "to": "Fallback",
+      "label": "no valid result"
+    }
+  ]
+}

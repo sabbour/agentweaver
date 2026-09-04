@@ -87,9 +87,9 @@ Where this lives: `tests/Agentweaver.Tests/Helpers`.
 
 Agentweaver tests use fakes deliberately, not casually. A fake is acceptable when it stands at a nondeterministic or external boundary and preserves the shape of the production contract. A fake is not used to skip the behavior being tested.
 
-![Fakes, fixtures, and real dependencies: Test case, Real API host, Real stores, Real workflow services, Real temp git repos, Real validators and policy code, Deterministic agent fake, In-memory GitHub token store, Fake HTTP handler, No-op project initializer](../diagrams/testing-strategy-fig2.png)
+![Fakes, fixtures, and real dependencies: Test case, Real API host, Real stores, Real workflow services, Real temp git repos, Real validators and policy code, Deterministic agent fake, In-memory GitHub token store, Fake HTTP handler, No-op project initializer](../diagrams/canonical-testing-boundary.png)
 
-<!-- Rendered from ../diagrams/src/testing-strategy-fig2.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-testing-boundary.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -236,13 +236,6 @@ Coordinator tests use the same idea. The drafter is deterministic, but the persi
 ## In-memory versus real dependencies
 
 The suite uses a simple decision rule:
-
-![In-memory versus real dependencies: Test needs a dependency, Is this dependency part of, Use the real dependency, Would real use require, Use deterministic fake/stub](../diagrams/testing-strategy-fig3.png)
-
-<!-- Rendered from ../diagrams/src/testing-strategy-fig3.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
 
 Examples:
 

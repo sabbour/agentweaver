@@ -269,9 +269,9 @@ follows; cross-team memory must also be approved. Session context comes last. Al
 selected strings live inside an explicitly untrusted JSON data envelope, so trust
 controls eligibility without turning stored text into prompt instructions.
 
-![Memory versus decisions: Active architectural + scope decisions, Agent core_context memories, High-importance learnings and patterns, Cross-team tagged memories, Current open session, Compiled prompt context](../diagrams/memory-decisions-fig3.png)
+![Memory versus decisions: Active architectural + scope decisions, Agent core_context memories, High-importance learnings and patterns, Cross-team tagged memories, Current open session, Compiled prompt context](../diagrams/canonical-memory-context.png)
 
-<!-- Rendered from ../diagrams/src/memory-decisions-fig3.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-memory-context.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

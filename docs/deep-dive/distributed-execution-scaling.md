@@ -41,13 +41,6 @@ The key insight is that **memory relief and isolation are the same move**. Reloc
 
 The current design combines pod-based agent execution, provider-aware persistence, and a web/worker split. `Sandbox:AgentExecutionMode`, `Database:Provider`, and `App:Role` select the runtime topology.
 
-![The phased rollout: P1 — Agent execution in pods, P2 — Azure PostgreSQL, P3 — Web/worker split + run leasing, stops OOM, horizontal scale](../diagrams/distributed-execution-scaling-fig2.png)
-
-<!-- Rendered from ../diagrams/src/distributed-execution-scaling-fig2.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
 ### P1 — agent execution in pods (the OOM fix)
 
 P1 relocates only the heavy execution into sandbox pods over a thin agent bridge (the `RemoteAgentProxy` → AgentHost A2A seam, enabled by `Sandbox:AgentExecutionMode=pod-per-run`). It keeps a **single** orchestrating process and the existing SQLite file. This is deliberate and safe: the pod is a *compute satellite*, never a database writer. The `RemoteAgentProxy` carries no `ICheckpointStore` and the pod opens no database connection, so every checkpoint and run-event write is proxied back through the one worker, which remains the sole owner of durable state. Because there is still exactly one writer, SQLite's single-writer invariant holds and nothing forces Postgres yet.

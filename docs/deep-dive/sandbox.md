@@ -29,9 +29,9 @@ Where this lives: `packages/Agentweaver.AgentRuntime`, `packages/Agentweaver.Age
 
 Think of every agent action as passing through three concentric boundaries:
 
-![The core mental model: Model proposes tool call, Governance boundary, Tool boundary, Execution boundary, Workspace root, Network egress policy, No side effect, No file escape, No host escape](../diagrams/sandbox-fig1.png)
+![The core mental model: Model proposes tool call, Governance boundary, Tool boundary, Execution boundary, Workspace root, Network egress policy, No side effect, No file escape, No host escape](../diagrams/canonical-sandbox-boundary.png)
 
-<!-- Rendered from ../diagrams/src/sandbox-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-sandbox-boundary.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

@@ -1,0 +1,80 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Sandbox Execution: Shared Worker to Per-Run Pod",
+  "alt": "Sandbox Execution: Shared Worker to Per-Run Pod: Shared worker execution, Claim warm AgentHost pod, Configure run identity and workspace, Per-run sandbox pod, API control plane",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "Before",
+      "label": "Shared worker execution",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "Multiple runs share one process"
+    },
+    {
+      "id": "Claim",
+      "label": "Claim warm AgentHost pod",
+      "icon": "route",
+      "badge": {
+        "text": "Gateway",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Configure",
+      "label": "Configure run identity and workspace",
+      "icon": "key",
+      "badge": {
+        "text": "Security",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "Pod",
+      "label": "Per-run sandbox pod",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "Isolated model and tools"
+    },
+    {
+      "id": "Control",
+      "label": "API control plane",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "Owns durable state"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Before",
+      "to": "Claim",
+      "label": "migration"
+    },
+    {
+      "from": "Control",
+      "to": "Claim"
+    },
+    {
+      "from": "Claim",
+      "to": "Configure"
+    },
+    {
+      "from": "Configure",
+      "to": "Pod"
+    },
+    {
+      "from": "Pod",
+      "to": "Control",
+      "label": "events + results"
+    }
+  ]
+}

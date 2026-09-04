@@ -86,9 +86,9 @@ Future automation rules are the place for "when event X fires, invoke workflow Y
 
 ## End-to-end flow
 
-![End-to-end flow: SelectWorkflowAsync, ResolveDefault — project default = fallback, GetOrLoad.Available — default first, then by id, ResolveInvocationKindAsync, input.WorkflowOverrideId set?, BacklogTask.WorkflowOverrideId, Exists in available set?, Use override workflow, Use available candidates, Available count, Return project default, Use the only candidate — no LLM call, …](../diagrams/workflow-selection-fig1.png)
+![End-to-end flow: SelectWorkflowAsync, ResolveDefault — project default = fallback, GetOrLoad.Available — default first, then by id, ResolveInvocationKindAsync, input.WorkflowOverrideId set?, BacklogTask.WorkflowOverrideId, Exists in available set?, Use override workflow, Use available candidates, Available count, Return project default, Use the only candidate — no LLM call, …](../diagrams/canonical-workflow-selection.png)
 
-<!-- Rendered from ../diagrams/src/workflow-selection-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-workflow-selection.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

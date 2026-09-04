@@ -1,0 +1,113 @@
+{
+  "$schema": "./graph-spec.schema.json",
+  "title": "Coordinator Architecture",
+  "alt": "Coordinator Architecture: Request or Ready task, Coordinator, Outcome and plan, Dispatch ready tasks, Child agent runs, Collective assembly, Review, merge, and scribe, Reviewed outcome",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "Request",
+      "label": "Request or Ready task",
+      "icon": "globe",
+      "badge": {
+        "text": "Client",
+        "tone": "lavender"
+      }
+    },
+    {
+      "id": "Coordinator",
+      "label": "Coordinator",
+      "icon": "server",
+      "badge": {
+        "text": "Service",
+        "tone": "green"
+      },
+      "subLabel": "understand, confirm, decompose"
+    },
+    {
+      "id": "Plan",
+      "label": "Outcome and plan",
+      "icon": "database",
+      "badge": {
+        "text": "Data",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "Dispatch",
+      "label": "Dispatch ready tasks",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "ChildRuns",
+      "label": "Child agent runs",
+      "icon": "bot",
+      "badge": {
+        "text": "Runtime",
+        "tone": "green"
+      },
+      "subLabel": "agent work + safety gate"
+    },
+    {
+      "id": "Assembly",
+      "label": "Collective assembly",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "Workflow",
+      "label": "Review, merge, and scribe",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      },
+      "subLabel": "review, merge, scribe"
+    },
+    {
+      "id": "Result",
+      "label": "Reviewed outcome",
+      "icon": "box",
+      "badge": {
+        "text": "Step",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Request",
+      "to": "Coordinator"
+    },
+    {
+      "from": "Coordinator",
+      "to": "Plan"
+    },
+    {
+      "from": "Plan",
+      "to": "Dispatch"
+    },
+    {
+      "from": "Dispatch",
+      "to": "ChildRuns"
+    },
+    {
+      "from": "ChildRuns",
+      "to": "Assembly"
+    },
+    {
+      "from": "Assembly",
+      "to": "Workflow"
+    },
+    {
+      "from": "Workflow",
+      "to": "Result"
+    }
+  ]
+}

@@ -10,9 +10,9 @@ This page walks through complete, end-to-end scenarios using Agentweaver — fro
 agent → rai → review → merge → scribe
 ```
 
-![Example walkthroughs: Agent, RAI, Human review, Merge, Declined, Scribe](../diagrams/guide-example-scenarios-fig1.png)
+![Example walkthroughs: Agent, RAI, Human review, Merge, Declined, Scribe](../diagrams/canonical-default-workflow.png)
 
-<!-- Rendered from ../diagrams/src/guide-example-scenarios-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-default-workflow.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -90,9 +90,9 @@ After a successful merge, a **Scribe** pass runs automatically. It auto-merges `
 
 Use the Kanban board to queue work and let the heartbeat dispatch it.
 
-![Scenario 2 — Pick up a backlog task with the board and heartbeat: Backlog, Ready, Active, Human Review, Done, Problems](../diagrams/guide-example-scenarios-fig2.png)
+![Scenario 2 — Pick up a backlog task with the board and heartbeat: Backlog, Ready, Active, Human Review, Done, Problems](../diagrams/canonical-board-lifecycle.png)
 
-<!-- Rendered from ../diagrams/src/guide-example-scenarios-fig2.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-board-lifecycle.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

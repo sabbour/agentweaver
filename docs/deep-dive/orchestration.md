@@ -11,9 +11,9 @@ The engine is intentionally split into two layers:
 
 The split matters. Planning and decomposition need durable state, idempotency, and team-level reasoning. Individual run execution needs streaming, review gates, restart loops, and terminal status handling. Keeping those concerns separate lets Agentweaver recover from partial progress without re-asking the model to re-invent the plan.
 
-![Purpose & Mental Model: Human request or Ready backlog task, Coordinator orchestration, OutcomeSpec + WorkPlan DAG, Dispatch ready subtasks, Child runs, Collective assembly, Run workflow orchestration, Reviewed merged outcome + recorded learnings](../diagrams/orchestration-fig1.png)
+![Purpose & Mental Model: Human request or Ready backlog task, Coordinator orchestration, OutcomeSpec + WorkPlan DAG, Dispatch ready subtasks, Child runs, Collective assembly, Run workflow orchestration, Reviewed merged outcome + recorded learnings](../diagrams/canonical-coordinator-architecture.png)
 
-<!-- Rendered from ../diagrams/src/orchestration-fig1.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-coordinator-architecture.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -193,50 +193,32 @@ A workflow definition answers:
 
 The default conceptual workflow is:
 
-![Workflow as Policy Graph: Agent work, Responsible AI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done](../diagrams/orchestration-fig4.png)
+![Workflow as Policy Graph: Agent work, Responsible AI gate, Terminal: safety failed, Scribe, Human review, Terminal: declined, Merge, Done](../diagrams/canonical-default-workflow.png)
 
-<!-- Rendered from ../diagrams/src/orchestration-fig4.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-default-workflow.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
 
 The important idea is that loops are first-class. Safety or review can return work to the producer. Merge can return to review if blocked. Terminal failures are explicit exits, not exceptions swallowed by the runtime.
 
-### Trigger Eligibility
+### Invocation context and event triggers
 
-Triggers protect workflows from being used in the wrong context.
-
-Agentweaver distinguishes these invocation modes conceptually:
-
-- **Manual** — a user starts a run directly.
-- **Heartbeat** — the background coordinator picks up ready backlog work.
-- **Event** — a workflow reacts to a named system event, such as a task becoming ready.
-
-Selection must filter by trigger before model selection or defaults are applied. A manual-only workflow should not run unattended from the heartbeat loop. A heartbeat-only workflow should not be chosen by a direct user run unless explicitly allowed.
-
-![Trigger Eligibility: Invocation context, Manual start?, Heartbeat pickup?, Manual workflows only, Heartbeat workflows + matching event workflows, Optional workflow override, Project default fallback, Selector if multiple eligible, Selected workflow](../diagrams/orchestration-fig5.png)
-
-<!-- Rendered from ../diagrams/src/orchestration-fig5.json by docs/diagram-renderer +
-     Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
-     Edit the JSON, then run `npm run docs:render-diagrams` and commit the
-     regenerated PNG + .hash.txt. -->
-
-A backlog task may request a workflow override, but the override is only honored if it exists and is trigger-eligible. This preserves safety: metadata on a backlog item cannot force a manual-only workflow to run unattended.
+Manual and heartbeat origins are recorded as invocation context. They do not remove valid workflows from the selector candidate set. Event and schedule triggers are evaluated before the normal backlog and coordinator pickup path. A requested override is used only when it resolves to a valid, bindable workflow.
 
 ### Workflow Selection Logic
 
 The selection order is deliberately conservative:
 
 1. Load built-in, catalog/library, and project-authored workflows.
-2. Determine invocation kind from the run origin.
-3. Filter out trigger-ineligible workflows.
-4. Honor a valid override if present.
-5. Prefer the configured project default when eligible.
-6. If exactly one workflow remains, use it without model help.
-7. If several remain, ask the selector to choose the best process fit.
-8. If selector output is invalid or parsing fails, fall back safely rather than inventing a workflow id.
+2. Record invocation kind from the run origin.
+3. Honor a valid override if present.
+4. Prefer the configured project default when available.
+5. If exactly one workflow remains, use it without model help.
+6. If several remain, ask the selector to choose the best process fit.
+7. If selector output is invalid or parsing fails, fall back safely rather than inventing a workflow id.
 
-This pattern limits model authority. The model may choose among safe candidates, but it does not get to bypass trigger filtering or runtime binding.
+This pattern limits model authority. The model may choose among safe candidates, but it cannot bypass validation or runtime binding.
 
 ### Binding Declarative Nodes to Runtime Execution
 
@@ -349,9 +331,9 @@ Run events have two purposes:
 
 The conceptual design is replay-then-tail:
 
-![Event Streaming: Runtime events, Durable event log, Live bounded channel, SSE client, Last-Event-ID](../diagrams/orchestration-fig6.png)
+![Event Streaming: Runtime events, Durable event log, Live bounded channel, SSE client, Last-Event-ID](../diagrams/canonical-event-replay-tail.png)
 
-<!-- Rendered from ../diagrams/src/orchestration-fig6.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-event-replay-tail.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->

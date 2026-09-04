@@ -135,9 +135,9 @@ A coordinator run exists for work that is too broad for one linear agent pass. I
 
 The key idea is to move from a vague goal to a confirmed contract before agents start editing. The coordinator first drafts an **OutcomeSpec**: desired outcome, scope, assumptions, and clarifying questions. A human can revise or confirm that spec. Only after confirmation does the system decompose work into a **WorkPlan**: subtasks, dependencies, assigned agents, isolation hints, and assembly strategy.
 
-![Coordinator Run Lifecycle: Human goal or ready backlog item, Draft OutcomeSpec, Human confirms?, Revise spec, Create WorkPlan DAG, Find ready dependency frontier, Dispatch child runs in parallel, Observe child terminal states, All usable outputs ready?, Build integration branch, Review aggregate diff, One human review, …](../diagrams/00-system-overview-fig3.png)
+![Coordinator Run Lifecycle: Human goal or ready backlog item, Draft OutcomeSpec, Human confirms?, Revise spec, Create WorkPlan DAG, Find ready dependency frontier, Dispatch child runs in parallel, Observe child terminal states, All usable outputs ready?, Build integration branch, Review aggregate diff, One human review, …](../diagrams/canonical-coordinator-architecture.png)
 
-<!-- Rendered from ../diagrams/src/00-system-overview-fig3.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-coordinator-architecture.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -174,9 +174,9 @@ Agentweaver represents work as workflows rather than hard-coded endpoint scripts
 
 The default full workflow is intentionally conservative:
 
-![Workflow Model: Agent, RAI, Terminal: safety blocked, Scribe, Human review, Terminal: declined, Merge, Terminal: done](../diagrams/00-system-overview-fig4.png)
+![Workflow Model: Agent, RAI, Terminal: safety blocked, Scribe, Human review, Terminal: declined, Merge, Terminal: done](../diagrams/canonical-default-workflow.png)
 
-<!-- Rendered from ../diagrams/src/00-system-overview-fig4.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-default-workflow.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
@@ -232,9 +232,9 @@ Where this lives: `apps/Agentweaver.Api/Memory`, `packages/Agentweaver.Squad/Mem
 
 Agentweaver treats every model tool call as a request, not a right. The governance stack is layered so a single missed check is less likely to become a workspace escape.
 
-![Sandbox and Tool Governance: Model requests tool call, Registered Agentweaver tool, Governance policy, Tool-specific backend checks, Path containment, Sandbox executor gate, Run worktree, Denied](../diagrams/00-system-overview-fig6.png)
+![Sandbox and Tool Governance: Model requests tool call, Registered Agentweaver tool, Governance policy, Tool-specific backend checks, Path containment, Sandbox executor gate, Run worktree, Denied](../diagrams/canonical-sandbox-boundary.png)
 
-<!-- Rendered from ../diagrams/src/00-system-overview-fig6.json by docs/diagram-renderer +
+<!-- Rendered from ../diagrams/src/canonical-sandbox-boundary.json by docs/diagram-renderer +
      Playwright (Fluent-styled React Flow), replacing a Mermaid flowchart.
      Edit the JSON, then run `npm run docs:render-diagrams` and commit the
      regenerated PNG + .hash.txt. -->
