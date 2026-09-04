@@ -355,6 +355,15 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             };
 
             await PrepareAgentHostCapabilityAsync(run, ct).ConfigureAwait(false);
+            await AppendAsync(key, EventTypes.RunStarted, new
+            {
+                runId = key,
+                kind = "operator",
+                agentName = OperatorAgentName,
+                projectId,
+                contextRunId,
+                resumedFromRunId = resumeFromRunId,
+            }, ct).ConfigureAwait(false);
             await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
         }
         catch
@@ -368,16 +377,6 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             // reservation must not keep counting against the user.
             ReleasePendingStart(caller.User);
         }
-
-        await AppendAsync(key, EventTypes.RunStarted, new
-        {
-            runId = key,
-            kind = "operator",
-            agentName = OperatorAgentName,
-            projectId,
-            contextRunId,
-            resumedFromRunId = resumeFromRunId,
-        }, ct).ConfigureAwait(false);
 
         OperatorAssistantResponse? firstTurn = null;
         if (!deferFirstTurn && !string.IsNullOrWhiteSpace(firstMessage))

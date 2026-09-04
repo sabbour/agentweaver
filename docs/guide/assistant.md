@@ -44,6 +44,7 @@ Under the hood this works by durably replaying the conversation's persisted mess
 ## Deleting a session
 
 Each row in the Sessions list has a delete action. Deleting removes the run record and its persisted transcript — this cannot be undone, so a confirmation dialog appears first.
+Because sessions are personal rather than project-owned, you can delete your own session even if the project that was open when you started it has since been deleted or you no longer have access to that project.
 
 ## See also
 

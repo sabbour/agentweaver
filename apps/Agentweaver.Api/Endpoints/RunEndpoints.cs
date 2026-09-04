@@ -246,7 +246,7 @@ app.MapDelete("/api/runs/{id}", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+    if (await EndpointHelpers.RequireRunDeletionAccessAsync(httpContext, run, ct) is { } denied)
         return denied;
 
     // For any non-terminal run: cancel the workflow, clean up worktree, force to terminal.
