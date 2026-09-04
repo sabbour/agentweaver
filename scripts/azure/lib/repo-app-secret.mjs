@@ -21,6 +21,7 @@ const SECRET_NOT_FOUND = /SecretNotFound|was not found in this key vault/i;
 const RBAC_PROPAGATING = /Forbidden|ForbiddenByRbac|not authorized/i;
 const DELETED_BUT_RECOVERABLE = /ObjectIsDeletedButRecoverable|deleted but recoverable/i;
 const RECOVERY_IN_PROGRESS = /Conflict|already being recovered|recovery.*in progress/i;
+const RECOVERY_ALREADY_COMPLETED = /already (?:been )?recovered|already (?:in )?(?:an? )?active(?: state)?/i;
 const RECOVERY_POLL_ATTEMPTS = 60;
 const RECOVERY_POLL_INTERVAL_MS = 500;
 
@@ -79,9 +80,12 @@ async function inspectKeyVaultSecretResult(vaultName, name, { exec = execDefault
   if (active.status !== "missing") return active;
 
   const deleted = await inspectDeletedKeyVaultSecretResult(vaultName, name, { exec });
-  return deleted.status === "missing"
-    ? { status: "missing", error: active.error }
-    : deleted;
+  if (deleted.status !== "missing") return deleted;
+
+  const activeAfterDeletedCheck = await inspectActiveKeyVaultSecretResult(vaultName, name, { exec });
+  return activeAfterDeletedCheck.status === "missing"
+    ? { status: "missing", error: activeAfterDeletedCheck.error || active.error }
+    : activeAfterDeletedCheck;
 }
 
 export async function inspectKeyVaultSecret(vaultName, name, opts = {}) {
@@ -119,8 +123,10 @@ async function recoverDeletedSecretAndWait(
     const recoveryError = recovered.stderr || "";
     if (
       recovered.code !== 0 &&
+      !SECRET_NOT_FOUND.test(recoveryError) &&
       !DELETED_BUT_RECOVERABLE.test(recoveryError) &&
-      !RECOVERY_IN_PROGRESS.test(recoveryError)
+      !RECOVERY_IN_PROGRESS.test(recoveryError) &&
+      !RECOVERY_ALREADY_COMPLETED.test(recoveryError)
     ) {
       throw new Error(`Failed to recover Key Vault secret '${name}': ${recoveryError || "unknown Azure CLI error"}`);
     }
