@@ -22,6 +22,15 @@ PKCE S256 and explicit consent are required. The stable least-privilege scope is
 `mcp:invoke`; requesting additional approved scopes re-opens consent. Password,
 implicit, client-credentials, and device grants are unavailable.
 
+The consent page keeps a strict Content Security Policy. Its form may redirect only to
+the callback registered for that OAuth client: the exact loopback or HTTPS authority, or
+the validated private-use scheme for a native client. If the Agentweaver browser session
+expires while the consent page is open, the page shows a same-origin sign-in action
+instead of forwarding the form submission through the upstream identity-provider chain.
+Chromium does not accept literal IPv6 hosts in `form-action`; for a validated IPv6
+callback, Agentweaver therefore finishes consent through a short-lived, single-use
+same-origin continuation that contains no callback, client state, code, or token.
+
 Access tokens are signed JWTs with a ten-minute lifetime. Authorization codes and
 refresh tokens are opaque references persisted by OpenIddict. Code replay is
 rejected. Refresh-token replay atomically revokes all tokens in its authorization
