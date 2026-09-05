@@ -147,6 +147,7 @@ interface OptimisticUserMessage {
   text: string;
   normalizedText: string;
   expectedServerOccurrence: number | null;
+  snapshotRequestGenerationAtSend: number;
   status: 'sending' | 'syncing';
 }
 
@@ -349,6 +350,8 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     events,
     baselineEvents,
     baselineReady,
+    snapshotRequestGeneration,
+    baselineRequestGeneration,
     status: streamStatus,
     error: streamError,
     seedError,
@@ -395,10 +398,40 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const optimisticExpectedOccurrences = useMemo(() => {
     const nextExpectedOccurrence = new Map(baselineUserMessageCounts);
     const expectedByMessageId = new Map<string, number>();
+    const postSendPendingByText = new Map<string, OptimisticUserMessage[]>();
+    if (baselineReady && baselineRequestGeneration !== null) {
+      for (const message of optimisticMessages) {
+        if (
+          message.runId !== runId
+          || message.expectedServerOccurrence !== null
+          || baselineRequestGeneration <= message.snapshotRequestGenerationAtSend
+        ) {
+          continue;
+        }
+        const messages = postSendPendingByText.get(message.normalizedText) ?? [];
+        messages.push(message);
+        postSendPendingByText.set(message.normalizedText, messages);
+      }
+    }
+    const baselineIncludedOccurrences = new Map<string, number>();
+    for (const [normalizedText, messages] of postSendPendingByText) {
+      const baselineCount = baselineUserMessageCounts.get(normalizedText) ?? 0;
+      // A later snapshot can claim only its trailing repeated occurrences. If it contains
+      // no older occurrence beyond the pending group, keep waiting rather than treating
+      // an unknown pre-send message as confirmation.
+      if (baselineCount <= messages.length) continue;
+      messages.forEach((message, index) => {
+        baselineIncludedOccurrences.set(
+          message.id,
+          baselineCount - messages.length + index + 1,
+        );
+      });
+    }
     for (const message of optimisticMessages) {
       if (message.runId !== runId) continue;
       const currentMaximum = nextExpectedOccurrence.get(message.normalizedText) ?? 0;
       const expectedServerOccurrence = message.expectedServerOccurrence
+        ?? baselineIncludedOccurrences.get(message.id)
         ?? (baselineReady ? currentMaximum + 1 : null);
       if (expectedServerOccurrence === null) continue;
       nextExpectedOccurrence.set(
@@ -408,7 +441,13 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       expectedByMessageId.set(message.id, expectedServerOccurrence);
     }
     return expectedByMessageId;
-  }, [baselineReady, baselineUserMessageCounts, optimisticMessages, runId]);
+  }, [
+    baselineReady,
+    baselineRequestGeneration,
+    baselineUserMessageCounts,
+    optimisticMessages,
+    runId,
+  ]);
   const visibleOptimisticMessages = useMemo(
     () => optimisticMessages.filter((message) => {
       if (message.runId !== runId) return false;
@@ -538,6 +577,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       text: message,
       normalizedText,
       expectedServerOccurrence,
+      snapshotRequestGenerationAtSend: snapshotRequestGeneration,
       status: 'sending',
     };
     setOptimisticMessages((current) => [...current, optimisticMessage]);
@@ -634,6 +674,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     runId,
     searchParams,
     serverUserMessageCounts,
+    snapshotRequestGeneration,
     setSearchParams,
   ]);
 
