@@ -652,10 +652,20 @@ public sealed record GitHubRepositorySelectionCandidateDto
     [JsonPropertyName("pushed_at")] public DateTimeOffset? PushedAt { get; init; }
 }
 
+/// <summary>Safe display and navigation metadata for one Repo App installation.</summary>
+public sealed record GitHubRepositoryInstallationDto
+{
+    [JsonPropertyName("account_login")] public required string AccountLogin { get; init; }
+    [JsonPropertyName("account_type")] public required string AccountType { get; init; }
+    [JsonPropertyName("repository_selection")] public required string RepositorySelection { get; init; }
+    [JsonPropertyName("management_url")] public required string ManagementUrl { get; init; }
+}
+
 /// <summary>Response for GET /api/github/repository-selections.</summary>
 public sealed record GitHubRepositorySelectionListResponse
 {
     [JsonPropertyName("repositories")] public required IReadOnlyList<GitHubRepositorySelectionCandidateDto> Repositories { get; init; }
+    [JsonPropertyName("installations")] public required IReadOnlyList<GitHubRepositoryInstallationDto> Installations { get; init; }
 }
 
 /// <summary>

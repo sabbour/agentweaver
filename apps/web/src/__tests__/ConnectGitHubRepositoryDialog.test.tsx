@@ -31,6 +31,7 @@ beforeEach(() => {
     { login: 'octo', type: 'user' },
   ] as never);
   vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+    installations: [],
     repositories: [
       { full_name: 'octo/existing-repo', owner_login: 'octo', private: true, default_branch: 'main', pushed_at: null },
       { full_name: 'octo/other-repo', owner_login: 'octo', private: false, default_branch: 'develop', pushed_at: null },

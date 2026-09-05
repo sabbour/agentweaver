@@ -524,8 +524,16 @@ export interface GitHubRepositorySelectionCandidate {
   pushed_at: string | null;
 }
 
+export interface GitHubRepositoryInstallation {
+  account_login: string;
+  account_type: 'user' | 'organization';
+  repository_selection: 'all' | 'selected';
+  management_url: string;
+}
+
 export interface GitHubRepositorySelectionListResponse {
   repositories: GitHubRepositorySelectionCandidate[];
+  installations: GitHubRepositoryInstallation[];
 }
 
 export interface GitHubRepositorySelectionCodeResponse {
