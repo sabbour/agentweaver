@@ -52,7 +52,6 @@ beforeEach(() => {
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([]);
   vi.mocked(apiClient.suggestBlueprint).mockResolvedValue({ recommended_blueprint: null, rationale: '', confidence: 0, signals: [], fallback: true });
   vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
-    installations: [],
     repositories: [{ full_name: 'octocat/hello-world', owner_login: 'octocat', private: false, default_branch: 'main', pushed_at: null }],
     installations: [{
       account_login: 'octocat',
