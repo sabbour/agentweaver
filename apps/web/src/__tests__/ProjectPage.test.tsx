@@ -1,4 +1,5 @@
 import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { ProjectPage } from '../pages/ProjectPage';
 import { makeBoard } from './fixtures/board';
@@ -182,6 +183,30 @@ describe('ProjectPage board (board-dedupe)', () => {
     expect(await screen.findByText('Project setup')).toBeDefined();
     expect(screen.getAllByText('Required').length).toBeGreaterThan(0);
     expect(screen.getByText('Action required')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Dismiss Project setup' })).toBeNull();
+  });
+
+  it.each([
+    ['Viewer', new ApiError(403, JSON.stringify({ error: 'forbidden' }))],
+    ['Contributor', new Error('readiness unavailable')],
+  ])('loads the project board for a %s when Owner-only readiness is unavailable', async (
+    _role,
+    readinessError,
+  ) => {
+    vi.mocked(apiClient.getProject).mockResolvedValue({
+      ...project,
+      origin: 'blank',
+      source_repository: null,
+    } as Project);
+    vi.mocked(apiClient.getUnattendedReadiness).mockRejectedValue(readinessError);
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Start task' })).toBeDefined();
+    });
+    expect(screen.queryByText('Project setup')).toBeNull();
+    expect(screen.queryByText('The project board did not load')).toBeNull();
   });
 
   it('keeps setup dismissal scoped to the signed-in user', async () => {

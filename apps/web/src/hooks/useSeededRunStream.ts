@@ -50,17 +50,17 @@ export function useSeededRunStream(runId: string): SeededRunStream {
   const [baselineEvents, setBaselineEvents] = useState<RunStreamEvent[]>([]);
   const [baselineRunId, setBaselineRunId] = useState<string | null>(null);
   const [seedError, setSeedError] = useState<string | null>(null);
+  const baselineRunIdRef = useRef<string | null>(null);
   const refreshGenerationRef = useRef(0);
   const runGenerationRef = useRef(0);
 
   useEffect(() => {
     refreshGenerationRef.current += 1;
     runGenerationRef.current += 1;
+    baselineRunIdRef.current = null;
   }, [runId]);
 
-  const loadPersistedEvents = useCallback(async (
-    establishBaseline: boolean,
-  ): Promise<RunStreamEvent[]> => {
+  const loadPersistedEvents = useCallback(async (): Promise<RunStreamEvent[]> => {
     const refreshGeneration = ++refreshGenerationRef.current;
     const runGeneration = runGenerationRef.current;
     const isCurrentRefresh = () => refreshGeneration === refreshGenerationRef.current;
@@ -71,7 +71,8 @@ export function useSeededRunStream(runId: string): SeededRunStream {
         setSeedEvents([]);
         setSeedRunId('');
       }
-      if (establishBaseline && isCurrentRun()) {
+      if (isCurrentRun() && baselineRunIdRef.current !== '') {
+        baselineRunIdRef.current = '';
         setBaselineEvents([]);
         setBaselineRunId('');
       }
@@ -84,7 +85,8 @@ export function useSeededRunStream(runId: string): SeededRunStream {
         type: e.type as EventType,
         payload: e.payload,
       }));
-      if (establishBaseline && isCurrentRun()) {
+      if (isCurrentRun() && baselineRunIdRef.current !== runId) {
+        baselineRunIdRef.current = runId;
         setBaselineEvents(refreshed);
         setBaselineRunId(runId);
       }
@@ -102,12 +104,12 @@ export function useSeededRunStream(runId: string): SeededRunStream {
   }, [runId]);
 
   const refresh = useCallback(
-    () => loadPersistedEvents(false),
+    () => loadPersistedEvents(),
     [loadPersistedEvents],
   );
 
   useEffect(() => {
-    void loadPersistedEvents(true).catch(() => {});
+    void loadPersistedEvents().catch(() => {});
   }, [loadPersistedEvents]);
 
   const currentSeedEvents = useMemo(

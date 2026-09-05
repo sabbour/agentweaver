@@ -9,7 +9,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { formatApiErrorMessage, parseApiBody } from '../api/errors';
@@ -297,13 +297,14 @@ export interface AssistantRunPageProps {
 export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const styles = useStyles();
   const params = useParams<{ projectId?: string }>();
+  const location = useLocation();
   const effectiveProjectId = projectId ?? params.projectId;
   const [searchParams, setSearchParams] = useSearchParams();
   const routeRunId = searchParams.get('runId') ?? '';
 
-  // The URL is the conversation source of truth. AssistantRoute does not key this page by
-  // runId, so assigning the first run id connects the stream without remounting this
-  // component and discarding its optimistic message.
+  // The URL is the conversation source of truth. AssistantRoute preserves this page while
+  // assigning a newly-created session's first run id, then resets it when navigation moves
+  // between two already-established run ids.
   const runId = routeRunId;
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -558,7 +559,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         )));
         const next = new URLSearchParams(searchParams);
         next.set('runId', created.run_id);
-        setSearchParams(next, { replace: true });
+        setSearchParams(next, { replace: true, state: location.state });
         // Create the conversation first so React can bind its SSE stream while this request is
         // still running. Supplying the opening message to createAssistantRun would keep the run id
         // hidden until the entire model turn completed, making the first reply impossible to stream.
@@ -599,7 +600,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         pendingResumeFromRunIdRef.current = runId;
         const next = new URLSearchParams(searchParams);
         next.delete('runId');
-        setSearchParams(next, { replace: true });
+        setSearchParams(next, { replace: true, state: location.state });
         setError('This conversation could not be found, so it can no longer be continued. Send your message again to start a new one that remembers this conversation.');
       } else if (
         !isNewRun &&
@@ -614,7 +615,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         pendingResumeFromRunIdRef.current = runId;
         const next = new URLSearchParams(searchParams);
         next.delete('runId');
-        setSearchParams(next, { replace: true });
+        setSearchParams(next, { replace: true, state: location.state });
         setError('This conversation has ended and can no longer be continued. Send your message again to start a new one that remembers this conversation.');
       } else {
         setError(formatApiErrorMessage(err));
@@ -627,6 +628,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     busy,
     effectiveProjectId,
     input,
+    location.state,
     optimisticMessages,
     baselineReady,
     runId,
