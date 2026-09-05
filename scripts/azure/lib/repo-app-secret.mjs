@@ -28,10 +28,33 @@ const RECOVERY_POLL_INTERVAL_MS = 500;
 const PEM_BLOCK = /-----BEGIN ([A-Z0-9 ]+)-----[\s\S]*?-----END \1-----/g;
 const RSA_PRIVATE_KEY_LABELS = new Set(["RSA PRIVATE KEY", "PRIVATE KEY"]);
 const ENCRYPTED_PRIVATE_KEY = /BEGIN ENCRYPTED PRIVATE KEY|Proc-Type:\s*4,\s*ENCRYPTED/i;
+const STAGED_FILE_CLEANUP_ATTEMPTS = 3;
+const RETRYABLE_CLEANUP_ERRORS = new Set(["EBUSY", "EMFILE", "ENFILE", "ENOTEMPTY", "EPERM"]);
 
 function normalizeComparablePath(value) {
   const normalized = path.normalize(value);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function removeStagedDirectory(fsImpl, stageDir) {
+  let lastError;
+  for (let attempt = 1; attempt <= STAGED_FILE_CLEANUP_ATTEMPTS; attempt++) {
+    try {
+      fsImpl.rmSync(stageDir, {
+        recursive: true,
+        force: true,
+        maxRetries: STAGED_FILE_CLEANUP_ATTEMPTS,
+        retryDelay: 50,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!RETRYABLE_CLEANUP_ERRORS.has(error?.code) || attempt === STAGED_FILE_CLEANUP_ATTEMPTS) {
+        throw error;
+      }
+    }
+  }
+  throw lastError;
 }
 
 function validateRepoAppPrivateKeyBytes(bytes, sourceFile) {
@@ -82,11 +105,16 @@ export function stageRepoAppPrivateKeyFile(
   const resolvedFile = path.resolve(configuredFile);
   let sourceStat;
   let realPath;
+  let realParentPath;
   try {
-    sourceStat = fsImpl.lstatSync(resolvedFile);
+    sourceStat = fsImpl.lstatSync(resolvedFile, { bigint: true });
     realPath = fsImpl.realpathSync.native
       ? fsImpl.realpathSync.native(resolvedFile)
       : fsImpl.realpathSync(resolvedFile);
+    const parentPath = path.dirname(resolvedFile);
+    realParentPath = fsImpl.realpathSync.native
+      ? fsImpl.realpathSync.native(parentPath)
+      : fsImpl.realpathSync(parentPath);
   } catch {
     throw new Error(`Repo App private-key file '${resolvedFile}' could not be read.`);
   }
@@ -95,12 +123,13 @@ export function stageRepoAppPrivateKeyFile(
       `Repo App private-key file '${resolvedFile}' must not be a symbolic link, junction, or reparse-point path.`,
     );
   }
-  if (normalizeComparablePath(realPath) !== normalizeComparablePath(resolvedFile)) {
+  const expectedRealPath = path.join(realParentPath, path.basename(resolvedFile));
+  if (normalizeComparablePath(realPath) !== normalizeComparablePath(expectedRealPath)) {
     throw new Error(
-      `Repo App private-key file '${resolvedFile}' must not traverse a symbolic link, junction, or reparse-point path.`,
+      `Repo App private-key file '${resolvedFile}' must not be a symbolic link, junction, or reparse-point path.`,
     );
   }
-  if (!sourceStat.isFile() || sourceStat.size === 0) {
+  if (!sourceStat.isFile() || sourceStat.size === 0n) {
     throw new Error(`Repo App private-key file '${resolvedFile}' must be a non-empty file.`);
   }
 
@@ -109,7 +138,7 @@ export function stageRepoAppPrivateKeyFile(
   try {
     const noFollow = fsImpl.constants.O_NOFOLLOW ?? 0;
     sourceFd = fsImpl.openSync(resolvedFile, fsImpl.constants.O_RDONLY | noFollow);
-    const openedStat = fsImpl.fstatSync(sourceFd);
+    const openedStat = fsImpl.fstatSync(sourceFd, { bigint: true });
     if (
       !openedStat.isFile() ||
       (sourceStat.dev !== openedStat.dev || sourceStat.ino !== openedStat.ino)
@@ -132,6 +161,8 @@ export function stageRepoAppPrivateKeyFile(
   const stageDir = fsImpl.mkdtempSync(path.join(scratchDir, "agentweaver-repo-app-key-"));
   const stagedFile = path.join(stageDir, "private-key.pem");
   let stagedFd;
+  let stagingError;
+  let closeError;
   try {
     try {
       fsImpl.chmodSync(stageDir, 0o700);
@@ -150,11 +181,31 @@ export function stageRepoAppPrivateKeyFile(
     } catch {
       // Windows ACLs do not expose POSIX mode bits through Node.
     }
-  } catch {
-    fsImpl.rmSync(stageDir, { recursive: true, force: true });
-    throw new Error("Could not stage the validated Repo App private key in a protected temporary file.");
+  } catch (error) {
+    stagingError = error;
   } finally {
-    if (stagedFd !== undefined) fsImpl.closeSync(stagedFd);
+    if (stagedFd !== undefined) {
+      try {
+        fsImpl.closeSync(stagedFd);
+      } catch (error) {
+        closeError = error;
+      }
+    }
+  }
+  if (stagingError || closeError) {
+    let removalError;
+    try {
+      removeStagedDirectory(fsImpl, stageDir);
+    } catch (error) {
+      removalError = error;
+    }
+    const causes = [stagingError, closeError, removalError].filter(Boolean);
+    const message = removalError
+      ? "Could not stage or remove the validated Repo App private key temporary file."
+      : "Could not stage the validated Repo App private key in a protected temporary file.";
+    throw new Error(message, {
+      cause: causes.length === 1 ? causes[0] : new AggregateError(causes),
+    });
   }
 
   let cleaned = false;
@@ -162,8 +213,8 @@ export function stageRepoAppPrivateKeyFile(
     filePath: stagedFile,
     cleanup() {
       if (cleaned) return;
+      removeStagedDirectory(fsImpl, stageDir);
       cleaned = true;
-      fsImpl.rmSync(stageDir, { recursive: true, force: true });
     },
   };
 }

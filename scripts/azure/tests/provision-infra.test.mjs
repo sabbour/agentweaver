@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { parseArgs, run, runInteractiveInstaller } from "../provision-infra.mjs";
+import { ensureRepoAppPrivateKeySecret } from "../lib/repo-app-secret.mjs";
 
 function generateRsaPrivateKeyPem(type = "pkcs8") {
   return generateKeyPairSync("rsa", {
@@ -41,6 +42,19 @@ function generateEcPrivateKeyPem() {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   }).privateKey;
+}
+
+function noopLog() {
+  return {
+    banner() {},
+    field() {},
+    info() {},
+    ok() {},
+    section() {},
+    skip() {},
+    step() {},
+    warn() {},
+  };
 }
 
 test("parseArgs accepts the optional Entra enterprise app object ID flag", () => {
@@ -232,18 +246,21 @@ test("run rejects every invalid Repo App key class before variable discovery or 
 
 test("run rejects a Repo App key reparse path before variable discovery or Azure calls", async (t) => {
   const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "provision-repo-app-symlink-"));
-  const targetDir = path.join(scratchRoot, "target");
-  const linkedDir = path.join(scratchRoot, "linked");
-  const targetFile = path.join(targetDir, "source.pem");
-  const sourceFile = path.join(linkedDir, "source.pem");
-  fs.mkdirSync(targetDir);
+  const targetFile = path.join(scratchRoot, "target.pem");
+  const sourceFile = path.join(scratchRoot, "source.pem");
   fs.writeFileSync(targetFile, generateRsaPrivateKeyPem());
   try {
-    fs.symlinkSync(targetDir, linkedDir, "junction");
-  } catch (error) {
-    fs.rmSync(scratchRoot, { recursive: true, force: true });
-    t.skip(`Directory junctions are unavailable on this platform: ${error.code ?? "unknown error"}`);
-    return;
+    fs.symlinkSync(targetFile, sourceFile, "file");
+  } catch {
+    const targetDir = path.join(scratchRoot, "target-dir");
+    fs.mkdirSync(targetDir);
+    try {
+      fs.symlinkSync(targetDir, sourceFile, "junction");
+    } catch (error) {
+      fs.rmSync(scratchRoot, { recursive: true, force: true });
+      t.skip(`Reparse points are unavailable on this platform: ${error.code ?? "unknown error"}`);
+      return;
+    }
   }
 
   let variablesResolved = false;
@@ -267,10 +284,138 @@ test("run rejects a Repo App key reparse path before variable discovery or Azure
           return {};
         },
       }),
-      /must not traverse a symbolic link, junction, or reparse-point path/i,
+      /must not be a symbolic link, junction, or reparse-point path/i,
     );
     assert.equal(azureCalls.length, 0);
     assert.equal(variablesResolved, false);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
+test("run imports the staged Repo App key once and makes deploy verification-only", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "provision-repo-app-once-"));
+  const sourceFile = path.join(scratchRoot, "source.pem");
+  fs.writeFileSync(sourceFile, generateRsaPrivateKeyPem());
+  let canonicalAvailable = false;
+  let stagedFile;
+  let setCalls = 0;
+  const keyVaultExec = {
+    async capture(_cmd, args) {
+      const operation = args[2];
+      if (operation === "set") {
+        setCalls += 1;
+        stagedFile = args[args.indexOf("--file") + 1];
+        assert.equal(fs.existsSync(stagedFile), true);
+        canonicalAvailable = true;
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (operation === "show") {
+        return canonicalAvailable
+          ? { code: 0, stdout: "https://kv/secrets/ghtok-repo-app-private-key/version", stderr: "" }
+          : { code: 3, stdout: "", stderr: "ERROR: (SecretNotFound) secret was not found" };
+      }
+      if (operation === "show-deleted") {
+        return { code: 3, stdout: "", stderr: "ERROR: (SecretNotFound) deleted secret was not found" };
+      }
+      throw new Error(`Unexpected Key Vault operation: ${args.join(" ")}`);
+    },
+  };
+  const resolvedConfigs = [];
+  const resolveVariables = async ({ env }) => {
+    resolvedConfigs.push({ ...env });
+    return {
+      RESOURCE_GROUP: "rg",
+      CLUSTER_NAME: "aks",
+      ACR_NAME: "acr",
+      ACR_LOGIN_SERVER: "acr.azurecr.io",
+      LOCATION: "westus2",
+      MONITORING_LOCATION: "westus2",
+      NODE_VM_SIZE: "Standard_D4s_v6",
+      KEYVAULT_NAME: "kv",
+      PG_SERVER_NAME: "agentweaver-pg",
+      PG_LOCATION: "westus2",
+      PG_HA_MODE: "ZoneRedundant",
+      PG_ACCESS_MODE: "private",
+      NAMESPACE: "agentweaver",
+      AUTH_MODE: "Entra",
+      ENTRA_CLIENT_ID: "client-id",
+      ENTRA_TENANT_ID: "tenant-id",
+      OAUTH_SIGNING_CERTIFICATE_NAME: "signing",
+      OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption",
+      REPO_APP_PRIVATE_KEY_FILE: env.REPO_APP_PRIVATE_KEY_FILE ?? "",
+      IMAGE_TAG: "test",
+      AGENTHOST_IMAGE_TAG: "test",
+    };
+  };
+  const noOpStep = { run: async () => ({}) };
+
+  try {
+    const result = await run({
+      argv: [
+        "--skip-postgres",
+        "--image-source", "acr-build",
+        "--entra-client-id", "client-id",
+        "--entra-tenant-id", "tenant-id",
+        "--repo-app-private-key-file", sourceFile,
+        "--recover-repo-app-private-key",
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      az: {},
+      exec: {
+        capture: async () => ({ code: 1, stdout: "", stderr: "" }),
+        run: async () => ({ code: 0, stdout: "", stderr: "" }),
+      },
+      log: noopLog(),
+      resolveVariables,
+      steps: {
+        createCluster: noOpStep,
+        setupIdentity: {
+          run: async (cfg) => {
+            assert.notEqual(cfg.REPO_APP_PRIVATE_KEY_STAGED_FILE, "");
+            assert.equal(cfg.RECOVER_REPO_APP_PRIVATE_KEY, true);
+            await ensureRepoAppPrivateKeySecret(
+              {
+                vaultName: cfg.KEYVAULT_NAME,
+                stagedSourceFile: cfg.REPO_APP_PRIVATE_KEY_STAGED_FILE,
+                recoverDeleted: cfg.RECOVER_REPO_APP_PRIVATE_KEY,
+              },
+              { exec: keyVaultExec, log: noopLog() },
+            );
+          },
+        },
+        provisionMonitoring: noOpStep,
+        provisionPostgres: noOpStep,
+        buildImages: { run: async () => ({ expectedImageDigests: {} }) },
+        verifyProvenance: noOpStep,
+        genA2aMtlsCerts: noOpStep,
+        deployStep: {
+          run: async (cfg) => {
+            assert.equal(cfg.REPO_APP_PRIVATE_KEY_FILE, "");
+            assert.equal(cfg.REPO_APP_PRIVATE_KEY_STAGED_FILE, "");
+            assert.equal(cfg.RECOVER_REPO_APP_PRIVATE_KEY, false);
+            assert.equal(fs.existsSync(stagedFile), false);
+            return ensureRepoAppPrivateKeySecret(
+              {
+                vaultName: cfg.KEYVAULT_NAME,
+                sourceFile: cfg.REPO_APP_PRIVATE_KEY_FILE,
+                stagedSourceFile: cfg.REPO_APP_PRIVATE_KEY_STAGED_FILE,
+                recoverDeleted: cfg.RECOVER_REPO_APP_PRIVATE_KEY,
+              },
+              { exec: keyVaultExec, log: noopLog() },
+            );
+          },
+        },
+        verifyStep: { run: async () => ({ ok: true, pass: 1, fail: 0 }) },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(setCalls, 1);
+    assert.equal(resolvedConfigs.length, 2);
+    assert.notEqual(resolvedConfigs[0].REPO_APP_PRIVATE_KEY_FILE, "");
+    assert.equal(resolvedConfigs[1].REPO_APP_PRIVATE_KEY_FILE, "");
   } finally {
     fs.rmSync(scratchRoot, { recursive: true, force: true });
   }

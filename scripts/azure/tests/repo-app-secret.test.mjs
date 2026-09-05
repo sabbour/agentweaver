@@ -464,7 +464,7 @@ test("stageRepoAppPrivateKeyFile accepts the two .NET RSA.ImportFromPem-compatib
       }
     });
 
-    test("stageRepoAppPrivateKeyFile rejects paths traversing a directory symlink or junction", (t) => {
+    test("stageRepoAppPrivateKeyFile allows a canonicalized ancestor directory alias", (t) => {
       const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-junction-"));
       const targetDir = path.join(scratchRoot, "target");
       const linkedDir = path.join(scratchRoot, "linked");
@@ -480,9 +480,271 @@ test("stageRepoAppPrivateKeyFile accepts the two .NET RSA.ImportFromPem-compatib
       }
 
       try {
+        const staged = stageRepoAppPrivateKeyFile(
+          path.join(linkedDir, "source.pem"),
+          { scratchDir: scratchRoot },
+        );
+        try {
+          assertSameSecretBytes(fs.readFileSync(staged.filePath), fs.readFileSync(targetFile));
+        } finally {
+          staged.cleanup();
+        }
+      } finally {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("stageRepoAppPrivateKeyFile allows a macOS-style /var to /private/var canonical ancestor alias", () => {
+      const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-macos-alias-"));
+      const sourceFile = path.join(scratchRoot, "source.pem");
+      fs.writeFileSync(sourceFile, generatePrivateKeyPem());
+      const canonicalParent = path.join(path.parse(sourceFile).root, "private", "var", "folders", "agentweaver-test");
+      const realpathSync = (candidate) => {
+        const resolvedCandidate = path.resolve(candidate);
+        if (resolvedCandidate === path.dirname(sourceFile)) return canonicalParent;
+        if (resolvedCandidate === sourceFile) return path.join(canonicalParent, path.basename(sourceFile));
+        return fs.realpathSync(candidate);
+      };
+      realpathSync.native = realpathSync;
+      const fsImpl = Object.assign(Object.create(fs), { realpathSync });
+
+      try {
+        const staged = stageRepoAppPrivateKeyFile(sourceFile, { fsImpl, scratchDir: scratchRoot });
+        staged.cleanup();
+        assert.equal(fs.existsSync(staged.filePath), false);
+      } finally {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("stageRepoAppPrivateKeyFile verifies the opened file is the lstat-validated file", () => {
+      const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-opened-identity-"));
+      const sourceFile = path.join(scratchRoot, "source.pem");
+      fs.writeFileSync(sourceFile, generatePrivateKeyPem());
+      const sourceStat = fs.lstatSync(sourceFile, { bigint: true });
+      const firstUnsafeInode = 9_007_199_254_740_992n;
+      let openedFd;
+      let closedFd;
+      const fsImpl = Object.assign(Object.create(fs), {
+        lstatSync(candidate, options) {
+          assert.equal(options?.bigint, true);
+          const stat = fs.lstatSync(candidate, options);
+          if (path.resolve(candidate) !== sourceFile) return stat;
+          return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+            ino: firstUnsafeInode,
+          });
+        },
+        openSync(...args) {
+          const fd = fs.openSync(...args);
+          if (path.resolve(args[0]) === sourceFile) openedFd = fd;
+          return fd;
+        },
+        fstatSync(fd, options) {
+          assert.equal(options?.bigint, true);
+          const stat = fs.fstatSync(fd, options);
+          if (fd !== openedFd) return stat;
+          return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+            dev: sourceStat.dev,
+            ino: firstUnsafeInode + 1n,
+          });
+        },
+        closeSync(fd) {
+          fs.closeSync(fd);
+          if (fd === openedFd) closedFd = fd;
+        },
+      });
+
+      try {
         assert.throws(
-          () => stageRepoAppPrivateKeyFile(path.join(linkedDir, "source.pem"), { scratchDir: scratchRoot }),
-          /must not traverse a symbolic link, junction, or reparse-point path/i,
+          () => stageRepoAppPrivateKeyFile(sourceFile, { fsImpl, scratchDir: scratchRoot }),
+          /changed while it was being opened/i,
+        );
+        assert.equal(closedFd, openedFd);
+      } finally {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("stageRepoAppPrivateKeyFile retries an injected transient Windows sharing violation internally", () => {
+      const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-sharing-"));
+      const sourceFile = path.join(scratchRoot, "source.pem");
+      fs.writeFileSync(sourceFile, generatePrivateKeyPem());
+      let stagedFd;
+      let stagedFdOpen = false;
+      let stageDir;
+      let removalAttempts = 0;
+      const fsImpl = Object.assign(Object.create(fs), {
+        openSync(...args) {
+          const fd = fs.openSync(...args);
+          if (path.basename(args[0]) === "private-key.pem") {
+            stagedFd = fd;
+            stagedFdOpen = true;
+            stageDir = path.dirname(args[0]);
+          }
+          return fd;
+        },
+        closeSync(fd) {
+          fs.closeSync(fd);
+          if (fd === stagedFd) stagedFdOpen = false;
+        },
+        rmSync(target, options) {
+          if (target === stageDir) {
+            removalAttempts += 1;
+            assert.equal(stagedFdOpen, false);
+            if (removalAttempts === 1) {
+              const error = new Error("injected Windows sharing violation");
+              error.code = "EPERM";
+              throw error;
+            }
+          }
+          return fs.rmSync(target, options);
+        },
+      });
+
+      try {
+        const staged = stageRepoAppPrivateKeyFile(sourceFile, { fsImpl, scratchDir: scratchRoot });
+        staged.cleanup();
+        assert.equal(fs.existsSync(staged.filePath), false);
+        staged.cleanup();
+        assert.equal(removalAttempts, 2);
+      } finally {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("stageRepoAppPrivateKeyFile leaves cleanup retryable after bounded deletion failures", () => {
+      const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-cleanup-retry-"));
+      const sourceFile = path.join(scratchRoot, "source.pem");
+      fs.writeFileSync(sourceFile, generatePrivateKeyPem());
+      let stageDir;
+      let removalAttempts = 0;
+      const fsImpl = Object.assign(Object.create(fs), {
+        openSync(...args) {
+          const fd = fs.openSync(...args);
+          if (path.basename(args[0]) === "private-key.pem") {
+            stageDir = path.dirname(args[0]);
+          }
+          return fd;
+        },
+        rmSync(target, options) {
+          if (target === stageDir) {
+            removalAttempts += 1;
+            if (removalAttempts <= 3) {
+              const error = new Error("injected persistent Windows sharing violation");
+              error.code = "EPERM";
+              throw error;
+            }
+          }
+          return fs.rmSync(target, options);
+        },
+      });
+
+      try {
+        const staged = stageRepoAppPrivateKeyFile(sourceFile, { fsImpl, scratchDir: scratchRoot });
+        assert.throws(() => staged.cleanup(), /sharing violation/i);
+        assert.equal(fs.existsSync(staged.filePath), true);
+        staged.cleanup();
+        assert.equal(fs.existsSync(staged.filePath), false);
+        assert.equal(removalAttempts, 4);
+      } finally {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("stageRepoAppPrivateKeyFile closes a failed staged write before removing its directory", () => {
+      const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-write-failure-"));
+      const sourceFile = path.join(scratchRoot, "source.pem");
+      fs.writeFileSync(sourceFile, generatePrivateKeyPem());
+      let stagedFd;
+      let stagedFdOpen = false;
+      let removalAttempts = 0;
+      const fsImpl = Object.assign(Object.create(fs), {
+        openSync(...args) {
+          const fd = fs.openSync(...args);
+          if (path.basename(args[0]) === "private-key.pem") {
+            stagedFd = fd;
+            stagedFdOpen = true;
+          }
+          return fd;
+        },
+        writeFileSync(target, ...args) {
+          if (target === stagedFd) throw new Error("injected staged write failure");
+          return fs.writeFileSync(target, ...args);
+        },
+        closeSync(fd) {
+          fs.closeSync(fd);
+          if (fd === stagedFd) stagedFdOpen = false;
+        },
+        rmSync(target, options) {
+          if (path.basename(target).startsWith("agentweaver-repo-app-key-")) {
+            removalAttempts += 1;
+            if (stagedFdOpen) {
+              const error = new Error("injected Windows sharing violation");
+              error.code = "EPERM";
+              throw error;
+            }
+          }
+          return fs.rmSync(target, options);
+        },
+      });
+
+      try {
+        assert.throws(
+          () => stageRepoAppPrivateKeyFile(sourceFile, { fsImpl, scratchDir: scratchRoot }),
+          /could not stage the validated Repo App private key/i,
+        );
+        assert.equal(stagedFdOpen, false);
+        assert.equal(removalAttempts, 1);
+        assert.equal(
+          fs.readdirSync(scratchRoot).some((entry) => entry.startsWith("agentweaver-repo-app-key-")),
+          false,
+        );
+      } finally {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("stageRepoAppPrivateKeyFile removes staged bytes even when descriptor close reports failure", () => {
+      const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-close-failure-"));
+      const sourceFile = path.join(scratchRoot, "source.pem");
+      fs.writeFileSync(sourceFile, generatePrivateKeyPem());
+      let stagedFd;
+      let stagedFdOpen = false;
+      let removalAttempts = 0;
+      const fsImpl = Object.assign(Object.create(fs), {
+        openSync(...args) {
+          const fd = fs.openSync(...args);
+          if (path.basename(args[0]) === "private-key.pem") {
+            stagedFd = fd;
+            stagedFdOpen = true;
+          }
+          return fd;
+        },
+        closeSync(fd) {
+          fs.closeSync(fd);
+          if (fd === stagedFd) {
+            stagedFdOpen = false;
+            throw new Error("injected close failure");
+          }
+        },
+        rmSync(target, options) {
+          if (path.basename(target).startsWith("agentweaver-repo-app-key-")) {
+            removalAttempts += 1;
+            assert.equal(stagedFdOpen, false);
+          }
+          return fs.rmSync(target, options);
+        },
+      });
+
+      try {
+        assert.throws(
+          () => stageRepoAppPrivateKeyFile(sourceFile, { fsImpl, scratchDir: scratchRoot }),
+          /could not stage the validated Repo App private key/i,
+        );
+        assert.equal(removalAttempts, 1);
+        assert.equal(
+          fs.readdirSync(scratchRoot).some((entry) => entry.startsWith("agentweaver-repo-app-key-")),
+          false,
         );
       } finally {
         fs.rmSync(scratchRoot, { recursive: true, force: true });
