@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createPrivateKey } from "node:crypto";
 import * as execDefault from "./exec.mjs";
 import * as logDefault from "./log.mjs";
 import * as secretDefault from "./secret.mjs";
@@ -24,6 +25,8 @@ const RECOVERY_IN_PROGRESS = /Conflict|already being recovered|recovery.*in prog
 const RECOVERY_ALREADY_COMPLETED = /already (?:been )?recovered|already (?:in )?(?:an? )?active(?: state)?/i;
 const RECOVERY_POLL_ATTEMPTS = 60;
 const RECOVERY_POLL_INTERVAL_MS = 500;
+const PRIVATE_KEY_PEM = /^-----BEGIN (RSA PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY)-----[\s\S]+-----END \1-----$/;
+const ENCRYPTED_PRIVATE_KEY = /BEGIN ENCRYPTED PRIVATE KEY|Proc-Type:\s*4,\s*ENCRYPTED/i;
 
 async function inspectActiveKeyVaultSecretResult(vaultName, name, { exec = execDefault } = {}) {
   const result = await exec.capture(
@@ -178,6 +181,35 @@ export async function setSecretFileWithRetry(
   }
   if (!stat.isFile() || stat.size === 0) {
     throw new Error(`Repo App private-key file '${filePath}' must be a non-empty file.`);
+  }
+
+  let pem;
+  try {
+    pem = fsImpl.readFileSync(filePath, "utf8").trim();
+  } catch {
+    throw new Error(`Repo App private-key file '${filePath}' could not be read.`);
+  }
+  if (!pem) {
+    throw new Error(`Repo App private-key file '${filePath}' must be a non-empty file.`);
+  }
+  if (!PRIVATE_KEY_PEM.test(pem)) {
+    throw new Error(`Repo App private-key file '${filePath}' must contain a valid PEM-encoded RSA private key.`);
+  }
+  if (ENCRYPTED_PRIVATE_KEY.test(pem)) {
+    throw new Error(
+      `Repo App private-key file '${filePath}' is encrypted. ` +
+        "Encrypted private keys are not supported because provisioning cannot prompt for a passphrase.",
+    );
+  }
+
+  let privateKey;
+  try {
+    privateKey = createPrivateKey({ key: pem, format: "pem" });
+  } catch {
+    throw new Error(`Repo App private-key file '${filePath}' must contain a valid PEM-encoded RSA private key.`);
+  }
+  if (privateKey.type !== "private" || privateKey.asymmetricKeyType !== "rsa") {
+    throw new Error(`Repo App private-key file '${filePath}' must contain an RSA private key.`);
   }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {

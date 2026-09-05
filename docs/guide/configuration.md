@@ -160,6 +160,11 @@ argument or params-file value:
 npm run azure:provision-infra -- --repo-app-private-key-file C:\secure\agentweaver-repo-app.pem
 ```
 
+The file must contain an unencrypted RSA private key in PEM format. Before any
+Key Vault write, provisioning reads and parses the file with Node.js crypto and
+rejects empty, unreadable, malformed, public-key-only, non-RSA, or encrypted
+inputs. Encrypted keys are not prompted for or decrypted interactively.
+
 You can also set `REPO_APP_PRIVATE_KEY_FILE` in the environment or params file for this
 one import only. The path is resolved by the deployment process, and the file content is
 imported as `ghtok-repo-app-private-key`. This explicit import replaces the canonical
