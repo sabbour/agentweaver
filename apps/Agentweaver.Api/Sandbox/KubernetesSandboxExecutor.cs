@@ -692,7 +692,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 // this, a successful run recorded NOTHING about which provider/binding/account served
                 // its model turns.
                 await EmitModelProviderResolvedAsync(
-                    runId, effectiveProvider, byokProvider?.Model, ct).ConfigureAwait(false);
+                    runId,
+                    effectiveProvider,
+                    byokProvider?.Model,
+                    providerScopeProjectId is null
+                        ? EffectiveModelProviderProvenance.ScopePlatform
+                        : EffectiveModelProviderProvenance.ScopeProject,
+                    ct).ConfigureAwait(false);
             }
             else
             {
@@ -1400,6 +1406,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         string runId,
         EffectiveModelProviderResult? effectiveProvider,
         string? modelId,
+        string resolutionScope,
         CancellationToken ct)
     {
         if (_runEventStream is null || effectiveProvider is null)
@@ -1410,7 +1417,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             await _runEventStream.AppendAsync(
                 runId,
                 new RunEvent(0, EventTypes.RunModelProviderResolved,
-                    effectiveProvider.ToProvenancePayload(runId, modelId)),
+                    effectiveProvider.ToProvenancePayload(runId, modelId, resolutionScope)),
                 ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
