@@ -16,6 +16,7 @@ internal sealed class GitHubRepositorySelectionClient(
 {
     private const int PageSize = 100;
     private const int MaximumPages = 2;
+    private const int MaximumRepositories = PageSize * MaximumPages;
     private const long MaximumResponseBytes = 512 * 1024;
     private readonly string _apiUrl = (configuration["Auth:RepoApp:ApiUrl"] ?? "https://api.github.com").TrimEnd('/');
     private readonly string _baseUrl = (configuration["Auth:RepoApp:BaseUrl"] ?? "https://github.com").TrimEnd('/');
@@ -66,11 +67,15 @@ internal sealed class GitHubRepositorySelectionClient(
                         $"{_baseUrl}/{repository.FullName}",
                         repository.CloneUrl!,
                         repository.PushedAt);
+                    if (candidates.Count >= MaximumRepositories)
+                        break;
                 }
 
-                if (batch.Count < PageSize)
+                if (candidates.Count >= MaximumRepositories || batch.Count < PageSize)
                     break;
             }
+            if (candidates.Count >= MaximumRepositories)
+                break;
         }
 
         return new GitHubRepositoryBrowseResult(

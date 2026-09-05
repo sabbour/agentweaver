@@ -79,6 +79,35 @@ public sealed class GitHubRepositorySelectionClientTests
     }
 
     [Fact]
+    public async Task Browse_AppliesOneGlobalRepositoryLimitAcrossInstallations()
+    {
+        var handler = new PagingRouteHandler(Installations(
+            """
+            {"id":72,"account":{"login":"octo"},"target_type":"User",
+             "repository_selection":"selected",
+             "html_url":"https://github.com/settings/installations/72","permissions":{}}
+            """,
+            """
+            {"id":73,"account":{"login":"example-org"},"target_type":"Organization",
+             "repository_selection":"all",
+             "html_url":"https://github.com/organizations/example-org/settings/installations/73","permissions":{}}
+            """));
+        var client = Client(handler);
+
+        var result = await client.BrowseAsync("user-oauth-token", CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.Repositories.Should().HaveCount(200);
+        result.Repositories.Select(repository => repository.RepositoryId)
+            .Should().OnlyHaveUniqueItems();
+        handler.Requests.Should().Equal(
+            "/user/installations?per_page=100&page=1",
+            "/user/installations/72/repositories?per_page=100&page=1",
+            "/user/installations/72/repositories?per_page=100&page=2",
+            "/user/installations/73/repositories?per_page=100&page=1");
+    }
+
+    [Fact]
     public async Task Browse_EmptyInstallationsReturnsEmptyLists()
     {
         var client = Client(Handler(Installations()));
@@ -194,7 +223,7 @@ public sealed class GitHubRepositorySelectionClientTests
     }
 
     private static GitHubRepositorySelectionClient Client(
-        RecordingRouteHandler handler,
+        HttpMessageHandler handler,
         IReadOnlyDictionary<string, string?>? values = null)
     {
         var configuration = new ConfigurationBuilder()
@@ -229,6 +258,24 @@ public sealed class GitHubRepositorySelectionClientTests
             """;
     }
 
+    private static string RepositoryRange(long firstId, int count, string owner) =>
+        JsonSerializer.Serialize(new
+        {
+            repositories = Enumerable.Range(0, count).Select(offset =>
+            {
+                var id = firstId + offset;
+                return new
+                {
+                    id,
+                    full_name = $"{owner}/repo-{id}",
+                    owner = new { login = owner },
+                    @private = true,
+                    default_branch = "main",
+                    clone_url = $"https://github.com/{owner}/repo-{id}.git",
+                };
+            }),
+        });
+
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
@@ -254,6 +301,35 @@ public sealed class GitHubRepositorySelectionClientTests
                     routes.GetValueOrDefault(request.RequestUri.AbsolutePath, "{}"),
                     Encoding.UTF8,
                     "application/json"),
+            });
+        }
+    }
+
+    private sealed class PagingRouteHandler(string installations) : HttpMessageHandler
+    {
+        public List<string> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken ct)
+        {
+            var route = request.RequestUri!.PathAndQuery;
+            Requests.Add(route);
+            var body = route switch
+            {
+                "/user/installations?per_page=100&page=1" => installations,
+                "/user/installations/72/repositories?per_page=100&page=1" =>
+                    RepositoryRange(1, 100, "octo"),
+                "/user/installations/72/repositories?per_page=100&page=2" =>
+                    RepositoryRange(101, 50, "octo"),
+                "/user/installations/73/repositories?per_page=100&page=1" =>
+                    RepositoryRange(151, 100, "example-org"),
+                _ => "{}",
+            };
+            return Task.FromResult(new HttpResponseMessage(
+                body == "{}" ? HttpStatusCode.NotFound : HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
             });
         }
     }
