@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.28.4
+
+### Patch Changes
+
+- abeb669: Prioritize GitHub Copilot clients in MCP setup guidance and show the Agentweaver logo on OAuth consent.
+- d08e74b: Let users dismiss optional repository setup guidance per project while keeping changed or required setup visible.
+- d08e74b: Keep assistant messages visible while sessions connect or reload history without duplicating server-confirmed turns.
+
 ## 0.28.3
 
 ### Patch Changes
