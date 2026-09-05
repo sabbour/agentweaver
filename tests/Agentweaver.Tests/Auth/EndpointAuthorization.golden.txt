@@ -133,6 +133,7 @@ POST /api/admin/byok-providers/deactivate | PlatformOrMcp
 POST /api/admin/byok-providers/{id}/activate | PlatformOrMcp
 POST /api/admin/platform-default-copilot/begin | PlatformOrMcp
 POST /api/admin/platform-default-copilot/disconnect | PlatformOrMcp
+POST /api/ai/execution-context | AuthenticatedPlatform
 POST /api/assistant/runs | AuthenticatedPlatform
 POST /api/assistant/runs/{id}/messages | AuthenticatedPlatform
 POST /api/auth/github/repo-app/authorization/refresh | PlatformOrMcp
