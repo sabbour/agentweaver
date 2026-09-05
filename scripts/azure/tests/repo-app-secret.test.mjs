@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
   ensureRepoAppPrivateKeySecret,
   REPO_APP_PRIVATE_KEY_SECRET,
   setSecretFileWithRetry,
+  stageRepoAppPrivateKeyFile,
 } from "../lib/repo-app-secret.mjs";
 
 function noopLog() {
@@ -73,6 +74,14 @@ function generateEcPrivateKeyPem() {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   }).privateKey;
+}
+
+function secretHash(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function assertSameSecretBytes(actual, expected) {
+  assert.equal(secretHash(actual), secretHash(expected));
 }
 
 test("Repo App secret contract keeps the application logical name distinct from the physical Key Vault name", () => {
@@ -259,10 +268,13 @@ test("ensureRepoAppPrivateKeySecret imports a configured PEM file directly to th
   const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-import-"));
   const sourceFile = path.join(scratchRoot, "repo-app.pem");
   fs.writeFileSync(sourceFile, generatePrivateKeyPem());
+  let stagedFile;
   const exec = fakeExec((_cmd, args) => {
     if (args[2] === "set") {
       assert.equal(requestedSecret(args), REPO_APP_PRIVATE_KEY_SECRET.physicalName);
-      assert.equal(args[args.indexOf("--file") + 1], sourceFile);
+      stagedFile = args[args.indexOf("--file") + 1];
+      assert.notEqual(stagedFile, sourceFile);
+      assertSameSecretBytes(fs.readFileSync(stagedFile), fs.readFileSync(sourceFile));
     }
     return { stdout: "verified", stderr: "", code: 0 };
   });
@@ -277,6 +289,7 @@ test("ensureRepoAppPrivateKeySecret imports a configured PEM file directly to th
       requestedSecret(call.args) === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName), false);
     assert.equal(exec.calls.some((call) => call.args.includes("show-deleted")), false);
     assert.equal(exec.calls.some((call) => call.args.includes("recover")), false);
+    assert.equal(fs.existsSync(stagedFile), false);
   } finally {
     fs.rmSync(scratchRoot, { recursive: true, force: true });
   }
@@ -306,12 +319,38 @@ test("setSecretFileWithRetry retries bounded RBAC propagation failures", async (
   }
 });
 
+test("setSecretFileWithRetry always removes the staged file after an Azure failure", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-cleanup-"));
+  const sourceFile = path.join(scratchRoot, "repo-app.pem");
+  fs.writeFileSync(sourceFile, generatePrivateKeyPem());
+  let stagedFile;
+  const exec = fakeExec((_cmd, args) => {
+    stagedFile = args[args.indexOf("--file") + 1];
+    assert.notEqual(stagedFile, sourceFile);
+    return { stdout: "", stderr: "write failed", code: 1 };
+  });
+
+  try {
+    await assert.rejects(
+      setSecretFileWithRetry("kv", "secret", sourceFile, {
+        exec,
+        log: noopLog(),
+        maxAttempts: 1,
+      }),
+      /failed to set key vault secret/i,
+    );
+    assert.equal(fs.existsSync(stagedFile), false);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
+});
+
 test("setSecretFileWithRetry rejects invalid private-key files before any Key Vault write", async (t) => {
   const cases = [
     {
       name: "malformed non-PEM input",
       contents: "SENSITIVE-PRIVATE-KEY-MATERIAL",
-      expected: /valid PEM-encoded RSA private key/i,
+      expected: /exactly one unencrypted.*private key pem block/i,
     },
     {
       name: "malformed private-key PEM",
@@ -321,7 +360,7 @@ test("setSecretFileWithRetry rejects invalid private-key files before any Key Va
     {
       name: "public-key-only PEM",
       contents: generatePublicKeyPem(),
-      expected: /valid PEM-encoded RSA private key/i,
+      expected: /exactly one unencrypted.*private key pem block/i,
     },
     {
       name: "non-RSA private key",
@@ -332,6 +371,21 @@ test("setSecretFileWithRetry rejects invalid private-key files before any Key Va
       name: "encrypted RSA private key",
       contents: generateEncryptedPrivateKeyPem(),
       expected: /encrypted.*not supported.*cannot prompt/i,
+    },
+    {
+      name: "two concatenated PKCS8 private keys",
+      contents: `${generatePrivateKeyPem()}${generatePrivateKeyPem()}`,
+      expected: /exactly one unencrypted.*private key pem block/i,
+    },
+    {
+      name: "concatenated PKCS1 and PKCS8 private keys",
+      contents: `${generatePrivateKeyPem("pkcs1")}${generatePrivateKeyPem("pkcs8")}`,
+      expected: /exactly one unencrypted.*private key pem block/i,
+    },
+    {
+      name: "private key plus trailing non-PEM content",
+      contents: `${generatePrivateKeyPem()}\nnot-allowed`,
+      expected: /exactly one unencrypted.*private key pem block/i,
     },
   ];
 
@@ -363,6 +417,108 @@ test("setSecretFileWithRetry rejects invalid private-key files before any Key Va
     });
   }
 });
+
+test("stageRepoAppPrivateKeyFile accepts the two .NET RSA.ImportFromPem-compatible private-key encodings", async (t) => {
+      for (const type of ["pkcs1", "pkcs8"]) {
+        await t.test(type, () => {
+          const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-compatible-"));
+          const sourceFile = path.join(scratchRoot, "source.pem");
+          const sourceBytes = generatePrivateKeyPem(type);
+          fs.writeFileSync(sourceFile, sourceBytes);
+          const staged = stageRepoAppPrivateKeyFile(sourceFile, { scratchDir: scratchRoot });
+          try {
+            assert.notEqual(staged.filePath, sourceFile);
+            assertSameSecretBytes(fs.readFileSync(staged.filePath), sourceBytes);
+            if (process.platform !== "win32") {
+              assert.equal(fs.statSync(staged.filePath).mode & 0o777, 0o600);
+            }
+          } finally {
+            staged.cleanup();
+            assert.equal(fs.existsSync(staged.filePath), false);
+            fs.rmSync(scratchRoot, { recursive: true, force: true });
+          }
+        });
+      }
+});
+
+    test("stageRepoAppPrivateKeyFile rejects source symlinks before staging", (t) => {
+      const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-symlink-"));
+      const targetFile = path.join(scratchRoot, "target.pem");
+      const sourceFile = path.join(scratchRoot, "source.pem");
+      fs.writeFileSync(targetFile, generatePrivateKeyPem());
+      try {
+        fs.symlinkSync(targetFile, sourceFile, "file");
+      } catch (error) {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+        t.skip(`File symlinks are unavailable on this platform: ${error.code ?? "unknown error"}`);
+        return;
+      }
+
+      try {
+        assert.throws(
+          () => stageRepoAppPrivateKeyFile(sourceFile, { scratchDir: scratchRoot }),
+          /must not be a symbolic link, junction, or reparse-point path/i,
+        );
+      } finally {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("stageRepoAppPrivateKeyFile rejects paths traversing a directory symlink or junction", (t) => {
+      const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-junction-"));
+      const targetDir = path.join(scratchRoot, "target");
+      const linkedDir = path.join(scratchRoot, "linked");
+      const targetFile = path.join(targetDir, "source.pem");
+      fs.mkdirSync(targetDir);
+      fs.writeFileSync(targetFile, generatePrivateKeyPem());
+      try {
+        fs.symlinkSync(targetDir, linkedDir, "junction");
+      } catch (error) {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+        t.skip(`Directory junctions are unavailable on this platform: ${error.code ?? "unknown error"}`);
+        return;
+      }
+
+      try {
+        assert.throws(
+          () => stageRepoAppPrivateKeyFile(path.join(linkedDir, "source.pem"), { scratchDir: scratchRoot }),
+          /must not traverse a symbolic link, junction, or reparse-point path/i,
+        );
+      } finally {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("ensureRepoAppPrivateKeySecret sends the already-staged bytes even if the source file changes", async () => {
+      const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-toctou-"));
+      const sourceFile = path.join(scratchRoot, "source.pem");
+      const originalBytes = generatePrivateKeyPem("pkcs1");
+      fs.writeFileSync(sourceFile, originalBytes);
+      const staged = stageRepoAppPrivateKeyFile(sourceFile, { scratchDir: scratchRoot });
+      fs.writeFileSync(sourceFile, generatePrivateKeyPem("pkcs8"));
+      let azureFile;
+      const exec = fakeExec((_cmd, args) => {
+        if (args[2] === "set") {
+          azureFile = args[args.indexOf("--file") + 1];
+          assert.equal(azureFile, staged.filePath);
+          assertSameSecretBytes(fs.readFileSync(azureFile), originalBytes);
+        }
+        return { stdout: "verified", stderr: "", code: 0 };
+      });
+
+      try {
+        const result = await ensureRepoAppPrivateKeySecret(
+          { vaultName: "kv", stagedSourceFile: staged.filePath },
+          { exec, log: noopLog() },
+        );
+        assert.equal(result.status, "imported");
+        assert.equal(fs.existsSync(azureFile), true);
+      } finally {
+        staged.cleanup();
+        assert.equal(fs.existsSync(staged.filePath), false);
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+      }
+    });
 
 test("setSecretFileWithRetry rejects empty and unreadable inputs before any Key Vault write", async (t) => {
   await t.test("empty file", async () => {
@@ -403,6 +559,28 @@ test("setSecretFileWithRetry rejects empty and unreadable inputs before any Key 
   });
 });
 
+test("ensureRepoAppPrivateKeySecret refuses soft-deleted canonical recovery without the operator flag", async () => {
+  const exec = fakeExec((_cmd, args) => {
+    const operation = args[2];
+    if (operation === "show") {
+      return { stdout: "", stderr: "ERROR: (SecretNotFound) active secret was not found", code: 3 };
+    }
+    if (operation === "show-deleted") {
+      return { stdout: "https://kv/deletedsecrets/ghtok-repo-app-private-key", stderr: "", code: 0 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  await assert.rejects(
+    ensureRepoAppPrivateKeySecret(
+      { vaultName: "kv" },
+      { exec, log: noopLog() },
+    ),
+    /normal deployment will not reactivate old credentials.*--recover-repo-app-private-key/is,
+  );
+  assert.equal(exec.calls.some((call) => call.args[2] === "recover"), false);
+});
+
 test("ensureRepoAppPrivateKeySecret recovers a canonical-only soft-deleted secret before legacy fallback", async () => {
   let activeChecks = 0;
   const messages = [];
@@ -426,7 +604,7 @@ test("ensureRepoAppPrivateKeySecret recovers a canonical-only soft-deleted secre
   });
 
   const result = await ensureRepoAppPrivateKeySecret(
-    { vaultName: "kv" },
+    { vaultName: "kv", recoverDeleted: true },
     {
       exec,
       log: {
@@ -475,7 +653,7 @@ test("ensureRepoAppPrivateKeySecret polls canonical when recovery loses a missin
       });
 
       const result = await ensureRepoAppPrivateKeySecret(
-        { vaultName: "kv" },
+        { vaultName: "kv", recoverDeleted: true },
         {
           exec,
           log: noopLog(),
@@ -514,7 +692,7 @@ test("ensureRepoAppPrivateKeySecret fails closed when canonical recovery is inac
 
   await assert.rejects(
     ensureRepoAppPrivateKeySecret(
-      { vaultName: "kv" },
+      { vaultName: "kv", recoverDeleted: true },
       { exec, log: noopLog(), sleep: async () => {} },
     ),
     /failed to recover.*ForbiddenByRbac/i,
@@ -522,6 +700,31 @@ test("ensureRepoAppPrivateKeySecret fails closed when canonical recovery is inac
   assert.equal(exec.calls.filter((call) => call.args[2] === "recover").length, 1);
   assert.equal(exec.calls.some((call) =>
     requestedSecret(call.args) === REPO_APP_PRIVATE_KEY_SECRET.legacyPhysicalName), false);
+});
+
+test("ensureRepoAppPrivateKeySecret will not recover a soft-deleted canonical secret during normal replacement", async () => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "repo-app-secret-no-recover-import-"));
+  const sourceFile = path.join(scratchRoot, "repo-app.pem");
+  fs.writeFileSync(sourceFile, generatePrivateKeyPem());
+  const exec = fakeExec((_cmd, args) => {
+    if (args[2] === "set") {
+      return { stdout: "", stderr: "ERROR: (ObjectIsDeletedButRecoverable) Secret is deleted but recoverable.", code: 1 };
+    }
+    throw new Error(`Unexpected command: ${args.join(" ")}`);
+  });
+
+  try {
+    await assert.rejects(
+      ensureRepoAppPrivateKeySecret(
+        { vaultName: "kv", sourceFile },
+        { exec, log: noopLog() },
+      ),
+      /normal deployment will not reactivate old credentials.*--recover-repo-app-private-key/is,
+    );
+    assert.equal(exec.calls.some((call) => call.args[2] === "recover"), false);
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
 });
 
 test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret before configured-file import", async () => {
@@ -532,11 +735,14 @@ test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret bef
   let setAttempts = 0;
   let showAttempts = 0;
   const messages = [];
+  let stagedFile;
   const exec = fakeExec((_cmd, args) => {
     const operation = args[2];
     if (operation === "set") {
       setAttempts += 1;
-      assert.equal(args[args.indexOf("--file") + 1], sourceFile);
+      stagedFile = args[args.indexOf("--file") + 1];
+      assert.notEqual(stagedFile, sourceFile);
+      assertSameSecretBytes(fs.readFileSync(stagedFile), secretValue);
       return setAttempts === 1
         ? { stdout: "", stderr: "ERROR: (ObjectIsDeletedButRecoverable) Secret is deleted but recoverable.", code: 1 }
         : { stdout: "", stderr: "", code: 0 };
@@ -556,7 +762,7 @@ test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret bef
 
   try {
     const result = await ensureRepoAppPrivateKeySecret(
-      { vaultName: "kv", sourceFile },
+      { vaultName: "kv", sourceFile, recoverDeleted: true },
       {
         exec,
         log: { ...noopLog(), info: (message) => messages.push(message) },
@@ -569,6 +775,7 @@ test("ensureRepoAppPrivateKeySecret recovers a soft-deleted canonical secret bef
     assert.ok(exec.calls.some((call) => call.args[2] === "recover"));
     assert.equal(exec.calls.some((call) => call.args.includes(secretValue)), false);
     assert.equal(messages.some((message) => message.includes(secretValue)), false);
+    assert.equal(fs.existsSync(stagedFile), false);
   } finally {
     fs.rmSync(scratchRoot, { recursive: true, force: true });
   }
@@ -606,7 +813,7 @@ test("ensureRepoAppPrivateKeySecret recovers canonical after legacy inspection w
   });
 
   const result = await ensureRepoAppPrivateKeySecret(
-    { vaultName: "kv" },
+    { vaultName: "kv", recoverDeleted: true },
     {
       exec,
       log: { ...noopLog(), info: (message) => messages.push(message) },
@@ -709,7 +916,7 @@ test("ensureRepoAppPrivateKeySecret cannot overwrite a configured-file import fr
 
     assert.equal(migrationResult.status, "available");
     assert.equal(writerResult.status, "imported");
-    assert.equal(canonicalValue, configuredPrivateKey);
+    assertSameSecretBytes(canonicalValue, configuredPrivateKey);
     assert.equal(migrationExec.calls.some((call) =>
       ["set", "download", "recover"].includes(call.args[2])), false);
     assert.equal(writerExec.calls.filter((call) => call.args[2] === "set").length, 1);

@@ -160,10 +160,17 @@ argument or params-file value:
 npm run azure:provision-infra -- --repo-app-private-key-file C:\secure\agentweaver-repo-app.pem
 ```
 
-The file must contain an unencrypted RSA private key in PEM format. Before any
-Key Vault write, provisioning reads and parses the file with Node.js crypto and
-rejects empty, unreadable, malformed, public-key-only, non-RSA, or encrypted
-inputs. Encrypted keys are not prompted for or decrypted interactively.
+The file must contain exactly one unencrypted PKCS#1 `RSA PRIVATE KEY` or
+PKCS#8 `PRIVATE KEY` PEM block. These are the private-key encodings accepted by
+the API's .NET `RSA.ImportFromPem` consumer. Concatenated keys, multiple PEM
+blocks, public-key-only input, other key algorithms, encrypted keys, malformed
+PEM, empty files, trailing content, and unreadable files are rejected.
+Provisioning performs this local validation immediately after arguments and
+params are parsed, before variable discovery, image work, cluster creation, or
+any Azure collaborator. It rejects source symlink, junction, and reparse-path
+ambiguity where the platform exposes it. The validated bytes are copied to an
+exclusively created access-restricted temporary file; only that file is passed
+to Azure, and it is removed on success or failure.
 
 You can also set `REPO_APP_PRIVATE_KEY_FILE` in the environment or params file for this
 one import only. The path is resolved by the deployment process, and the file content is
@@ -195,6 +202,35 @@ import succeeds, unset the environment variable. Remove the params-file property
 remove the PEM. Provisioning and deployment also stop before applying manifests when
 neither secret exists or Key Vault access cannot be verified.
 `npm run azure:verify` checks the canonical physical secret again after deployment.
+
+A soft-deleted canonical `ghtok-repo-app-private-key` is different from a
+missing secret: restoring it can reactivate an old credential. Normal
+provision and deploy commands therefore fail closed and never call Azure
+recovery. Use `--recover-repo-app-private-key` only as an explicit, auditable
+operator action:
+
+1. Revoke the corresponding old private key in the GitHub App settings, or
+   suspend the Agentweaver API workload and its GitHub access before recovery.
+2. Generate and protect the replacement GitHub App private-key file. Serialize
+   the operation so no other deployment can write the canonical secret.
+3. Run one deployment with both the recovery action and the one-shot replacement:
+
+   ```powershell
+   npm run azure:provision-infra -- --recover-repo-app-private-key `
+     --repo-app-private-key-file C:\secure\agentweaver-repo-app.pem
+   ```
+
+4. Confirm the canonical import and run `npm run azure:verify` before restoring
+   suspended workload access. If the old GitHub credential was not revoked
+   because intentional recovery was required, keep workloads suspended until
+   that credential's access has been reviewed.
+5. Unset `REPO_APP_PRIVATE_KEY_FILE`, remove it from every params file used for
+   the operation, and delete the protected local PEM.
+
+If Key Vault purge protection is disabled and policy permits purging the
+soft-deleted secret, an operator can purge it and perform a normal replacement
+instead. Do not recover an old credential merely to make a routine deployment
+continue.
 
 ##### Required manual step: register the installation Setup URL
 

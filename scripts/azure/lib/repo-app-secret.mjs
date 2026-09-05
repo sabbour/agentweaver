@@ -25,8 +25,148 @@ const RECOVERY_IN_PROGRESS = /Conflict|already being recovered|recovery.*in prog
 const RECOVERY_ALREADY_COMPLETED = /already (?:been )?recovered|already (?:in )?(?:an? )?active(?: state)?/i;
 const RECOVERY_POLL_ATTEMPTS = 60;
 const RECOVERY_POLL_INTERVAL_MS = 500;
-const PRIVATE_KEY_PEM = /^-----BEGIN (RSA PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY)-----[\s\S]+-----END \1-----$/;
+const PEM_BLOCK = /-----BEGIN ([A-Z0-9 ]+)-----[\s\S]*?-----END \1-----/g;
+const RSA_PRIVATE_KEY_LABELS = new Set(["RSA PRIVATE KEY", "PRIVATE KEY"]);
 const ENCRYPTED_PRIVATE_KEY = /BEGIN ENCRYPTED PRIVATE KEY|Proc-Type:\s*4,\s*ENCRYPTED/i;
+
+function normalizeComparablePath(value) {
+  const normalized = path.normalize(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function validateRepoAppPrivateKeyBytes(bytes, sourceFile) {
+  const pem = bytes.toString("utf8").trim();
+  if (!pem) {
+    throw new Error(`Repo App private-key file '${sourceFile}' must be a non-empty file.`);
+  }
+  if (ENCRYPTED_PRIVATE_KEY.test(pem)) {
+    throw new Error(
+      `Repo App private-key file '${sourceFile}' is encrypted. ` +
+        "Encrypted private keys are not supported because provisioning cannot prompt for a passphrase.",
+    );
+  }
+
+  const blocks = [...pem.matchAll(PEM_BLOCK)];
+  if (
+    blocks.length !== 1 ||
+    blocks[0][0] !== pem ||
+    !RSA_PRIVATE_KEY_LABELS.has(blocks[0][1])
+  ) {
+    throw new Error(
+      `Repo App private-key file '${sourceFile}' must contain exactly one unencrypted ` +
+        "RSA PRIVATE KEY or PRIVATE KEY PEM block and no other content.",
+    );
+  }
+
+  let privateKey;
+  try {
+    privateKey = createPrivateKey({ key: pem, format: "pem" });
+  } catch {
+    throw new Error(`Repo App private-key file '${sourceFile}' must contain a valid PEM-encoded RSA private key.`);
+  }
+  if (privateKey.type !== "private" || privateKey.asymmetricKeyType !== "rsa") {
+    throw new Error(`Repo App private-key file '${sourceFile}' must contain an RSA private key.`);
+  }
+}
+
+export function stageRepoAppPrivateKeyFile(
+  sourceFile,
+  {
+    fsImpl = fs,
+    scratchDir = os.tmpdir(),
+  } = {},
+) {
+  const configuredFile = String(sourceFile ?? "").trim();
+  if (!configuredFile) return null;
+
+  const resolvedFile = path.resolve(configuredFile);
+  let sourceStat;
+  let realPath;
+  try {
+    sourceStat = fsImpl.lstatSync(resolvedFile);
+    realPath = fsImpl.realpathSync.native
+      ? fsImpl.realpathSync.native(resolvedFile)
+      : fsImpl.realpathSync(resolvedFile);
+  } catch {
+    throw new Error(`Repo App private-key file '${resolvedFile}' could not be read.`);
+  }
+  if (sourceStat.isSymbolicLink()) {
+    throw new Error(
+      `Repo App private-key file '${resolvedFile}' must not be a symbolic link, junction, or reparse-point path.`,
+    );
+  }
+  if (normalizeComparablePath(realPath) !== normalizeComparablePath(resolvedFile)) {
+    throw new Error(
+      `Repo App private-key file '${resolvedFile}' must not traverse a symbolic link, junction, or reparse-point path.`,
+    );
+  }
+  if (!sourceStat.isFile() || sourceStat.size === 0) {
+    throw new Error(`Repo App private-key file '${resolvedFile}' must be a non-empty file.`);
+  }
+
+  let sourceFd;
+  let bytes;
+  try {
+    const noFollow = fsImpl.constants.O_NOFOLLOW ?? 0;
+    sourceFd = fsImpl.openSync(resolvedFile, fsImpl.constants.O_RDONLY | noFollow);
+    const openedStat = fsImpl.fstatSync(sourceFd);
+    if (
+      !openedStat.isFile() ||
+      (sourceStat.dev !== openedStat.dev || sourceStat.ino !== openedStat.ino)
+    ) {
+      throw new Error(
+        `Repo App private-key file '${resolvedFile}' changed while it was being opened or is not a regular file.`,
+      );
+    }
+    bytes = fsImpl.readFileSync(sourceFd);
+  } catch (error) {
+    if (error?.message?.startsWith("Repo App private-key file")) throw error;
+    throw new Error(`Repo App private-key file '${resolvedFile}' could not be read.`);
+  } finally {
+    if (sourceFd !== undefined) fsImpl.closeSync(sourceFd);
+  }
+
+  validateRepoAppPrivateKeyBytes(bytes, resolvedFile);
+
+  fsImpl.mkdirSync(scratchDir, { recursive: true });
+  const stageDir = fsImpl.mkdtempSync(path.join(scratchDir, "agentweaver-repo-app-key-"));
+  const stagedFile = path.join(stageDir, "private-key.pem");
+  let stagedFd;
+  try {
+    try {
+      fsImpl.chmodSync(stageDir, 0o700);
+    } catch {
+      // Windows ACLs do not expose POSIX mode bits through Node.
+    }
+    stagedFd = fsImpl.openSync(
+      stagedFile,
+      fsImpl.constants.O_CREAT | fsImpl.constants.O_EXCL | fsImpl.constants.O_WRONLY,
+      0o600,
+    );
+    fsImpl.writeFileSync(stagedFd, bytes);
+    fsImpl.fsyncSync(stagedFd);
+    try {
+      fsImpl.fchmodSync(stagedFd, 0o600);
+    } catch {
+      // Windows ACLs do not expose POSIX mode bits through Node.
+    }
+  } catch {
+    fsImpl.rmSync(stageDir, { recursive: true, force: true });
+    throw new Error("Could not stage the validated Repo App private key in a protected temporary file.");
+  } finally {
+    if (stagedFd !== undefined) fsImpl.closeSync(stagedFd);
+  }
+
+  let cleaned = false;
+  return {
+    filePath: stagedFile,
+    cleanup() {
+      if (cleaned) return;
+      cleaned = true;
+      fsImpl.rmSync(stageDir, { recursive: true, force: true });
+    },
+  };
+}
 
 async function inspectActiveKeyVaultSecretResult(vaultName, name, { exec = execDefault } = {}) {
   const result = await exec.capture(
@@ -161,7 +301,7 @@ async function recoverDeletedSecretAndWait(
   );
 }
 
-export async function setSecretFileWithRetry(
+async function setStagedSecretFileWithRetry(
   keyvaultName,
   name,
   filePath,
@@ -171,6 +311,7 @@ export async function setSecretFileWithRetry(
     maxAttempts = 12,
     sleep = defaultSleep,
     fsImpl = fs,
+    recoverDeleted = false,
   } = {},
 ) {
   let stat;
@@ -182,35 +323,13 @@ export async function setSecretFileWithRetry(
   if (!stat.isFile() || stat.size === 0) {
     throw new Error(`Repo App private-key file '${filePath}' must be a non-empty file.`);
   }
-
-  let pem;
+  let stagedBytes;
   try {
-    pem = fsImpl.readFileSync(filePath, "utf8").trim();
+    stagedBytes = fsImpl.readFileSync(filePath);
   } catch {
     throw new Error(`Repo App private-key file '${filePath}' could not be read.`);
   }
-  if (!pem) {
-    throw new Error(`Repo App private-key file '${filePath}' must be a non-empty file.`);
-  }
-  if (!PRIVATE_KEY_PEM.test(pem)) {
-    throw new Error(`Repo App private-key file '${filePath}' must contain a valid PEM-encoded RSA private key.`);
-  }
-  if (ENCRYPTED_PRIVATE_KEY.test(pem)) {
-    throw new Error(
-      `Repo App private-key file '${filePath}' is encrypted. ` +
-        "Encrypted private keys are not supported because provisioning cannot prompt for a passphrase.",
-    );
-  }
-
-  let privateKey;
-  try {
-    privateKey = createPrivateKey({ key: pem, format: "pem" });
-  } catch {
-    throw new Error(`Repo App private-key file '${filePath}' must contain a valid PEM-encoded RSA private key.`);
-  }
-  if (privateKey.type !== "private" || privateKey.asymmetricKeyType !== "rsa") {
-    throw new Error(`Repo App private-key file '${filePath}' must contain an RSA private key.`);
-  }
+  validateRepoAppPrivateKeyBytes(stagedBytes, filePath);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const result = await exec.capture(
@@ -236,6 +355,13 @@ export async function setSecretFileWithRetry(
         RECOVERY_IN_PROGRESS.test(result.stderr || "")) &&
       attempt < maxAttempts
     ) {
+      if (!recoverDeleted) {
+        throw new Error(
+          `Canonical Repo App private-key secret '${name}' is soft-deleted. Normal deployment will not ` +
+            "reactivate old credentials. Suspend or revoke workload access, then rerun with the explicit " +
+            "--recover-repo-app-private-key operator flag.",
+        );
+      }
       await recoverDeletedSecretAndWait(keyvaultName, name, {
         exec,
         log,
@@ -249,6 +375,25 @@ export async function setSecretFileWithRetry(
       continue;
     }
     throw new Error(`Failed to set Key Vault secret '${name}': ${result.stderr || "unknown Azure CLI error"}`);
+  }
+}
+
+export async function setSecretFileWithRetry(
+  keyvaultName,
+  name,
+  filePath,
+  opts = {},
+) {
+  const staged = stageRepoAppPrivateKeyFile(filePath, opts);
+  try {
+    return await setStagedSecretFileWithRetry(
+      keyvaultName,
+      name,
+      staged.filePath,
+      opts,
+    );
+  } finally {
+    staged.cleanup();
   }
 }
 
@@ -281,6 +426,7 @@ async function reconcileCanonicalSecret(
     exec = execDefault,
     log = logDefault,
     sleep = defaultSleep,
+    recoverDeleted = false,
   } = {},
 ) {
   const canonical = await inspectKeyVaultSecretResult(
@@ -290,6 +436,13 @@ async function reconcileCanonicalSecret(
   );
   if (canonical.status === "available") return "available";
   if (canonical.status === "recoverable") {
+    if (!recoverDeleted) {
+      throw new Error(
+        `Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is soft-deleted. ` +
+          "Normal deployment will not reactivate old credentials. Suspend or revoke workload access, then " +
+          "rerun with the explicit --recover-repo-app-private-key operator flag.",
+      );
+    }
     await recoverDeletedSecretAndWait(
       vaultName,
       REPO_APP_PRIVATE_KEY_SECRET.physicalName,
@@ -325,17 +478,28 @@ export async function ensureRepoAppPrivateKeySecret(
 ) {
   const vaultName = String(params?.vaultName ?? "").trim();
   const sourceFile = params?.sourceFile ?? "";
+  const stagedSourceFile = params?.stagedSourceFile ?? "";
+  const recoverDeleted = params?.recoverDeleted === true;
   if (!vaultName) throw new Error("KEYVAULT_NAME is required to verify the Repo App private key.");
 
-  const configuredFile = String(sourceFile ?? "").trim();
+  const configuredFile = String(stagedSourceFile || sourceFile || "").trim();
   if (configuredFile) {
     const resolvedFile = path.resolve(configuredFile);
-    await setSecretFileWithRetry(
-      vaultName,
-      REPO_APP_PRIVATE_KEY_SECRET.physicalName,
-      resolvedFile,
-      { exec, log, fsImpl, sleep },
-    );
+    if (stagedSourceFile) {
+      await setStagedSecretFileWithRetry(
+        vaultName,
+        REPO_APP_PRIVATE_KEY_SECRET.physicalName,
+        resolvedFile,
+        { exec, log, fsImpl, sleep, recoverDeleted },
+      );
+    } else {
+      await setSecretFileWithRetry(
+        vaultName,
+        REPO_APP_PRIVATE_KEY_SECRET.physicalName,
+        resolvedFile,
+        { exec, log, fsImpl, sleep, recoverDeleted },
+      );
+    }
     const imported = await inspectKeyVaultSecret(
       vaultName,
       REPO_APP_PRIVATE_KEY_SECRET.physicalName,
@@ -351,7 +515,10 @@ export async function ensureRepoAppPrivateKeySecret(
     return { status: "imported", ...REPO_APP_PRIVATE_KEY_SECRET };
   }
 
-  const canonicalStatus = await reconcileCanonicalSecret(vaultName, { exec, log, sleep });
+  const canonicalStatus = await reconcileCanonicalSecret(
+    vaultName,
+    { exec, log, sleep, recoverDeleted },
+  );
   if (canonicalStatus !== "missing") {
     logCanonicalStatus(canonicalStatus, log);
     return { status: canonicalStatus, ...REPO_APP_PRIVATE_KEY_SECRET };
@@ -377,7 +544,10 @@ export async function ensureRepoAppPrivateKeySecret(
     );
   }
 
-  const canonicalAfterLegacyCheck = await reconcileCanonicalSecret(vaultName, { exec, log, sleep });
+  const canonicalAfterLegacyCheck = await reconcileCanonicalSecret(
+    vaultName,
+    { exec, log, sleep, recoverDeleted },
+  );
   if (canonicalAfterLegacyCheck !== "missing") {
     logCanonicalStatus(canonicalAfterLegacyCheck, log);
     return { status: canonicalAfterLegacyCheck, ...REPO_APP_PRIVATE_KEY_SECRET };

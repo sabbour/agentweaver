@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { userInfo } from "node:os";
 import * as logDefault from "./lib/log.mjs";
+import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -46,22 +47,25 @@ function mergeParamsIntoEnv(baseEnv, paramsFile) {
  */
 async function resolveDeployInputs(rest, { importFn, modules, log, findParamsFile = findUserParamsFile }) {
   const { loadParamsFile } = modules.config ?? (await importFn("./lib/config.mjs"));
-  const paramsFileIdx = rest.findIndex((a) => a === "--params-file" || a.startsWith("--params-file="));
   let paramsFilePath = null;
-  let argv = rest;
-  if (paramsFileIdx !== -1) {
-    const inline = rest[paramsFileIdx].startsWith("--params-file=");
-    paramsFilePath = inline
-      ? rest[paramsFileIdx].slice("--params-file=".length)
-      : rest[paramsFileIdx + 1];
-    if (!paramsFilePath) {
-      throw new Error("--params-file requires a value");
+  let recoverRepoAppPrivateKey = false;
+  const argv = [];
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === "--params-file" || arg.startsWith("--params-file=")) {
+      const inline = arg.startsWith("--params-file=");
+      paramsFilePath = inline ? arg.slice("--params-file=".length) : rest[i + 1];
+      if (!paramsFilePath) {
+        throw new Error("--params-file requires a value");
+      }
+      if (!inline) i += 1;
+    } else if (arg === "--recover-repo-app-private-key") {
+      recoverRepoAppPrivateKey = true;
+    } else {
+      argv.push(arg);
     }
-    argv = [
-      ...rest.slice(0, paramsFileIdx),
-      ...rest.slice(paramsFileIdx + (inline ? 1 : 2)),
-    ];
-  } else {
+  }
+  if (!paramsFilePath) {
     paramsFilePath = findParamsFile();
     if (paramsFilePath) log.info(`[params] Auto-loading ${paramsFilePath}`);
   }
@@ -69,6 +73,7 @@ async function resolveDeployInputs(rest, { importFn, modules, log, findParamsFil
   return {
     env: mergeParamsIntoEnv(process.env, paramsFile),
     argv,
+    recoverRepoAppPrivateKey,
   };
 }
 
@@ -176,7 +181,13 @@ export async function run(argv = [], opts = {}) {
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const { env } = await resolveDeployInputs(rest, { importFn, modules, log, findParamsFile });
+    const { env, recoverRepoAppPrivateKey } = await resolveDeployInputs(
+      rest,
+      { importFn, modules, log, findParamsFile },
+    );
+    if (recoverRepoAppPrivateKey) {
+      throw new Error("--recover-repo-app-private-key is valid only for deployment commands.");
+    }
     const cfg = await resolveVariables({ env });
     return mod.run(cfg, { log });
   }
@@ -187,13 +198,31 @@ export async function run(argv = [], opts = {}) {
       return { ok: true, help: true };
     }
     const { resolveVariables } = modules.variables ?? (await importFn("./variables.mjs"));
-    const { env, argv: deployArgs } = await resolveDeployInputs(
+    const {
+      env,
+      argv: deployArgs,
+      recoverRepoAppPrivateKey,
+    } = await resolveDeployInputs(
       rest,
       { importFn, modules, log, findParamsFile },
     );
-    const cfg = await resolveVariables({ env });
-    const allowDirty = deployArgs.includes("--allow-dirty");
-    return mod.run(cfg, { log, allowDirty });
+    const stagedRepoAppKey = stageRepoAppPrivateKeyFile(env.REPO_APP_PRIVATE_KEY_FILE);
+    try {
+      const cfg = {
+        ...(await resolveVariables({
+          env: {
+            ...env,
+            REPO_APP_PRIVATE_KEY_FILE: "",
+          },
+        })),
+        REPO_APP_PRIVATE_KEY_STAGED_FILE: stagedRepoAppKey?.filePath ?? "",
+        RECOVER_REPO_APP_PRIVATE_KEY: recoverRepoAppPrivateKey,
+      };
+      const allowDirty = deployArgs.includes("--allow-dirty");
+      return await mod.run(cfg, { log, allowDirty });
+    } finally {
+      stagedRepoAppKey?.cleanup();
+    }
   }
 
   if (command === "deploy-from-commit" || command === "deploy-from-release") {
@@ -204,11 +233,20 @@ export async function run(argv = [], opts = {}) {
     // Same per-user params.<username>.json auto-load as deploy-from-local -- these
     // subcommands also deploy real infrastructure and previously required every
     // variable (e.g. KEYVAULT_NAME) to be set by hand in the shell.
-    const { env, argv: deployArgs } = await resolveDeployInputs(
+    const {
+      env,
+      argv: deployArgs,
+      recoverRepoAppPrivateKey,
+    } = await resolveDeployInputs(
       rest,
       { importFn, modules, log, findParamsFile },
     );
-    return mod.run({ argv: deployArgs, log, env });
+    return mod.run({
+      argv: deployArgs,
+      log,
+      env,
+      recoverRepoAppPrivateKey,
+    });
   }
 
   return mod.run({ argv: rest, log });

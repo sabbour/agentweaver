@@ -9,6 +9,7 @@ import * as logDefault from "./lib/log.mjs";
 import * as kubectlDefault from "./lib/kubectl.mjs";
 import { resolveVariables, DEFAULT_REPO_ROOT } from "./variables.mjs";
 import { deployCommittedSha } from "./deploy-from-local.mjs";
+import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
 
 export class CommitResolutionError extends Error {}
 
@@ -35,12 +36,14 @@ export function parseArgs(argv = []) {
 export const HELP_TEXT = `deploy-from-commit -- deploy an exact committed git ref
 
 Usage:
-  node scripts/azure/cli.mjs deploy-from-commit <sha-or-ref>
+  node scripts/azure/cli.mjs deploy-from-commit <sha-or-ref> [--recover-repo-app-private-key]
 
 Fetches and resolves the ref to an exact commit, creates a temporary detached
 worktree for that source, and runs the same SHA build/deploy/provenance/warm-
 pool pipeline as deploy-from-local. The caller's checkout is never switched or
 modified. Uncommitted local changes are never included.
+Soft-deleted canonical Repo App credentials remain inactive unless the explicit
+recovery operator flag is present.
 `;
 
 export async function resolveCommitRef(ref, { repoRoot, exec = execDefault, git = gitDefault } = {}) {
@@ -95,6 +98,7 @@ export async function run(opts = {}) {
     deployCommittedSha: deployCommittedShaFn = deployCommittedSha,
     fsImpl = fs,
     env: baseEnv = process.env,
+    recoverRepoAppPrivateKey = false,
   } = opts;
   const { ref, help } = parseArgs(argv);
   if (help) {
@@ -102,6 +106,8 @@ export async function run(opts = {}) {
     return { ok: true, help: true };
   }
 
+  const stagedRepoAppKey = stageRepoAppPrivateKeyFile(baseEnv.REPO_APP_PRIVATE_KEY_FILE);
+  try {
   const commit = await resolveCommitRef(ref, { repoRoot, exec, git });
   const imageTag = commit.slice(0, 7);
   const worktreeRoot = await repositoryWorktreeRoot(repoRoot, { exec });
@@ -125,6 +131,7 @@ export async function run(opts = {}) {
   try {
     const env = {
       ...baseEnv,
+      REPO_APP_PRIVATE_KEY_FILE: "",
       IMAGE_TAG: imageTag,
       AGENTHOST_IMAGE_TAG: imageTag,
       TARGET_GIT_REF: commit,
@@ -132,6 +139,8 @@ export async function run(opts = {}) {
     const cfg = {
       ...(await resolveVariablesFn({ env, repoRoot: worktreePath })),
       TARGET_GIT_REF: commit,
+      REPO_APP_PRIVATE_KEY_STAGED_FILE: stagedRepoAppKey?.filePath ?? "",
+      RECOVER_REPO_APP_PRIVATE_KEY: recoverRepoAppPrivateKey,
       repoRoot: worktreePath,
     };
     result = await deployCommittedShaFn(cfg, {
@@ -170,4 +179,7 @@ export async function run(opts = {}) {
     worktreePath,
     worktreeRemoved: !cleanupError,
   };
+  } finally {
+    stagedRepoAppKey?.cleanup();
+  }
 }

@@ -267,6 +267,8 @@ export async function run(cfg, opts = {}) {
     {
       vaultName: cfg.KEYVAULT_NAME,
       sourceFile: cfg.REPO_APP_PRIVATE_KEY_FILE,
+      stagedSourceFile: cfg.REPO_APP_PRIVATE_KEY_STAGED_FILE,
+      recoverDeleted: cfg.RECOVER_REPO_APP_PRIVATE_KEY === true,
     },
     { exec, log },
   );

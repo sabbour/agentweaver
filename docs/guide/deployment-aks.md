@@ -73,12 +73,17 @@ Optional flags include `--skip-postgres`, `--image-tag <tag>`,
 `--oauth-encryption-certificate-name <name>`. Use
 `--repo-app-private-key-file <path>` or `REPO_APP_PRIVATE_KEY_FILE` to import
 the GitHub Repo App PEM without placing its contents in a command argument or
-params-file value. The file must contain an unencrypted RSA private key in PEM
-format; provisioning parses it locally before any Key Vault write and does not
-prompt for encrypted-key passphrases. Treat `REPO_APP_PRIVATE_KEY_FILE` as a
-one-shot input: after the canonical import succeeds, unset it in the environment.
-Remove it from every params file used for the import. Then delete the PEM. Otherwise a future
-deploy reloads the stale path before checking the valid canonical secret. The
+params-file value. The file must contain exactly one unencrypted PKCS#1
+`RSA PRIVATE KEY` or PKCS#8 `PRIVATE KEY` PEM block, the two formats accepted
+by the API's .NET `RSA.ImportFromPem` consumer. Provisioning validates the
+file immediately after argument and params parsing, before variable discovery
+or Azure work. It rejects symlink, junction, and reparse-path ambiguity, copies
+the validated bytes to an exclusively created access-restricted temporary
+file, gives only that file to Azure, and always removes it. Treat
+`REPO_APP_PRIVATE_KEY_FILE` as a one-shot input: after the canonical import
+succeeds, unset it in the environment. Remove it from every params file used
+for the import. Then delete the PEM. Otherwise a future deploy reloads the
+stale path before checking the valid canonical secret. The
 runtime loads the newest two usable
 versions under each certificate name; create a new version under the same name for
 rotation overlap.
@@ -96,7 +101,10 @@ or CI step. Any environment or params-file `REPO_APP_PRIVATE_KEY_FILE` setting m
 removed after that import succeeds. Remove the setting before you delete the PEM. See
 [Configuration](./configuration#repo-app-installation-and-webhook) for the migration
 commands. Deployment also stops before applying manifests when neither secret exists or
-Key Vault access cannot be verified.
+Key Vault access cannot be verified. A soft-deleted canonical secret is never
+recovered by a normal provision or deploy. Recovery requires the explicit
+`--recover-repo-app-private-key` operator flag after workload access is suspended
+or the old GitHub App credential is revoked.
 
 ### Image-build progress and optional Azure CLI limits
 
