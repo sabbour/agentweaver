@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.5
+
+### Patch Changes
+
+- 01127ac: Allow OAuth consent submissions to reach only the validated registered client callback while preserving a strict content security policy.
+
 ## 0.28.4
 
 ### Patch Changes
