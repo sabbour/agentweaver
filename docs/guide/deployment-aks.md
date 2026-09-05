@@ -73,9 +73,11 @@ Optional flags include `--skip-postgres`, `--image-tag <tag>`,
 `--oauth-encryption-certificate-name <name>`. Use
 `--repo-app-private-key-file <path>` or `REPO_APP_PRIVATE_KEY_FILE` to import
 the GitHub Repo App PEM without placing its contents in a command argument or
-params-file value. Treat `REPO_APP_PRIVATE_KEY_FILE` as one-shot input: after
-the canonical import succeeds, unset it in the environment. Remove it from
-every params file used for the import. Then delete the PEM. Otherwise a future
+params-file value. The file must contain an unencrypted RSA private key in PEM
+format; provisioning parses it locally before any Key Vault write and does not
+prompt for encrypted-key passphrases. Treat `REPO_APP_PRIVATE_KEY_FILE` as a
+one-shot input: after the canonical import succeeds, unset it in the environment.
+Remove it from every params file used for the import. Then delete the PEM. Otherwise a future
 deploy reloads the stale path before checking the valid canonical secret. The
 runtime loads the newest two usable
 versions under each certificate name; create a new version under the same name for
