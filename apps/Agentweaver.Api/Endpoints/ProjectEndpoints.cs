@@ -867,18 +867,19 @@ app.MapPost("/api/projects/{id}/github/repository", async (
                 request.Private ?? true,
                 token,
                 ct).ConfigureAwait(false);
-            return repository is null
-                ? null
-                : await projectService.ConnectCreatedRepositoryAsync(
-                    projectId, repository.FullName, repository.CloneUrl, token, ct).ConfigureAwait(false);
+            if (repository is null)
+                return null;
+            var project = await projectService.ConnectCreatedRepositoryAsync(
+                projectId, repository.FullName, repository.CloneUrl, token, ct).ConfigureAwait(false);
+            return new { Project = project, repository.HtmlUrl };
         },
         ct).ConfigureAwait(false);
     return connected.Outcome switch
     {
         GitHubRepositorySelectionOutcome.Issued when connected.Value is not null => Results.Ok(new
         {
-            source_repository = connected.Value.Origin.SourceRepository,
-            html_url = $"https://github.com/{connected.Value.Origin.SourceRepository}",
+            source_repository = connected.Value.Project.Origin.SourceRepository,
+            html_url = connected.Value.HtmlUrl,
         }),
         GitHubRepositorySelectionOutcome.GitHubBindingUnavailable =>
             Results.Conflict(new { error = "github_binding_unavailable" }),
@@ -1193,7 +1194,10 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             else
             {
                 project = await projectService.CreateFromGitHubAsync(
-                    request.Name!, resolvedRepository!.SourceRepository, requestedWorkingDirectory,
+                    request.Name!,
+                    resolvedRepository!.FullName,
+                    resolvedRepository.CloneUrl,
+                    requestedWorkingDirectory,
                     request.DefaultProvider, request.DefaultModelGitHubCopilot,
                     request.DefaultModelMicrosoftFoundry, caller.User, resolvedRepository.AccessToken, ct);
             }

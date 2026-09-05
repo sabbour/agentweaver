@@ -29,6 +29,7 @@ internal sealed record GitHubRepositorySelectionCandidate(
     string OwnerLogin,
     bool IsPrivate,
     string DefaultBranch,
+    string SourceUrl,
     string CloneUrl,
     DateTimeOffset? PushedAt);
 
@@ -36,6 +37,11 @@ internal sealed record GitHubRepositorySelectionIssueResult(
     GitHubRepositorySelectionOutcome Outcome,
     string? Code,
     DateTimeOffset? ExpiresAt);
+
+internal sealed record GitHubRepositorySelectionListResult(
+    GitHubRepositorySelectionOutcome Outcome,
+    IReadOnlyList<GitHubRepositorySelectionCandidate> Candidates,
+    IReadOnlyList<GitHubRepositoryInstallationMetadata> Installations);
 
 internal sealed record GitHubRepositoryCredentialUseResult<T>(
     GitHubRepositorySelectionOutcome Outcome,
@@ -65,16 +71,19 @@ internal sealed class GitHubRepositorySelectionBroker(
     internal static readonly TimeSpan SelectionCodeLifetime = TimeSpan.FromMinutes(5);
     private static readonly JsonSerializerOptions CredentialJsonOptions = new(JsonSerializerDefaults.Web);
 
-    internal async Task<(GitHubRepositorySelectionOutcome Outcome, IReadOnlyList<GitHubRepositorySelectionCandidate> Candidates)>
+    internal async Task<GitHubRepositorySelectionListResult>
         ListAsync(CallerContext caller, CancellationToken ct)
     {
-        var result = await GetCandidatesAsync(caller, ct).ConfigureAwait(false);
-        return result.Candidates is null
-            ? (result.Outcome, [])
-            : (result.Outcome, result.Candidates);
+        var result = await WithCredentialAsync(
+            GetCallerSubject(caller),
+            token => repositories.BrowseAsync(token, ct),
+            ct).ConfigureAwait(false);
+        return result.Value is null
+            ? new(result.Outcome, [], [])
+            : new(result.Outcome, result.Value.Repositories, result.Value.Installations);
     }
 
-    internal Task<(GitHubRepositorySelectionOutcome Outcome, IReadOnlyList<GitHubRepositorySelectionCandidate> Candidates)>
+    internal Task<GitHubRepositorySelectionListResult>
         ListAsync(string entraObjectId, CancellationToken ct) =>
         ListAsync(new CallerContext { User = entraObjectId, EntraObjectId = entraObjectId }, ct);
 
@@ -256,7 +265,7 @@ internal sealed class GitHubRepositorySelectionBroker(
 
         return new ResolvedGitHubRepositorySelection(
             repository.FullName,
-            $"https://github.com/{repository.FullName}",
+            repository.SourceUrl,
             repository.CloneUrl,
             accessToken);
     }
@@ -265,18 +274,24 @@ internal sealed class GitHubRepositorySelectionBroker(
         GitHubRepositorySelectionOutcome Outcome,
         IReadOnlyList<GitHubRepositorySelectionCandidate>? Candidates,
         RepoAppCredentialReference? Credential)>
-        GetCandidatesAsync(CallerContext caller, CancellationToken ct) =>
-        await WithCredentialAsync(GetCallerSubject(caller), token => repositories.ListAsync(token, ct), ct)
-            .ConfigureAwait(false);
+        GetCandidatesAsync(CallerContext caller, CancellationToken ct)
+    {
+        var result = await WithCredentialAsync(
+            GetCallerSubject(caller),
+            token => repositories.ListAsync(token, ct),
+            ct).ConfigureAwait(false);
+        return (result.Outcome, result.Value, result.Credential);
+    }
 
     private async Task<(
         GitHubRepositorySelectionOutcome Outcome,
-        IReadOnlyList<GitHubRepositorySelectionCandidate>? Candidates,
+        T? Value,
         RepoAppCredentialReference? Credential)>
-        WithCredentialAsync(
+        WithCredentialAsync<T>(
             string entraObjectId,
-            Func<string, Task<IReadOnlyList<GitHubRepositorySelectionCandidate>?>> operation,
+            Func<string, Task<T?>> operation,
             CancellationToken ct)
+        where T : class
     {
         var credential = await persistence.GetLiveRepoAppCredentialAsync(entraObjectId, ct).ConfigureAwait(false);
         if (credential is null)
@@ -296,10 +311,10 @@ internal sealed class GitHubRepositorySelectionBroker(
         if (!secret.Found || !TryGetUsableAccessToken(secret.Value, out var accessToken))
             return (GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, null, null);
 
-        IReadOnlyList<GitHubRepositorySelectionCandidate>? candidates;
+        T? value;
         try
         {
-            candidates = await operation(accessToken!).ConfigureAwait(false);
+            value = await operation(accessToken!).ConfigureAwait(false);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested &&
                                    (ex is HttpRequestException || ex is JsonException || ex is TaskCanceledException))
@@ -311,11 +326,11 @@ internal sealed class GitHubRepositorySelectionBroker(
             return (GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError, null, null);
         }
 
-        if (candidates is null ||
+        if (value is null ||
             !await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false))
             return (GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, null, null);
 
-        return (GitHubRepositorySelectionOutcome.Issued, candidates, credential);
+        return (GitHubRepositorySelectionOutcome.Issued, value, credential);
     }
 
     private static string GetCallerSubject(CallerContext caller) =>

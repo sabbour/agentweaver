@@ -25,6 +25,20 @@ namespace Agentweaver.Tests.Auth;
 /// </summary>
 public sealed class RepoAppInstallationAuthorizationServiceTests
 {
+    [Theory]
+    [InlineData("owner/repository", "https://github.com", "owner/repository")]
+    [InlineData("https://github.com/owner/repository", "https://github.com", "owner/repository")]
+    [InlineData("https://ghe.example.com/owner/repository.git", "https://ghe.example.com", "owner/repository")]
+    [InlineData("https://evil.example/owner/repository", "https://github.com", null)]
+    public void NormalizeRepositoryFullName_HandlesCanonicalAndLegacyOrigins(
+        string sourceRepository,
+        string baseUrl,
+        string? expected)
+    {
+        RepoAppInstallationAuthorizationService.NormalizeRepositoryFullName(sourceRepository, baseUrl)
+            .Should().Be(expected);
+    }
+
     [Fact]
     public async Task InstallCallbackToBind_BindsTheConnectedRepositoryEndToEnd()
     {
