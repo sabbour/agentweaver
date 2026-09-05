@@ -2,4 +2,4 @@
 "agentweaver": patch
 ---
 
-Make Azure deployments import or verify the GitHub Repo App private key at its canonical Key Vault name, refuse unsafe cross-runner automatic legacy migration, and provide explicit one-shot file-based migration instructions.
+Make Azure deployments validate and safely stage exactly one .NET-compatible RSA Repo App private key before Azure work, keep soft-deleted credentials inactive unless an operator explicitly requests recovery, and preserve fail-closed canonical and legacy-secret handling.

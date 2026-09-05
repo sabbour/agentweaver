@@ -74,6 +74,9 @@ post-deploy health verification.
 Flags:
   --allow-dirty   Dev/test escape hatch: skip the dirty-working-tree check.
                   Do not use for a published release deployment.
+  --recover-repo-app-private-key
+                  Explicit operator action that permits recovery of a soft-deleted
+                  canonical Repo App key. Suspend or revoke workload access first.
 `;
 
 export const WARM_POOL_NAME = "agentweaver-agent-host";

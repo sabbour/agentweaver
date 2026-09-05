@@ -253,6 +253,41 @@ test("run(): rejects a missing or inaccessible canonical Repo App private key be
   }
 });
 
+test("run(): forwards only the staged Repo App key path and explicit recovery decision", async () => {
+  const { calls, execRun, execCapture, log, az, fsImpl } = makeFakes();
+  let received;
+  await assert.rejects(
+    () => run(
+      {
+        ...CFG,
+        REPO_APP_PRIVATE_KEY_FILE: "",
+        REPO_APP_PRIVATE_KEY_STAGED_FILE: "C:\\protected-temp\\private-key.pem",
+        RECOVER_REPO_APP_PRIVATE_KEY: true,
+      },
+      {
+        run: execRun,
+        capture: execCapture,
+        log,
+        az,
+        fs: fsImpl,
+        repoRoot: DEFAULT_REPO_ROOT,
+        ensureRepoAppPrivateKeySecret: async (params) => {
+          received = params;
+          throw new Error("stop after Repo App contract assertion");
+        },
+      },
+    ),
+    /stop after Repo App contract assertion/,
+  );
+  assert.deepEqual(received, {
+    vaultName: TEST_KEYVAULT_NAME,
+    sourceFile: "",
+    stagedSourceFile: "C:\\protected-temp\\private-key.pem",
+    recoverDeleted: true,
+  });
+  assert.equal(appliedFilenames(calls).length, 0);
+});
+
 test("run(): rejects an empty managed domain before rendering or applying manifests", async () => {
   const { calls, writtenFiles, execRun, execCapture, log, az, fsImpl } = makeFakes({ domain: "" });
   await assert.rejects(

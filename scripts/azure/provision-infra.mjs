@@ -52,6 +52,7 @@ import * as azDefault from "./lib/az.mjs";
 import * as promptDefault from "./lib/prompt.mjs";
 import { resolveGitHubRepository } from "./lib/github.mjs";
 import { resolveConfig, loadParamsFile } from "./lib/config.mjs";
+import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
 import { resolveVariables, DEFAULTS, DEFAULT_REPO_ROOT, validateQualifiedImageReference } from "./variables.mjs";
 
 import * as createClusterDefault from "./steps/10-create-cluster.mjs";
@@ -75,7 +76,7 @@ const PROVISION_KEYVAULT_NAME_SUGGESTION = "agentweaver-kv";
 
 /**
  * Parses `provision-infra` subcommand argv into a flags object plus a paramsFile path.
- * Recognizes: --skip-postgres, --force,
+ * Recognizes: --skip-postgres, --force, --recover-repo-app-private-key,
  * --image-tag <tag>, --image-source <acr-build|ghcr|custom>, --ghcr-ref <ref>,
  * --ghcr-token <token>, --image-api <ref>, --image-frontend <ref>,
  * --image-mcp <ref>, --image-agent-host <ref> (or =value forms),
@@ -105,6 +106,8 @@ export function parseArgs(argv = []) {
       flags.SKIP_POSTGRES = true;
     } else if (arg === "--force") {
       flags.FORCE = true;
+    } else if (arg === "--recover-repo-app-private-key") {
+      flags.RECOVER_REPO_APP_PRIVATE_KEY = true;
     } else if (arg === "-h" || arg === "--help") {
       help = true;
     } else if (arg === "--image-tag" || arg.startsWith("--image-tag=")) {
@@ -235,6 +238,9 @@ Local dev environment setup (no Azure) lives under 'dev --setup' instead:
 Flags:
   --skip-postgres             Skip Postgres provisioning (17-provision-postgres).
   --force                     Allow GHCR/custom import to overwrite an existing target ACR tag if the digest differs.
+  --recover-repo-app-private-key
+                              Explicitly recover a soft-deleted canonical Repo App key.
+                              Suspend or revoke workload access before using this operator action.
   --image-tag <tag>           Use this image tag instead of the derived default.
   --image-source <source>     Image source: 'ghcr' (default), 'acr-build', or 'custom'.
   --ghcr-ref <ref>            Required with --image-source ghcr; only accepts immutable refs (vX.Y.Z or sha-<hex>).
@@ -539,8 +545,15 @@ function buildSchema({ prompt, az }) {
  * Returns a flags-shaped object suitable for feeding into resolveConfig() as
  * the highest-precedence source. Every collaborator is injectable for tests.
  */
-export async function runInteractiveInstaller({ prompt = promptDefault, az = azDefault, log = logDefault } = {}) {
-  const collected = {};
+export async function runInteractiveInstaller({
+  prompt = promptDefault,
+  az = azDefault,
+  log = logDefault,
+  repoAppPrivateKeyFile = "",
+} = {}) {
+  const collected = {
+    REPO_APP_PRIVATE_KEY_FILE: repoAppPrivateKeyFile,
+  };
 
   log.banner("Agentweaver interactive installer", "Provision Azure infrastructure and deploy");
 
@@ -640,11 +653,6 @@ export async function runInteractiveInstaller({ prompt = promptDefault, az = azD
     "Microsoft Entra enterprise application (service principal) object ID (optional, enables a direct 'Manage users' deep link)",
     { default: "" },
   );
-  collected.REPO_APP_PRIVATE_KEY_FILE = await prompt.text(
-    "GitHub Repo App private-key PEM file (leave blank to reuse or migrate an existing Key Vault secret)",
-    { default: "" },
-  );
-
   return collected;
 }
 
@@ -698,11 +706,32 @@ export async function run(opts = {}) {
   }
 
   const paramsFile = loadParamsFile(paramsFilePath);
-
-  if (shouldRunInteractiveInstaller(argv, { prompt })) {
-    const collected = await runInteractiveInstaller({ prompt, az, log });
-    Object.assign(flags, collected);
+  const interactive = shouldRunInteractiveInstaller(argv, { prompt });
+  if (interactive) {
+    flags.REPO_APP_PRIVATE_KEY_FILE = await prompt.text(
+      "GitHub Repo App private-key PEM file (leave blank to reuse an existing Key Vault secret)",
+      { default: "" },
+    );
   }
+
+  const configuredKeyFile = Object.hasOwn(flags, "REPO_APP_PRIVATE_KEY_FILE")
+    ? flags.REPO_APP_PRIVATE_KEY_FILE
+    : env.REPO_APP_PRIVATE_KEY_FILE ?? paramsFile.REPO_APP_PRIVATE_KEY_FILE;
+  const stagedRepoAppKey = stageRepoAppPrivateKeyFile(configuredKeyFile);
+  if (stagedRepoAppKey) {
+    flags.REPO_APP_PRIVATE_KEY_FILE = stagedRepoAppKey.filePath;
+  }
+
+  try {
+    if (interactive) {
+      const collected = await runInteractiveInstaller({
+        prompt,
+        az,
+        log,
+        repoAppPrivateKeyFile: stagedRepoAppKey?.filePath ?? "",
+      });
+      Object.assign(flags, collected);
+    }
 
   const githubRepo = await resolveGitHubRepository({ repoRoot, exec }).catch(() => null);
   const ghcrOwner = githubRepo?.owner ?? "";
@@ -796,6 +825,8 @@ export async function run(opts = {}) {
     MONITORING_LOCATION: config.MONITORING_LOCATION,
     FORCE: Boolean(flags.FORCE),
     REPO_APP_PRIVATE_KEY_FILE: config.REPO_APP_PRIVATE_KEY_FILE,
+    REPO_APP_PRIVATE_KEY_STAGED_FILE: stagedRepoAppKey?.filePath ?? "",
+    RECOVER_REPO_APP_PRIVATE_KEY: Boolean(flags.RECOVER_REPO_APP_PRIVATE_KEY),
     repoRoot,
   };
 
@@ -824,6 +855,8 @@ export async function run(opts = {}) {
     MONITORING_LOCATION: config.MONITORING_LOCATION,
     FORCE: Boolean(flags.FORCE),
     REPO_APP_PRIVATE_KEY_FILE: config.REPO_APP_PRIVATE_KEY_FILE,
+    REPO_APP_PRIVATE_KEY_STAGED_FILE: stagedRepoAppKey?.filePath ?? "",
+    RECOVER_REPO_APP_PRIVATE_KEY: Boolean(flags.RECOVER_REPO_APP_PRIVATE_KEY),
     repoRoot,
   };
 
@@ -904,4 +937,7 @@ export async function run(opts = {}) {
     deploy: deployResult,
     verify: verifyResult,
   };
+  } finally {
+    stagedRepoAppKey?.cleanup();
+  }
 }
