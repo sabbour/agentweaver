@@ -592,6 +592,77 @@ describe('AssistantRunPage', () => {
     });
   });
 
+  it('reconciles a repeated optimistic message when the first post-send baseline already contains it', async () => {
+    const retryHydration = deferred<Array<{
+      sequence: number;
+      type: string;
+      payload: Record<string, unknown>;
+    }>>();
+    const repeatedTurn = deferred<typeof REAL_MESSAGE_RESPONSE>();
+    const oldUserEvent = {
+      sequence: 1,
+      type: 'agent.message',
+      payload: { messageId: 'user-1', role: 'user', content: 'persist before response' },
+    };
+    const persistedUserEvent = {
+      sequence: 2,
+      type: 'agent.message',
+      payload: { messageId: 'user-2', role: 'user', content: 'persist before response' },
+    };
+    vi.mocked(apiClient.getRunEvents)
+      .mockRejectedValueOnce(new Error('history unavailable'))
+      .mockReturnValueOnce(retryHydration.promise as never);
+    vi.mocked(apiClient.sendAssistantMessage).mockReturnValueOnce(repeatedTurn.promise);
+
+    const view = render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    await screen.findByRole('button', { name: 'Retry sync' });
+    typeAndSend('persist before response');
+    await waitFor(() => {
+      expect(apiClient.sendAssistantMessage).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('assistant-pending-message')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry sync' }));
+    await waitFor(() => expect(apiClient.getRunEvents).toHaveBeenCalledTimes(2));
+    retryHydration.resolve([oldUserEvent, persistedUserEvent]);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+      expect(screen.getAllByTestId('timeline-message').filter(
+        (message) => message.getAttribute('data-role') === 'user',
+      )).toHaveLength(2);
+    });
+
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [persistedUserEvent],
+    };
+    view.rerender(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/assistant?runId=assistant-run-1']}>
+          <Routes>
+            <Route path="/assistant" element={<AssistantRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    expect(screen.queryByTestId('assistant-pending-message')).toBeNull();
+    expect(screen.getAllByTestId('timeline-message').filter(
+      (message) => message.getAttribute('data-role') === 'user',
+    )).toHaveLength(2);
+    repeatedTurn.resolve(REAL_MESSAGE_RESPONSE);
+  });
+
   it('keeps a retry-established baseline when the original hydration resolves later', async () => {
     const originalHydration = deferred<Array<{
       sequence: number;
