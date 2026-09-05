@@ -717,7 +717,7 @@ export async function run(opts = {}) {
   const configuredKeyFile = Object.hasOwn(flags, "REPO_APP_PRIVATE_KEY_FILE")
     ? flags.REPO_APP_PRIVATE_KEY_FILE
     : env.REPO_APP_PRIVATE_KEY_FILE ?? paramsFile.REPO_APP_PRIVATE_KEY_FILE;
-  const stagedRepoAppKey = stageRepoAppPrivateKeyFile(configuredKeyFile);
+  let stagedRepoAppKey = stageRepoAppPrivateKeyFile(configuredKeyFile);
   if (stagedRepoAppKey) {
     flags.REPO_APP_PRIVATE_KEY_FILE = stagedRepoAppKey.filePath;
   }
@@ -836,6 +836,15 @@ export async function run(opts = {}) {
   log.step(2, 9, "Setting up identity");
   await setupIdentity.run(cfg, { exec, log, az, prompt });
 
+  if (stagedRepoAppKey) {
+    stagedRepoAppKey.cleanup();
+    stagedRepoAppKey = null;
+  }
+  flags.REPO_APP_PRIVATE_KEY_FILE = "";
+  flags.RECOVER_REPO_APP_PRIVATE_KEY = false;
+  config.REPO_APP_PRIVATE_KEY_FILE = "";
+  envOverride.REPO_APP_PRIVATE_KEY_FILE = "";
+
   // Re-resolve variables so IDENTITY_CLIENT_ID (populated live by az after
   // 15-setup-identity provisions the managed identity) is picked up before
   // any later step needs it -- mirrors install.sh's explicit `az identity
@@ -854,9 +863,9 @@ export async function run(opts = {}) {
     IMAGE_AGENT_HOST: config.IMAGE_AGENT_HOST,
     MONITORING_LOCATION: config.MONITORING_LOCATION,
     FORCE: Boolean(flags.FORCE),
-    REPO_APP_PRIVATE_KEY_FILE: config.REPO_APP_PRIVATE_KEY_FILE,
-    REPO_APP_PRIVATE_KEY_STAGED_FILE: stagedRepoAppKey?.filePath ?? "",
-    RECOVER_REPO_APP_PRIVATE_KEY: Boolean(flags.RECOVER_REPO_APP_PRIVATE_KEY),
+    REPO_APP_PRIVATE_KEY_FILE: "",
+    REPO_APP_PRIVATE_KEY_STAGED_FILE: "",
+    RECOVER_REPO_APP_PRIVATE_KEY: false,
     repoRoot,
   };
 

@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   parseArgs,
   validatePublishedRelease,
@@ -17,6 +20,59 @@ const log = {
   info() {}, section() {}, field() {}, ok() {}, skip() {}, warn() {},
   error() {}, debug() {}, command() {},
 };
+
+function makeFinalReparsePath(scratchRoot) {
+  const targetFile = path.join(scratchRoot, "target.pem");
+  const sourceFile = path.join(scratchRoot, "source.pem");
+  fs.writeFileSync(targetFile, "-----BEGIN PRIVATE KEY-----\nSENSITIVE\n-----END PRIVATE KEY-----");
+  try {
+    fs.symlinkSync(targetFile, sourceFile, "file");
+  } catch {
+    const targetDir = path.join(scratchRoot, "target-dir");
+    fs.mkdirSync(targetDir);
+    fs.symlinkSync(targetDir, sourceFile, "junction");
+  }
+  return sourceFile;
+}
+
+async function assertRepoAppKeyRejectedBeforeCollaborators(sourceFile, expected) {
+  const calls = [];
+  const blocked = (name) => async () => {
+    calls.push(name);
+    throw new Error(`${name} must not be called`);
+  };
+
+  await assert.rejects(
+    run({
+      argv: ["v1.2.3"],
+      repoRoot: "/repo",
+      env: { REPO_APP_PRIVATE_KEY_FILE: sourceFile },
+      exec: {
+        capture: blocked("git/azure capture"),
+        run: blocked("git/azure run"),
+        setDryRun: () => calls.push("dry-run"),
+      },
+      git: { revParseCommit: blocked("git resolution") },
+      kubectl: new Proxy({}, { get: (_target, property) => blocked(`kubectl.${String(property)}`) }),
+      log,
+      readFile: blocked("release file read"),
+      resolveVariables: blocked("variable resolution"),
+      resolveGitHubRepository: blocked("GitHub repository resolution"),
+      steps: {
+        buildImages: { run: blocked("build") },
+        deployStep: { run: blocked("deploy") },
+        verifyProvenance: { run: blocked("provenance") },
+        verifyStep: { run: blocked("verification") },
+      },
+    }),
+    (error) => {
+      assert.match(error.message, expected);
+      assert.doesNotMatch(error.message, /SENSITIVE|BEGIN .* PRIVATE KEY/);
+      return true;
+    },
+  );
+  assert.deepEqual(calls, []);
+}
 
 function fakeExec({ head = "abc", tagCommit = "abc", annotated = true, release = true } = {}) {
   const calls = [];
@@ -227,4 +283,34 @@ test("deploy-from-release --image-source ghcr fails closed without a GitHub orig
     }),
     /GitHub origin remote/,
   );
+});
+
+test("run rejects invalid, unreadable, and final reparse Repo App key inputs before collaborators", async (t) => {
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-release-repo-app-key-"));
+  try {
+    await t.test("invalid PEM", async () => {
+      const sourceFile = path.join(scratchRoot, "invalid.pem");
+      fs.writeFileSync(sourceFile, "SENSITIVE-PRIVATE-KEY-MATERIAL");
+      await assertRepoAppKeyRejectedBeforeCollaborators(
+        sourceFile,
+        /exactly one unencrypted.*private key pem block/i,
+      );
+    });
+
+    await t.test("unreadable path", async () => {
+      await assertRepoAppKeyRejectedBeforeCollaborators(
+        path.join(scratchRoot, "missing.pem"),
+        /could not be read/i,
+      );
+    });
+
+    await t.test("final-component reparse point", async () => {
+      await assertRepoAppKeyRejectedBeforeCollaborators(
+        makeFinalReparsePath(scratchRoot),
+        /must not be a symbolic link, junction, or reparse-point path/i,
+      );
+    });
+  } finally {
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  }
 });
