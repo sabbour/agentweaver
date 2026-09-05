@@ -90,6 +90,10 @@ app.MapGet("/api/runs/{id}", async (
     var streamEntry = streamStore.Get(id);
     var streamEvents = streamEntry?.GetSnapshotSince(0).Events;
     var sandboxStatus = RunSandboxStatusReader.GetSandboxStatus(run, streamEvents);
+    var streamProviderEvent = streamEvents?
+        .Where(e => e.Type == EventTypes.RunModelProviderResolved)
+        .OrderByDescending(e => e.Sequence)
+        .FirstOrDefault();
 
     // Augment sandboxStatus with the live SandboxClaim phase from Kubernetes.
     // Only attempted when the backend is kubernetes-sandbox-claim and an in-cluster
@@ -154,13 +158,42 @@ app.MapGet("/api/runs/{id}", async (
     var stepCount = run.StepCount;
     if (stepCount <= 0 && streamEvents is not null)
         stepCount = streamEvents.Count(e => e.Type == EventTypes.ToolCall);
-    if (stepCount <= 0)
+    EffectiveModelProviderDto? effectiveModelProvider;
+    await using (var dbScope = httpContext.RequestServices.CreateAsyncScope())
     {
-        await using var dbScope = httpContext.RequestServices.CreateAsyncScope();
         var memoryDb = dbScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        stepCount = await memoryDb.RunEvents
-            .Where(e => e.RunId == id && e.EventType == EventTypes.ToolCall)
-            .CountAsync(ct);
+        if (stepCount <= 0)
+        {
+            stepCount = await memoryDb.RunEvents
+                .Where(e => e.RunId == id && e.EventType == EventTypes.ToolCall)
+                .CountAsync(ct);
+        }
+
+        var durableProvider = await memoryDb.RunEvents
+            .Where(e => e.RunId == id && e.EventType == EventTypes.RunModelProviderResolved)
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => new { e.Sequence, e.PayloadJson })
+            .FirstOrDefaultAsync(ct);
+
+        if (durableProvider is not null
+            && (streamProviderEvent is null || durableProvider.Sequence >= streamProviderEvent.Sequence))
+        {
+            try
+            {
+                effectiveModelProvider = EffectiveModelProviderProvenance.TryReadContract(
+                    System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                        durableProvider.PayloadJson));
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                logger.LogWarning(ex, "Could not parse effective model provider provenance for run {RunId}", id);
+                effectiveModelProvider = null;
+            }
+        }
+        else
+        {
+            effectiveModelProvider = EffectiveModelProviderProvenance.TryReadContract(streamProviderEvent?.Payload);
+        }
     }
 
     return Results.Json(new RunResponse
@@ -168,6 +201,7 @@ app.MapGet("/api/runs/{id}", async (
         RunId = run.Id.ToString(),
         Status = run.Status.ToApiString(),
         ModelSource = run.ModelSource.ToApiString(),
+        EffectiveModelProvider = effectiveModelProvider,
         StartedAt = run.StartedAt,
         EndedAt = run.EndedAt,
         Result = run.Result,

@@ -292,7 +292,10 @@ public sealed class CoordinatorRunService
             ?? await ResolveEffectiveProviderAsync(run.ProjectId, _appStopping).ConfigureAwait(false);
         entry.RecordNext(
             EventTypes.RunModelProviderResolved,
-            resolvedProvider.ToProvenancePayload(runId, run.ModelId));
+            resolvedProvider.ToProvenancePayload(
+                runId,
+                run.ModelId,
+                EffectiveModelProviderProvenance.ScopeProject));
 
         var outcomeSpecGenerationModel = await ResolveOutcomeSpecGenerationModelAsync(
             run.ProjectId!.Value, _appStopping).ConfigureAwait(false);

@@ -1245,6 +1245,7 @@ else
     applicationEndpoints.MapSkillEndpoints();
     applicationEndpoints.MapBacklogEndpoints();
     applicationEndpoints.MapBacklogDecomposeEndpoints();
+    applicationEndpoints.MapAiExecutionContextEndpoints();
     applicationEndpoints.MapAssistantEndpoints();
     applicationEndpoints.MapCoordinatorEndpoints();
     applicationEndpoints.MapCastingEndpoints();

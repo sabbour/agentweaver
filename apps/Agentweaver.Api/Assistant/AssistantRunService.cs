@@ -4,6 +4,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Auth.OAuth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Sandbox;
@@ -87,7 +88,11 @@ public sealed class AssistantRunHttpException(int statusCode, string error, stri
     public string Error { get; } = error;
 }
 
-public sealed record StartAssistantRunResult(RunId RunId, RunStatus Status, OperatorAssistantResponse? FirstTurn);
+public sealed record StartAssistantRunResult(
+    RunId RunId,
+    RunStatus Status,
+    OperatorAssistantResponse? FirstTurn,
+    EffectiveModelProviderDto? EffectiveModelProvider);
 
 /// <summary>A single operator conversation in a caller's recent-conversations list.</summary>
 public sealed record AssistantRunSummary(string RunId, RunStatus Status, string Title, DateTimeOffset CreatedAt);
@@ -279,7 +284,11 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                     "identical opening message started {SecondsAgo:0}s ago; returning it instead of " +
                     "starting a duplicate.",
                     caller.User, duplicate.Id, (now - duplicate.StartedAt).TotalSeconds);
-                return new StartAssistantRunResult(duplicate.Id, duplicate.Status, FirstTurn: null);
+                return new StartAssistantRunResult(
+                    duplicate.Id,
+                    duplicate.Status,
+                    FirstTurn: null,
+                    await LoadLatestProviderContextAsync(duplicate.Id.ToString(), ct).ConfigureAwait(false));
             }
         }
 
@@ -331,10 +340,12 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
             _runs[key] = new OperatorRunState(caller.User, projectId, modelId, now, seedHistory: resumeHistory);
         }
 
+        EffectiveModelProviderResult effectiveProvider;
         try
         {
             ProjectId? project = ProjectId.TryParse(projectId, out var pid) ? pid : null;
-            var modelSource = await ResolveAssistantModelSourceAsync(ct).ConfigureAwait(false);
+            effectiveProvider = await ResolveAssistantProviderAsync(ct).ConfigureAwait(false);
+            var modelSource = ToModelSource(effectiveProvider);
             var run = new Run
             {
                 Id = runId,
@@ -364,6 +375,14 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
                 contextRunId,
                 resumedFromRunId = resumeFromRunId,
             }, ct).ConfigureAwait(false);
+            await AppendAsync(
+                key,
+                EventTypes.RunModelProviderResolved,
+                effectiveProvider.ToProvenancePayload(
+                    key,
+                    modelId,
+                    EffectiveModelProviderProvenance.ScopePlatform),
+                ct).ConfigureAwait(false);
             await _runStore.InsertAsync(run, ct).ConfigureAwait(false);
         }
         catch
@@ -379,11 +398,31 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         }
 
         OperatorAssistantResponse? firstTurn = null;
+        var providerContext = effectiveProvider.ToContract(
+            EffectiveModelProviderProvenance.ScopePlatform,
+            modelId);
         if (!deferFirstTurn && !string.IsNullOrWhiteSpace(firstMessage))
+        {
             firstTurn = await RunTurnAsync(caller, key, firstMessage!, contextRunId, ct)
                 .ConfigureAwait(false);
+            providerContext = await LoadLatestProviderContextAsync(key, ct).ConfigureAwait(false)
+                ?? providerContext;
+        }
 
-        return new StartAssistantRunResult(runId, RunStatus.InProgress, firstTurn);
+        return new StartAssistantRunResult(runId, RunStatus.InProgress, firstTurn, providerContext);
+    }
+
+    private async Task<EffectiveModelProviderDto?> LoadLatestProviderContextAsync(
+        string runId,
+        CancellationToken ct)
+    {
+        var events = await _eventStream.GetPersistedEventsAsync(runId, fromSequence: 0, ct)
+            .ConfigureAwait(false);
+        return events
+            .Where(e => e.Type == EventTypes.RunModelProviderResolved)
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => EffectiveModelProviderProvenance.TryReadContract(e.Payload))
+            .FirstOrDefault(provider => provider is not null);
     }
 
     /// <summary>Drops a start reservation taken under <see cref="_startLock"/>.</summary>
@@ -568,16 +607,19 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
     /// platform connection fails fast with the "Connect GitHub" CTA rather than deep inside the turn.
     /// </para>
     /// </summary>
-    private async Task ReresolveModelSourceForTurnAsync(OperatorRunState state, string runId, CancellationToken ct)
+    private async Task<EffectiveModelProviderResult> ReresolveModelSourceForTurnAsync(
+        OperatorRunState state,
+        string runId,
+        CancellationToken ct)
     {
+        var provider = await ResolveAssistantProviderAsync(ct).ConfigureAwait(false);
         if (!RunId.TryParse(runId, out var parsedRunId))
-            return;
+            return provider;
 
         var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
         if (run is null)
-            return;
+            return provider;
 
-        var provider = await ResolveAssistantProviderAsync(ct).ConfigureAwait(false);
         var modelSource = ToModelSource(provider);
 
         // Null on the conversation's very first turn on this replica (a fresh start, or a rehydration
@@ -589,7 +631,7 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         var modelSourceChanged = modelSource != run.ModelSource;
 
         if (!identityChanged && !modelSourceChanged)
-            return;
+            return provider;
 
         _logger.LogInformation(
             "Operator run {RunId}: effective model provider changed ({PreviousSource}/{PreviousIdentity} -> " +
@@ -612,6 +654,8 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
         // sweeper fires concurrently.
         if (identityChanged && state.TryMarkAgentHostPodReleasing())
             await ReleaseAgentHostPodAsync(state, runId, "model_provider_changed").ConfigureAwait(false);
+
+        return provider;
     }
 
     private async Task PrepareAgentHostCapabilityAsync(Run run, CancellationToken ct)
@@ -705,7 +749,15 @@ public sealed class AssistantRunService : IAssistantRunService, IDisposable
 
             // Re-resolve the effective provider for this turn so a platform provider switch takes
             // effect on the next message, releasing any held pod configured for the prior provider.
-            await ReresolveModelSourceForTurnAsync(state, runId, ct).ConfigureAwait(false);
+            var effectiveProvider = await ReresolveModelSourceForTurnAsync(state, runId, ct).ConfigureAwait(false);
+            await AppendAsync(
+                runId,
+                EventTypes.RunModelProviderResolved,
+                effectiveProvider.ToProvenancePayload(
+                    runId,
+                    state.ModelId,
+                    EffectiveModelProviderProvenance.ScopePlatform),
+                ct).ConfigureAwait(false);
 
             Task<string> IssueBrokerTokenAsync(CancellationToken token) =>
                 _brokerTokenIssuer.IssueAsync(caller, runId, state.ProjectId, token);

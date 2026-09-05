@@ -43,6 +43,45 @@ public sealed record CreateRunResponse
     public required string Status { get; init; }
 }
 
+/// <summary>
+/// Redacted identity of the model provider resolved for one execution context. This is the
+/// authoritative UI contract; <c>Run.ModelSource</c> is intentionally not used because it cannot
+/// distinguish project/platform/user scope or same-kind provider changes.
+/// </summary>
+public sealed record EffectiveModelProviderDto
+{
+    [JsonPropertyName("state")] public required string State { get; init; }
+    [JsonPropertyName("provider_kind")] public required string ProviderKind { get; init; }
+    [JsonPropertyName("resolution_scope")] public required string ResolutionScope { get; init; }
+    [JsonPropertyName("provider_scope")] public required string ProviderScope { get; init; }
+    [JsonPropertyName("provider_type")] public string? ProviderType { get; init; }
+    [JsonPropertyName("github_login")] public string? GitHubLogin { get; init; }
+    [JsonPropertyName("model_id")] public string? ModelId { get; init; }
+    /// <summary>Opaque fingerprint used to detect provider changes. Never display this value.</summary>
+    [JsonPropertyName("provider_key")] public string? ProviderKey { get; init; }
+    [JsonPropertyName("unavailable_reason")] public string? UnavailableReason { get; init; }
+}
+
+/// <summary>Request body for POST /api/ai/execution-context.</summary>
+public sealed record AiExecutionContextRequest
+{
+    [JsonPropertyName("operation")] public string? Operation { get; init; }
+    [JsonPropertyName("project_id")] public string? ProjectId { get; init; }
+}
+
+/// <summary>
+/// Provider context the UI displays before a generative action. The matching active/completed
+/// execution uses the same <see cref="EffectiveModelProvider"/> shape.
+/// </summary>
+public sealed record AiExecutionContextResponse
+{
+    [JsonPropertyName("ai_required")] public required bool AiRequired { get; init; }
+    [JsonPropertyName("operation")] public required string Operation { get; init; }
+    [JsonPropertyName("phase")] public required string Phase { get; init; }
+    [JsonPropertyName("effective_model_provider")]
+    public EffectiveModelProviderDto? EffectiveModelProvider { get; init; }
+}
+
 /// <summary>Response body for GET /api/runs/{id}.</summary>
 public sealed record RunResponse
 {
@@ -54,6 +93,9 @@ public sealed record RunResponse
 
     [JsonPropertyName("model_source")]
     public required string ModelSource { get; init; }
+
+    [JsonPropertyName("effective_model_provider")]
+    public EffectiveModelProviderDto? EffectiveModelProvider { get; init; }
 
     [JsonPropertyName("started_at")]
     public required DateTimeOffset StartedAt { get; init; }
@@ -1015,6 +1057,8 @@ public sealed record StartAssistantRunResponse
 {
     [JsonPropertyName("run_id")] public required string RunId { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("effective_model_provider")]
+    public EffectiveModelProviderDto? EffectiveModelProvider { get; init; }
     /// <summary>Assistant reply for the initial turn when a message was supplied; null otherwise.</summary>
     [JsonPropertyName("message")] public string? Message { get; init; }
     /// <summary>Names of MCP tools the assistant invoked on the initial turn.</summary>
