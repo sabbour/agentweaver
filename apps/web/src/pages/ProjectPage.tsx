@@ -468,9 +468,10 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
   const [error, setError] = useState<string | null>(null);
   const [connectRepoOpen, setConnectRepoOpen] = useState(false);
   const [projectSetupDismissed, setProjectSetupDismissed] = useState(false);
-  const [repositorySetup, setRepositorySetup] = useState<
-    NonNullable<UnattendedReadiness['repository']> | null
-  >(null);
+  const [repositorySetup, setRepositorySetup] = useState<{
+    projectId: string;
+    repository: NonNullable<UnattendedReadiness['repository']>;
+  } | null>(null);
 
   const handleRunDeleted = (workflowRunId: string) => {
     setRuns((prev) => prev.filter((r) => r.workflow_run_id !== workflowRunId));
@@ -491,22 +492,31 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
       }
     };
 
+    const fetchRepositorySetup = async (proj: Project) => {
+      try {
+        const readiness = await apiClient.getUnattendedReadiness(projectId);
+        if (cancelled) return;
+        const repository = projectRepositoryReadiness(proj, readiness);
+        const setupState = projectSetupPromptState(proj, currentUserKey, repository);
+        const storageKey = projectSetupPromptStorageKey(setupState);
+        const fingerprint = projectSetupPromptFingerprint(setupState);
+        setProjectSetupDismissed(
+          hasDismissedProjectSetupPrompt(storageKey, fingerprint),
+        );
+        setRepositorySetup({ projectId: proj.project_id, repository });
+      } catch {
+        if (!cancelled) setRepositorySetup(null);
+      }
+    };
+
     Promise.all([
       apiClient.getProject(projectId),
       fetchRuns(),
-      apiClient.getUnattendedReadiness(projectId),
     ])
-      .then(([proj, runList, readiness]) => {
+      .then(([proj, runList]) => {
         if (!cancelled) {
-          const repository = projectRepositoryReadiness(proj, readiness);
-          const setupState = projectSetupPromptState(proj, currentUserKey, repository);
-          const storageKey = projectSetupPromptStorageKey(setupState);
-          const fingerprint = projectSetupPromptFingerprint(setupState);
-          setProjectSetupDismissed(
-            hasDismissedProjectSetupPrompt(storageKey, fingerprint),
-          );
-          setRepositorySetup(repository);
           setProject(proj);
+          void fetchRepositorySetup(proj);
         }
         // Kick off polling while any run is non-terminal
         if (!runList) return;
@@ -543,8 +553,8 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
   if (!projectId) return null;
   const liveRuns = runs.filter((run) => !isTerminalRunStatus(run.status));
   const completedRuns = runs.length - liveRuns.length;
-  const setupState = project && repositorySetup
-    ? projectSetupPromptState(project, currentUserKey, repositorySetup)
+  const setupState = project && repositorySetup?.projectId === project.project_id
+    ? projectSetupPromptState(project, currentUserKey, repositorySetup.repository)
     : null;
   const repositoryStatus = setupState?.repositoryAccessStatus === 'ready'
     ? 'ready'
@@ -575,12 +585,14 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
       {project && project.origin === 'blank' && !projectSetupDismissed && setupState && (
         <SetupReadiness
           compact
-          onDismiss={() => {
-            const storageKey = projectSetupPromptStorageKey(setupState);
-            const fingerprint = projectSetupPromptFingerprint(setupState);
-            markProjectSetupPromptDismissed(storageKey, fingerprint);
-            setProjectSetupDismissed(true);
-          }}
+          onDismiss={repositoryStatus === 'optional'
+            ? () => {
+                const storageKey = projectSetupPromptStorageKey(setupState);
+                const fingerprint = projectSetupPromptFingerprint(setupState);
+                markProjectSetupPromptDismissed(storageKey, fingerprint);
+                setProjectSetupDismissed(true);
+              }
+            : undefined}
           model={{
             title: 'Project setup',
             description: 'The local project is ready for agent work.',
