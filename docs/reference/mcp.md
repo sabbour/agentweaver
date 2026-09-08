@@ -16,43 +16,48 @@ server without headers. The client discovers Agentweaver OAuth, opens a browser
 for sign-in and consent, and completes authorization code + PKCE. See
 [Connect an MCP client](../guide/mcp-cli.md) for supported-client instructions.
 
+### Repository workspace connection
+
+The `.mcp.json` at the repository root registers the canonical published Agentweaver
+endpoint automatically for MCP hosts that support workspace auto-discovery (Copilot CLI
+≥1.0.59 and equivalents). It uses the remote HTTP transport and contains no credentials:
+
+`https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/mcp`
+
+The client completes Agentweaver OAuth when it first connects. If a user-level server is
+also named `agentweaver`, this workspace entry takes precedence while working in the
+repository.
+
 ### Local stdio development
 
-Set an Agentweaver broker token before starting a local stdio MCP host:
+Repository developers can still launch a separate local stdio server explicitly:
 
-```
-AGENTWEAVER_TOKEN=<agentweaver-broker-token>
+```shell
+dotnet run --project apps/Agentweaver.Mcp -- --stdio
 ```
 
-`AGENTWEAVER_TOKEN` must be issued by Agentweaver for the exact
-`<public-origin>/mcp` audience and include `mcp:invoke`. The API attributes calls to its
-subject and enforces project ownership.
+Set `AGENTWEAVER_TOKEN` in the launching environment. It must be an Agentweaver broker
+token for the exact `<public-origin>/mcp` audience with the `mcp:invoke` scope. Never put
+the token in `.mcp.json`, command arguments, or source control. Optionally set
+`AGENTWEAVER_API_URL`; it defaults to `http://localhost:5000`.
 
 ::: danger Broker tokens only
-Raw Entra access tokens, GitHub tokens, API keys, and shared service credentials are not MCP
-credentials. Stdio mode refuses to start without a configured broker token.
+Raw Entra access tokens, GitHub tokens, API keys, and shared service credentials are not
+MCP credentials. Stdio mode refuses to start without a configured broker token.
 :::
-
-Optionally override the API base URL (defaults to `http://localhost:5000`):
-
-```
-AGENTWEAVER_API_URL=http://localhost:5000
-```
-
-The `.mcp.json` at the repository root registers the server automatically for MCP hosts that support auto-discovery (Copilot CLI ≥1.0.59 and equivalents). No manual registration is required beyond setting the environment variable.
 
 ### Using with GitHub Copilot CLI
 
-**Local (stdio), working in this repo.** No setup beyond the environment variable above —
-`copilot` auto-discovers the workspace `.mcp.json` and starts
-`dotnet run --project apps/Agentweaver.Mcp -- --stdio` on demand. Confirm the tools are
-live with `copilot mcp list` or `/mcp` inside an interactive session.
+**Working in this repo.** `copilot` auto-discovers the workspace `.mcp.json` and connects
+to the published HTTP endpoint. Confirm the source, transport, and URL with
+`copilot mcp get agentweaver`, then use `/mcp` inside an interactive session to complete
+OAuth and confirm that the tools are live.
 
 ::: tip Server-name collisions
 Copilot CLI resolves MCP servers by **name**, merging `~/.copilot/mcp-config.json` (user),
 `.mcp.json`/`.github/mcp.json` (workspace), and `--additional-mcp-config` (session) in that
 order. If your personal `~/.copilot/settings.json` has `agentweaver` listed under
-`disabledMcpServers` (e.g. because you disabled the workspace stdio server), naming a
+`disabledMcpServers` (e.g. because you disabled the workspace entry), naming a
 session override `agentweaver` will be silently skipped — check
 `~/.copilot/logs/process-*.log` for `Skipping disabled MCP server: <name>` if a
 registered server discovers zero tools. Use a distinct name to
