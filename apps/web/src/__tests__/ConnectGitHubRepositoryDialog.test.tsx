@@ -108,6 +108,38 @@ describe('ConnectGitHubRepositoryDialog', () => {
     expect(screen.queryByRole('button', { name: 'Authorize repository access' })).toBeNull();
   });
 
+  it('offers GitHub App installation from the default create tab when no installations exist', async () => {
+    vi.mocked(apiClient.listProjectRepositoryOwners).mockResolvedValue([]);
+    vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+      repositories: [],
+      installations: [],
+    } as never);
+
+    render(
+      <MemoryRouter initialEntries={['/projects/proj-1/settings?section=repository']}>
+        <AzureFluentProvider density="compact">
+          <ConnectGitHubRepositoryDialog
+            projectId="proj-1"
+            projectName="Demo Project"
+            open
+            onOpenChange={() => {}}
+            onConnected={() => {}}
+          />
+        </AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(
+      'The Agentweaver GitHub App is not installed for an account you can access.',
+    )).toBeDefined();
+    const installLinks = screen.getAllByRole('link', { name: 'Install Agentweaver GitHub App' });
+    expect(installLinks).toHaveLength(1);
+    expect(installLinks[0].getAttribute('href')).toBe('https://github.com/apps/agentweaver/installations/new');
+    expect(installLinks[0].getAttribute('target')).toBe('_blank');
+    expect(installLinks[0].getAttribute('rel')).toBe('noopener noreferrer');
+    expect(screen.getByRole('button', { name: 'Create repository' }).hasAttribute('disabled')).toBe(true);
+  });
+
   it('connects an existing repository from the new tab', async () => {
     vi.mocked(apiClient.issueGitHubRepositorySelection).mockResolvedValue({
       selection_code: 'opaque-selection-code',

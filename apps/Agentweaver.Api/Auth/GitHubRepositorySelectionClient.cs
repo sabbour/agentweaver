@@ -34,12 +34,22 @@ internal sealed class GitHubRepositorySelectionClient(
         if (installations is null)
             return null;
 
+        var repositoriesByInstallation = installations
+            .Select(_ => new List<GitHubRepositorySelectionCandidate>())
+            .ToList();
+        var installationHasMorePages = Enumerable.Repeat(true, installations.Count).ToArray();
+        var nextCandidateIndexes = new int[installations.Count];
         var candidates = new Dictionary<long, GitHubRepositorySelectionCandidate>();
-        foreach (var installation in installations)
+
+        for (var page = 1; page <= MaximumPages && candidates.Count < MaximumRepositories; page++)
         {
-            var repositoriesUrl = $"{_apiUrl}/user/installations/{installation.Id}/repositories";
-            for (var page = 1; page <= MaximumPages; page++)
+            for (var installationIndex = 0; installationIndex < installations.Count; installationIndex++)
             {
+                if (!installationHasMorePages[installationIndex])
+                    continue;
+
+                var installation = installations[installationIndex];
+                var repositoriesUrl = $"{_apiUrl}/user/installations/{installation.Id}/repositories";
                 using var request = CreateRequest(
                     HttpMethod.Get,
                     AppendPagination(repositoriesUrl, page),
@@ -58,24 +68,41 @@ internal sealed class GitHubRepositorySelectionClient(
 
                 foreach (var repository in batch.Where(IsSafe))
                 {
-                    candidates[repository.Id!.Value] = new GitHubRepositorySelectionCandidate(
-                        repository.Id.Value,
+                    repositoriesByInstallation[installationIndex].Add(new GitHubRepositorySelectionCandidate(
+                        repository.Id!.Value,
                         repository.FullName!,
                         repository.Owner!.Login!,
                         repository.Private,
                         repository.DefaultBranch ?? "main",
                         $"{_baseUrl}/{repository.FullName}",
                         repository.CloneUrl!,
-                        repository.PushedAt);
-                    if (candidates.Count >= MaximumRepositories)
-                        break;
+                        repository.PushedAt));
                 }
 
-                if (candidates.Count >= MaximumRepositories || batch.Count < PageSize)
+                installationHasMorePages[installationIndex] = batch.Count >= PageSize;
+            }
+
+            while (candidates.Count < MaximumRepositories)
+            {
+                var candidatesRemain = false;
+                for (var installationIndex = 0;
+                     installationIndex < repositoriesByInstallation.Count
+                        && candidates.Count < MaximumRepositories;
+                     installationIndex++)
+                {
+                    var installationCandidates = repositoriesByInstallation[installationIndex];
+                    while (nextCandidateIndexes[installationIndex] < installationCandidates.Count)
+                    {
+                        candidatesRemain = true;
+                        var candidate = installationCandidates[nextCandidateIndexes[installationIndex]++];
+                        if (candidates.TryAdd(candidate.RepositoryId, candidate))
+                            break;
+                    }
+                }
+
+                if (!candidatesRemain)
                     break;
             }
-            if (candidates.Count >= MaximumRepositories)
-                break;
         }
 
         return new GitHubRepositoryBrowseResult(

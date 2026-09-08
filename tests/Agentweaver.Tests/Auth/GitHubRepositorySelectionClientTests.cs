@@ -79,7 +79,7 @@ public sealed class GitHubRepositorySelectionClientTests
     }
 
     [Fact]
-    public async Task Browse_AppliesOneGlobalRepositoryLimitAcrossInstallations()
+    public async Task Browse_AppliesGlobalRepositoryLimitFairlyAcrossInstallations()
     {
         var handler = new PagingRouteHandler(Installations(
             """
@@ -98,13 +98,16 @@ public sealed class GitHubRepositorySelectionClientTests
 
         result.Should().NotBeNull();
         result!.Repositories.Should().HaveCount(200);
+        result.Repositories.Should().Contain(repository =>
+            repository.RepositoryId == 1001 && repository.FullName == "example-org/later-repo");
+        result.Repositories.Count(repository => repository.OwnerLogin == "octo").Should().Be(199);
         result.Repositories.Select(repository => repository.RepositoryId)
             .Should().OnlyHaveUniqueItems();
         handler.Requests.Should().Equal(
             "/user/installations?per_page=100&page=1",
             "/user/installations/72/repositories?per_page=100&page=1",
-            "/user/installations/72/repositories?per_page=100&page=2",
-            "/user/installations/73/repositories?per_page=100&page=1");
+            "/user/installations/73/repositories?per_page=100&page=1",
+            "/user/installations/72/repositories?per_page=100&page=2");
     }
 
     [Fact]
@@ -321,9 +324,9 @@ public sealed class GitHubRepositorySelectionClientTests
                 "/user/installations/72/repositories?per_page=100&page=1" =>
                     RepositoryRange(1, 100, "octo"),
                 "/user/installations/72/repositories?per_page=100&page=2" =>
-                    RepositoryRange(101, 50, "octo"),
+                    RepositoryRange(101, 100, "octo"),
                 "/user/installations/73/repositories?per_page=100&page=1" =>
-                    RepositoryRange(151, 100, "example-org"),
+                    Repositories(1001, "example-org/later-repo"),
                 _ => "{}",
             };
             return Task.FromResult(new HttpResponseMessage(
