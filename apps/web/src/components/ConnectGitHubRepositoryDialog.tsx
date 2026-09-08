@@ -337,6 +337,14 @@ export function ConnectGitHubRepositoryDialog({
                   <Tab value="existing">Connect existing repository</Tab>
                 </TabList>
 
+                {!reposLoading && !reposError && installations?.length === 0 && (
+                  <GitHubRepositoryAccessNotice
+                    installations={installations}
+                    repositoryCount={repos.length}
+                    repoAppInstallUrl={repoAppInstallUrl}
+                  />
+                )}
+
                 {mode === 'create' ? (
                   <div className={styles.tabPanel}>
                     <div className={styles.helperText}>
@@ -389,11 +397,13 @@ export function ConnectGitHubRepositoryDialog({
                     )}
                     {!reposLoading && !reposError && (
                       <>
-                        <GitHubRepositoryAccessNotice
-                          installations={installations}
-                          repositoryCount={repos.length}
-                          repoAppInstallUrl={repoAppInstallUrl}
-                        />
+                        {installations?.length !== 0 && (
+                          <GitHubRepositoryAccessNotice
+                            installations={installations}
+                            repositoryCount={repos.length}
+                            repoAppInstallUrl={repoAppInstallUrl}
+                          />
+                        )}
                         <Field label="Find repository">
                           <Input
                             value={repoFilter}
