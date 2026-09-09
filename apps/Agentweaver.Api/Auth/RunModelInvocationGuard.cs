@@ -9,7 +9,7 @@ namespace Agentweaver.Api.Auth;
 public sealed class RunModelInvocationGuard(IServiceScopeFactory scopeFactory) : IModelInvocationGuard
 {
     public async Task<ResolvedRunModelProviderBoundary> PrepareAsync(
-        string runId, CancellationToken ct, bool supportsByok = true)
+        string runId, CancellationToken ct, bool supportsByok = true, string? expectedProviderKey = null)
     {
         using var scope = scopeFactory.CreateScope();
         var services = scope.ServiceProvider;
@@ -19,6 +19,13 @@ public sealed class RunModelInvocationGuard(IServiceScopeFactory scopeFactory) :
             ?? throw new InvalidOperationException("The model invocation has no persisted run.");
         var boundary = await services.GetRequiredService<IRunModelProviderBoundaryResolver>()
             .ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        if (expectedProviderKey is not null
+            && !string.Equals(expectedProviderKey, boundary.Provider.ProviderKey(), StringComparison.Ordinal))
+        {
+            throw new AgentProviderException(
+                boundary.Provider.ToModelSource(), AgentProviderFailureKind.Configuration,
+                "model_provider_changed", "The configured model provider no longer matches the accepted run.", isRetryable: true);
+        }
         if (boundary.Provider is EffectiveModelProviderResult.Unavailable
             || (!supportsByok && boundary.Provider is EffectiveModelProviderResult.Byok))
         {

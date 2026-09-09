@@ -283,8 +283,11 @@ internal sealed class RunCapabilityAuthenticationHandler(
         var runId = Request.RouteValues["id"]?.ToString();
         var headerRunId = Request.Headers[RunAuthorshipHeaders.RunId].ToString();
         var headerToken = Request.Headers[RunAuthorshipHeaders.RunToken].ToString();
+        var modelValidation = HttpMethods.IsPost(Request.Method)
+            && Context.GetEndpoint()?.Metadata.GetMetadata<Microsoft.AspNetCore.Routing.IEndpointNameMetadata>()
+                ?.EndpointName == "ValidateRunModelProvider";
         if (metadata?.Kind != EndpointAuthorizationKind.RunCapability
-            || !HttpMethods.IsGet(Request.Method)
+            || (!HttpMethods.IsGet(Request.Method) && !modelValidation)
             || string.IsNullOrWhiteSpace(runId)
             || !string.Equals(runId, headerRunId, StringComparison.Ordinal)
             || !AgentweaverAuthentication.FixedTimeEquals(token, headerToken)

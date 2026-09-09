@@ -684,7 +684,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
                     configProjectId,
-                    configAgentName, byokProvider,
+                    configAgentName, byokProvider, effectiveProvider?.ProviderKey(),
                     ct)
                     .ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(effectiveWorkingDirectory))
@@ -1226,6 +1226,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         string? projectId,
         string? agentName,
         ByokProviderConfiguration? byokProviderConfiguration,
+        string? modelProviderKey,
         CancellationToken ct)
     {
         if (_httpClientFactory is null)
@@ -1254,6 +1255,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             turnBearerToken,
             copilotCredential,
             byokProviderConfiguration,
+            modelProviderKey,
             repositoryAccessToken,
             mcpBrokerToken = launchContext.McpBrokerToken,
             toolApprovalApiBaseUrl = _options.ToolApprovalApiBaseUrl,

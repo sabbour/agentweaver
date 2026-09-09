@@ -16,7 +16,7 @@ namespace Agentweaver.Api.Endpoints;
 /// the endpoint-bound authentication policy, so an unauthenticated
 /// request never reaches these handlers.
 ///
-/// Additive: the legacy /api/console/turn facade path is untouched.
+/// These routes are the production operator-conversation entry points.
 /// </summary>
 public static class AssistantEndpoints
 {
