@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.28.7
+
+### Patch Changes
+
+- 951a2ee: Fail coordinator runs when outcome-plan drafting cannot finish provider startup, session creation, or the model turn within a bounded deadline, and keep the displayed elapsed time advancing from the durable run start.
+- 2830892: Let users dismiss optional repository setup guidance per project while keeping changed or required setup visible.
+- f6d4d28: Fix OAuth consent callback CSP handling for ephemeral IPv4 loopback ports and expired browser sessions.
+- 048c212: Make Azure deployments validate and safely stage exactly one .NET-compatible RSA Repo App private key before Azure work, keep soft-deleted credentials inactive unless an operator explicitly requests recovery, and preserve fail-closed canonical and legacy-secret handling.
+- f0530a6: Restore caller-bound GitHub repository enumeration, explain GitHub App repository limits in repository pickers, and link to each installation's GitHub-provided settings page.
+- d0df194: Allow users to permanently delete their own personal Assistant sessions after the incidental project is deleted or becomes inaccessible. Personal sessions now require an unspoofable first-event marker, internal-service callers are denied, and project-owned runs retain Contributor authorization.
+- 2830892: Keep assistant messages visible while sessions connect or reload history without duplicating server-confirmed turns.
+- 6de4e2e: Report previews as ready only after the generated HTTPS URL responds successfully within the publication deadline. Clean up failed publications and recheck retained process health after approval. Prevent run-bound ready events when run termination wins the publication race.
+  If a later workflow-step diagnostic fails, keep published previews and retryable processes available. Log that error without replacing the preview outcome.
+- 6769e71: Report truthful model-provider context for supported AI actions. Agentweaver revalidates provider selection immediately before model calls and persists redacted execution provenance.
+
+  If the provider changes, Agentweaver returns `409 model_provider_changed` before invocation. The UI distinguishes Expected, Using, and Used provider context.
+- 16797c9: Connect the repository workspace MCP entry to the published Agentweaver service instead of launching a local server.
+
 ## 0.28.6
 
 ### Patch Changes
