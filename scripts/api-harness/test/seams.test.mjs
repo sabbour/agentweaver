@@ -3,13 +3,18 @@ import assert from 'node:assert/strict';
 
 import { runGenerationSeams } from '../lib/seams.mjs';
 
-test('Entra-mode authentication failure identifies the required bearer type without retaining config', async () => {
+test('Entra-mode session authentication failure identifies the required bearer type without retaining config', async () => {
   const config = { ok: true, status: 200, responseBody: { mode: 'Entra', client_id: 'public-client-id' } };
+  const calls = [];
   const client = {
     async get(path) {
-      if (path === '/api/auth/github')
-        return { ok: false, status: 401, responseBody: { error: 'unauthorized' } };
+      if (path === '/api/auth/session') {
+        const call = { ok: false, status: 401, responseBody: { error: 'unauthorized' } };
+        calls.push(call);
+        return call;
+      }
       assert.equal(path, '/api/auth/config');
+      calls.push(config);
       return config;
     },
   };
@@ -19,13 +24,46 @@ test('Entra-mode authentication failure identifies the required bearer type with
   assert.equal(result.pass, false);
   assert.deepEqual(result.evidence.authentication, { authStatus: 401, serverMode: 'Entra' });
   assert.deepEqual(config.responseBody, { mode: 'Entra' });
+  assert.deepEqual(calls[1].responseBody, { mode: 'Entra' });
   assert.match(result.checks[0].detail, /valid Entra bearer token/i);
+});
+
+test('authenticated session is the protected preflight probe', async () => {
+  const calls = [];
+  const client = {
+    async get(path) {
+      calls.push(path);
+      return {
+        ok: true,
+        status: 200,
+        responseBody: { authenticated: true, auth_mode: 'entra' },
+      };
+    },
+    post: async (path) => {
+      if (path === '/api/blueprints/generate') {
+        return { ok: false, status: 503, responseBody: null };
+      }
+      if (path === '/api/projects') {
+        return { ok: false, status: 503, responseBody: null };
+      }
+      throw new Error(`unexpected POST ${path}`);
+    },
+  };
+
+  const result = await runGenerationSeams(client, {
+    projectPrefix: 'seam',
+    blueprintDescription: 'generate',
+  });
+
+  assert.deepEqual(calls, ['/api/auth/session']);
+  assert.equal(result.checks[0].pass, true);
+  assert.equal(result.checks[0].detail, 'authenticated session confirmed');
 });
 
 test('owned project is deleted when a later seam step throws', async () => {
   const calls = [];
   const client = {
-    get: async () => ({ ok: true, status: 200, responseBody: { status: 'signed_in', login: 'test' } }),
+    get: async () => ({ ok: true, status: 200, responseBody: { authenticated: true } }),
     post: async (path) => {
       calls.push(path);
       if (path === '/api/blueprints/generate') {
@@ -59,7 +97,7 @@ test('owned project is deleted when a later seam step throws', async () => {
 
 test('primary seam failure is preserved when owned cleanup also fails', async () => {
   const client = {
-    get: async () => ({ ok: true, status: 200, responseBody: { status: 'signed_in', login: 'test' } }),
+    get: async () => ({ ok: true, status: 200, responseBody: { authenticated: true } }),
     post: async (path) => {
       if (path === '/api/blueprints/generate') {
         return { ok: true, status: 200, responseBody: { blueprint: { roster: ['a', 'b'], workflows: ['w'] } } };

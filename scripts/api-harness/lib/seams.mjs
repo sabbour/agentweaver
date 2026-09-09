@@ -27,6 +27,7 @@ import {
 // bugs in generation structure — they make the seam un-assessable. We surface them as
 // an inconclusive result rather than a false regression.
 const PROVIDER_FAIL_STATUS = new Set([401, 402, 429, 500, 502, 503, 504]);
+const AUTHENTICATION_PROBE_PATH = '/api/auth/session';
 
 /**
  * @param {import('./client.mjs').AgentweaverClient} client
@@ -89,9 +90,9 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
   };
 
   // --- Auth ---
-  const auth = await client.get('/api/auth/github');
-  const signedIn = auth.ok && auth.responseBody?.status === 'signed_in';
-  let authDetail = signedIn ? `as ${auth.responseBody.login}` : `status ${auth.status}`;
+  const auth = await client.get(AUTHENTICATION_PROBE_PATH);
+  const signedIn = auth.ok && auth.responseBody?.authenticated === true;
+  let authDetail = signedIn ? 'authenticated session confirmed' : `status ${auth.status}`;
   if (!signedIn && auth.status === 401) {
     // This public endpoint distinguishes an expired GitHub token from an Entra-mode
     // deployment, without retaining public identity-provider configuration in evidence.

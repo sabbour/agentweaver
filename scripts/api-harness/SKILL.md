@@ -31,6 +31,11 @@ The provider uses `scripts/demo-recording/.auth/` by default; use
 recording session first with `npm run demo:record -- status`. If its bearer is expired,
 the human-only recording sign-in flow must refresh it.
 
+Before the seam mutations, the runner sends that bearer to the protected
+`GET /api/auth/session` endpoint and requires `authenticated: true`. It uses public
+`GET /api/auth/config` only to explain a `401` without retaining provider configuration
+in evidence.
+
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
 
 There is no curated list of named scenario subcommands, no per-persona fixed
