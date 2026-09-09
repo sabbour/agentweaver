@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
+import { aiExecutionProviderLabel } from '../components/aiExecutionContext';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import type { AiExecutionContext } from '../api/types';
 
@@ -102,6 +103,28 @@ function DeferredActionHarness({
         void completion.then(execution.applyCompletedContext);
         void failure.catch(execution.handleInvocationError);
       }}>Start action</button>
+    </>
+  );
+}
+
+function DeferredPhaseActionHarness({
+  operation,
+  projectId,
+  action,
+}: {
+  operation: string;
+  projectId: string;
+  action: Promise<void>;
+}) {
+  const execution = useAiExecutionContext(operation, projectId);
+  return (
+    <>
+      <span data-testid="phase-action-phase">{execution.context?.phase}</span>
+      <span data-testid="phase-action-label">{aiExecutionProviderLabel(execution.context)}</span>
+      <button onClick={() => {
+        execution.setPhase('active');
+        void action.then(() => execution.setPhase('completed'));
+      }}>Start phase action</button>
     </>
   );
 }
@@ -230,6 +253,47 @@ describe('useAiExecutionContext', () => {
     expect(screen.getByTestId('action-phase').textContent).toBe('prepared');
     expect(screen.getByTestId('action-error').textContent).toBe('');
     expect(screen.getByTestId('action-announcement').textContent).toBe('');
+  });
+
+  it('does not complete the prepared scope when an action from the previous scope resolves', async () => {
+    let resolveOldAction!: () => void;
+    const oldAction = new Promise<void>((resolve) => {
+      resolveOldAction = resolve;
+    });
+    vi.mocked(apiClient.prepareAiExecutionContext).mockImplementation(
+      (operation) => Promise.resolve(operation === 'operation-a'
+        ? prepared('platform_github_copilot', 'key-a')
+        : prepared('byok', 'key-b')),
+    );
+
+    const view = render(
+      <DeferredPhaseActionHarness
+        operation="operation-a"
+        projectId="project-a"
+        action={oldAction}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('phase-action-phase').textContent).toBe('prepared'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start phase action' }));
+    expect(screen.getByTestId('phase-action-phase').textContent).toBe('active');
+
+    view.rerender(
+      <DeferredPhaseActionHarness
+        operation="operation-b"
+        projectId="project-b"
+        action={oldAction}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('phase-action-phase').textContent).toBe('prepared'));
+
+    await act(async () => {
+      resolveOldAction();
+      await oldAction;
+    });
+
+    expect(screen.getByTestId('phase-action-phase').textContent).toBe('prepared');
+    expect(screen.getByTestId('phase-action-label').textContent)
+      .toBe('Expected provider: Azure BYOK. Model: gpt-5.');
   });
 
   it('announces a same-kind provider replacement detected during refresh', async () => {
