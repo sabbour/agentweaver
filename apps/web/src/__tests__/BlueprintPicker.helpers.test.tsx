@@ -37,6 +37,7 @@ const blueprint: Blueprint = {
   name: 'Generated',
   description: 'Generated blueprint',
   roster: ['builder'],
+  workflow: 'default',
   workflows: [],
   review_policy: 'default',
   sandbox_profile: 'default',
