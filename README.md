@@ -12,6 +12,8 @@ Agentweaver is a self-hosted multi-agent orchestration platform for teams that n
 
 It supports software delivery, content authoring, product discovery, incident response, and other knowledge work. Teams can split work, assign roles, track progress, and review the result.
 
+![Architecture diagram: Clients connect through identity and authorization services to the API control plane. The API coordinates workflows, git services, catalog and memory, and sandboxed AgentHost execution on AKS. PostgreSQL, Key Vault, Git repositories, and model providers provide durable state and external services.](docs/public/pitch-architecture.png)
+
 📖 **[Read the documentation](https://sabbour.me/agentweaver/)** or browse the source in [docs/index.md](docs/index.md).
 
 ## Why Agentweaver
