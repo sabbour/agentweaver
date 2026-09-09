@@ -85,6 +85,18 @@ public sealed record AiExecutionContextResponse
     public EffectiveModelProviderDto? EffectiveModelProvider { get; init; }
 }
 
+/// <summary>
+/// Typed error returned when AI execution context is invalid, unavailable, expired, or no longer
+/// matches the provider selected at preparation time. A replacement <see cref="Context"/> is
+/// included for provider-change errors so clients can prepare and review the current provider.
+/// </summary>
+public sealed record AiExecutionContextErrorResponse
+{
+    [JsonPropertyName("error")] public required string Error { get; init; }
+    [JsonPropertyName("message")] public required string Message { get; init; }
+    [JsonPropertyName("context")] public AiExecutionContextResponse? Context { get; init; }
+}
+
 /// <summary>Response body for GET /api/runs/{id}.</summary>
 public sealed record RunResponse
 {

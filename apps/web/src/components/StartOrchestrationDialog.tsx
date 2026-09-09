@@ -1,6 +1,5 @@
 import {
   apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
 import {
   Button,
   Dialog,
@@ -23,10 +22,11 @@ import {
 import { DismissRegular } from '@fluentui/react-icons';
 import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
-import { parseNoTeamStartError } from '../api/errors';
+import { formatApiErrorMessage, parseNoTeamStartError } from '../api/errors';
 import type { StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 import {
   AiExecutionProviderHint,
+  AiExecutionProviderReadiness,
   AiProviderChangeAnnouncement,
 } from './AiExecutionProviderHint';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
@@ -111,11 +111,7 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
         return;
       }
       setError(
-        err instanceof ApiError
-          ? `API error ${err.status}: ${err.body}`
-          : err instanceof Error
-            ? err.message
-            : String(err),
+        formatApiErrorMessage(err),
       );
     } finally {
       setSavingMode(null);
@@ -143,6 +139,12 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
                 Outcome drafts structured acceptance criteria and expected outputs before dispatch.
                 Later review, tool approval, assembly, and merge gates still apply.
               </Text>
+              <AiExecutionProviderReadiness
+                context={providerContext.context}
+                error={providerContext.error}
+                projectId={projectId}
+                onRefresh={() => void providerContext.refresh()}
+              />
               <Field label="Goal" required>
                 <Textarea
                   value={goal}

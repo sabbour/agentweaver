@@ -2,12 +2,17 @@ import {
   apiClient } from '../../api/apiClient';
 import { useBoard } from '../../api/board';
 import { ApiError } from '../../api/client';
+import { formatApiErrorMessage } from '../../api/errors';
 import { Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, DialogTrigger, makeStyles, mergeClasses, MessageBar, MessageBarBody, Spinner, Text, tokens } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
 import { ArrowImportRegular } from '@fluentui/react-icons';
 import { EmptyState } from '../ui';
 import { DecomposePreviewDialog } from '../DecomposePreviewDialog';
-import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from '../AiExecutionProviderHint';
+import {
+  AiExecutionProviderHint,
+  AiExecutionProviderReadiness,
+  AiProviderChangeAnnouncement,
+} from '../AiExecutionProviderHint';
 import { useAiExecutionContext } from '../../hooks/useAiExecutionContext';
 import { WorkspaceFilePicker } from '../WorkspaceFilePicker';
 import { CaptureTaskForm } from './CaptureTaskForm';
@@ -365,7 +370,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     } catch (err) {
       setDecomposeError(providerContext.handleInvocationError(err)
         ? 'The AI provider changed. Review the updated provider and preview again.'
-        : err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+        : formatApiErrorMessage(err));
     } finally {
       setDecomposeLoading(false);
     }
@@ -395,7 +400,7 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     } catch (err) {
       setDecomposeError(providerContext.handleInvocationError(err)
         ? 'The AI provider changed. Review the updated provider and create tasks again.'
-        : err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+        : formatApiErrorMessage(err));
     } finally {
       setDecomposeLoading(false);
     }
@@ -596,6 +601,12 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
               }
             >Import from workspace</DialogTitle>
             <DialogContent>
+              <AiExecutionProviderReadiness
+                context={providerContext.context}
+                error={providerContext.error}
+                projectId={projectId}
+                onRefresh={() => void providerContext.refresh()}
+              />
               <WorkspaceFilePicker
                 projectId={projectId}
                 selectedPath={importSelectedPath}
@@ -631,6 +642,9 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
         error={decomposeError}
         executionContext={providerContext.context}
         providerLoading={providerContext.loading || !providerContext.available}
+        providerError={providerContext.error}
+        projectId={projectId}
+        onRefreshProvider={() => void providerContext.refresh()}
       />
       <AiProviderChangeAnnouncement message={providerContext.announcement} />
     </div>

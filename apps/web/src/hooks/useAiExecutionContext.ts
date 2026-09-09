@@ -116,19 +116,24 @@ export function useAiExecutionContext(
   const handleInvocationError = useCallback((err: unknown): boolean => {
     if (!isActiveActionScope()) return false;
     const replacement = replacementContext(err);
-    if (!replacement) return false;
     const errorCode = replacementErrorCode(err);
+    const requiresRefresh = errorCode === 'model_provider_changed'
+      || errorCode === 'ai_execution_context_expired'
+      || errorCode === 'ai_execution_context_required';
+    if (!replacement && !requiresRefresh) return false;
     const expired = errorCode === 'ai_execution_context_expired';
     const required = errorCode === 'ai_execution_context_required';
-    setPreparedContext(replacement);
+    if (replacement) {
+      setPreparedContext(replacement);
+      applyDisplayContext(replacement);
+    }
     setAnnouncement(
       expired
-        ? `AI provider confirmation expired. ${aiExecutionProviderLabel(replacement)}`
+        ? `AI provider confirmation expired.${replacement ? ` ${aiExecutionProviderLabel(replacement)}` : ''}`
         : required
-          ? `AI provider confirmation required. ${aiExecutionProviderLabel(replacement)}`
-          : `AI provider changed. ${aiExecutionProviderLabel(replacement)}`,
+          ? `AI provider confirmation required.${replacement ? ` ${aiExecutionProviderLabel(replacement)}` : ''}`
+          : `AI provider changed.${replacement ? ` ${aiExecutionProviderLabel(replacement)}` : ''}`,
     );
-    applyDisplayContext(replacement);
     setError(
       expired
         ? 'The AI provider confirmation expired. Review the provider and retry the action.'

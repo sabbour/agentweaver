@@ -131,7 +131,8 @@ public class CopilotOutcomeSpecReplyClassifier : IOutcomeSpecReplyClassifier
                 token => _effectiveModelTurn is null
                     ? RunModelTurnAsync(context.RunId, prompt, token)
                     : _effectiveModelTurn.RunAsync(
-                        context.RunId, context.ProjectId, _modelId, ClassifierCharter, prompt, token),
+                        context.RunId, context.ProjectId, _modelId, ClassifierCharter, prompt,
+                        supportsByok: false, token),
                 ClassificationTimeout,
                 ct,
                 onTimeout: () => _logger.LogWarning(
