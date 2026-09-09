@@ -140,7 +140,9 @@ public sealed class GitHubConnectionsCredentialArchitectureTests
         File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Program.cs"))
             .Should().Contain("AddScoped<RunGitHubCapabilitySnapshotLifecycle>");
         File.ReadAllText(Path.Combine(root, "apps", "Agentweaver.Api", "Runs", "WorkflowRestartService.cs"))
-            .Should().Contain("PrepareForLaunchAsync(run, ct)");
+            .Should().Contain("PrepareForLaunchAsync(")
+            .And.Contain("expectedCopilotBindingId: run.ModelSource == ModelSource.GitHubCopilot")
+            .And.Contain("expectedCopilotCredentialVersion: acceptedBoundary?.Provider.CredentialVersion()");
     }
 
     [Fact]

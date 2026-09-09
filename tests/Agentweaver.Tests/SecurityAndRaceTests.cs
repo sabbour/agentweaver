@@ -200,7 +200,8 @@ public sealed class SecurityAndRaceTests
         };
         request.Headers.Add(
             AiExecutionPlanHeaders.ProviderKey,
-            context!.EffectiveModelProvider!.ProviderKey);
+            context!.ExecutionKey
+                ?? throw new InvalidOperationException("AI execution context did not return an execution key."));
         return await _ownerClient.SendAsync(request);
     }
 
@@ -209,6 +210,10 @@ public sealed class SecurityAndRaceTests
         var repoPath = CreateTempGitRepo();
         var runId = RunId.New();
         var projectId = await _factory.CreateBlankProjectAsync(repoPath);
+        await using var providerScope = _factory.Services.CreateAsyncScope();
+        var effectiveProvider = await providerScope.ServiceProvider
+            .GetRequiredService<EffectiveModelProviderResolver>()
+            .ResolveAsync(projectId, CancellationToken.None);
 
         var worktreeManager = _factory.Services.GetRequiredService<WorktreeManager>();
         var worktreeInfo = worktreeManager.AddWorktree(repoPath, "main", runId);
@@ -225,7 +230,7 @@ public sealed class SecurityAndRaceTests
             Id = runId,
             RepositoryPath = repoPath,
             OriginatingBranch = "main",
-            ModelSource = ModelSource.Byok,
+            ModelSource = effectiveProvider.ToModelSource(),
             Task = "original task description",
             SubmittingUser = RequestChangesWebApplicationFactory.OwnerUser,
             ProjectId = projectId,
@@ -242,6 +247,12 @@ public sealed class SecurityAndRaceTests
         var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
         var entry = streamStore.Create(runId.ToString(), RequestChangesWebApplicationFactory.OwnerUser);
         entry.MarkAwaitingReview();
+        entry.RecordNext(
+            EventTypes.RunModelProviderResolved,
+            effectiveProvider.ToProvenancePayload(
+                runId.ToString(),
+                run.ModelId,
+                EffectiveModelProviderProvenance.ScopeProject));
         entry.RecordNext(EventTypes.ReviewRequested, new { tree_hash = treeHash });
 
         return (run with
