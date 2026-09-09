@@ -32,7 +32,8 @@ public sealed class SandboxPreviewServiceClusterTests
         new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, handler);
 
     private static SandboxPreviewService NewService(FakeKubeHandler handler) =>
-        new(ClientFor(handler), EnabledOptions(), NullLogger<SandboxPreviewService>.Instance);
+        new(ClientFor(handler), EnabledOptions(), NullLogger<SandboxPreviewService>.Instance,
+            publicationClient: new HttpClient(new PreviewPublicationHandler()));
 
     // ── B1: replica-safe pod resolution from cluster state ───────────────────────
 
@@ -201,8 +202,8 @@ public sealed class SandboxPreviewServiceClusterTests
     {
         // Under the sandbox isolation model the API pod cannot TCP-connect to podIP:targetPort
         // (NetworkPolicy admits preview ports only from the Gateway). StartPreview must therefore
-        // NOT preflight-probe the port: readiness is proven upstream by the AgentHost observe step.
-        // Here nothing is listening on the target port, yet the Service + HTTPRoute must still be created.
+        // NOT preflight-probe the port: process health is checked by AgentHost and publication by HTTPS.
+        // Nothing listens locally, but the fake Gateway responds successfully.
         const string runId = "run-dead-port";
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
         var deadPort = ReserveUnusedLocalPort();

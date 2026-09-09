@@ -15,6 +15,8 @@ public sealed record PreviewSession(
     string PreviewUrl,
     DateTimeOffset StartedAt);
 
+public sealed class PreviewPublicationException(string message) : InvalidOperationException(message);
+
 /// <summary>
 /// Durable run-level preview lifecycle derived from unexpired HTTPRoutes.
 /// <see cref="PreviewLifecycleState.PreviewActive"/> applies every sandbox-retention mechanism;
@@ -48,7 +50,8 @@ public interface ISandboxPreviewService
     /// <summary>
     /// Provisions a preview for <paramref name="runId"/> targeting <paramref name="targetPort"/>
     /// on the bound sandbox pod. The pod is resolved from the run's SandboxClaim status in the
-    /// cluster (replica-safe), not from any in-process registry. Throws
+    /// cluster (replica-safe), not from any in-process registry. Returns only after the generated
+    /// HTTPS URL responds successfully through the Gateway within PublicationTimeoutSeconds. Throws
     /// <see cref="InvalidOperationException"/> when the claim is missing or not yet bound.
     /// </summary>
     /// <param name="previewRunnerSessionId">
@@ -120,6 +123,19 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     /// <summary>Minimum age before a route-less preview Service is treated as a leaked orphan.</summary>
     private static readonly TimeSpan OrphanGrace = TimeSpan.FromMinutes(2);
 
+    // Separate from authenticated API/AgentHost clients: no bearer, cookies, redirects or TLS bypass.
+    private static readonly HttpClient PublicationClient = new(CreatePublicationHandler())
+    {
+        Timeout = TimeSpan.FromSeconds(10),
+    };
+
+    internal static HttpClientHandler CreatePublicationHandler() => new()
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false,
+        UseDefaultCredentials = false,
+    };
+
     private readonly IKubernetes? _client;
     private readonly SandboxPreviewOptions _options;
     private readonly ILogger<SandboxPreviewService> _logger;
@@ -128,6 +144,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
     private readonly IAgentHostOriginResolver? _originResolver;
     private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
     private readonly int _normalClaimTtlSeconds;
+    private readonly HttpClient _publicationClient;
 
     public SandboxPreviewService(
         IKubernetes? client,
@@ -137,7 +154,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         IPreviewRunnerHttpClient? previewRunnerClient = null,
         IAgentHostOriginResolver? originResolver = null,
         Agentweaver.Api.Auth.ISecretStore? secretStore = null,
-        KubernetesSandboxOptions? kubernetesOptions = null)
+        KubernetesSandboxOptions? kubernetesOptions = null,
+        HttpClient? publicationClient = null)
     {
         _client = client;
         _options = options;
@@ -147,6 +165,7 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         _originResolver = originResolver;
         _secretStore = secretStore;
         _normalClaimTtlSeconds = Math.Max(1, kubernetesOptions?.TimeoutSeconds ?? 600);
+        _publicationClient = publicationClient ?? PublicationClient;
     }
 
     public bool Enabled => _options.Enabled && _client is not null;
@@ -162,6 +181,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         EnsureReady();
         if (targetPort is <= 0 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(targetPort), "targetPort must be between 1 and 65535.");
+        if (_options.PublicationTimeoutSeconds <= 0)
+            throw new InvalidOperationException("PublicationTimeoutSeconds must be positive.");
 
         var podName = await ResolveBoundPodNameAsync(runId, ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(podName))
@@ -172,9 +193,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         // NOTE: We deliberately do NOT TCP-probe podIP:targetPort from the API pod here.
         // Under the sandbox isolation model (k8s/networkpolicy-sandbox.yaml), preview ports
         // 3000-9000 admit ingress ONLY from the preview Gateway — a direct API->podIP connect is
-        // denied by policy and can never succeed. Readiness is already proven upstream by the
-        // AgentHost observe step (forwarder-verified, in-pod loopback) before this call, which is
-        // the correct readiness signal under isolation.
+        // denied by policy and can never succeed. AgentHost checks the process in-pod; publication
+        // is checked separately through the generated HTTPS Gateway URL after provisioning.
 
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         await EnforcePreviewLimitsAsync(sanitizedRun, ct).ConfigureAwait(false);
@@ -265,18 +285,92 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
             throw;
         }
 
-        // Never log the token or preview URL (the URL is an unauthenticated capability). A short,
-        // non-reversible fingerprint is logged for cross-line correlation; RunId is the safe key.
+        var published = false;
+        try
+        {
+            // Retain the sandbox while DNS and Gateway configuration converge.
+            await ApplyPreviewLifecycleStateAsync(
+                runId, PreviewLifecycleState.PreviewActive, ct).ConfigureAwait(false);
+            await WaitForPublicationAsync(new Uri(previewUrl), ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            published = true;
+        }
+        finally
+        {
+            if (!published)
+            {
+                // Caller cancellation must not prevent removal of an unusable publication.
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await DeleteHttpRouteIdempotentAsync(serviceName, cleanup.Token).ConfigureAwait(false);
+                await DeleteServiceIdempotentAsync(serviceName, cleanup.Token).ConfigureAwait(false);
+                await ReconcilePreviewLifecycleAsync(runId, cleanup.Token).ConfigureAwait(false);
+            }
+        }
+
+        // Never log the capability URL or transport exception messages containing it.
         _logger.LogInformation(
-            "SandboxPreviewService: started preview {Fingerprint} for run {RunId} -> pod {Pod} port {Port}",
+            "SandboxPreviewService: published preview {Fingerprint} for run {RunId} -> pod {Pod} port {Port}",
             Fingerprint(token), runId, podName, targetPort);
 
-        // The route is now the durable source of truth. Entering PreviewActive applies every current
-        // protection together (claim TTL + eviction pin), including starts after the run already ended.
-        await ApplyPreviewLifecycleStateAsync(
-            runId, PreviewLifecycleState.PreviewActive, CancellationToken.None).ConfigureAwait(false);
-
         return new PreviewSession(token, runId, podName, targetPort, previewUrl, now);
+    }
+
+    private async Task WaitForPublicationAsync(Uri previewUrl, CancellationToken ct)
+    {
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(_options.PublicationTimeoutSeconds), _clock);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        var lastFailure = "no successful HTTPS response";
+
+        try
+        {
+            while (true)
+            {
+                deadline.Token.ThrowIfCancellationRequested();
+                try
+                {
+                    var url = previewUrl;
+                    for (var redirects = 0; redirects <= 5; redirects++)
+                    {
+                        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                        using var response = await _publicationClient.SendAsync(
+                            request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
+                        if (response.IsSuccessStatusCode)
+                            return;
+
+                        lastFailure = $"HTTP {(int)response.StatusCode}";
+                        if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308)
+                            || response.Headers.Location is not { } location)
+                            break;
+
+                        var next = new Uri(url, location);
+                        if (next.Scheme != previewUrl.Scheme || next.IdnHost != previewUrl.IdnHost
+                            || next.Port != previewUrl.Port || !string.IsNullOrEmpty(next.UserInfo))
+                        {
+                            lastFailure = "cross-origin redirect rejected";
+                            break;
+                        }
+                        url = next;
+                    }
+                }
+                catch (HttpRequestException ex)
+                {
+                    lastFailure = $"HTTPS transport failure ({ex.HttpRequestError})";
+                }
+                catch (OperationCanceledException) when (!deadline.IsCancellationRequested)
+                {
+                    lastFailure = "HTTPS request timed out";
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(2), _clock, deadline.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            throw new PreviewPublicationException(
+                $"Preview publication did not become ready within {_options.PublicationTimeoutSeconds} seconds " +
+                $"({lastFailure}). Check preview process health and Gateway/DNS availability before retrying.");
+        }
     }
 
     public async Task KeepAliveAsync(string token, CancellationToken ct = default)

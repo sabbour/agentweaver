@@ -52,6 +52,7 @@ public sealed class PreviewStepTests : IDisposable
         await h.Step.RunAsync(Request(), CancellationToken.None);
 
         h.PreviewRunner.LastObserveTimeoutSeconds.Should().Be(105);
+        h.PreviewRunner.HealthCalls.Should().Be(1);
         h.TerminalKinds().Should().ContainSingle().Which.Should().Be(EventTypes.SandboxPreviewReady);
         var ready = h.Single(EventTypes.SandboxPreviewReady);
         // BLOCKER B: token and preview-runner session id are distinct and both present.
@@ -514,6 +515,36 @@ public sealed class PreviewStepTests : IDisposable
         h.PreviewService.StartCalls.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData("unhealthy")]
+    [InlineData("unreachable")]
+    [InlineData("wrong-session")]
+    [InlineData("wrong-port")]
+    public async Task ProcessBecomesUnusableDuringApproval_DoesNotRegister(string failure)
+    {
+        var h = new Harness(_worktree, autoApprove: false);
+        var task = h.Step.RunAsync(Request(), CancellationToken.None);
+        var approvalId = await h.WaitForApprovalRequestAsync();
+        h.PreviewRunner.HealthCalls.Should().Be(0, "the new health check must follow approval");
+        h.PreviewRunner.HealthBehavior = (session, port) => failure switch
+        {
+            "unreachable" => throw new PreviewRunnerHttpException("agenthost_unreachable", "not reachable"),
+            "wrong-session" => new("another-session", port, true, 200),
+            "wrong-port" => new(session, port + 1, true, 200),
+            _ => new(session, port, false, 503),
+        };
+
+        (await h.ApprovalGate.GrantAsync(RunId, approvalId, ApprovalScope.Once)).Should().BeTrue();
+        await task;
+
+        h.TerminalKinds().Should().ContainSingle().Which.Should().Be(EventTypes.SandboxPreviewFailed);
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "reason").Should().Be("preview_session_exited");
+        Str(h.Single(EventTypes.SandboxPreviewFailed), "preview_runner_session_id").Should().Be("proc-sess-1");
+        h.PreviewRunner.HealthCalls.Should().Be(1);
+        h.PreviewRunner.StopCalls.Should().Be(1);
+        h.PreviewService.StartCalls.Should().Be(0);
+    }
+
     // ── Credential durable lifecycle ────────────────────────────────────────────────────
 
     [Fact]
@@ -642,12 +673,14 @@ public sealed class PreviewStepTests : IDisposable
     {
         public int StartCalls;
         public int StopCalls;
+        public int HealthCalls;
         public string? LastStopReason;
         public string? LastCommand;
         public string? LastCwd;
         public int? LastObserveTimeoutSeconds;
         public Func<PreviewRunnerStartResult>? StartBehavior;
         public Func<PreviewRunnerPortResult>? ObserveBehavior;
+        public Func<string, int, PreviewRunnerHealthResult>? HealthBehavior;
         public PreviewRunnerPortResult PortResult = new("proc-sess-1", 3000, Healthy: true, "ok");
 
         public Task<PreviewRunnerStartResult> StartProcessAsync(
@@ -669,8 +702,12 @@ public sealed class PreviewStepTests : IDisposable
         }
 
         public Task<PreviewRunnerHealthResult> HealthCheckAsync(
-            string runId, string? bearer, string sessionId, int port, string path, CancellationToken ct) =>
-            Task.FromResult(new PreviewRunnerHealthResult(sessionId, port, true, 200));
+            string runId, string? bearer, string sessionId, int port, string path, CancellationToken ct)
+        {
+            HealthCalls++;
+            return Task.FromResult(HealthBehavior?.Invoke(sessionId, port)
+                ?? new PreviewRunnerHealthResult(sessionId, port, true, 200));
+        }
 
         public Task StopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct)
         {

@@ -233,6 +233,18 @@ public sealed class PreviewStep
                 return;
             }
 
+            // Approval can outlive the observed listener. Recheck the retained session, not keepalive.
+            bearer = await ResolveBearerAsync(runId, ct).ConfigureAwait(false);
+            if (!await SandboxEndpoints.IsPreviewProcessHealthyAsync(
+                runId, bearer, started.SessionId, port.Port, _httpClient, ct).ConfigureAwait(false))
+            {
+                await TryStopProcessAsync(runId, bearer, started.SessionId, "preview_session_exited", ct).ConfigureAwait(false);
+                EmitFailed(request, "preview_session_exited",
+                    "Preview session has exited or is unreachable; a preview URL cannot be published.",
+                    started.SessionId);
+                return;
+            }
+
             // 8. Gateway registration via the emit-nothing helper — single-owner emission below.
             var registration = await SandboxEndpoints.TryRegisterPreviewAsync(
                 runId, port.Port, request.SubmittingUser, _previewService, ct,
@@ -249,7 +261,7 @@ public sealed class PreviewStep
                 ? "port_not_allowed"
                 : "registration_failed";
             await TryStopProcessAsync(runId, bearer, started.SessionId, failReason, ct).ConfigureAwait(false);
-            EmitFailed(request, failReason, registration.Message ?? "Preview registration failed.");
+            EmitFailed(request, failReason, registration.Message ?? "Preview registration failed.", started.SessionId);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -426,7 +438,7 @@ public sealed class PreviewStep
         EmitWorkflowStep(r.RunId, "completed", "Preview is ready.");
     }
 
-    private void EmitFailed(PreviewStepRequest r, string reason, string message)
+    private void EmitFailed(PreviewStepRequest r, string reason, string message, string? previewRunnerSessionId = null)
     {
         Record(r.RunId, EventTypes.SandboxPreviewFailed, new
         {
@@ -436,6 +448,7 @@ public sealed class PreviewStep
             source = "preview-step",
             reason,
             message,
+            preview_runner_session_id = previewRunnerSessionId,
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         });
         EmitWorkflowStep(r.RunId, "failed", message);
