@@ -1,8 +1,11 @@
 using System.IO;
+using System.Net;
 using System.Text.Json;
 using System.Threading;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Configuration;
+using k8s;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
@@ -23,7 +26,7 @@ namespace Agentweaver.Tests.Preview;
 /// </summary>
 public sealed class PreviewStepTests : IDisposable
 {
-    private const string RunId = "run-preview-step";
+    private const string RunId = "795f54d0-f3fc-4ca5-99bb-59bc0a98e2af";
     private const int WorkPlanId = 7;
     private const string TreeHash = "tree-1";
 
@@ -545,6 +548,101 @@ public sealed class PreviewStepTests : IDisposable
         h.PreviewService.StartCalls.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunEndsDuringHttpsWait_LateSuccessCannotPublish(bool completeLocalStream)
+    {
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var publication = new HttpClient(new PreviewPublicationHandler(async (_, ct) =>
+        {
+            entered.SetResult(ct);
+            await resume.Task;
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }));
+        var kube = new FakeKubeHandler();
+        const string routes = "/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes";
+        kube.OnGet(routes, """{"kind":"HTTPRouteList","items":[]}""");
+        var claim = SandboxClaimConventions.DeriveAgentHostClaimName(RunId);
+        kube.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claim}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"preview-pod"}}}""");
+        using var kubernetes = new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, kube);
+        var preview = new SandboxPreviewService(kubernetes, new SandboxPreviewOptions
+        {
+            Enabled = true,
+            ZoneSuffix = "preview.example.test",
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        var h = new Harness(_worktree, previewService: preview);
+        using var appLifetime = new CancellationTokenSource();
+        var step = h.Step.RunAsync(Request(), appLifetime.Token);
+        var publicationCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var route = kube.Requests.Single(r => r.Method == "POST" && r.Path == routes);
+        using var routeDocument = JsonDocument.Parse(route.Body!);
+        var routeName = routeDocument.RootElement.GetProperty("metadata").GetProperty("name").GetString();
+        kube.OnGet($"{routes}/{routeName}", route.Body!);
+
+        (await h.RunStore.TrySetTerminalStatusAsync(
+            Domain.RunId.Parse(RunId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        if (completeLocalStream)
+            h.Streams.Complete(RunId);
+        var publicationCancelled = publicationCt.IsCancellationRequested;
+        resume.SetResult();
+        await step.WaitAsync(TimeSpan.FromSeconds(5));
+
+        appLifetime.IsCancellationRequested.Should().BeFalse();
+        publicationCancelled.Should().Be(completeLocalStream);
+        h.Types().Should().NotContain(EventTypes.SandboxPreviewReady).And.NotContain(EventTypes.CoordinatorPreviewReady);
+        h.PreviewRunner.StopCalls.Should().Be(1);
+        h.PreviewRunner.StopCancellationToken.IsCancellationRequested.Should().BeFalse();
+        var deleted = kube.Requests.Where(r => r.Method == "DELETE").ToList();
+        deleted.Should().HaveCount(2);
+        deleted[0].Path.Should().Be($"{routes}/{routeName}");
+        deleted[1].Path.Should().Be($"/api/v1/namespaces/agentweaver/services/{routeName}");
+        kube.Requests.Should().Contain(r =>
+            r.Method == "PATCH" && r.Path.EndsWith("/pods/preview-pod")
+            && r.Body!.Contains("safe-to-evict") && r.Body.Contains("true"));
+        using var retention = JsonDocument.Parse(kube.Requests.Last(r =>
+            r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{claim}")).Body!);
+        retention.RootElement.GetProperty("spec").GetProperty("lifecycle")
+            .GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunEndsDuringPostApprovalHealth_DoesNotRegister(bool completeLocalStream)
+    {
+        var h = new Harness(_worktree, autoApprove: false);
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.PreviewRunner.HealthAsyncBehavior = async (session, port, ct) =>
+        {
+            entered.SetResult(ct);
+            await resume.Task;
+            return new PreviewRunnerHealthResult(session, port, true, 200);
+        };
+        var step = h.Step.RunAsync(Request(), CancellationToken.None);
+        var approvalId = await h.WaitForApprovalRequestAsync();
+        (await h.ApprovalGate.GrantAsync(RunId, approvalId, ApprovalScope.Once)).Should().BeTrue();
+        var healthCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        (await h.RunStore.TrySetTerminalStatusAsync(
+            Domain.RunId.Parse(RunId), RunStatus.Failed, DateTimeOffset.UtcNow, "abandoned")).Should().BeTrue();
+        if (completeLocalStream)
+            h.Streams.Complete(RunId);
+        var healthCancelled = healthCt.IsCancellationRequested;
+        resume.SetResult();
+        await step.WaitAsync(TimeSpan.FromSeconds(5));
+
+        healthCancelled.Should().Be(completeLocalStream);
+        h.PreviewService.StartCalls.Should().Be(0);
+        h.PreviewRunner.StopCalls.Should().Be(1);
+        h.PreviewRunner.StopCancellationToken.IsCancellationRequested.Should().BeFalse();
+        h.Types().Should().NotContain(EventTypes.SandboxPreviewReady).And.NotContain(EventTypes.CoordinatorPreviewReady);
+    }
+
     // ── Credential durable lifecycle ────────────────────────────────────────────────────
 
     [Fact]
@@ -595,6 +693,7 @@ public sealed class PreviewStepTests : IDisposable
         public readonly FakePreviewRunnerClient PreviewRunner = new();
         public readonly FakePreviewService PreviewService = new();
         public readonly InMemoryToolApprovalGate ApprovalGate = new();
+        public readonly IRunStore RunStore;
         public readonly PreviewStep Step;
 
         public Harness(
@@ -603,9 +702,26 @@ public sealed class PreviewStepTests : IDisposable
             bool autoApprove = true,
             IPodNameRegistry? podRegistry = null,
             IPreviewCommandModel? commandModel = null,
-            TimeSpan? approvalTimeout = null)
+            TimeSpan? approvalTimeout = null,
+            ISandboxPreviewService? previewService = null)
         {
             Streams.Create(RunId, "owner");
+            var db = new SqliteDb(new ConfigurationBuilder().AddInMemoryCollection(
+                new Dictionary<string, string?> { ["Database:Path"] = Path.Combine(worktree, "runs.db") }).Build());
+            db.EnsureCreatedAsync().GetAwaiter().GetResult();
+            RunStore = new SqliteRunStore(db);
+            if (RunStore.GetAsync(Domain.RunId.Parse(RunId)).GetAwaiter().GetResult() is null)
+                RunStore.InsertAsync(new Run
+                {
+                    Id = Domain.RunId.Parse(RunId),
+                    RepositoryPath = worktree,
+                    OriginatingBranch = "dev",
+                    ModelSource = ModelSource.GitHubCopilot,
+                    Task = "preview step test",
+                    SubmittingUser = "owner",
+                    Status = RunStatus.InProgress,
+                    StartedAt = DateTimeOffset.UtcNow,
+                }).GetAwaiter().GetResult();
             var runtime = new SandboxRuntimeOptions
             {
                 AgentExecutionMode = podPerRun ? "pod-per-run" : "in-api",
@@ -615,12 +731,13 @@ public sealed class PreviewStepTests : IDisposable
                 NullLogger<AgentPreviewGate>.Instance, approvalTimeout ?? TimeSpan.FromSeconds(5));
 
             Step = new PreviewStep(
-                PreviewService,
+                previewService ?? PreviewService,
                 gate,
                 PreviewRunner,
                 new PreviewCommandResolver(),
                 new FakeTurnTokens("turn-token"),
                 Streams,
+                RunStore,
                 runtime,
                 NullLogger<PreviewStep>.Instance,
                 secretStore: null,
@@ -674,6 +791,7 @@ public sealed class PreviewStepTests : IDisposable
         public int StartCalls;
         public int StopCalls;
         public int HealthCalls;
+        public CancellationToken StopCancellationToken;
         public string? LastStopReason;
         public string? LastCommand;
         public string? LastCwd;
@@ -681,6 +799,7 @@ public sealed class PreviewStepTests : IDisposable
         public Func<PreviewRunnerStartResult>? StartBehavior;
         public Func<PreviewRunnerPortResult>? ObserveBehavior;
         public Func<string, int, PreviewRunnerHealthResult>? HealthBehavior;
+        public Func<string, int, CancellationToken, Task<PreviewRunnerHealthResult>>? HealthAsyncBehavior;
         public PreviewRunnerPortResult PortResult = new("proc-sess-1", 3000, Healthy: true, "ok");
 
         public Task<PreviewRunnerStartResult> StartProcessAsync(
@@ -705,6 +824,7 @@ public sealed class PreviewStepTests : IDisposable
             string runId, string? bearer, string sessionId, int port, string path, CancellationToken ct)
         {
             HealthCalls++;
+            if (HealthAsyncBehavior is not null) return HealthAsyncBehavior(sessionId, port, ct);
             return Task.FromResult(HealthBehavior?.Invoke(sessionId, port)
                 ?? new PreviewRunnerHealthResult(sessionId, port, true, 200));
         }
@@ -712,6 +832,7 @@ public sealed class PreviewStepTests : IDisposable
         public Task StopProcessAsync(string runId, string? bearer, string sessionId, string reason, CancellationToken ct)
         {
             StopCalls++;
+            StopCancellationToken = ct;
             LastStopReason = reason;
             return Task.CompletedTask;
         }

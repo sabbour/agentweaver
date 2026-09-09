@@ -814,6 +814,7 @@ builder.Services.AddSingleton<PortForwardService>();
             sp.GetRequiredService<Agentweaver.Api.Sandbox.Preview.PreviewCommandResolver>(),
             sp.GetRequiredService<Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry>(),
             sp.GetRequiredService<Agentweaver.Api.Infrastructure.RunStreamStore>(),
+            sp.GetRequiredService<Agentweaver.Api.Infrastructure.IRunStore>(),
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<SandboxRuntimeOptions>>().Value,
             sp.GetRequiredService<ILoggerFactory>().CreateLogger<Agentweaver.Api.Coordinator.Preview.PreviewStep>(),
             sp.GetService<Agentweaver.Api.Auth.ISecretStore>(),

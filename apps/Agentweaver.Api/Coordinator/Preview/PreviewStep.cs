@@ -42,6 +42,7 @@ public sealed class PreviewStep
     private readonly IAgentHostTurnTokenRegistry _turnTokens;
     private readonly Agentweaver.Api.Auth.ISecretStore? _secretStore;
     private readonly RunStreamStore _streamStore;
+    private readonly IRunStore _runStore;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly ILogger<PreviewStep> _logger;
     private readonly IPodNameRegistry? _podRegistry;
@@ -53,6 +54,7 @@ public sealed class PreviewStep
         PreviewCommandResolver resolver,
         IAgentHostTurnTokenRegistry turnTokens,
         RunStreamStore streamStore,
+        IRunStore runStore,
         SandboxRuntimeOptions sandboxRuntime,
         ILogger<PreviewStep> logger,
         Agentweaver.Api.Auth.ISecretStore? secretStore = null,
@@ -66,6 +68,7 @@ public sealed class PreviewStep
         _commandModel = commandModel;
         _turnTokens = turnTokens;
         _streamStore = streamStore;
+        _runStore = runStore;
         _sandboxRuntime = sandboxRuntime;
         _logger = logger;
         _secretStore = secretStore;
@@ -79,6 +82,14 @@ public sealed class PreviewStep
     public async Task RunAsync(PreviewStepRequest request, CancellationToken ct)
     {
         var runId = request.RunId;
+        var callerCt = ct;
+        var runCt = _streamStore.Get(runId)?.CompletionToken ?? CancellationToken.None;
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, runCt);
+        ct = lifetime.Token;
+        PreviewRunnerStartResult? started = null;
+        string? bearer = null;
+        var keepProcess = false;
+        var stopReason = "registration_failed";
 
         try
         {
@@ -90,6 +101,12 @@ public sealed class PreviewStep
                 _logger.LogInformation(
                     "PreviewStep: run {RunId} tree already has terminal preview outcome '{Kind}'; skipping.",
                     runId, latest);
+                return;
+            }
+
+            if (!await SandboxEndpoints.IsPreviewRunActiveAsync(runId, _runStore, ct).ConfigureAwait(false))
+            {
+                EmitFailed(request, "run_terminal", "The run ended before the preview step started.");
                 return;
             }
 
@@ -142,12 +159,11 @@ public sealed class PreviewStep
 
             // 4. Bearer: same-process affinity uses the run's turn token; fall back to the per-run
             //    preview-runner credential from the run secret store for a cross-replica reconcile.
-            var bearer = await ResolveBearerAsync(runId, ct).ConfigureAwait(false);
+            bearer = await ResolveBearerAsync(runId, ct).ConfigureAwait(false);
 
             // 5. Start the supervised process (deterministic). Non-success exits best-effort stop
             //    the process, except approval timeout: that leaves the healthy process private and
             //    supervised so a fresh approval attempt can reuse it without duplicate execution.
-            PreviewRunnerStartResult started;
             try
             {
                 started = await _httpClient.StartProcessAsync(
@@ -180,13 +196,13 @@ public sealed class PreviewStep
             }
             catch (PreviewRunnerHttpException ex) when (ex.Reason == "preview_runner_unauthorized")
             {
-                await TryStopProcessAsync(runId, bearer, started.SessionId, "preview_runner_unauthorized", ct).ConfigureAwait(false);
+                stopReason = "preview_runner_unauthorized";
                 EmitFailed(request, "preview_runner_unauthorized", "AgentHost rejected the preview-runner credential.");
                 return;
             }
             catch (PreviewRunnerHttpException ex)
             {
-                await TryStopProcessAsync(runId, bearer, started.SessionId, "port_not_found", ct).ConfigureAwait(false);
+                stopReason = "port_not_found";
                 EmitFailed(request, "port_not_found", $"Could not observe a bound port: {ex.Message}");
                 return;
             }
@@ -196,7 +212,7 @@ public sealed class PreviewStep
             if (!port.Healthy)
             {
                 var reason = string.IsNullOrWhiteSpace(port.Reason) ? "health_check_failed" : port.Reason!;
-                await TryStopProcessAsync(runId, bearer, started.SessionId, reason, ct).ConfigureAwait(false);
+                stopReason = reason;
                 EmitFailed(request, reason,
                     $"The preview process on public port {port.Port} (app port {port.AppPort}) is not reachable. {port.Evidence}");
                 return;
@@ -204,7 +220,7 @@ public sealed class PreviewStep
 
             if (port.Port is <= 0 or > 65535)
             {
-                await TryStopProcessAsync(runId, bearer, started.SessionId, "port_not_found", ct).ConfigureAwait(false);
+                stopReason = "port_not_found";
                 EmitFailed(request, "port_not_found", "The preview process did not bind a discoverable port.");
                 return;
             }
@@ -212,6 +228,7 @@ public sealed class PreviewStep
             // 7. Register through the gate (honors Decision 1 — no auto-approve bypass).
             var approval = await _previewGate.RequestApprovalAsync(
                 runId, port.Port, ct, request.WorkPlanId, request.TreeHash).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
             if (approval.Outcome != PreviewApprovalOutcome.Approved)
             {
                 if (approval.Outcome == PreviewApprovalOutcome.TimedOut)
@@ -225,10 +242,11 @@ public sealed class PreviewStep
                         started.SessionId,
                         approval.RequestId!,
                         approval.ExpiresAt);
+                    keepProcess = true;
                     return;
                 }
 
-                await TryStopProcessAsync(runId, bearer, started.SessionId, "approval_denied", ct).ConfigureAwait(false);
+                stopReason = "approval_denied";
                 EmitFailed(request, "approval_denied", "Preview approval was denied.");
                 return;
             }
@@ -238,10 +256,17 @@ public sealed class PreviewStep
             if (!await SandboxEndpoints.IsPreviewProcessHealthyAsync(
                 runId, bearer, started.SessionId, port.Port, _httpClient, ct).ConfigureAwait(false))
             {
-                await TryStopProcessAsync(runId, bearer, started.SessionId, "preview_session_exited", ct).ConfigureAwait(false);
+                stopReason = "preview_session_exited";
                 EmitFailed(request, "preview_session_exited",
                     "Preview session has exited or is unreachable; a preview URL cannot be published.",
                     started.SessionId);
+                return;
+            }
+
+            if (!await SandboxEndpoints.IsPreviewRunActiveAsync(runId, _runStore, ct).ConfigureAwait(false))
+            {
+                stopReason = "run_terminal";
+                EmitFailed(request, stopReason, "The run ended before preview publication started.", started.SessionId);
                 return;
             }
 
@@ -252,16 +277,29 @@ public sealed class PreviewStep
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
+                if (!await SandboxEndpoints.ValidatePreviewPublicationAsync(
+                    registration.Session!, _previewService, _runStore, ct).ConfigureAwait(false))
+                {
+                    stopReason = "run_terminal";
+                    EmitFailed(request, stopReason, "The run ended before preview publication completed.", started.SessionId);
+                    return;
+                }
                 // SUCCESS: keep the process + forwarder alive to serve the preview.
                 EmitReady(request, registration.Session!, started.SessionId);
+                keepProcess = true;
                 return;
             }
 
             var failReason = registration.Status == PreviewRegistrationStatus.PortNotAllowed
                 ? "port_not_allowed"
                 : "registration_failed";
-            await TryStopProcessAsync(runId, bearer, started.SessionId, failReason, ct).ConfigureAwait(false);
+            stopReason = failReason;
             EmitFailed(request, failReason, registration.Message ?? "Preview registration failed.", started.SessionId);
+        }
+        catch (OperationCanceledException) when (runCt.IsCancellationRequested && !callerCt.IsCancellationRequested)
+        {
+            stopReason = "run_terminal";
+            EmitFailed(request, stopReason, "The run ended before preview publication completed.", started?.SessionId);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -280,6 +318,14 @@ public sealed class PreviewStep
             _logger.LogWarning(ex, "PreviewStep: unexpected error for run {RunId}; emitting preview_failed", runId);
             EmitFailed(request, "registration_failed", "Preview step failed unexpectedly.");
         }
+        finally
+        {
+            if (started is not null && !keepProcess)
+            {
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await TryStopProcessAsync(runId, bearer, started.SessionId, stopReason, cleanup.Token).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>
@@ -293,7 +339,7 @@ public sealed class PreviewStep
         {
             await _httpClient.StopProcessAsync(runId, bearer, sessionId, $"preview_step_failed:{reason}", ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             _logger.LogDebug(ex, "PreviewStep: best-effort stop of session {SessionId} for run {RunId} failed (ignored).", sessionId, runId);
         }
