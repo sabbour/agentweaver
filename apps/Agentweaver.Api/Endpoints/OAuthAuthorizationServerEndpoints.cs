@@ -8,7 +8,6 @@ using Agentweaver.Api.Memory;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
@@ -27,7 +26,6 @@ public static class OAuthAuthorizationServerEndpoints
             .RequireRateLimiting("oauth-registration")
             .ProtocolManaged();
         app.MapGet("/oauth/resume", ResumeAsync).ProtocolManaged();
-        app.MapGet("/oauth/continue", ContinueAsync).ProtocolManaged();
         app.MapPost("/oauth/token", TokenAsync).ProtocolManaged();
     }
 
@@ -369,30 +367,6 @@ public static class OAuthAuthorizationServerEndpoints
         return changed == 1 ? transaction : null;
     }
 
-    private static async Task<string> SaveContinuationAsync(
-        MemoryDbContext db,
-        OAuthAuthorizationTransaction transaction,
-        string decision,
-        CancellationToken ct)
-    {
-        var handle = Base64UrlEncoder.Encode(RandomNumberGenerator.GetBytes(32));
-        db.OAuthAuthorizationTransactions.Add(new OAuthAuthorizationTransaction
-        {
-            HandleHash = OAuthCertificateLoader.HashOpaque(handle),
-            ClientId = transaction.ClientId,
-            RedirectUri = transaction.RedirectUri,
-            CodeChallenge = transaction.CodeChallenge,
-            Scope = transaction.Scope,
-            ClientState = transaction.ClientState,
-            BrowserSessionId = transaction.BrowserSessionId,
-            Subject = transaction.Subject,
-            ContinuationDecision = decision,
-            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(2),
-        });
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
-        return handle;
-    }
-
     private static async Task UpsertConsentAsync(
         MemoryDbContext db,
         string subject,
@@ -421,35 +395,6 @@ public static class OAuthAuthorizationServerEndpoints
 
     private static string[] NormalizeScopes(IEnumerable<string> scopes) =>
         scopes.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-
-    internal static string? BuildConsentFormActionDirective(
-        string requestedRedirectUri,
-        IEnumerable<string> registeredRedirectUris)
-    {
-        var registered = registeredRedirectUris.FirstOrDefault(uri =>
-            string.Equals(uri, requestedRedirectUri, StringComparison.Ordinal));
-        if (registered is null
-            || registered.Any(c => char.IsWhiteSpace(c) || char.IsControl(c))
-            || !OAuthRedirectUriValidator.IsValid(registered, allowDynamicLoopbackPort: true)
-            || !Uri.TryCreate(registered, UriKind.Absolute, out var uri))
-            return null;
-
-        if (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal)
-            || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
-        {
-            if (uri.HostNameType == UriHostNameType.IPv6)
-                return "'self'";
-            return $"'self' {uri.GetLeftPart(UriPartial.Authority)}";
-        }
-
-        return $"{uri.Scheme}:";
-    }
-
-    private static bool IsIpv6CallbackRedirect(string redirectUri) =>
-        Uri.TryCreate(redirectUri, UriKind.Absolute, out var uri)
-        && (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal)
-            || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal))
-        && uri.HostNameType == UriHostNameType.IPv6;
 
     private static async Task<bool> HasExactResourceAsync(
         HttpContext context,
