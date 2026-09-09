@@ -29,6 +29,9 @@ import {
   LockClosedRegular,
 } from '@fluentui/react-icons';
 import { AgentStepList } from './ui/agentic';
+import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
+import { aiExecutionContextFromEvents } from './aiExecutionContext';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { RunStreamEvent, StreamStatus } from '../api/sse';
@@ -242,6 +245,12 @@ interface OutcomePlanPanelProps {
 
 export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCollapse, onReconnect, onConfirmed, onClarifyPlan, clarificationSent = false, onFooterChange }: OutcomePlanPanelProps) {
   const styles = useStyles();
+  const providerPreparation = useAiExecutionContext('orchestration', undefined, runId, Boolean(runId));
+  const activeProviderContext = useMemo(
+    () => aiExecutionContextFromEvents(events, 'orchestration'),
+    [events],
+  );
+  const providerContext = providerPreparation.context ?? activeProviderContext;
 
   const [specFromApi, setSpecFromApi] = useState<OutcomeSpec | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -379,10 +388,16 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
     // 409 `no_pending_gate`. Auto-retry only that case a few times; surface everything else.
     const maxAttempts = 5;
     const backoffMs = 400;
+    let providerChanged = false;
+    providerPreparation.setPhase('active');
     try {
       for (let attempt = 1; ; attempt++) {
         try {
-          const updated = await apiClient.confirmOutcomeSpec(runId, allowTaskPromotion);
+          const updated = await apiClient.confirmOutcomeSpec(
+            runId,
+            allowTaskPromotion,
+            providerPreparation.providerKey,
+          );
           if (updated) setSpecFromApi(updated);
           else await fetchSpec();
           // The parent derives its header/tree from separate REST snapshots, rather
@@ -390,9 +405,14 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
           onConfirmed?.();
           // Reconnect the SSE stream so post-confirmation events (outcome_spec.confirmed,
           // coordinator work plan, subtask events) arrive without a manual page refresh.
+          providerPreparation.setPhase('completed');
           onReconnect?.();
           return;
         } catch (err) {
+          if (providerPreparation.handleInvocationError(err)) {
+            providerChanged = true;
+            throw err;
+          }
           const isGateArming =
             err instanceof ApiError && err.status === 409 && apiErrorCode(err) === 'no_pending_gate';
           if (!isGateArming || attempt >= maxAttempts) throw err;
@@ -400,8 +420,10 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         }
       }
     } catch (err) {
-      setActionError(actionErrorMessage(err));
-      if (err instanceof ApiError && err.status === 409) await fetchSpec();
+      setActionError(providerChanged
+        ? 'The AI provider changed. Review the updated provider and confirm again.'
+        : actionErrorMessage(err));
+      if (!providerChanged && err instanceof ApiError && err.status === 409) await fetchSpec();
     } finally {
       confirmInFlightRef.current = false;
       setActing(false);
@@ -414,17 +436,25 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
     reviseInFlightRef.current = true;
     setActing(true);
     setActionError(null);
+    providerPreparation.setPhase('active');
     try {
-      const updated = await apiClient.reviseOutcomeSpec(runId, composed);
+      const updated = await apiClient.reviseOutcomeSpec(
+        runId,
+        composed,
+        providerPreparation.providerKey,
+      );
       if (updated) setSpecFromApi(updated);
       else await fetchSpec();
+      providerPreparation.setPhase('completed');
       revisingSnapshotRef.current = JSON.stringify({ goal: spec?.goal, desiredOutcome: spec?.desiredOutcome });
       setRevising(true);
       setReviseOpen(false);
       setAnswers([]);
       setExtraFeedback('');
     } catch (err) {
-      setActionError(actionErrorMessage(err));
+      setActionError(providerPreparation.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and send again.'
+        : actionErrorMessage(err));
     } finally {
       reviseInFlightRef.current = false;
       setActing(false);
@@ -522,23 +552,30 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
         />
       </Field>
       <div role="group" className={styles.actionRow}>
-        <Button
-          appearance="primary"
-          icon={<CheckmarkCircleRegular />}
-          disabled={acting || revisionPending || runInterrupted || runTerminal}
-          onClick={() => void handleConfirm()}
-        >
-          {acting ? 'Confirming plan...' : 'Confirm plan'}
-        </Button>
-        <Button
-          appearance="secondary"
-          icon={<EditRegular />}
-          disabled={acting || revisionPending || runInterrupted || runTerminal}
-          onClick={openRevise}
-        >
-          Clarify plan
-        </Button>
+        <AiExecutionProviderHint context={providerContext}>
+          <Button
+            appearance="primary"
+            icon={<CheckmarkCircleRegular />}
+            disabled={acting || revisionPending || runInterrupted || runTerminal
+              || providerPreparation.loading || !providerPreparation.available}
+            onClick={() => void handleConfirm()}
+          >
+            {acting ? 'Confirming plan...' : 'Confirm plan'}
+          </Button>
+        </AiExecutionProviderHint>
+        <AiExecutionProviderHint context={providerContext}>
+          <Button
+            appearance="secondary"
+            icon={<EditRegular />}
+            disabled={acting || revisionPending || runInterrupted || runTerminal
+              || providerPreparation.loading || !providerPreparation.available}
+            onClick={openRevise}
+          >
+            Clarify plan
+          </Button>
+        </AiExecutionProviderHint>
       </div>
+      <AiProviderChangeAnnouncement message={providerPreparation.announcement} />
     </>
   ) : null;
 
@@ -547,7 +584,19 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
     onFooterChange(footerContent);
     return () => onFooterChange(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onFooterChange, awaiting, allowTaskPromotion, acting, revisionPending, runInterrupted, runTerminal]);
+  }, [
+    onFooterChange,
+    awaiting,
+    allowTaskPromotion,
+    acting,
+    revisionPending,
+    runInterrupted,
+    runTerminal,
+    providerPreparation.loading,
+    providerPreparation.available,
+    providerPreparation.announcement,
+    providerContext,
+  ]);
 
   return (
     <div className={styles.panel}>
@@ -726,13 +775,16 @@ export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCol
               <Button appearance="secondary" disabled={acting} onClick={() => { setReviseOpen(false); setAnswers([]); setExtraFeedback(''); }}>
                 Cancel
               </Button>
-              <Button
-                appearance="primary"
-                disabled={!composedFeedback.trim() || acting}
-                onClick={() => void handleRevise()}
-              >
-                {acting ? 'Sending' : 'Send'}
-              </Button>
+              <AiExecutionProviderHint context={providerContext}>
+                <Button
+                  appearance="primary"
+                  disabled={!composedFeedback.trim() || acting
+                    || providerPreparation.loading || !providerPreparation.available}
+                  onClick={() => void handleRevise()}
+                >
+                  {acting ? 'Sending' : 'Send'}
+                </Button>
+              </AiExecutionProviderHint>
             </DialogActions>
           </DialogBody>
         </DialogSurface>

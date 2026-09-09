@@ -87,6 +87,9 @@ namespace Agentweaver.Api.Migrations
                     b.Property<DateTimeOffset?>("ConsumedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ContinuationDecision")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("TEXT");
 

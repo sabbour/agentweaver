@@ -38,6 +38,12 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
         return (body.GetProperty("project_id").GetString()!, body.GetProperty("working_directory").GetString()!);
     }
 
+    private async Task<HttpResponseMessage> GenerateBlueprintAsync(GenerateBlueprintRequest request)
+    {
+        await _factory.PrepareAiExecutionAsync(_client, "blueprint_generation", request.ProjectId);
+        return await _client.PostAsJsonAsync("/api/blueprints/generate", request);
+    }
+
     [Fact]
     public async Task GetBlueprints_ReturnsFivePredefined_WithCatalogRostersAndExportability()
     {
@@ -378,8 +384,7 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             new { blueprint_generation_model = "gpt-5-mini" });
         update.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/blueprints/generate",
+        var response = await GenerateBlueprintAsync(
             new GenerateBlueprintRequest { ProjectId = projectId, Description = "a data team" });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
@@ -391,8 +396,8 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     {
         _factory.Generator.Response = "I am sorry, I cannot produce that.";
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "a data team" });
+        var response = await GenerateBlueprintAsync(
+            new GenerateBlueprintRequest { Description = "a data team" });
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -406,8 +411,8 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             ModelSource.GitHubCopilot,
             new InvalidOperationException("Session error: Execution failed: Error: Failed to list models"))!;
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "a data team" });
+        var response = await GenerateBlueprintAsync(
+            new GenerateBlueprintRequest { Description = "a data team" });
 
         response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -429,8 +434,8 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     {
         _factory.Generator.ExceptionToThrow = new InvalidOperationException("boom");
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "a data team" });
+        var response = await GenerateBlueprintAsync(
+            new GenerateBlueprintRequest { Description = "a data team" });
 
         response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -456,8 +461,8 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             }
             """;
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "a growth team" });
+        var response = await GenerateBlueprintAsync(
+            new GenerateBlueprintRequest { Description = "a growth team" });
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -482,8 +487,8 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             }
             """;
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "a data team" });
+        var response = await GenerateBlueprintAsync(
+            new GenerateBlueprintRequest { Description = "a data team" });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -515,8 +520,7 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             }
             """;
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/blueprints/generate",
+        var response = await GenerateBlueprintAsync(
             new GenerateBlueprintRequest
             {
                 Description = "Every Monday: triage GitHub issues",
@@ -552,8 +556,8 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             }
             """;
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "Find jobs based on my profile, compare them, generate a customized CV, create an interview guide" });
+        var response = await GenerateBlueprintAsync(
+            new GenerateBlueprintRequest { Description = "Find jobs based on my profile, compare them, generate a customized CV, create an interview guide" });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -583,8 +587,8 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             }
             """;
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/blueprints/generate", new GenerateBlueprintRequest { Description = "a mystery team" });
+        var response = await GenerateBlueprintAsync(
+            new GenerateBlueprintRequest { Description = "a mystery team" });
 
         response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();

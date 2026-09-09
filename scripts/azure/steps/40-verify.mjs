@@ -21,6 +21,10 @@
 import * as execDefault from "../lib/exec.mjs";
 import * as logDefault from "../lib/log.mjs";
 import { createPrivateKey, createPublicKey, X509Certificate } from "node:crypto";
+import {
+  inspectKeyVaultSecret,
+  REPO_APP_PRIVATE_KEY_SECRET,
+} from "../lib/repo-app-secret.mjs";
 
 function certificatePem(text) {
   return String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/)?.[0] ?? null;
@@ -304,6 +308,24 @@ export async function run(cfg, opts = {}) {
   for (const { label, selector } of RUNNING_POD_SELECTORS) {
     const count = await runningPodCount(NAMESPACE, selector, { exec });
     record(count >= 1, count >= 1 ? `${label} pod(s) running (${count})` : `No ${label} pods in Running state`);
+  }
+
+  log.info("");
+  log.info("--- Key Vault application secrets ---");
+  if (cfg.KEYVAULT_NAME) {
+    const repoAppPrivateKey = await inspectKeyVaultSecret(
+      cfg.KEYVAULT_NAME,
+      REPO_APP_PRIVATE_KEY_SECRET.physicalName,
+      { exec },
+    );
+    record(
+      repoAppPrivateKey.status === "available",
+      repoAppPrivateKey.status === "available"
+        ? `Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is accessible`
+        : `Canonical Repo App private-key secret '${REPO_APP_PRIVATE_KEY_SECRET.physicalName}' is ${repoAppPrivateKey.status}`,
+    );
+  } else {
+    info("KEYVAULT_NAME is unavailable; skipping canonical Repo App private-key secret verification");
   }
 
   log.info("");

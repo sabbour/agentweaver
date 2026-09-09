@@ -163,7 +163,7 @@ public sealed class RepoAppInstallationAuthorizationService(
         }
 
         var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
-        var fullName = project?.Origin.SourceRepository;
+        var fullName = NormalizeRepositoryFullName(project?.Origin.SourceRepository, _baseUrl);
         if (installationId is not > 0 || string.IsNullOrWhiteSpace(fullName))
         {
             await persistence.CompleteAuthorizationAsync(transaction.State, succeeded: false, ct).ConfigureAwait(false);
@@ -215,6 +215,31 @@ public sealed class RepoAppInstallationAuthorizationService(
 
     private string BuildInstallationUrl(string state) =>
         $"{_baseUrl.TrimEnd('/')}/apps/{Uri.EscapeDataString(_slug!)}/installations/new?state={Uri.EscapeDataString(state)}";
+
+    internal static string? NormalizeRepositoryFullName(string? sourceRepository, string baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(sourceRepository))
+            return null;
+        var candidate = sourceRepository.Trim();
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri))
+            return candidate;
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var provider)
+            || uri.Scheme != Uri.UriSchemeHttps
+            || !string.Equals(uri.IdnHost, provider.IdnHost, StringComparison.OrdinalIgnoreCase)
+            || uri.Port != provider.Port
+            || !string.IsNullOrEmpty(uri.UserInfo)
+            || !string.IsNullOrEmpty(uri.Query)
+            || !string.IsNullOrEmpty(uri.Fragment))
+            return null;
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length != 2)
+            return null;
+        var repository = segments[1].EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+            ? segments[1][..^4]
+            : segments[1];
+        return $"{segments[0]}/{repository}";
+    }
 
     public static void SetCallbackCookie(HttpContext context, string value) =>
         context.Response.Cookies.Append(CookieName, value, CookieOptions());

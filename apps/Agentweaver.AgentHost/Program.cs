@@ -566,6 +566,7 @@ internal sealed record ConfigureRequest
     /// </summary>
     public GitHubCapabilitySnapshotCredential? CopilotCredential { get; init; }
     public ByokProviderConfiguration? ByokProviderConfiguration { get; init; }
+    public string? ModelProviderKey { get; init; }
 
     /// <summary>
     /// Short-lived credential for the configured run and repository. The runtime gives this value
@@ -580,7 +581,7 @@ internal sealed record ConfigureRequest
     public string? McpBrokerToken { get; init; }
 
     /// <summary>
-    /// Internal API endpoint used only for this run's durable tool-approval-policy lookups.
+    /// Internal API endpoint for this run's approval-policy and model-provider validation callbacks.
     /// Authentication uses the per-run turn capability, never a static API credential.
     /// </summary>
     public string? ToolApprovalApiBaseUrl { get; init; }
@@ -671,7 +672,8 @@ internal sealed record ConfigureRequest
         McpBrokerToken,
         RepositoryAccessToken,
         ToolApprovalApiBaseUrl,
-        ByokProviderConfiguration);
+        ByokProviderConfiguration,
+        ModelProviderKey);
 }
 
 internal sealed record McpBrokerTokenRefreshRequest(string? McpBrokerToken);

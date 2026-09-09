@@ -10,7 +10,9 @@
 // waiting for the cluster's DefaultDomainCertificate). So:
 //
 //   1. writeOverlay() copies k8s/base + k8s/overlays/production into a
-//      git-ignored scratch directory and rewrites ONLY the `images:` tags
+//      git-ignored scratch directory and rewrites ONLY the `images:` fields
+//      (AgentHost may use its promoted immutable digest; all other images
+//      remain tag-based)
 //      and the `agentweaver-runtime-config` configMapGenerator literals in
 //      the copied kustomization.yaml with the real resolved values -- a
 //      small, targeted rewrite (same spirit as the old render.mjs, just
@@ -32,6 +34,8 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import path from "node:path";
+import { REPO_APP_PRIVATE_KEY_SECRET } from "./repo-app-secret.mjs";
+import { validateImageDigest } from "../variables.mjs";
 
 export const OVERLAY_NAME = "production";
 
@@ -321,6 +325,7 @@ export function buildRuntimeConfigLiterals(vars) {
       oauthTrustedProxyNetworks,
       signingCertificateName,
       encryptionCertificateName,
+      repoAppPrivateKeySecretName: REPO_APP_PRIVATE_KEY_SECRET.logicalName,
     }))
     .digest("hex");
   return {
@@ -346,6 +351,7 @@ export function buildRuntimeConfigLiterals(vars) {
     ENTRA_FRONTEND_URL: isEntra ? entraOrigin : host ? `https://${host}` : "",
     COPILOT_APP_CALLBACK_URL: isEntra ? `${entraOrigin}/auth/github/copilot-app/callback` : host ? `https://${host}/auth/github/copilot-app/callback` : "",
     REPO_APP_CALLBACK_URL: isEntra ? `${entraOrigin}/auth/github/repo-app/callback` : host ? `https://${host}/auth/github/repo-app/callback` : "",
+    REPO_APP_PRIVATE_KEY_SECRET_NAME: REPO_APP_PRIVATE_KEY_SECRET.logicalName,
     KEYVAULT_URI: vars.KEYVAULT_NAME ? `https://${vars.KEYVAULT_NAME}.vault.azure.net` : "",
     AGENTHOST_KEYVAULT_URI: str(vars.AGENTHOST_KEYVAULT_URI),
     APPINSIGHTS_WORKSPACE_ID: str(vars.APPINSIGHTS_WORKSPACE_ID),
@@ -360,11 +366,19 @@ export function buildRuntimeConfigLiterals(vars) {
  */
 export function buildImageEntries(vars) {
   const registry = vars.ACR_LOGIN_SERVER;
+  const agentHostDigest = vars.AGENTHOST_IMAGE_DIGEST || "";
+  if (agentHostDigest) {
+    validateImageDigest(agentHostDigest, "AGENTHOST_IMAGE_DIGEST");
+  }
   return [
     { name: IMAGE_NAMES.api, newName: `${registry}/agentweaver-api`, newTag: vars.IMAGE_TAG },
     { name: IMAGE_NAMES.frontend, newName: `${registry}/agentweaver-frontend`, newTag: vars.IMAGE_TAG },
     { name: IMAGE_NAMES.mcp, newName: `${registry}/agentweaver-mcp`, newTag: vars.IMAGE_TAG },
-    { name: IMAGE_NAMES.agentHost, newName: `${registry}/agentweaver-agent-host`, newTag: vars.AGENTHOST_IMAGE_TAG },
+    {
+      name: IMAGE_NAMES.agentHost,
+      newName: `${registry}/agentweaver-agent-host`,
+      ...(agentHostDigest ? { digest: agentHostDigest } : { newTag: vars.AGENTHOST_IMAGE_TAG }),
+    },
   ];
 }
 
@@ -390,8 +404,11 @@ export function rewriteOverlayKustomization(kustomizationText, vars) {
 
   for (const image of buildImageEntries(vars)) {
     const nameRe = escapeRegExp(image.name);
-    const blockRe = new RegExp(`(- name: ${nameRe}\\r?\\n\\s*newName: ).*(\\r?\\n\\s*newTag: ).*`);
-    out = out.replace(blockRe, (_match, prefix1, prefix2) => `${prefix1}${image.newName}${prefix2}${JSON.stringify(String(image.newTag))}`);
+    const blockRe = new RegExp(`(- name: ${nameRe}\\r?\\n\\s*newName: ).*(\\r?\\n\\s*)(?:newTag|digest): .*`);
+    const imageField = image.digest
+      ? `digest: ${JSON.stringify(String(image.digest))}`
+      : `newTag: ${JSON.stringify(String(image.newTag))}`;
+    out = out.replace(blockRe, (_match, prefix1, prefix2) => `${prefix1}${image.newName}${prefix2}${imageField}`);
   }
 
   const literals = buildRuntimeConfigLiterals(vars);

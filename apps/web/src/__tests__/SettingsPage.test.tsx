@@ -96,26 +96,32 @@ describe('SettingsPage', () => {
     const urlInput = screen.getByRole('textbox', { name: 'MCP server URL' }) as HTMLInputElement;
     expect(urlInput.value).toMatch(/\/mcp$/);
     expect(screen.getByRole('tablist', { name: 'MCP client setup' })).toBeDefined();
-    for (const clientName of [
-      'Claude Desktop',
-      'VS Code',
-      'GitHub Copilot CLI',
-      'GitHub Copilot desktop',
-    ]) {
-      expect(screen.getByRole('tab', { name: clientName })).toBeDefined();
-    }
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs).toEqual([
+      screen.getByRole('tab', { name: 'GitHub Copilot CLI' }),
+      screen.getByRole('tab', { name: 'GitHub Copilot desktop' }),
+      screen.getByRole('tab', { name: 'VS Code' }),
+      screen.getByRole('tab', { name: 'Claude Desktop' }),
+    ]);
+    expect(tabs[0].getAttribute('aria-selected')).toBe('true');
+    expect(tabs.slice(1).every((tab) => tab.getAttribute('aria-selected') === 'false')).toBe(true);
+    const tabPanel = screen.getByRole('tabpanel');
+    expect(tabPanel.getAttribute('aria-labelledby')).toBe('mcp-client-tab-copilot-cli');
+    expect(tabPanel.textContent).toContain('/mcp show agentweaver');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'GitHub Copilot desktop' }));
+    expect(tabPanel.getAttribute('aria-labelledby')).toBe('mcp-client-tab-copilot-desktop');
+    expect(tabPanel.textContent).toContain('Customize → MCP servers');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'VS Code' }));
+    expect(tabPanel.getAttribute('aria-labelledby')).toBe('mcp-client-tab-vs-code');
+    expect(screen.getByRole('tabpanel').textContent).toContain('MCP: Add Server');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Claude Desktop' }));
+    expect(tabPanel.getAttribute('aria-labelledby')).toBe('mcp-client-tab-claude-desktop');
     expect(screen.getByRole('tabpanel').textContent).toContain('Customize → Connectors');
     expect(screen.getByRole('tabpanel').textContent).toContain('OAuth Client ID to agentweaver-claude');
     expect(screen.getByRole('tabpanel').textContent).toContain('Leave OAuth Client Secret empty');
-
-    fireEvent.click(screen.getByRole('tab', { name: 'VS Code' }));
-    expect(screen.getByRole('tabpanel').textContent).toContain('MCP: Add Server');
-
-    fireEvent.click(screen.getByRole('tab', { name: 'GitHub Copilot CLI' }));
-    expect(screen.getByRole('tabpanel').textContent).toContain('/mcp show agentweaver');
-
-    fireEvent.click(screen.getByRole('tab', { name: 'GitHub Copilot desktop' }));
-    expect(screen.getByRole('tabpanel').textContent).toContain('Customize → MCP servers');
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy MCP server URL' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(urlInput.value));

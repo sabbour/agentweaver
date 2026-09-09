@@ -97,7 +97,7 @@ export function SettingsPage() {
   const [repoAppError, setRepoAppError] = useState<string | null>(null);
   const [repoAppConnection, setRepoAppConnection] = useState<RepoAppConnectionStatus | null>(null);
   const [repoAppStatusLoading, setRepoAppStatusLoading] = useState(true);
-  const [mcpClientId, setMcpClientId] = useState<McpClientId>('claude-desktop');
+  const [mcpClientId, setMcpClientId] = useState<McpClientId>('copilot-cli');
   const mcpClient = MCP_CLIENT_GUIDANCE[mcpClientId];
 
   useEffect(() => {

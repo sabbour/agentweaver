@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.28.6
+
+### Patch Changes
+
+- 6b267f3: Expose a redacted effective model-provider context before generative AI actions and on active runs so interfaces can identify the project, platform, or personal provider without relying on the lossy persisted model source.
+
+## 0.28.5
+
+### Patch Changes
+
+- 01127ac: Allow OAuth consent submissions to reach only the validated registered client callback while preserving a strict content security policy.
+
+## 0.28.4
+
+### Patch Changes
+
+- abeb669: Prioritize GitHub Copilot clients in MCP setup guidance and show the Agentweaver logo on OAuth consent.
+- d08e74b: Let users dismiss optional repository setup guidance per project while keeping changed or required setup visible.
+- d08e74b: Keep assistant messages visible while sessions connect or reload history without duplicating server-confirmed turns.
+
+## 0.28.3
+
+### Patch Changes
+
+- da3e10d: docs: diagram consolidation, sequence-diagram renderer, and refreshed architecture/component diagrams
+- 450c644: Allow users to permanently delete their own personal Assistant sessions after the incidental project is deleted or becomes inaccessible, while preserving project authorization for project-owned runs.
+
 ## 0.28.2
 
 ### Patch Changes

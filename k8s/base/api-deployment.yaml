@@ -264,7 +264,10 @@ spec:
                   name: agentweaver-secrets
                   key: repo-app-id
             - name: Auth__RepoApp__PrivateKeySecretName
-              value: repo-app-private-key
+              valueFrom:
+                configMapKeyRef:
+                  name: agentweaver-runtime-config
+                  key: REPO_APP_PRIVATE_KEY_SECRET_NAME
             # GitHub Repo App / Copilot App connection credentials persist in Key Vault so the
             # API can read them back for on-behalf-of calls. Requires "Key Vault Secrets Officer"
             # on agentweaver-api-identity (granted by scripts/aks/15-setup-identity.sh).

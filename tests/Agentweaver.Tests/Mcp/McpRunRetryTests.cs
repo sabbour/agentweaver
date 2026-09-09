@@ -2,6 +2,7 @@ using FluentAssertions;
 using LibGit2Sharp;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 using Agentweaver.Mcp;
 using Agentweaver.Mcp.Tools;
@@ -89,6 +90,7 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
     [Fact]
     public async Task RunRetry_FailedRun_ReturnsSummaryString()
     {
+        await SeedByokProviderAsync();
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var repo = CreateTempGitRepo();
         var runId = RunId.New();
@@ -122,8 +124,11 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
     [Fact]
     public async Task RunRetry_NonRetryableRun_ThrowsMcpApiException409()
     {
+        await SeedByokProviderAsync();
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var runId = RunId.New();
+        var repo = CreateTempGitRepo();
+        var projectId = await CreateBlankProjectAsync(repo);
 
         await runStore.InsertAsync(new Run
         {
@@ -133,6 +138,7 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
             ModelSource       = ModelSource.GitHubCopilot,
             Task              = "non-retryable test task",
             SubmittingUser    = ProjectsWebApplicationFactory.TestUser,
+            ProjectId         = projectId,
             Status            = RunStatus.InProgress,
             StartedAt         = DateTimeOffset.UtcNow,
         });
@@ -166,5 +172,23 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
         });
 
         return projectId;
+    }
+
+    private async Task SeedByokProviderAsync()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+        foreach (var provider in await settings.ListAsync(CancellationToken.None))
+            await settings.RemoveAsync(provider.Id, CancellationToken.None);
+        var created = await settings.AddAsync(
+            new ByokProviderConfiguration(
+                string.Empty,
+                "MCP test provider",
+                "openai",
+                "https://provider.example.test",
+                "gpt-5",
+                "test-key"),
+            CancellationToken.None);
+        await settings.SetActiveAsync(created.Id, CancellationToken.None);
     }
 }

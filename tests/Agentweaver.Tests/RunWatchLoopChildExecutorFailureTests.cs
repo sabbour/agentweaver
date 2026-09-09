@@ -90,11 +90,14 @@ public sealed class RunWatchLoopChildExecutorFailureTests
             CancellationToken.None);
 
         Run? run = null;
+        RunEvent? failed = null;
         var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
         while (DateTimeOffset.UtcNow < deadline)
         {
             run = await runStore.GetAsync(runId, CancellationToken.None);
-            if (run?.Status == RunStatus.Failed)
+            failed = entry.GetSnapshotSince(0).Events
+                .SingleOrDefault(e => e.Type == EventTypes.RunFailed);
+            if (run?.Status == RunStatus.Failed && failed is not null)
                 break;
             await Task.Delay(100);
         }
@@ -103,8 +106,8 @@ public sealed class RunWatchLoopChildExecutorFailureTests
         run!.Status.Should().Be(RunStatus.Failed);
         run.Result.Should().Be("shell_execution_timeout");
         run.Result.Should().NotBe("watch_stream_completed_without_terminal_event");
-        var failed = entry.GetSnapshotSince(0).Events.Single(e => e.Type == EventTypes.RunFailed);
-        System.Text.Json.JsonSerializer.Serialize(failed.Payload).Should().Contain("shell_execution_timeout");
+        failed.Should().NotBeNull();
+        System.Text.Json.JsonSerializer.Serialize(failed!.Payload).Should().Contain("shell_execution_timeout");
     }
 
     [Fact]

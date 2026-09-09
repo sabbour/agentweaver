@@ -57,6 +57,7 @@ public class CopilotStoryIndependenceClassifier : IStoryIndependenceClassifier
         "\"short explanation\"}. If unsure, choose false.";
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
+    private readonly EffectiveRunModelTurnExecutor? _effectiveModelTurn;
     private readonly ILogger<CopilotStoryIndependenceClassifier> _logger;
     private readonly string? _modelId;
 
@@ -64,10 +65,12 @@ public class CopilotStoryIndependenceClassifier : IStoryIndependenceClassifier
         GitHubCopilotClientFactory copilotClientFactory,
         ILogger<CopilotStoryIndependenceClassifier> logger,
         IConfiguration configuration,
-        IOptions<GenerationModelOptions>? generationOptions = null)
+        IOptions<GenerationModelOptions>? generationOptions = null,
+        EffectiveRunModelTurnExecutor? effectiveModelTurn = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _logger = logger;
+        _effectiveModelTurn = effectiveModelTurn;
         _modelId = (generationOptions?.Value ?? GenerationModelOptions.FromConfiguration(configuration))
             .ResolveReplyClassificationModel();
     }
@@ -83,7 +86,10 @@ public class CopilotStoryIndependenceClassifier : IStoryIndependenceClassifier
         {
             var prompt = BuildPrompt(context);
             var result = await RunWithRetryAsync(
-                token => RunModelTurnAsync(context.RunId, prompt, token),
+                token => _effectiveModelTurn is null
+                    ? RunModelTurnAsync(context.RunId, prompt, token)
+                    : _effectiveModelTurn.RunAsync(
+                        context.RunId, context.ProjectId, _modelId, ClassifierCharter, prompt, token),
                 ClassificationTimeout,
                 MaxClassificationAttempts,
                 ct,
@@ -115,7 +121,7 @@ public class CopilotStoryIndependenceClassifier : IStoryIndependenceClassifier
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!EffectiveRunModelTurnExecutor.IsProviderChange(ex))
         {
             _logger.LogWarning(ex,
                 "Story-independence classification failed for run {RunId}; caller will fail closed to inline.",
@@ -175,7 +181,8 @@ public class CopilotStoryIndependenceClassifier : IStoryIndependenceClassifier
             {
                 throw;
             }
-            catch (Exception ex) when (attempt < maxAttempts)
+            catch (Exception ex) when (attempt < maxAttempts
+                && !EffectiveRunModelTurnExecutor.IsProviderChange(ex))
             {
                 onRetryableError?.Invoke(ex, attempt);
             }

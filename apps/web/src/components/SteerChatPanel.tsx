@@ -12,6 +12,8 @@ import {
   tokens,
   } from '@fluentui/react-components';
 import { SendRegular, StopRegular } from '@fluentui/react-icons';
+import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { useEffect, useRef, useState } from 'react';
 // Maps a successful steer response status to a compact confirmation line.
 function steerStatusMessage(status: string): string {
@@ -114,6 +116,7 @@ export interface SteerChatPanelProps {
  */
 export function SteerChatPanel({ runId, canSteer = true, onSteered }: SteerChatPanelProps) {
   const styles = useStyles();
+  const providerContext = useAiExecutionContext('orchestration', undefined, runId, canSteer);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -139,12 +142,24 @@ export function SteerChatPanel({ runId, canSteer = true, onSteered }: SteerChatP
     append({ role: 'user', text: instruction });
     setText('');
     setBusy(true);
+    providerContext.setPhase('active');
     try {
-      const res = await apiClient.steerCoordinator(runId, { kind: 'send', instruction });
+      const res = await apiClient.steerCoordinator(
+        runId,
+        { kind: 'send', instruction },
+        providerContext.providerKey,
+      );
+      providerContext.setPhase('completed');
       append({ role: 'system', text: steerStatusMessage(res.status), intent: 'success' });
       onSteered?.();
     } catch (err) {
-      append({ role: 'system', text: errText(err), intent: 'error' });
+      append({
+        role: 'system',
+        text: providerContext.handleInvocationError(err)
+          ? 'The AI provider changed. Review the updated provider and send again.'
+          : errText(err),
+        intent: 'error',
+      });
     } finally {
       setBusy(false);
     }
@@ -217,16 +232,19 @@ export function SteerChatPanel({ runId, canSteer = true, onSteered }: SteerChatP
           }}
         />
         <div className={styles.actions}>
-          <Button
-            appearance="primary"
-            size="small"
-            icon={<SendRegular />}
-            disabled={busy || !canSteer || !text.trim()}
-            onClick={() => void send()}
-            data-testid="steer-chat-send"
-          >
-            Send
-          </Button>
+          <AiExecutionProviderHint context={providerContext.context}>
+            <Button
+              appearance="primary"
+              size="small"
+              icon={<SendRegular />}
+              disabled={busy || !canSteer || !text.trim()
+                || providerContext.loading || !providerContext.available}
+              onClick={() => void send()}
+              data-testid="steer-chat-send"
+            >
+              Send
+            </Button>
+          </AiExecutionProviderHint>
           <div className={styles.spacer} />
           <Button
             appearance="subtle"
@@ -241,6 +259,7 @@ export function SteerChatPanel({ runId, canSteer = true, onSteered }: SteerChatP
           {busy && <Spinner size="extra-tiny" aria-label="Steering" />}
         </div>
       </div>
+      <AiProviderChangeAnnouncement message={providerContext.announcement} />
     </div>
   );
 }

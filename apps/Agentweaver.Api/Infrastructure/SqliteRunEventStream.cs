@@ -117,6 +117,53 @@ public sealed class SqliteRunEventStream : IRunEventStream
         return ValueTask.FromResult(sequence);
     }
 
+    public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
+        string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
+    {
+        if (runStore is not RunActiveClaimGuardedRunStore guarded)
+            throw new InvalidOperationException("Conditional SQLite events require the guarded run store.");
+
+        var recorded = new List<RunEvent>();
+        await guarded.TryWhileRunActiveAsync(RunId.Parse(runId), () =>
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            using var tx = connection.BeginTransaction();
+            foreach (var evt in events)
+            {
+                ct.ThrowIfCancellationRequested();
+                using var cmd = connection.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText = """
+                    INSERT INTO "RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
+                    SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $type, $payload, $createdAt
+                    FROM "RunEvents" WHERE "RunId" = $runId
+                    RETURNING "Sequence";
+                    """;
+                cmd.Parameters.AddWithValue("$runId", runId);
+                cmd.Parameters.AddWithValue("$type", evt.Type);
+                cmd.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(evt.Payload));
+                cmd.Parameters.AddWithValue("$createdAt",
+                    evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
+                recorded.Add(evt with { Sequence = Convert.ToInt32(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) });
+            }
+            ct.ThrowIfCancellationRequested();
+            tx.Commit();
+            return Task.CompletedTask;
+        }, ct).ConfigureAwait(false);
+
+        lock (_channelsGate)
+        {
+            if (recorded.Count > 0 && !_completedRuns.ContainsKey(runId))
+            {
+                var channel = _channels.GetOrAdd(runId, _ => CreateChannel());
+                foreach (var evt in recorded)
+                    channel.Writer.TryWrite(evt);
+            }
+        }
+        return recorded;
+    }
+
     /// <inheritdoc />
     public async IAsyncEnumerable<RunEvent> SubscribeAsync(
         string runId, int fromSequence = 0, [EnumeratorCancellation] CancellationToken ct = default)

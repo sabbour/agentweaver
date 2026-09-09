@@ -58,6 +58,7 @@ public sealed class CoordinatorAutopilot : ICoordinatorAutopilot
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<CoordinatorAutopilot> _logger;
     private readonly string _defaultCopilotModel;
+    private readonly IModelInvocationGuard? _modelInvocationGuard;
 
     public CoordinatorAutopilot(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -71,7 +72,8 @@ public sealed class CoordinatorAutopilot : ICoordinatorAutopilot
         IRunStore runStore,
         IServiceScopeFactory scopeFactory,
         ILoggerFactory loggerFactory,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IModelInvocationGuard? modelInvocationGuard = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
@@ -86,6 +88,7 @@ public sealed class CoordinatorAutopilot : ICoordinatorAutopilot
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<CoordinatorAutopilot>();
         _defaultCopilotModel = configuration["Providers:GitHubCopilot:Model"] ?? CoordinatorModelDefaults.DefaultCopilotModel;
+        _modelInvocationGuard = modelInvocationGuard;
     }
 
     /// <inheritdoc />
@@ -200,7 +203,9 @@ public sealed class CoordinatorAutopilot : ICoordinatorAutopilot
                 _sandboxPolicyStore,
                 _approvalStore,
                 _toolApprovalGate,
-                _loggerFactory.CreateLogger<CopilotAIAgent>());
+                _loggerFactory.CreateLogger<CopilotAIAgent>(),
+                modelInvocationGuard: _modelInvocationGuard);
+            agent.ConfigureProviderBoundary(ModelSource.GitHubCopilot, null);
 
             await agent.SetupAsync(
                 workingDirectory: coordinatorRun.RepositoryPath,

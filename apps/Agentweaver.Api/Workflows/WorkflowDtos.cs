@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Api.Contracts;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -224,6 +225,8 @@ public sealed record GenerateWorkflowResponse
     [JsonPropertyName("mode")] public string Mode { get; init; } = "create";
     [JsonPropertyName("base_workflow_id")] public string? BaseWorkflowId { get; init; }
     [JsonPropertyName("base_workflow_is_built_in")] public bool BaseWorkflowIsBuiltIn { get; init; }
+    [JsonPropertyName("ai_execution_context")]
+    public AiExecutionContextResponse? AiExecutionContext { get; init; }
 }
 
 /// <summary>Maps the workflow domain model to API DTOs (server-side only, Principles III/IV).</summary>

@@ -61,6 +61,7 @@ public sealed class RunRetryTests : IDisposable
         var source = await SeedRunAsync(
             RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
             agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: ProjectId.Parse(projectId));
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
 
         var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
@@ -104,6 +105,7 @@ public sealed class RunRetryTests : IDisposable
         // The original run was launched with auto-approve + autopilot enabled.
         var runOptions = _factory.Services.GetRequiredService<IRunOptionsStore>();
         runOptions.Set(source.Id.ToString(), new RunOptions(AutoApproveTools: true, Autopilot: true));
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
 
         var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "no work plan exists, so the retry mints a fresh coordinator run");
@@ -132,18 +134,33 @@ public sealed class RunRetryTests : IDisposable
             RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
             agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: projectId, factory: factory);
         var (planId, subtaskId) = await SeedRecoverablePlanAsync(source, factory);
+        if (!expiredSnapshot)
+        {
+            await factory.PrepareAiExecutionAsync(
+                owner, "orchestration", projectId.ToString(), source.Id.ToString());
+        }
         await SeedUnattendedCopilotSnapshotAsync(source, expiredSnapshot, revokeBinding: !expiredSnapshot, factory: factory);
+        if (expiredSnapshot)
+        {
+            await factory.PrepareAiExecutionAsync(
+                owner, "orchestration", projectId.ToString(), source.Id.ToString());
+        }
 
         var resp = await owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
 
         resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.EnumerateObject().Select(property => property.Name).Should().BeEquivalentTo(["code", "message", "action"]);
-        body.GetProperty("code").GetString().Should().Be(ModelProviderConnectionRequirement.RequirementCode);
-        body.GetProperty("message").GetString().Should().Be(ModelProviderConnectionRequirement.RequirementMessage);
+        var expectedRequirement = expiredSnapshot
+            ? ModelProviderConnectionRequirement.ForProject(projectId)
+            : ModelProviderConnectionRequirement.ForPlatformDefault();
+        body.EnumerateObject().Select(property => property.Name)
+            .Should().BeEquivalentTo(["code", "message", "action"]);
+        body.GetProperty("code").GetString().Should().Be(expectedRequirement.Code);
+        body.GetProperty("message").GetString().Should().Be(expectedRequirement.Message);
         body.GetProperty("action").GetProperty("type").GetString()
-            .Should().Be(ModelProviderConnectionAction.ConfigureProjectModelProvider);
-        body.GetProperty("action").GetProperty("project_id").GetString().Should().Be(projectId.ToString());
+            .Should().Be(expectedRequirement.Action.Type);
+        body.GetProperty("action").GetProperty("project_id").GetString()
+            .Should().Be(expectedRequirement.Action.ProjectId);
         body.ToString().Should().NotContainAny("credential", "snapshot", "binding");
 
         // Capability fencing happens before recovery can reopen the run stream, reset the failed
@@ -174,6 +191,8 @@ public sealed class RunRetryTests : IDisposable
         await SeedRecoverablePlanAsync(source, factory);
         await SeedUnattendedCopilotSnapshotAsync(
             source, expiredSnapshot: false, revokeBinding: false, factory: factory);
+        await factory.PrepareAiExecutionAsync(
+            owner, "orchestration", projectId.ToString(), source.Id.ToString());
 
         var resp = await owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
 
@@ -188,6 +207,60 @@ public sealed class RunRetryTests : IDisposable
     }
 
     [Fact]
+    public async Task FreshCoordinatorRetry_IgnoresStaleSourceSnapshotAndUsesAcceptedCurrentProvider()
+    {
+        using var factory = CoordinatorWebApplicationFactory.CreatePodPerRun();
+        using var owner = factory.CreateOwnerClient();
+        var projectId = ProjectId.Parse(await CreateProjectAsync(factory, owner));
+        var source = await SeedRunAsync(
+            RunStatus.Failed,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            agentName: "Coordinator",
+            origin: RunOrigin.Interactive,
+            projectId: projectId,
+            factory: factory);
+        await SeedUnattendedCopilotSnapshotAsync(
+            source,
+            expiredSnapshot: false,
+            revokeBinding: true,
+            factory: factory);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+            {
+                Id = SnapshotRef.Create().Value,
+                ProjectId = projectId.ToString(),
+                EntraObjectId = CoordinatorWebApplicationFactory.OwnerUser,
+                CredentialReference = "copilot-app-project-retry-replacement",
+                CredentialVersion = "replacement-version",
+                GrantDigest = "replacement-digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            await scope.ServiceProvider.GetRequiredService<ISecretStore>().SetSecretAsync(
+                "copilot-app-project-retry-replacement",
+                """{"status":"signed-in","accessToken":"replacement-token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"replacement-bot"}""");
+            await db.SaveChangesAsync();
+        }
+        await factory.PrepareAiExecutionAsync(
+            owner,
+            "orchestration",
+            projectId.ToString(),
+            source.Id.ToString());
+
+        var resp = await owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+
+        var responseBody = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(HttpStatusCode.Created, responseBody);
+        var body = JsonSerializer.Deserialize<JsonElement>(responseBody);
+        body.GetProperty("run_id").GetString().Should().NotBe(source.Id.ToString());
+        body.GetProperty("retried_from").GetString().Should().Be(source.Id.ToString());
+        (await factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(source.Id))!.Status
+            .Should().Be(RunStatus.Failed);
+    }
+
+    [Fact]
     public async Task InPlaceCoordinatorRetry_InApiBlankProject_ResumesWithoutAgentHostCapability()
     {
         var projectId = ProjectId.Parse(await CreateProjectAsync());
@@ -195,6 +268,8 @@ public sealed class RunRetryTests : IDisposable
             RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
             agentName: "Coordinator", origin: RunOrigin.Interactive, projectId: projectId);
         await SeedRecoverablePlanAsync(source);
+        await _factory.PrepareAiExecutionAsync(
+            _owner, "orchestration", projectId.ToString(), source.Id.ToString());
 
         var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
 
@@ -233,6 +308,7 @@ public sealed class RunRetryTests : IDisposable
         var source = await SeedRunAsync(
             RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
             agentName: "Coordinator", origin: RunOrigin.BacklogPickup, projectId: pid);
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
 
         var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
@@ -262,6 +338,16 @@ public sealed class RunRetryTests : IDisposable
             RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
             agentName: null, origin: RunOrigin.Interactive, projectId: pid,
             repoPath: repo, branch: "main", task: "implement feature X", modelId: "gpt-4o");
+        await _factory.PrepareAiExecutionAsync(_owner, "agent_turn", pid.ToString(), source.Id.ToString());
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            (await scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>()
+                    .PrepareForLaunchAsync(
+                        source,
+                        CancellationToken.None,
+                        PlatformDefaultCopilotBindingRecord.SingletonId))
+                .Should().BeTrue("a retry source represents a run that completed launch preparation");
+        }
 
         var resp = await _owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
         resp.StatusCode.Should().Be(HttpStatusCode.Created);

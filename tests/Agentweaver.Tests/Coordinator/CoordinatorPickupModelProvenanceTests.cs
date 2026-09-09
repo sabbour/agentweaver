@@ -15,9 +15,8 @@ namespace Agentweaver.Tests.Coordinator;
 /// Regression for the hardcoded <c>Run.ModelSource = ModelSource.GitHubCopilot</c> at every
 /// coordinator run insert site: the row (and therefore the UI) always claimed "GitHub Copilot" even
 /// when <see cref="EffectiveModelProviderResolver"/> had resolved a deployment-wide BYOK provider.
-/// The reserved-pickup path must persist the resolver's ACTUAL source, and the run's event stream
-/// must carry the <c>run.model_provider_resolved</c> provenance a successful run previously left
-/// nowhere at all.
+/// The reserved-pickup path must persist the resolver's actual source while failing a Copilot-only
+/// orchestration truthfully before it can emit "used" provider provenance.
 /// </summary>
 [Collection("CoordinatorOutcomeSpec")]
 public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
@@ -38,7 +37,7 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
     }
 
     [Fact]
-    public async Task Pickup_run_persists_the_resolved_byok_source_and_emits_provenance()
+    public async Task Pickup_run_with_byok_fails_truthfully_without_emitting_used_provenance()
     {
         var projectId = await CreateProjectAsync();
         var pid = ProjectId.Parse(projectId);
@@ -90,13 +89,17 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         run.Should().NotBeNull();
         run!.ModelSource.Should().Be(ModelSource.Byok,
             "the persisted source must be the resolver's actual result, never a hardcoded Copilot literal");
+        run.Status.Should().Be(RunStatus.Failed);
+        run.Result.Should().Be("operation_requires_github_copilot");
 
-        var provenance = await PollForProvenanceAsync(claimed.RunId!.Value.ToString());
-        provenance.Should().NotBeNull(
-            "a successful run must leave durable provenance for the provider that served it");
-        provenance!.Value.GetProperty("providerKind").GetString()
-            .Should().Be(EffectiveModelProviderProvenance.KindByok);
-        provenance.Value.GetProperty("modelSource").GetString().Should().Be("byok");
+        var eventsResponse = await _owner.GetAsync($"/api/runs/{claimed.RunId.Value}/events");
+        eventsResponse.EnsureSuccessStatusCode();
+        var events = await eventsResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var provenance = EnumerateEvents(events).FirstOrDefault(e =>
+            e.TryGetProperty("type", out var type)
+            && type.GetString() == EventTypes.RunModelProviderResolved);
+        provenance.ValueKind.Should().Be(JsonValueKind.Undefined,
+            "a Copilot-only operation blocked before model invocation must not claim that BYOK was used");
     }
 
     [Fact]

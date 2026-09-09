@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
@@ -571,7 +572,8 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             _memoryServiceProvider,
             new TestHostApplicationLifetime(),
             NullLogger<CoordinatorAssemblyService>.Instance,
-            configuration);
+            configuration,
+            providerBoundaryResolver: new FixedRunModelProviderBoundaryResolver());
 
     private async Task<Run> SeedTerminalCoordinatorRunAsync()
     {
@@ -791,6 +793,16 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             CollectiveMergeRequest request,
             CancellationToken ct) =>
             throw new NotImplementedException();
+    }
+
+    private sealed class FixedRunModelProviderBoundaryResolver : IRunModelProviderBoundaryResolver
+    {
+        public Task<ResolvedRunModelProviderBoundary> ResolveDurableProviderBoundaryAsync(
+            Run run,
+            CancellationToken ct) =>
+            Task.FromResult(new ResolvedRunModelProviderBoundary(
+                new EffectiveModelProviderResult.PlatformGitHubCopilot("test-binding", null),
+                ByokProviderFingerprint: null));
     }
 
     private sealed class ThrowingWorktreeOps : IWorktreeOperations

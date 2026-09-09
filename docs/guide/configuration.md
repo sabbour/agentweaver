@@ -85,11 +85,17 @@ and JWKS.
 
 Anonymous dynamic registration accepts public native clients only. It permits
 tightly formed reverse-domain private-use callbacks and HTTP callbacks on literal
-`127.0.0.1` or `[::1]`; it never accepts HTTPS callbacks. HTTPS redirect
-registration is available only through the explicitly administered static-client
-configuration. Hostnames such as `localhost`, alternate numeric loopback forms,
+`127.0.0.1`; it never accepts HTTPS callbacks. HTTPS redirect registration is
+available only through the explicitly administered static-client configuration and
+requires a CSP-compatible DNS or IPv4 origin. DNS names are validated after IDN
+conversion and cannot contain empty, underscore, wildcard, or trailing-dot labels.
+IPv6 literal callback hosts are rejected because strict browser CSP cannot safely
+express them. Hostnames such as `localhost`, alternate numeric loopback forms,
 wildcards, prefix matching, fragments, userinfo, client secrets, and metadata URL
-fetching are rejected.
+fetching are rejected. A native client may register an IPv4 loopback callback without
+a port and use a fresh ephemeral port in the authorization request as defined by RFC
+8252; OpenIddict validates that substitution before Agentweaver derives the consent
+page's callback CSP source from the validated request.
 
 #### Repo App user authorization
 
@@ -119,6 +125,10 @@ human Entra subject as authorization begin.
 
 The API identity reads the Repo App PEM and webhook secrets through its configured secret
 store; in hosted deployments those names resolve only through the API's Key Vault access.
+The deployment supplies the logical PEM name `repo-app-private-key`. The production
+`KeyVaultSecretStore` maps that logical name to the physical Key Vault secret
+`ghtok-repo-app-private-key`; do not set the application configuration to the prefixed
+physical name because the store would sanitize it again.
 The PEM, App JWT, and installation access token are never configuration values, persisted
 records, logs, or API responses. Configure GitHub's single Repo App webhook to the
 App-level receiver implemented by the API; do not configure per-project webhook URLs.
@@ -127,7 +137,7 @@ App-level receiver implemented by the API; do not configure per-project webhook 
 | --- | --- | --- |
 | `Auth:RepoApp:AppId` | none | Numeric Repo App ID used as the App-JWT issuer |
 | `Auth:RepoApp:Slug` | none | Public GitHub App slug used to build the Project Settings installation deep link |
-| `Auth:RepoApp:PrivateKeySecretName` | none | Secret-store name of the Repo App PEM, readable only by the API |
+| `Auth:RepoApp:PrivateKeySecretName` | none | Logical secret-store name of the Repo App PEM. Hosted deployments set `repo-app-private-key`, which maps to physical Key Vault secret `ghtok-repo-app-private-key` |
 | `Auth:RepoApp:WebhookSecretName` | none | Secret-store name of the active webhook HMAC secret |
 | `Auth:RepoApp:PreviousWebhookSecretName` | none | Secret-store name of the prior HMAC secret during a rotation |
 | `Auth:RepoApp:PreviousWebhookSecretExpiresAt` | none | UTC expiration after which the previous secret is rejected |
@@ -142,6 +152,85 @@ permission expansion or reduction invalidates the affected unattended grant and 
 the App permissions and wait for the server to verify a new grant.
 Installation tokens are scoped to Agentweaver's server-declared unattended repository
 permissions and never inherit unrelated installation permissions.
+
+For Azure provisioning, pass the PEM by file so its contents never appear in a command
+argument or params-file value:
+
+```powershell
+npm run azure:provision-infra -- --repo-app-private-key-file C:\secure\agentweaver-repo-app.pem
+```
+
+The file must contain exactly one unencrypted PKCS#1 `RSA PRIVATE KEY` or
+PKCS#8 `PRIVATE KEY` PEM block. These are the private-key encodings accepted by
+the API's .NET `RSA.ImportFromPem` consumer. Concatenated keys, multiple PEM
+blocks, public-key-only input, other key algorithms, encrypted keys, malformed
+PEM, empty files, trailing content, and unreadable files are rejected.
+Provisioning performs this local validation immediately after arguments and
+params are parsed, before variable discovery, image work, cluster creation, or
+any Azure collaborator. It rejects source symlink, junction, and reparse-path
+ambiguity where the platform exposes it. The validated bytes are copied to an
+exclusively created access-restricted temporary file; only that file is passed
+to Azure, and it is removed on success or failure.
+
+You can also set `REPO_APP_PRIVATE_KEY_FILE` in the environment or params file for this
+one import only. The path is resolved by the deployment process, and the file content is
+imported as `ghtok-repo-app-private-key`. This explicit import replaces the canonical
+value, so run it from one serialized operator or CI step. After the command reports a
+successful canonical import, unset `REPO_APP_PRIVATE_KEY_FILE` in the environment.
+Remove it from every params file used for the import. Then delete the PEM. A stale
+setting makes a future deploy try the deleted file before it checks the valid canonical
+secret.
+
+Automatic migration from legacy physical secret `repo-app-private-key` is disabled.
+Azure Key Vault secret set has no create-only condition that protects the canonical
+value across deployment runners. If only the legacy secret exists, provisioning and
+deployment stop with these migration instructions:
+
+```powershell
+$vaultName = "your-vault-name"
+$keyFile = "C:\secure\agentweaver-repo-app.pem"
+az keyvault secret download --vault-name $vaultName --name repo-app-private-key `
+  --file $keyFile --encoding utf-8 --overwrite
+npm run azure:provision-infra -- --repo-app-private-key-file $keyFile
+Remove-Item Env:REPO_APP_PRIVATE_KEY_FILE -ErrorAction SilentlyContinue
+# Remove REPO_APP_PRIVATE_KEY_FILE from any params file used for this import.
+Remove-Item $keyFile
+```
+
+Use a protected local path and serialize the explicit import in CI. After the canonical
+import succeeds, unset the environment variable. Remove the params-file property. Then
+remove the PEM. Provisioning and deployment also stop before applying manifests when
+neither secret exists or Key Vault access cannot be verified.
+`npm run azure:verify` checks the canonical physical secret again after deployment.
+
+A soft-deleted canonical `ghtok-repo-app-private-key` is different from a
+missing secret: restoring it can reactivate an old credential. Normal
+provision and deploy commands therefore fail closed and never call Azure
+recovery. Use `--recover-repo-app-private-key` only as an explicit, auditable
+operator action:
+
+1. Revoke the corresponding old private key in the GitHub App settings, or
+   suspend the Agentweaver API workload and its GitHub access before recovery.
+2. Generate and protect the replacement GitHub App private-key file. Serialize
+   the operation so no other deployment can write the canonical secret.
+3. Run one deployment with both the recovery action and the one-shot replacement:
+
+   ```powershell
+   npm run azure:provision-infra -- --recover-repo-app-private-key `
+     --repo-app-private-key-file C:\secure\agentweaver-repo-app.pem
+   ```
+
+4. Confirm the canonical import and run `npm run azure:verify` before restoring
+   suspended workload access. If the old GitHub credential was not revoked
+   because intentional recovery was required, keep workloads suspended until
+   that credential's access has been reviewed.
+5. Unset `REPO_APP_PRIVATE_KEY_FILE`, remove it from every params file used for
+   the operation, and delete the protected local PEM.
+
+If Key Vault purge protection is disabled and policy permits purging the
+soft-deleted secret, an operator can purge it and perform a normal replacement
+instead. Do not recover an old credential merely to make a routine deployment
+continue.
 
 ##### Required manual step: register the installation Setup URL
 

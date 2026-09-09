@@ -1,9 +1,15 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using System.Net.Http.Json;
+using System.Text.Json;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Helpers;
@@ -66,6 +72,84 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
 
     public HttpClient CreateOtherClient() => CreateClientWithKey(OtherApiKey);
 
+    public async Task PrepareAiExecutionAsync(
+        HttpClient client,
+        string operation,
+        string? projectId = null,
+        string? runId = null,
+        bool ensureProvider = true)
+    {
+        if (ensureProvider)
+            await EnsurePlatformProviderAsync(projectId);
+        var response = await client.PostAsJsonAsync(
+            "/api/ai/execution-context",
+            new { operation, project_id = projectId, run_id = runId });
+        response.EnsureSuccessStatusCode();
+        var context = await response.Content.ReadFromJsonAsync<AiExecutionContextResponse>()
+            ?? throw new InvalidOperationException("AI execution context response was empty.");
+        var providerKey = context.ExecutionKey
+            ?? throw new InvalidOperationException(
+                $"AI execution context did not return a provider key ({context.EffectiveModelProvider?.UnavailableReason ?? "unknown"}).");
+        client.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
+        client.DefaultRequestHeaders.Add(AiExecutionPlanHeaders.ProviderKey, providerKey);
+    }
+
+    public async Task ChangePlatformProviderIdentityAsync(string githubLogin)
+    {
+        await EnsurePlatformProviderAsync(projectId: null);
+        await using var scope = Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var binding = await db.PlatformDefaultCopilotBindings.SingleAsync();
+        binding.CredentialVersion = $"coordinator-test-version-{Guid.NewGuid():N}";
+        await db.SaveChangesAsync();
+        var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+        await secrets.SetSecretAsync(
+            binding.CredentialReference,
+            JsonSerializer.Serialize(new
+            {
+                status = "signed-in",
+                accessToken = "coordinator-test-token",
+                expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                githubLogin,
+            }));
+    }
+
+    private async Task EnsurePlatformProviderAsync(string? projectId)
+    {
+        await using var scope = Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        if (!string.IsNullOrWhiteSpace(projectId) &&
+            !await db.Projects.AnyAsync(project => project.ProjectId == projectId))
+        {
+            db.Projects.Add(new ProjectRecord { ProjectId = projectId });
+        }
+
+        var credentialReference = "copilot-app-platform-default-coordinator-test";
+        var binding = await db.PlatformDefaultCopilotBindings.SingleOrDefaultAsync();
+        if (binding is null)
+        {
+            binding = new PlatformDefaultCopilotBindingRecord
+            {
+                Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+            };
+            db.PlatformDefaultCopilotBindings.Add(binding);
+        }
+
+        binding.EntraObjectId = "coordinator-test-platform-admin";
+        binding.CredentialReference = credentialReference;
+        binding.CredentialVersion = "coordinator-test-version";
+        binding.GrantDigest = "coordinator-test-grant";
+        binding.Status = GitHubBindingStatus.Active;
+        binding.BoundAt = DateTimeOffset.UtcNow;
+        binding.DeactivatedAt = null;
+        await db.SaveChangesAsync();
+
+        var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
+        await secrets.SetSecretAsync(
+            credentialReference,
+            """{"status":"signed-in","accessToken":"coordinator-test-token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"coordinator-test-bot"}""");
+    }
+
     /// <summary>
     /// The hermetic reply classifier wired into this host. Tests may set its <c>Override</c> to force
     /// a specific confirm/revise/null result (e.g. to prove fail-closed behavior on model outage).
@@ -122,6 +206,7 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
                 ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
                 ["RunBounds:MaxSteps"]                    = "50",
                 ["RunBounds:MaxMinutes"]                  = "10",
+                ["Coordinator:OutcomeSpecDraftTimeoutSeconds"] = "1",
                 // Phase 1 + decompose/persist suite: keep child dispatch off so the confirm/decline
                 // lifecycle and the work-plan contract stay deterministic in this hermetic host
                 // (non-git workspaces + signed-out tokens cannot spawn real child runs). The
@@ -137,8 +222,8 @@ public sealed class CoordinatorWebApplicationFactory : WebApplicationFactory<Pro
             // drafting step never makes a live model call. The boilerplate spec lives in the test
             // project, not production (production fails the run when the model is unavailable).
             RemoveService<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(services);
-            services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(
-                new FakeCoordinatorSpecDrafter());
+            services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter>(sp =>
+                new FakeCoordinatorSpecDrafter(sp.GetRequiredService<RunStreamStore>()));
 
             // Replace the production Copilot-backed reply classifier with a deterministic, hermetic
             // fake so the confirm/revise routing at the outcome-spec gate never makes a live model

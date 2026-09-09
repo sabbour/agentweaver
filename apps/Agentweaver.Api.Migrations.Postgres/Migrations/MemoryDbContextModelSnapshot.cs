@@ -92,6 +92,9 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTimeOffset?>("ConsumedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("ContinuationDecision")
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -607,6 +610,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("TaskId")
                         .HasColumnType("text")
                         .HasColumnName("task_id");
+
+                    b.Property<string>("AiExecutionProviderKey")
+                        .HasColumnType("text")
+                        .HasColumnName("ai_execution_provider_key");
 
                     b.Property<DateTimeOffset?>("ArchivedAt")
                         .HasColumnType("timestamp with time zone")

@@ -43,8 +43,11 @@ public static class SandboxEndpoints
             if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
                 return denied;
 
-            return await StartPreviewForRunAsync(
+            var result = await StartPreviewForRunAsync(
                 runId, request.TargetPort, run, previewService, portForwardService, streamStore, logger, ct);
+            if (previewService.Enabled && result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK })
+                EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.", logger);
+            return result;
         });
 
         // POST /api/runs/{runId}/sandbox/preview
@@ -100,12 +103,14 @@ public static class SandboxEndpoints
                 var reason = timedOut ? "approval_timed_out" : "approval_denied";
                 EmitPreviewFailure(
                     streamStore,
+                    logger,
                     runId,
                     request.TargetPort,
                     reason,
                     timedOut
                         ? "Preview approval expired. Retry approval without restarting the run."
                         : "Preview approval was denied.",
+                    previewRunnerSessionId: request.PreviewRunnerSessionId,
                     approvalRequestId: outcome.RequestId,
                     retryAvailable: timedOut,
                     expiredAt: outcome.ExpiresAt);
@@ -114,65 +119,62 @@ public static class SandboxEndpoints
                     statusCode: StatusCodes.Status403Forbidden);
             }
 
-            // Approval can outlive both the run and its preview process. Check the authoritative
-            // AgentHost session immediately before creating Gateway resources, so no dead URL is published.
-            var currentRun = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
-            if (currentRun is null) return Results.NotFound();
-            if (EndpointHelpers.IsTerminal(currentRun.Status))
+            var runCt = streamStore.Get(runId)?.CompletionToken ?? CancellationToken.None;
+            using var publicationLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, runCt);
+            var published = false;
+            try
             {
-                const string message = "Preview session has exited; a preview URL cannot be published for a terminal run.";
-                EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
+                if (!await IsPreviewRunActiveAsync(runId, runStore, publicationLifetime.Token).ConfigureAwait(false))
+                {
+                    const string message = "Preview session has exited; a preview URL cannot be published for a terminal run.";
+                    EmitPreviewFailure(streamStore, logger, runId, request.TargetPort, "preview_session_exited", message,
+                        previewRunnerSessionId: request.PreviewRunnerSessionId);
+                    return Results.Conflict(new { error = message });
+                }
+
+                if (!string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId)
+                    && !await IsPreviewProcessHealthyAsync(
+                        runId, BearerToken(httpContext), request.PreviewRunnerSessionId,
+                        request.TargetPort, previewRunnerClient, publicationLifetime.Token).ConfigureAwait(false))
+                {
+                    const string message = "Preview session has exited or is unreachable; a preview URL cannot be published.";
+                    EmitPreviewFailure(streamStore, logger, runId, request.TargetPort, "preview_session_exited", message,
+                        previewRunnerSessionId: request.PreviewRunnerSessionId);
+                    return Results.Conflict(new { error = message });
+                }
+
+                var result = await StartPreviewForRunAsync(
+                    runId, request.TargetPort, run, previewService, portForwardService, streamStore, logger,
+                    publicationLifetime.Token, request.PreviewRunnerSessionId, runStore).ConfigureAwait(false);
+                published = result is IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK };
+                if (published && previewService.Enabled)
+                    EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.", logger);
+                return result;
+            }
+            catch (OperationCanceledException) when (runCt.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                const string message = "The run ended before preview publication completed.";
+                EmitPreviewFailure(streamStore, logger, runId, request.TargetPort, "registration_failed", message,
                     previewRunnerSessionId: request.PreviewRunnerSessionId);
                 return Results.Conflict(new { error = message });
             }
-
-            if (!string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId))
+            finally
             {
-                PreviewRunnerHealthResult health;
-                try
+                if (!published && !string.IsNullOrWhiteSpace(request.PreviewRunnerSessionId))
                 {
-                    health = await previewRunnerClient.HealthCheckAsync(
-                        runId,
-                        BearerToken(httpContext),
-                        request.PreviewRunnerSessionId,
-                        request.TargetPort,
-                        "/",
-                        ct).ConfigureAwait(false);
-                }
-                catch (PreviewRunnerHttpException)
-                {
-                    const string message = "Preview session has exited or is unreachable; a preview URL cannot be published.";
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                     try
                     {
                         await previewRunnerClient.StopProcessAsync(
-                            runId, BearerToken(httpContext), request.PreviewRunnerSessionId, "preview_session_exited", ct)
-                            .ConfigureAwait(false);
+                            runId, BearerToken(httpContext), request.PreviewRunnerSessionId,
+                            "preview_not_published", cleanup.Token).ConfigureAwait(false);
                     }
-                    catch (PreviewRunnerHttpException) { }
-                    EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
-                        previewRunnerSessionId: request.PreviewRunnerSessionId);
-                    return Results.Conflict(new { error = message });
-                }
-
-                if (!health.Healthy)
-                {
-                    const string message = "Preview session is no longer healthy; a preview URL cannot be published.";
-                    try
+                    catch (Exception ex)
                     {
-                        await previewRunnerClient.StopProcessAsync(
-                            runId, BearerToken(httpContext), request.PreviewRunnerSessionId, "preview_session_exited", ct)
-                            .ConfigureAwait(false);
+                        logger.LogWarning(ex, "Failed to stop unpublished preview process for run {RunId}", runId);
                     }
-                    catch (PreviewRunnerHttpException) { }
-                    EmitPreviewFailure(streamStore, runId, request.TargetPort, "preview_session_exited", message,
-                        previewRunnerSessionId: request.PreviewRunnerSessionId);
-                    return Results.Conflict(new { error = message });
                 }
             }
-
-            return await StartPreviewForRunAsync(
-                runId, request.TargetPort, currentRun, previewService, portForwardService, streamStore, logger, ct,
-                request.PreviewRunnerSessionId);
         });
 
         // POST /api/runs/{runId}/sandbox/preview-approvals/{requestId}/retry
@@ -210,6 +212,8 @@ public static class SandboxEndpoints
 
             RetryablePreviewContext retry;
             PreviewApprovalAttempt attempt;
+            // Workflow registry entries can end while the run remains active.
+            var runCt = streamStore.Get(runId)?.CompletionToken ?? CancellationToken.None;
             try
             {
                 var currentRun = await runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
@@ -231,7 +235,7 @@ public static class SandboxEndpoints
                 attempt = await previewGate.BeginApprovalAsync(
                     runId,
                     retry.TargetPort,
-                    CancellationToken.None,
+                    runCt,
                     retry.WorkPlanId,
                     retry.TreeHash,
                     retryOfRequestId: requestId).ConfigureAwait(false);
@@ -254,7 +258,8 @@ public static class SandboxEndpoints
                 turnTokens,
                 secretStore,
                 runStore,
-                logger);
+                logger,
+                runCt);
 
             return Results.Accepted(
                 $"/api/runs/{runId}/events",
@@ -402,6 +407,9 @@ public static class SandboxEndpoints
     /// approval gate are the caller's responsibility — by the time this runs the request is
     /// already authorized/approved.
     /// </summary>
+    /// <param name="runStore">
+    /// Required for run-bound publication. Only intentional operator post-run previews omit it.
+    /// </param>
     internal static async Task<IResult> StartPreviewForRunAsync(
         string runId,
         int targetPort,
@@ -411,8 +419,20 @@ public static class SandboxEndpoints
         RunStreamStore streamStore,
         ILogger logger,
         CancellationToken ct,
-        string? previewRunnerSessionId = null)
+        string? previewRunnerSessionId = null,
+        IRunStore? runStore = null)
     {
+        // Only agent/deterministic publication is run-bound. Operator previews may start post-run.
+        using var publicationLifetime = runStore is null ? null : CancellationTokenSource.CreateLinkedTokenSource(
+            ct, streamStore.Get(runId)?.CompletionToken ?? CancellationToken.None);
+        ct = publicationLifetime?.Token ?? ct;
+        if (runStore is not null && !await IsPreviewRunActiveAsync(runId, runStore, ct).ConfigureAwait(false))
+        {
+            const string message = "The run became terminal before preview publication started.";
+            EmitPreviewFailure(streamStore, logger, runId, targetPort, "registration_failed", message, previewRunnerSessionId);
+            return Results.Conflict(new { error = message });
+        }
+
         // ── Gateway-direct preview path (replica-safe) ───────────────────────────────
         if (previewService.Enabled)
         {
@@ -439,10 +459,17 @@ public static class SandboxEndpoints
                     started_at = preview.StartedAt,
                     timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
                 };
-                streamStore.Get(runId)?.RecordNext(EventTypes.SandboxPreviewReady, readyPayload);
-                streamStore.Get(runId)?.RecordNext(EventTypes.CoordinatorPreviewReady, readyPayload);
-                EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.");
 
+                if (!await PublishPreviewReadyAsync(
+                    preview, readyPayload, previewService, streamStore, runStore, ct).ConfigureAwait(false))
+                {
+                    const string message = "The run became terminal before preview publication completed.";
+                    EmitPreviewFailure(
+                        streamStore, logger, runId, targetPort, "registration_failed", message, previewRunnerSessionId);
+                    return Results.Conflict(new { error = message });
+                }
+
+                // Let callers retain the process before they report ancillary workflow diagnostics.
                 return Results.Ok(new
                 {
                     session_id    = preview.Token,
@@ -457,7 +484,9 @@ public static class SandboxEndpoints
 
             // Single-owner emission: the helper emitted nothing — this caller emits exactly one
             // preview_failed for the typed error and returns the matching HTTP status.
-            EmitPreviewFailure(streamStore, runId, targetPort, registration.Reason!, registration.Message!);
+            EmitPreviewFailure(
+                streamStore, logger, runId, targetPort, registration.Reason!, registration.Message!,
+                previewRunnerSessionId: previewRunnerSessionId);
             return registration.Status switch
             {
                 PreviewRegistrationStatus.PortNotAllowed => Results.BadRequest(new { error = registration.Message }),
@@ -503,6 +532,48 @@ public static class SandboxEndpoints
         });
     }
 
+    internal static async Task<bool> IsPreviewRunActiveAsync(
+        string runId, IRunStore runStore, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var run = await runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        return run is not null && !EndpointHelpers.IsTerminal(run.Status);
+    }
+
+    // Run-bound emitters must use conditional persistence, not a final status read followed by
+    // RecordNext. A remote replica can terminalize the run while an event append waits.
+    internal static async Task<bool> PublishPreviewReadyAsync(
+        PreviewSession preview, object payload, ISandboxPreviewService previewService,
+        RunStreamStore streams, IRunStore? runStore, CancellationToken ct)
+    {
+        var published = false;
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            if (runStore is not null)
+                published = await streams.TryRecordPreviewReadyAsync(
+                    preview.RunId, payload, runStore, ct).ConfigureAwait(false);
+            else
+            {
+                // Intentional operator publication may start after the run has ended.
+                var entry = streams.Get(preview.RunId);
+                entry?.RecordNext(EventTypes.SandboxPreviewReady, payload);
+                entry?.RecordNext(EventTypes.CoordinatorPreviewReady, payload);
+                published = true;
+            }
+            return published;
+        }
+        finally
+        {
+            if (!published)
+            {
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await previewService.StopPreviewAsync(preview.Token, cleanup.Token).ConfigureAwait(false);
+            }
+        }
+    }
+
     /// <summary>
     /// Lower-level Gateway-direct preview registration (spec-006 decouple-preview, BLOCKER 3). Runs
     /// the port-range guard + <see cref="ISandboxPreviewService.StartPreviewAsync"/> and returns a
@@ -539,6 +610,11 @@ public static class SandboxEndpoints
         {
             return PreviewRegistrationResult.Error(PreviewRegistrationStatus.Capacity, "capacity", ex.Message);
         }
+        catch (PreviewPublicationException ex)
+        {
+            return PreviewRegistrationResult.Error(
+                PreviewRegistrationStatus.Conflict, "publication_not_ready", ex.Message);
+        }
         catch (InvalidOperationException ex)
         {
             return PreviewRegistrationResult.Error(PreviewRegistrationStatus.Conflict, PreviewFailureReason(ex), ex.Message);
@@ -562,8 +638,25 @@ public static class SandboxEndpoints
             : null;
     }
 
+    internal static async Task<bool> IsPreviewProcessHealthyAsync(
+        string runId, string? bearer, string sessionId, int targetPort,
+        IPreviewRunnerHttpClient client, CancellationToken ct)
+    {
+        try
+        {
+            var health = await client.HealthCheckAsync(
+                runId, bearer, sessionId, targetPort, "/", ct).ConfigureAwait(false);
+            return health.Healthy && health.SessionId == sessionId && health.Port == targetPort;
+        }
+        catch (PreviewRunnerHttpException)
+        {
+            return false;
+        }
+    }
+
     private static void EmitPreviewFailure(
         RunStreamStore streamStore,
+        ILogger logger,
         string runId,
         int targetPort,
         string reason,
@@ -589,7 +682,7 @@ public static class SandboxEndpoints
             expired_at = expiredAt?.ToString("O"),
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         });
-        EmitPreviewWorkflowStep(streamStore, runId, "failed", message);
+        EmitPreviewWorkflowStep(streamStore, runId, "failed", message, logger);
     }
 
     private static async Task CompletePreviewRetryAsync(
@@ -604,12 +697,13 @@ public static class SandboxEndpoints
         Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry turnTokens,
         Agentweaver.Api.Auth.ISecretStore secretStore,
         IRunStore runStore,
-        ILogger logger)
+        ILogger logger,
+        CancellationToken ct)
     {
         try
         {
             var result = await attempt.Completion.ConfigureAwait(false);
-            var currentRun = await runStore.GetAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
+            var currentRun = await runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
             if (currentRun is null || EndpointHelpers.IsTerminal(currentRun.Status))
             {
                 await TryStopRetainedProcessAsync(
@@ -622,6 +716,7 @@ public static class SandboxEndpoints
                     logger).ConfigureAwait(false);
                 EmitPreviewFailure(
                     streamStore,
+                    logger,
                     runId,
                     retry.TargetPort,
                     "registration_failed",
@@ -631,6 +726,25 @@ public static class SandboxEndpoints
 
             if (result.Outcome == PreviewApprovalOutcome.Approved)
             {
+                if (!string.IsNullOrWhiteSpace(retry.PreviewRunnerSessionId))
+                {
+                    var bearer = await ResolveRetainedProcessBearerAsync(
+                        runId, turnTokens, secretStore).ConfigureAwait(false);
+                    if (!await IsPreviewProcessHealthyAsync(
+                        runId, bearer, retry.PreviewRunnerSessionId, retry.TargetPort,
+                        previewRunnerClient, ct).ConfigureAwait(false))
+                    {
+                        await TryStopRetainedProcessAsync(
+                            runId, retry.PreviewRunnerSessionId, "preview_session_exited",
+                            previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
+                        EmitPreviewFailure(
+                            streamStore, logger, runId, retry.TargetPort, "preview_session_exited",
+                            "Preview session has exited or is unreachable; a preview URL cannot be published.",
+                            retry.PreviewRunnerSessionId);
+                        return;
+                    }
+                }
+
                 var registrationResult = await StartPreviewForRunAsync(
                     runId,
                     retry.TargetPort,
@@ -639,10 +753,11 @@ public static class SandboxEndpoints
                     portForwardService,
                     streamStore,
                     logger,
-                    CancellationToken.None,
-                    retry.PreviewRunnerSessionId).ConfigureAwait(false);
-                if (registrationResult is not Microsoft.AspNetCore.Http.IStatusCodeHttpResult
-                    { StatusCode: StatusCodes.Status200OK })
+                    ct,
+                    retry.PreviewRunnerSessionId,
+                    runStore).ConfigureAwait(false);
+                var published = registrationResult is IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK };
+                if (!published)
                 {
                     await TryStopRetainedProcessAsync(
                         runId,
@@ -652,6 +767,10 @@ public static class SandboxEndpoints
                         turnTokens,
                         secretStore,
                         logger).ConfigureAwait(false);
+                }
+                else if (previewService.Enabled)
+                {
+                    EmitPreviewWorkflowStep(streamStore, runId, "completed", "Preview is ready.", logger);
                 }
                 return;
             }
@@ -671,6 +790,7 @@ public static class SandboxEndpoints
 
             EmitPreviewFailure(
                 streamStore,
+                logger,
                 runId,
                 retry.TargetPort,
                 timedOut ? "approval_timed_out" : "approval_denied",
@@ -682,11 +802,24 @@ public static class SandboxEndpoints
                 retryAvailable: timedOut,
                 expiredAt: result.ExpiresAt);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await TryStopRetainedProcessAsync(
+                runId, retry.PreviewRunnerSessionId, "run_terminal",
+                previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
+            EmitPreviewFailure(
+                streamStore, logger, runId, retry.TargetPort, "registration_failed",
+                "The run ended before preview publication completed.", retry.PreviewRunnerSessionId);
+        }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Preview approval retry failed for run {RunId}", runId);
+            await TryStopRetainedProcessAsync(
+                runId, retry.PreviewRunnerSessionId, "registration_failed",
+                previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
             EmitPreviewFailure(
                 streamStore,
+                logger,
                 runId,
                 retry.TargetPort,
                 "registration_failed",
@@ -705,23 +838,18 @@ public static class SandboxEndpoints
     {
         if (string.IsNullOrWhiteSpace(previewRunnerSessionId)) return;
 
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         try
         {
-            var bearer = turnTokens.TryGetTurnToken(runId);
-            if (string.IsNullOrWhiteSpace(bearer))
-            {
-                var secret = await secretStore.GetSecretAsync(
-                    PreviewRunnerCredential.SecretKey(runId),
-                    CancellationToken.None).ConfigureAwait(false);
-                bearer = secret.Found ? secret.Value : null;
-            }
+            var bearer = await ResolveRetainedProcessBearerAsync(
+                runId, turnTokens, secretStore, cleanup.Token).WaitAsync(cleanup.Token).ConfigureAwait(false);
 
             await previewRunnerClient.StopProcessAsync(
                 runId,
                 bearer,
                 previewRunnerSessionId,
                 reason,
-                CancellationToken.None).ConfigureAwait(false);
+                cleanup.Token).WaitAsync(cleanup.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -731,6 +859,19 @@ public static class SandboxEndpoints
                 previewRunnerSessionId,
                 runId);
         }
+    }
+
+    private static async Task<string?> ResolveRetainedProcessBearerAsync(
+        string runId,
+        Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry turnTokens,
+        Agentweaver.Api.Auth.ISecretStore secretStore,
+        CancellationToken ct = default)
+    {
+        var bearer = turnTokens.TryGetTurnToken(runId);
+        if (!string.IsNullOrWhiteSpace(bearer)) return bearer;
+        var secret = await secretStore.GetSecretAsync(
+            PreviewRunnerCredential.SecretKey(runId), ct).ConfigureAwait(false);
+        return secret.Found ? secret.Value : null;
     }
 
     private static RetryablePreviewContext? LatestRetryablePreview(
@@ -788,19 +929,32 @@ public static class SandboxEndpoints
         catch { return false; }
     }
 
-    private static void EmitPreviewWorkflowStep(
+    internal static void EmitPreviewWorkflowStep(
         RunStreamStore streamStore,
         string runId,
         string status,
-        string message) =>
-        streamStore.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
+        string message,
+        ILogger logger)
+    {
+        // This diagnostic must not replace a committed preview outcome or trigger process cleanup.
+        try
         {
-            step = "preview",
-            status,
-            label = "Preview",
-            message,
-            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
-        });
+            streamStore.Get(runId)?.RecordNext(EventTypes.WorkflowStep, new
+            {
+                step = "preview",
+                status,
+                label = "Preview",
+                message,
+                timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+            });
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Failed to record Preview workflow step {Status} for run {RunId}; preview outcome is unchanged.",
+                status, runId);
+        }
+    }
 
     private static (int? WorkPlanId, string? TreeHash) LatestPreviewContext(RunStreamStore streamStore, string runId)
     {

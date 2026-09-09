@@ -57,7 +57,11 @@ public sealed class BlueprintTools(AgentweaverApiClient api)
         try
         {
             var body = new { description };
-            var result = await api.PostAsync<GenerateBlueprintResponse>("/api/blueprints/generate", body, ct);
+            var result = await api.PostAiAsync<GenerateBlueprintResponse>(
+                "/api/blueprints/generate",
+                body,
+                "blueprint_generation",
+                ct: ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException ex) when (ex.StatusCode == 400)

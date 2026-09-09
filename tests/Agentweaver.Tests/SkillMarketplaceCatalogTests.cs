@@ -1,6 +1,7 @@
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
 using Agentweaver.AgentRuntime.Providers;
@@ -8,6 +9,7 @@ using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -162,36 +164,56 @@ public sealed class SkillMarketplaceCatalogTests
             [new MarketplaceCatalogEntry("skills/a", "a", "A skill.")]);
         var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
         var issues = 0;
+        var executions = 0;
+        var activations = 0;
         Task<string?> IssueAsync(CancellationToken _)
         {
             issues++;
             return Task.FromResult<string?>("capability-reference");
+        }
+        Task<MarketplaceModelExecution> BeginExecutionAsync(CancellationToken _)
+        {
+            executions++;
+            return Task.FromResult(new MarketplaceModelExecution(
+                () =>
+                {
+                    activations++;
+                    return new CancellationTokenSource();
+                },
+                useByok: false));
         }
 
         var heuristic = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
             "acme", "repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
             capabilityReference: null, parseStrategy: "auto", CancellationToken.None,
             projectId: ProjectRef.Id, caller: Caller, issueCapabilityAsync: IssueAsync,
-            hasCapabilityAsync: _ => Task.FromResult(true));
+            hasCapabilityAsync: _ => Task.FromResult(true),
+            beginModelExecutionAsync: BeginExecutionAsync);
 
         heuristic.Strategy.Should().Be("skillmd");
         issues.Should().Be(0, "deterministic browsing must not create a durable capability");
+        executions.Should().Be(0, "deterministic browsing must not require an AI execution plan");
 
         var classified = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
             "acme", "classified-repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
             capabilityReference: null, parseStrategy: "llm", CancellationToken.None,
             projectId: ProjectRef.Id, caller: Caller, issueCapabilityAsync: IssueAsync,
-            hasCapabilityAsync: _ => Task.FromResult(true));
+            hasCapabilityAsync: _ => Task.FromResult(true),
+            beginModelExecutionAsync: BeginExecutionAsync);
         var cached = await indexer.GetOrBuildForProjectWithCapabilityIssuerAsync(
             "acme", "classified-repo", "main", [new GitHubTreeBlob("skills/a/SKILL.md", 40)],
             capabilityReference: null, parseStrategy: "llm", CancellationToken.None,
             projectId: ProjectRef.Id, caller: Caller, issueCapabilityAsync: IssueAsync,
-            hasCapabilityAsync: _ => Task.FromResult(true));
+            hasCapabilityAsync: _ => Task.FromResult(true),
+            beginModelExecutionAsync: BeginExecutionAsync);
 
         classified.Strategy.Should().Be("llm");
-        cached.Should().BeSameAs(classified);
+        cached.Should().BeEquivalentTo(classified, options => options.Excluding(x => x.ModelInvoked));
+        cached.ModelInvoked.Should().BeFalse();
         classifier.Invocations.Should().Be(1);
         issues.Should().Be(1, "the one model call receives the only issued capability; cache hits issue none");
+        executions.Should().Be(1, "only the uncached classifier invocation requires a provider fence");
+        activations.Should().Be(1, "the accepted provider plan must be active while the classifier runs");
     }
 
     [Fact]
@@ -225,12 +247,13 @@ public sealed class SkillMarketplaceCatalogTests
             "acme", "legacy-repo", "main", blobs, "legacy-capability", "llm", CancellationToken.None,
             ProjectRef.Id, Caller);
 
-        cached.Should().BeSameAs(first);
+        cached.Should().BeEquivalentTo(first, options => options.Excluding(x => x.ModelInvoked));
+        cached.ModelInvoked.Should().BeFalse();
         classifier.Invocations.Should().Be(1);
     }
 
     [Fact]
-    public async Task Indexer_requires_connection_for_an_llm_cache_hit_without_an_active_binding()
+    public async Task Indexer_serves_an_llm_cache_hit_without_requiring_a_provider()
     {
         var classifier = new FakeClassifier(
             [new MarketplaceCatalogEntry("skills/a", "a", "A skill.")]);
@@ -253,9 +276,29 @@ public sealed class SkillMarketplaceCatalogTests
 
         automaticBrowse.Strategy.Should().Be("skillmd");
         automaticBrowse.RequiresGitHubConnection.Should().BeFalse();
-        cachedForDisconnectedCaller.RequiresGitHubConnection.Should().BeTrue();
-        cachedForDisconnectedCaller.Entries.Should().BeEmpty();
+        cachedForDisconnectedCaller.RequiresGitHubConnection.Should().BeFalse();
+        cachedForDisconnectedCaller.Entries.Should().ContainSingle();
+        cachedForDisconnectedCaller.ModelInvoked.Should().BeFalse();
         classifier.Invocations.Should().Be(1, "the cached catalog must not dispatch another model turn");
+    }
+
+    [Fact]
+    public async Task Indexer_does_not_reuse_an_llm_cache_across_projects()
+    {
+        var classifier = new FakeClassifier(
+            [new MarketplaceCatalogEntry("skills/a", "a", "A skill.")]);
+        var indexer = new MarketplaceCatalogIndexer(new MarketplaceCatalogCache(), classifier);
+        var blobs = new[] { new GitHubTreeBlob("skills/a/SKILL.md", 40) };
+
+        _ = await indexer.GetOrBuildForProjectAsync(
+            "acme", "repo", "main", blobs, "first-capability", "llm", CancellationToken.None,
+            ProjectRef.Id, Caller);
+        _ = await indexer.GetOrBuildForProjectAsync(
+            "acme", "repo", "main", blobs, "second-capability", "llm", CancellationToken.None,
+            ProjectId.New(), Caller);
+
+        classifier.Invocations.Should().Be(2,
+            "model-derived marketplace catalogs are provider-authorized in project scope");
     }
 
     [Fact]
@@ -314,6 +357,38 @@ public sealed class SkillMarketplaceCatalogTests
         var raw = "{\"skills\":[{\"location\":\"skills/a\",\"name\":\"a\",\"description\":\"" + longDesc + "\"}]}";
         var parsed = CopilotMarketplaceCatalogClassifier.ParseResult(raw);
         parsed![0].Description!.Length.Should().Be(CopilotMarketplaceCatalogClassifier.MaxDescriptionLength);
+    }
+
+    [Fact]
+    public async Task Classifier_propagates_accepted_plan_rejection_before_starting_model_stream()
+    {
+        var classifier = new CopilotMarketplaceCatalogClassifier(
+            null!,
+            NullLogger<CopilotMarketplaceCatalogClassifier>.Instance,
+            new ConfigurationBuilder().Build());
+        var guard = new RejectingAcceptedPlanGuard("marketplace_catalog_classification");
+        var streamStarted = false;
+
+        var act = () => classifier.RunClassificationAsync(
+            "acme",
+            "skills",
+            "main",
+            ["skills/a/SKILL.md"],
+            _ => CopilotMarketplaceCatalogClassifier.RunAfterValidationAsync(
+                guard,
+                () =>
+                {
+                    streamStarted = true;
+                    return Task.FromResult<string?>("""{"skills":[]}""");
+                },
+                CancellationToken.None),
+            CancellationToken.None);
+
+        var exception = (await act.Should().ThrowAsync<AiExecutionPlanException>()).Which;
+        exception.ErrorCode.Should().Be("model_provider_changed");
+        exception.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        guard.Invocations.Should().Be(1);
+        streamStarted.Should().BeFalse("the accepted plan must be revalidated immediately before SDK streaming");
     }
 
     // ── Auto-detected browse (URL source): pagination + no bulk download ────────────────
@@ -550,6 +625,7 @@ public sealed class SkillMarketplaceCatalogTests
         index.Strategy.Should().Be("llm");
         index.RequiresGitHubConnection.Should().BeFalse();
         index.Entries.Should().ContainSingle(e => e.Location == "skills/a");
+        index.ModelInvoked.Should().BeTrue();
         classifier.ByokInvocations.Should().Be(1);
     }
 
@@ -574,6 +650,7 @@ public sealed class SkillMarketplaceCatalogTests
 
         byokBrowse.RequiresGitHubConnection.Should().BeFalse();
         byokBrowse.Entries.Should().ContainSingle(e => e.Location == "skills/a");
+        byokBrowse.ModelInvoked.Should().BeFalse();
         classifier.Invocations.Should().Be(1, "the cached catalog must not dispatch another model turn");
     }
 
@@ -611,6 +688,25 @@ public sealed class SkillMarketplaceCatalogTests
         public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
             string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? capabilityRunId, CancellationToken ct) =>
             throw new GitHubCopilotUnauthorizedException("Connect a GitHub account with GitHub Copilot access.");
+    }
+
+    private sealed class RejectingAcceptedPlanGuard(string operation) : IModelInvocationGuard
+    {
+        public int Invocations { get; private set; }
+
+        public Task ValidateAsync(string runId, CancellationToken ct)
+        {
+            Invocations++;
+            throw new AiExecutionPlanException(
+                "model_provider_changed",
+                new AiExecutionContextResponse
+                {
+                    AiRequired = true,
+                    Operation = operation,
+                    Phase = "prepared",
+                },
+                "The accepted model provider changed.");
+        }
     }
 
     private sealed class FakeByokClassifier(IReadOnlyList<MarketplaceCatalogEntry> result) : IMarketplaceCatalogClassifier

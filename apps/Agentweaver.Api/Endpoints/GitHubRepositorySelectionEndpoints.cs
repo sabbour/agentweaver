@@ -31,6 +31,13 @@ public static class GitHubRepositorySelectionEndpoints
                         DefaultBranch = candidate.DefaultBranch,
                         PushedAt = candidate.PushedAt,
                     }).ToList(),
+                    Installations = result.Installations.Select(installation => new GitHubRepositoryInstallationDto
+                    {
+                        AccountLogin = installation.AccountLogin,
+                        AccountType = installation.AccountType,
+                        RepositorySelection = installation.RepositorySelection,
+                        ManagementUrl = installation.ManagementUrl,
+                    }).ToList(),
                 }),
                 GitHubRepositorySelectionOutcome.GitHubBindingUnavailable =>
                     Results.Conflict(new { error = "github_binding_unavailable" }),

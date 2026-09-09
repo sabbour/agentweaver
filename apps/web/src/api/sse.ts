@@ -71,6 +71,7 @@ export function useRunPoll(runId: string, baseUrl: string = API_URL): PollState 
 }
 
 export type EventType =
+  | 'run.model_provider_resolved'
   | 'agent.message.delta'
   | 'agent.message'
   | 'agent.turn.start'

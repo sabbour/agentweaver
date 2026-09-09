@@ -5,6 +5,8 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
@@ -138,6 +140,205 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_DraftExceedsDeadline_FailsRunAndEmitsTypedTerminal()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.BlockUntilCancelled = true;
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "A provider startup that never completes must not strand outcome planning");
+
+        RunResponse? run = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+        var cancellationDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!drafter.CancellationObserved && DateTime.UtcNow < cancellationDeadline)
+            await Task.Delay(25);
+        drafter.CancellationObserved.Should().BeTrue(
+            "the coordinator deadline must still cancel provider setup/session work after failing the run");
+
+        var spec = await GetOutcomeSpecAsync(_owner, runId);
+        spec.Should().NotBeNull();
+        spec!.Status.Should().Be("drafting",
+            "the persisted drafting row should remain diagnostic evidence rather than masquerade as a completed plan");
+
+        var eventsResponse = await _owner.GetAsync($"/api/runs/{runId}/events");
+        eventsResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var events = await eventsResponse.Content.ReadFromJsonAsync<JsonElement[]>();
+        var failedEvent = events.Should().NotBeNull().And.Subject
+            .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
+        failedEvent.GetProperty("payload").GetProperty("reason").GetString()
+            .Should().Be("outcome_spec_draft_timeout");
+    }
+
+    [Fact]
+    public async Task Start_DraftCancellationCallbackBlocks_FailsPromptlyAtDeadlineAndCleansUp()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.BlockCancellationCallback = true;
+
+        var deadlineStopwatch = Stopwatch.StartNew();
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "A blocked provider cancellation callback must not delay terminal failure");
+
+        try
+        {
+            await drafter.BlockedCancellationStarted.WaitAsync(TimeSpan.FromSeconds(5));
+            var terminalizationStopwatch = Stopwatch.StartNew();
+
+            RunResponse? run = null;
+            var terminalDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (DateTime.UtcNow < terminalDeadline)
+            {
+                run = await GetRunAsync(_owner, runId);
+                if (run?.Status == "failed")
+                    break;
+                await Task.Delay(25);
+            }
+
+            run.Should().NotBeNull();
+            run!.Status.Should().Be("failed",
+                "terminalization must not await a provider cancellation callback that is still blocked");
+            terminalizationStopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+            deadlineStopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(4),
+                "the test host configures a one-second drafting deadline");
+        }
+        finally
+        {
+            drafter.ReleaseBlockedCancellation();
+        }
+
+        await drafter.BlockedDraftCompleted.WaitAsync(TimeSpan.FromSeconds(5));
+        drafter.CancellationObserved.Should().BeTrue();
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        List<RunEventRecord> durableFailures = [];
+        var persistenceDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < persistenceDeadline)
+        {
+            durableFailures = await db.RunEvents.AsNoTracking()
+                .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+                .OrderBy(e => e.Sequence)
+                .ToListAsync();
+            if (durableFailures.Count > 0)
+                break;
+            await Task.Delay(50);
+        }
+
+        var failedEvent = durableFailures.Should().ContainSingle(
+            "deadline cleanup must not emit a second terminal event")
+            .Subject;
+        var payload = JsonSerializer.Deserialize<JsonElement>(failedEvent.PayloadJson);
+        payload.GetProperty("reason").GetString()
+            .Should().Be("outcome_spec_draft_timeout");
+    }
+
+    [Fact]
+    public async Task Start_CopilotProviderFailure_PreservesTypedDurableTerminalWithoutDuplicate()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.ProviderFailureToThrow = new AgentProviderException(
+            ModelSource.GitHubCopilot,
+            AgentProviderFailureKind.ProviderUnavailable,
+            "github_copilot_models_unavailable",
+            "GitHub Copilot could not list available models.",
+            isRetryable: false);
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "A typed Copilot provider failure must remain the coordinator terminal");
+
+        RunResponse? run = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+        run.Result.Should().Be("github_copilot_models_unavailable");
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        List<RunEventRecord> durableFailures = [];
+        deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            durableFailures = await db.RunEvents.AsNoTracking()
+                .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+                .OrderBy(e => e.Sequence)
+                .ToListAsync();
+            if (durableFailures.Count > 0)
+                break;
+            await Task.Delay(50);
+        }
+
+        var durableFailure = durableFailures.Should().ContainSingle(
+            "CopilotAIAgent already emitted the provider terminal before MAF surfaced ExecutorFailedEvent")
+            .Subject;
+        var payload = JsonSerializer.Deserialize<JsonElement>(durableFailure.PayloadJson);
+        payload.GetProperty("errorCode").GetString().Should().Be("github_copilot_models_unavailable");
+        payload.GetProperty("message").GetString().Should().Be("GitHub Copilot could not list available models.");
+        payload.GetProperty("category").GetString().Should().Be(
+            AgentProviderFailureKind.ProviderUnavailable.ToString());
+        payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Start_DrafterThrowsTimeout_DoesNotMislabelCoordinatorDeadline()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.ExceptionToThrow = new TimeoutException("simulated provider timeout");
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "An immediate provider timeout must keep its executor-failure classification");
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        RunResponse? run = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+
+        var events = await _owner.GetFromJsonAsync<JsonElement[]>($"/api/runs/{runId}/events");
+        var failedEvent = events.Should().NotBeNull().And.Subject
+            .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
+        failedEvent.GetProperty("payload").GetProperty("reason").GetString()
+            .Should().Be("coordinator_executor_failed:coordinator-draft");
+    }
+
+    [Fact]
     public async Task Start_DefineOutcomeMode_DraftsSpecAndSuspendsAtGate()
     {
         var projectId = await CreateProjectAsync();
@@ -251,6 +452,68 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
         spec.Should().NotBeNull();
         spec!.AllowTaskPromotion.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("confirm")]
+    [InlineData("revise")]
+    public async Task OutcomeDecision_MissingProviderKey_Returns409_WithoutConsumingGate(string action)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Provider fencing must precede gate mutation");
+        await WaitForGateAsync(runId);
+        _owner.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
+
+        var response = action == "confirm"
+            ? await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", content: null)
+            : await _owner.PostAsJsonAsync(
+                $"/api/runs/{runId}/outcome-spec/revise",
+                new { feedback = "Keep the original gate pending." });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+        body.GetProperty("context").GetProperty("phase").GetString().Should().Be("prepared");
+
+        var spec = await GetOutcomeSpecAsync(_owner, runId);
+        spec!.Status.Should().Be("awaiting_confirmation");
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        (await pendingStore.GetAsync(runId)).Should().NotBeNull(
+            "provider rejection must happen before the confirmation gate is consumed");
+    }
+
+    [Fact]
+    public async Task Confirm_FreshKeyForChangedProvider_Returns409_WithoutConsumingGate()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Durable provider provenance must not drift");
+        await WaitForGateAsync(runId);
+
+        await _factory.ChangePlatformProviderIdentityAsync("replacement-account");
+        await _factory.PrepareAiExecutionAsync(
+            _owner,
+            "orchestration",
+            projectId,
+            runId,
+            ensureProvider: false);
+
+        var response = await _owner.PostAsync(
+            $"/api/runs/{runId}/outcome-spec/confirm",
+            content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var responseBody = await response.Content.ReadAsStringAsync();
+        using var body = JsonDocument.Parse(responseBody);
+        body.RootElement.GetProperty("error").GetString().Should().Be("model_provider_changed");
+        body.RootElement.GetProperty("context").GetProperty("phase").GetString().Should().Be("prepared");
+        responseBody.Should().NotContain("replacement-account");
+        responseBody.Should().NotContain("coordinator-test-bot");
+
+        var spec = await GetOutcomeSpecAsync(_owner, runId);
+        spec!.Status.Should().Be("awaiting_confirmation");
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        (await pendingStore.GetAsync(runId)).Should().NotBeNull(
+            "durable provider rejection must happen before the confirmation gate is consumed");
     }
 
     // =========================================================================
@@ -600,6 +863,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var pid = ProjectId.Parse(projectId);
         var runStore = _factory.Services.GetRequiredService<IRunStore>();
         (await runStore.GetRunsByProjectAsync(pid)).Should().BeEmpty("precondition: project starts with no runs");
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId);
 
         var resp = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations", new { goal = "build without a team" });
@@ -627,6 +891,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(squadDir, "casting-registry.json"), "{\"members\":{\"x\":{}}}");
 
         var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId);
         var resp = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations", new { goal = "build with a corrupt team layout" });
 
@@ -643,6 +908,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     public async Task StartOrchestration_WithDispatchableTeam_Returns201()
     {
         var projectId = await CreateProjectAsync(seedTeam: true);
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId);
 
         var resp = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations", new { goal = "build with a cast team" });
@@ -675,6 +941,8 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     private async Task<string> StartOrchestrationAsync(
         string projectId, string goal, string? startMode = null, bool autopilot = false)
     {
+        await _factory.PrepareAiExecutionAsync(
+            _owner, "orchestration", projectId);
         object request = (startMode, autopilot) switch
         {
             (null, false) => new { goal },
@@ -683,8 +951,12 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             (_, true) => new { goal, start_mode = startMode, autopilot },
         };
         var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", request);
-        resp.StatusCode.Should().Be(HttpStatusCode.Created, "starting a coordinator run must return 201");
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var responseBody = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(
+            HttpStatusCode.Created,
+            "starting a coordinator run must return 201, but returned {0}",
+            responseBody);
+        var body = JsonSerializer.Deserialize<JsonElement>(responseBody);
         return body.GetProperty("runId").GetString()!;
     }
 
@@ -782,6 +1054,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     /// </summary>
     private async Task<string> InsertInactiveCoordinatorRunAsync(string ownerUser)
     {
+        var projectId = await CreateProjectAsync();
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var runId = RunId.New();
         var run = new Run
@@ -795,10 +1068,13 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             Status = RunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
+            ProjectId = ProjectId.Parse(projectId),
             ParentRunId = null,
             SubtaskId = null,
         };
         await runStore.InsertAsync(run, CancellationToken.None);
+        await _factory.PrepareAiExecutionAsync(
+            _owner, "orchestration", projectId, runId.ToString());
         return runId.ToString();
     }
 }

@@ -8,6 +8,7 @@ using System.Text.Json;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using k8s;
@@ -475,6 +476,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         // must reconnect. Deriving that scope from "does the project id string parse" instead named
         // the project's App even for platform-default binding failures.
         var effectiveProvider = await ResolveEffectiveProviderAsync(providerScopeProjectId, ct).ConfigureAwait(false);
+        await EnsureMatchesDurableProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
         var byokProvider = await GetByokProviderAsync(runId, effectiveProvider, ct).ConfigureAwait(false);
         if (byokProvider is null && string.IsNullOrWhiteSpace(submittingUser))
         {
@@ -682,7 +684,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     requestedWorkingDirectory ?? await ResolveWorkingDirectoryAsync(runId, ct).ConfigureAwait(false),
                     launchContext,
                     configProjectId,
-                    configAgentName, byokProvider,
+                    configAgentName, byokProvider, effectiveProvider?.ProviderKey(),
                     ct)
                     .ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(effectiveWorkingDirectory))
@@ -692,7 +694,13 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 // this, a successful run recorded NOTHING about which provider/binding/account served
                 // its model turns.
                 await EmitModelProviderResolvedAsync(
-                    runId, effectiveProvider, byokProvider?.Model, ct).ConfigureAwait(false);
+                    runId,
+                    effectiveProvider,
+                    byokProvider?.Model,
+                    providerScopeProjectId is null
+                        ? EffectiveModelProviderProvenance.ScopePlatform
+                        : EffectiveModelProviderProvenance.ScopeProject,
+                    ct).ConfigureAwait(false);
             }
             else
             {
@@ -770,8 +778,82 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             throw new InvalidOperationException(
                 $"Cannot launch AgentHost pod for BYOK run '{runId}' because its active BYOK provider configuration is unavailable.");
         }
+        if (requiresByok
+            && effectiveProvider is EffectiveModelProviderResult.Byok expected
+            && !GenerationModelProviderExecutor.Matches(provider!, expected))
+        {
+            throw new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.Configuration,
+                "model_provider_changed",
+                "The effective model provider changed before AgentHost launch.",
+                isRetryable: true);
+        }
 
         return provider;
+    }
+
+    private async Task EnsureMatchesDurableProviderAsync(
+        string runId,
+        EffectiveModelProviderResult? effectiveProvider,
+        CancellationToken ct)
+    {
+        if (_runEventStream is null || effectiveProvider is null)
+            return;
+
+        var owningRunId = CoordinatorSubRunIds.StripSyntheticSuffix(runId);
+        RunEvent? expectedEvent;
+        try
+        {
+            expectedEvent = (await _runEventStream
+                    .GetPersistedEventsAsync(owningRunId, 0, ct)
+                    .ConfigureAwait(false))
+                .LastOrDefault(evt => evt.Type == EventTypes.RunModelProviderResolved);
+        }
+        catch (NotSupportedException)
+        {
+            expectedEvent = null;
+        }
+        Run? run = null;
+        if (expectedEvent is null && _runStore is not null && RunId.TryParse(owningRunId, out var parsedRunId))
+        {
+            run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(run?.ParentRunId))
+            {
+                expectedEvent = (await _runEventStream
+                        .GetPersistedEventsAsync(run.ParentRunId, 0, ct)
+                        .ConfigureAwait(false))
+                    .LastOrDefault(evt => evt.Type == EventTypes.RunModelProviderResolved);
+            }
+        }
+        var expectedProvider = EffectiveModelProviderProvenance.TryReadContract(expectedEvent?.Payload);
+        if (expectedProvider?.ProviderKey is null)
+        {
+            if (run is not null && run.ModelSource != effectiveProvider.ToModelSource())
+            {
+                throw new AgentProviderException(
+                    effectiveProvider.ToModelSource(),
+                    AgentProviderFailureKind.Configuration,
+                    "model_provider_changed",
+                    "The effective model provider changed before AgentHost launch.",
+                    isRetryable: true);
+            }
+            return;
+        }
+
+        if (!EffectiveModelProviderProvenance.MatchesDurableProvider(
+                expectedEvent!.Payload,
+                effectiveProvider,
+                expectedProvider.ResolutionScope,
+                expectedProvider.ModelId))
+        {
+            throw new AgentProviderException(
+                effectiveProvider.ToModelSource(),
+                AgentProviderFailureKind.Configuration,
+                "model_provider_changed",
+                "The effective model provider changed before AgentHost launch.",
+                isRetryable: true);
+        }
     }
 
     /// <summary>
@@ -1144,6 +1226,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         string? projectId,
         string? agentName,
         ByokProviderConfiguration? byokProviderConfiguration,
+        string? modelProviderKey,
         CancellationToken ct)
     {
         if (_httpClientFactory is null)
@@ -1172,6 +1255,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             turnBearerToken,
             copilotCredential,
             byokProviderConfiguration,
+            modelProviderKey,
             repositoryAccessToken,
             mcpBrokerToken = launchContext.McpBrokerToken,
             toolApprovalApiBaseUrl = _options.ToolApprovalApiBaseUrl,
@@ -1392,37 +1476,24 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
     /// <summary>
     /// Appends the durable <see cref="EventTypes.RunModelProviderResolved"/> provenance record for the
-    /// provider this AgentHost pod was configured with (kind, provider/binding id, GitHub login, model
-    /// id). Best-effort — a stream-append failure is logged and swallowed so provenance bookkeeping can
-    /// never fail a launch that Kubernetes would otherwise admit.
+    /// provider this AgentHost pod was configured with. This append is part of the execution fence:
+    /// failure prevents the model turn so durable provenance cannot lag actual execution.
     /// </summary>
     private async Task EmitModelProviderResolvedAsync(
         string runId,
         EffectiveModelProviderResult? effectiveProvider,
         string? modelId,
+        string resolutionScope,
         CancellationToken ct)
     {
         if (_runEventStream is null || effectiveProvider is null)
             return;
 
-        try
-        {
-            await _runEventStream.AppendAsync(
-                runId,
-                new RunEvent(0, EventTypes.RunModelProviderResolved,
-                    effectiveProvider.ToProvenancePayload(runId, modelId)),
-                ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "KubernetesSandboxExecutor: failed to emit run.model_provider_resolved provenance for run {RunId} (best-effort)",
-                runId);
-        }
+        await _runEventStream.AppendAsync(
+            runId,
+            new RunEvent(0, EventTypes.RunModelProviderResolved,
+                effectiveProvider.ToProvenancePayload(runId, modelId, resolutionScope)),
+            ct).ConfigureAwait(false);
     }
 
     /// <summary>

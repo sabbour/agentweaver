@@ -64,6 +64,9 @@ public sealed class SandboxPreviewOptions
     /// <summary>Maximum simultaneously active previews for the deployment, enforced from HTTPRoute state.</summary>
     public int MaxConcurrentSessionsGlobal { get; init; } = 20;
 
+    /// <summary>Seconds to wait for the generated HTTPS URL to serve a successful response through the Gateway.</summary>
+    public int PublicationTimeoutSeconds { get; init; } = 90;
+
     /// <summary>
     /// Pure check: is <paramref name="port"/> within the inclusive preview port range
     /// [<paramref name="min"/>, <paramref name="max"/>]? Used by the preview endpoint to reject

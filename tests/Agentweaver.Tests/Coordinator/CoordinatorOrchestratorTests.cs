@@ -280,6 +280,8 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         string? modelId = null,
         string? workflowOverrideId = null)
     {
+        await _factory.PrepareAiExecutionAsync(
+            _owner, "orchestration", projectId);
         var resp = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations",
             new { goal, modelId, workflow_override_id = workflowOverrideId });

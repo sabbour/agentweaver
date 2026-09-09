@@ -110,6 +110,13 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
                     _approvalStore,
                     _toolApprovalGate,
                     _loggerFactory.CreateLogger<CopilotAIAgent>());
+            if (agent is IProviderBoundWorkflowTurnAgent providerBoundAgent
+                && !string.IsNullOrWhiteSpace(input.ModelSource))
+            {
+                providerBoundAgent.ConfigureProviderBoundary(
+                    ModelSourceExtensions.FromApiString(input.ModelSource),
+                    input.ByokProviderFingerprint);
+            }
 
             if (agent is CopilotAIAgent copilotAgent)
             {
@@ -177,6 +184,11 @@ public sealed class BuildTestTurnExecutor : Executor<AgentTurnOutput, WorkflowRe
             throw;
         }
         catch (OperationCanceledException)
+        {
+            WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel, agentName: _agentId);
+            throw;
+        }
+        catch (AgentProviderException)
         {
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, LogicalNodeId, "failed", DisplayLabel, agentName: _agentId);
             throw;

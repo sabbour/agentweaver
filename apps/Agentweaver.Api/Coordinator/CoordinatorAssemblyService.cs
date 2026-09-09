@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
@@ -124,6 +125,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private readonly int _finalScribeMaxAttempts;
     private readonly TimeSpan _finalScribeTimeout;
     private readonly IPreviewClassifier? _previewClassifier;
+    private readonly IRunModelProviderBoundaryResolver? _providerBoundaryResolver;
 
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _active = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _finalScribeAdmissions = new();
@@ -150,7 +152,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         WorktreeManager? worktreeManager = null,
         IntegrationBuildLock? integrationBuildLock = null,
         IRunEventStream? eventStream = null,
-        IPreviewClassifier? previewClassifier = null)
+        IPreviewClassifier? previewClassifier = null,
+        IRunModelProviderBoundaryResolver? providerBoundaryResolver = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -161,6 +164,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         _serviceProvider = serviceProvider;
         _eventStream = eventStream;
         _previewClassifier = previewClassifier;
+        _providerBoundaryResolver = providerBoundaryResolver;
         _projectStore = projectStore;
         _workflowRegistry = workflowRegistry;
         _podRegistry = podRegistry;
@@ -966,6 +970,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var aggregateDiff = integration.Diff ?? string.Empty;
         var aggregateTreeHash = integration.TreeHash ?? string.Empty;
         var assemblyGates = await ResolveAssemblyGatesAsync(workPlanId, ct).ConfigureAwait(false);
+        var assemblyProvider = await ResolveAssemblyProviderBoundaryAsync(context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
 
         // #236: the assembly-gate RAI + rubber-duck reviewers must be able to READ the assembled
         // integration files host-side (raw bytes, line endings, integration state) — not just the
@@ -1021,7 +1027,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                             context.SubmittingUser,
                             gate.GraphNodeId,
                             gate.Label,
-                            gate.AgentId),
+                            gate.AgentId,
+                            assemblyProvider.ModelSource,
+                            assemblyProvider.ByokProviderFingerprint),
                         ct).ConfigureAwait(false);
                 }
                 catch (CollectiveBuildTestInfrastructureException ex)
@@ -1096,7 +1104,15 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiStarted, new { workPlanId, integrationBranch, gateId = gate.Id });
 
                 var rai = await _pipeline.RunRaiAsync(
-                    new CollectiveRaiRequest(context.CoordinatorRunId, context.RepositoryPath, aggregateDiff, context.SubmittingUser, reviewerWorktreePath), ct)
+                    new CollectiveRaiRequest(
+                        context.CoordinatorRunId,
+                        context.RepositoryPath,
+                        aggregateDiff,
+                        context.SubmittingUser,
+                        reviewerWorktreePath,
+                        assemblyProvider.ModelSource,
+                        assemblyProvider.ByokProviderFingerprint),
+                    ct)
                     .ConfigureAwait(false);
 
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiCompleted, new
@@ -1150,7 +1166,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                         context.SubmittingUser,
                         gate.GraphNodeId,
                         gate.Label,
-                        WorktreePath: reviewerWorktreePath),
+                        WorktreePath: reviewerWorktreePath,
+                        ModelSource: assemblyProvider.ModelSource,
+                        ByokProviderFingerprint: assemblyProvider.ByokProviderFingerprint),
                     ct).ConfigureAwait(false);
 
                 if (rubberduck.RequestChanges)
@@ -1412,8 +1430,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ConfigureAwait(false);
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.Declined, declineReason, ct).ConfigureAwait(false);
-        await RunCoordinatorScribeAsync(context, workPlanId, terminalStatus: RunStatus.Declined.ToApiString(), mergeResult: declineReason, ct)
-            .ConfigureAwait(false);
+        await CleanupAssemblyBuildTestResourcesAsync(
+            context.CoordinatorRunId, context.RepositoryPath, CancellationToken.None).ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogInformation("Collective assembly: run {RunId} declined", context.CoordinatorRunId);
     }
@@ -1471,8 +1489,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .ConfigureAwait(false);
         await TerminalizeCoordinatorRunAsync(
             context.CoordinatorRunId, RunStatus.Declined, declineReason, ct).ConfigureAwait(false);
-        await RunCoordinatorScribeAsync(context, workPlanId, terminalStatus: RunStatus.Declined.ToApiString(), mergeResult: declineReason, ct)
-            .ConfigureAwait(false);
+        await CleanupAssemblyBuildTestResourcesAsync(
+            context.CoordinatorRunId, context.RepositoryPath, CancellationToken.None).ConfigureAwait(false);
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogInformation("Collective assembly: run {RunId} declined", context.CoordinatorRunId);
         return false;
@@ -1527,6 +1545,24 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         List<string> BranchesInOrder,
         Dictionary<int, IReadOnlySet<string>> TouchedFilesBySubtask,
         List<int> IncludedSubtaskIds);
+
+    private async Task<(string ModelSource, string? ByokProviderFingerprint)>
+        ResolveAssemblyProviderBoundaryAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        if (!RunId.TryParse(coordinatorRunId, out var runId))
+            throw new InvalidOperationException($"Invalid coordinator run id '{coordinatorRunId}'.");
+        var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Coordinator run '{coordinatorRunId}' was not found.");
+
+        var resolver = _providerBoundaryResolver
+            ?? throw new InvalidOperationException(
+                "A run model provider boundary resolver is required for collective assembly.");
+        var boundary = await resolver.ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        var provider = boundary.Provider;
+        return (
+            provider.ToModelSource().ToApiString(),
+            boundary.ByokProviderFingerprint);
+    }
 
     private async Task<IReadOnlyList<CoordinatorGraphDescriptor.AssemblyGateNode>> ResolveAssemblyGatesAsync(
         int workPlanId,
@@ -1760,6 +1796,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             var coordinatorRun = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
             if (coordinatorRun is null)
                 return;
+            var scribeProvider = await ResolveAssemblyProviderBoundaryAsync(
+                context.CoordinatorRunId,
+                ct).ConfigureAwait(false);
 
             var (scribeRun, shouldExecute) = await EnsureScribeActivityAsync(
                 coordinatorRun,
@@ -1784,11 +1823,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     AgentName: "coordinator",
                     SubmittingUser: coordinatorRun.SubmittingUser,
                     context.RepositoryPath,
-                    ModelSource.GitHubCopilot.ToString(),
+                    scribeProvider.ModelSource,
                     ModelId: coordinatorRun.ModelId,
                     RunStartedAt: coordinatorRun.StartedAt,
                     TerminalStatus: terminalStatus,
-                    MergeResult: mergeResult), scribeCts.Token).ConfigureAwait(false);
+                    MergeResult: mergeResult,
+                    ByokProviderFingerprint: scribeProvider.ByokProviderFingerprint),
+                    scribeCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && scribeCts.IsCancellationRequested)
             {
@@ -1833,12 +1874,31 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
     private async Task EnsureFinalScribeAsync(Run coordinatorRun, CancellationToken ct)
     {
+        if (coordinatorRun.Status == RunStatus.Declined)
+            return;
+
         var context = new CoordinatorDispatchContext(
             coordinatorRun.Id.ToString(),
             coordinatorRun.RepositoryPath,
             coordinatorRun.OriginatingBranch,
             coordinatorRun.SubmittingUser,
             coordinatorRun.ProjectId);
+
+        (string ModelSource, string? ByokProviderFingerprint) scribeProvider;
+        try
+        {
+            scribeProvider = await ResolveAssemblyProviderBoundaryAsync(
+                context.CoordinatorRunId,
+                ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Coordinator final scribe provider boundary could not be resolved for run {RunId}",
+                coordinatorRun.Id);
+            return;
+        }
 
         var (scribeRun, shouldExecute) = await EnsureScribeActivityAsync(
             coordinatorRun,
@@ -1856,11 +1916,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 AgentName: "coordinator",
                 SubmittingUser: coordinatorRun.SubmittingUser,
                 context.RepositoryPath,
-                coordinatorRun.ModelSource.ToString(),
+                scribeProvider.ModelSource,
                 coordinatorRun.ModelId,
                 RunStartedAt: coordinatorRun.StartedAt,
                 TerminalStatus: coordinatorRun.Status.ToApiString(),
-                MergeResult: coordinatorRun.Result), ct).ConfigureAwait(false);
+                MergeResult: coordinatorRun.Result,
+                ByokProviderFingerprint: scribeProvider.ByokProviderFingerprint),
+                ct).ConfigureAwait(false);
 
             await _runStore.TrySetTerminalStatusAsync(
                 scribeRun.Id, RunStatus.Completed, DateTimeOffset.UtcNow, coordinatorRun.Result, ct).ConfigureAwait(false);
@@ -3048,6 +3110,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return;
         }
 
+        var orchestrator = _serviceProvider.GetRequiredService<RunOrchestrator>();
+        foreach (var (_, _, childRun) in pending)
+            await orchestrator.ValidateDurableProviderBoundaryAsync(childRun, ct).ConfigureAwait(false);
+
         // Bounded per-directive EXECUTION retry (rev8 §6, RD#2): each drive/re-drive that ACTUALLY
         // launches ≥1 child consumes one execution attempt via an atomic guarded CAS. SEPARATE from the
         // decision budget so a revision that finishes/errors before EVER writing a checkpoint (never
@@ -3067,7 +3133,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // Resolve the orchestrator LAZILY — only once we know at least one child will actually be
         // (re)launched. The unresumable (→ conscious dispatch_fresh) and all-confirmed early-returns
         // above never launch a revision, so they must not depend on RunOrchestrator being resolvable.
-        var orchestrator = _serviceProvider.GetRequiredService<RunOrchestrator>();
         foreach (var (subtask, childRunId, childRun) in pending)
         {
             // PER-CHILD launch claim (RD-A recovery relaunch): insert the Phase-1 `initiated` marker for

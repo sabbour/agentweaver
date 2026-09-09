@@ -124,6 +124,35 @@ public sealed class OAuthServerConfigurationTests
                 && client.RedirectUris[0] == sharedRedirectUri);
     }
 
+    [Theory]
+    [InlineData("http://127.0.0.1:49731/callback", true)]
+    [InlineData("http://127.0.0.1/callback", false)]
+    [InlineData("http://[::1]:49731/callback", false)]
+    [InlineData("http://::1:49731/callback", false)]
+    [InlineData("https://[::1]:8443/callback", false)]
+    [InlineData("https://github.enterprise.example:8443/oauth/callback", true)]
+    [InlineData("https://bücher.example:8443/oauth/callback", true)]
+    [InlineData("https://github_enterprise.example/oauth/callback", false)]
+    [InlineData("https://github.enterprise.example./oauth/callback", false)]
+    public void Resolve_StaticClientRedirectPolicySupportsOnlyRepresentableOrigins(
+        string redirectUri,
+        bool expected)
+    {
+        var action = () => OAuthServerConfiguration.Resolve(
+            Configuration(
+                ("Auth:OAuth:PublicOrigin", "https://agentweaver.example"),
+                ("Auth:OAuth:EnableClaudeHostedClient", "false"),
+                ("Auth:OAuth:Clients:0:ClientId", "configured-client"),
+                ("Auth:OAuth:Clients:0:DisplayName", "Configured client"),
+                ("Auth:OAuth:Clients:0:RedirectUris:0", redirectUri)),
+            Environment("Production"));
+
+        if (expected)
+            action.Should().NotThrow();
+        else
+            action.Should().Throw<InvalidOperationException>();
+    }
+
     [Fact]
     public void Resolve_RejectsReservedClaudeCallbackForDifferentStaticClient()
     {
@@ -223,7 +252,7 @@ public sealed class OAuthServerConfigurationTests
     [InlineData("https://app.example/callback", true)]
     [InlineData("com.github.copilot:/oauth/callback", true)]
     [InlineData("http://127.0.0.1:49731/callback", true)]
-    [InlineData("http://[::1]:49731/callback", true)]
+    [InlineData("http://[::1]:49731/callback", false)]
     [InlineData("http://localhost:49731/callback", false)]
     [InlineData("http://10.0.0.4:49731/callback", false)]
     [InlineData("https://app.example/*", false)]

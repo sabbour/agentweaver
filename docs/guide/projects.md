@@ -60,10 +60,20 @@ The chosen directory must be empty or not yet exist. Agentweaver will not overwr
 
 Agentweaver clones the repository into the chosen directory and records the project with its GitHub origin. Its card then carries a GitHub mark in the gallery.
 
+The repository picker shows only repositories available to both your GitHub account and
+the Agentweaver GitHub App installation. When the App is configured for selected
+repositories, use **Open GitHub installation settings** beside the relevant personal or
+organization account to change that installation's repository access. Multiple
+installations remain one combined repository list, with a separate settings action for
+each account.
+
 ![Create from GitHub dialog](/guide/images/create-from-github.png)
 
 ::: tip Repository access
 If repository access is not ready, select **Authorize repository access**. Agentweaver returns you to the current task after authorization.
+If the GitHub App is not installed for an account you can access, use the installation
+link supplied by Agentweaver. Agentweaver does not construct account-specific GitHub
+settings URLs.
 :::
 
 ## Project settings
@@ -86,6 +96,9 @@ Manage Agentweaver project members.
 If a project started blank, local agent work remains available. Open **Repository** only when you want GitHub operations.
 
 Select **Set up repository access** to create or connect a repository. Pull-request publishing requires this access.
+You can dismiss the optional setup card. Agentweaver remembers that choice for the current
+project and signed-in user. Unrelated project edits do not show it again; a repository
+requirement or readiness change does.
 
 ### Sandbox policy
 

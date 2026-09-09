@@ -90,6 +90,10 @@ app.MapGet("/api/runs/{id}", async (
     var streamEntry = streamStore.Get(id);
     var streamEvents = streamEntry?.GetSnapshotSince(0).Events;
     var sandboxStatus = RunSandboxStatusReader.GetSandboxStatus(run, streamEvents);
+    var streamProviderEvent = streamEvents?
+        .Where(e => e.Type == EventTypes.RunModelProviderResolved)
+        .OrderByDescending(e => e.Sequence)
+        .FirstOrDefault();
 
     // Augment sandboxStatus with the live SandboxClaim phase from Kubernetes.
     // Only attempted when the backend is kubernetes-sandbox-claim and an in-cluster
@@ -154,20 +158,51 @@ app.MapGet("/api/runs/{id}", async (
     var stepCount = run.StepCount;
     if (stepCount <= 0 && streamEvents is not null)
         stepCount = streamEvents.Count(e => e.Type == EventTypes.ToolCall);
-    if (stepCount <= 0)
+    EffectiveModelProviderDto? effectiveModelProvider;
+    await using (var dbScope = httpContext.RequestServices.CreateAsyncScope())
     {
-        await using var dbScope = httpContext.RequestServices.CreateAsyncScope();
         var memoryDb = dbScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        stepCount = await memoryDb.RunEvents
-            .Where(e => e.RunId == id && e.EventType == EventTypes.ToolCall)
-            .CountAsync(ct);
+        if (stepCount <= 0)
+        {
+            stepCount = await memoryDb.RunEvents
+                .Where(e => e.RunId == id && e.EventType == EventTypes.ToolCall)
+                .CountAsync(ct);
+        }
+
+        var durableProvider = await memoryDb.RunEvents
+            .Where(e => e.RunId == id && e.EventType == EventTypes.RunModelProviderResolved)
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => new { e.Sequence, e.PayloadJson })
+            .FirstOrDefaultAsync(ct);
+
+        if (durableProvider is not null
+            && (streamProviderEvent is null || durableProvider.Sequence >= streamProviderEvent.Sequence))
+        {
+            try
+            {
+                effectiveModelProvider = EffectiveModelProviderProvenance.TryReadContract(
+                    System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+                        durableProvider.PayloadJson));
+            }
+            catch (System.Text.Json.JsonException ex)
+            {
+                logger.LogWarning(ex, "Could not parse effective model provider provenance for run {RunId}", id);
+                effectiveModelProvider = null;
+            }
+        }
+        else
+        {
+            effectiveModelProvider = EffectiveModelProviderProvenance.TryReadContract(streamProviderEvent?.Payload);
+        }
     }
 
     return Results.Json(new RunResponse
     {
         RunId = run.Id.ToString(),
+        ProjectId = run.ProjectId?.ToString(),
         Status = run.Status.ToApiString(),
         ModelSource = run.ModelSource.ToApiString(),
+        EffectiveModelProvider = effectiveModelProvider,
         StartedAt = run.StartedAt,
         EndedAt = run.EndedAt,
         Result = run.Result,
@@ -246,7 +281,7 @@ app.MapDelete("/api/runs/{id}", async (
     }
 
     if (run is null) return Results.NotFound();
-    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+    if (await EndpointHelpers.RequireRunDeletionAccessAsync(httpContext, run, ct) is { } denied)
         return denied;
 
     // For any non-terminal run: cancel the workflow, clean up worktree, force to terminal.
@@ -725,6 +760,9 @@ app.MapPost("/api/runs/{id}/review", async (
     IWorktreeOperations worktreeOps,
     IMergeCoordinator mergeCoordinator,
     RunWorkflowFactory workflowFactory,
+    RunOrchestrator orchestrator,
+    AiExecutionPlanService executionPlans,
+    AiExecutionPlanAccessor executionPlanAccessor,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -754,8 +792,44 @@ app.MapPost("/api/runs/{id}/review", async (
         return Results.Conflict(new { error = $"Run is in status '{run.Status.ToApiString()}' and cannot be reviewed." });
 
     var streamingRunForReview = workflowRegistry.Get(id);
-    if (streamingRunForReview is not null && await pendingStore.GetAsync(id, ct) is null)
+    var pendingForReview = await pendingStore.GetAsync(id, ct);
+    if (streamingRunForReview is not null && pendingForReview is null)
         return Results.StatusCode(StatusCodes.Status409Conflict);
+
+    var operationName = run.ParentRunId is null
+        && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+            ? "orchestration"
+            : "agent_turn";
+    var resumesModelExecution = request.RequestChanges
+        || (request.Approved && (streamingRunForReview is not null || pendingForReview is not null));
+    using var execution = resumesModelExecution
+        ? await EndpointHelpers.BeginAiExecutionAsync(
+            httpContext,
+            operationName,
+            run.ProjectId,
+            executionPlans,
+            executionPlanAccessor,
+            ct).ConfigureAwait(false)
+        : null;
+    execution?.Activate();
+    if (execution?.Error is not null)
+        return execution.Error;
+    if (execution is not null)
+    {
+        try
+        {
+            await orchestrator.ValidateDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        }
+        catch (AiExecutionPlanException ex)
+        {
+            return EndpointHelpers.AiExecutionError(ex);
+        }
+        catch (AgentProviderException ex)
+        {
+            return await EndpointHelpers.DurableProviderBoundaryErrorAsync(
+                ex, operationName, run, caller, executionPlans, ct).ConfigureAwait(false);
+        }
+    }
 
     var decision = new WorkflowReviewDecision(
         Approved: request.Approved,
@@ -763,7 +837,7 @@ app.MapPost("/api/runs/{id}/review", async (
         Feedback: request.Feedback,
         ReviewedBy: caller.User);
 
-    if (streamingRunForReview is null && await pendingStore.GetAsync(id, ct) is { } pendingForDefer)
+    if (streamingRunForReview is null && pendingForReview is { } pendingForDefer)
     {
         if (run.ProjectId is null
             && !caller.Owns(pendingForDefer.OwnerUser))
@@ -1107,6 +1181,8 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     PendingRequestStore pendingStore,
     IShellApprovalStore shellApprovalStore,
     RunOrchestrator orchestrator,
+    AiExecutionPlanService executionPlans,
+    AiExecutionPlanAccessor executionPlanAccessor,
     IConfiguration configuration,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -1158,6 +1234,41 @@ app.MapPost("/api/runs/{id}/request-changes", async (
 
     if (currentMaxRevision >= maxRevisions)
         return Results.Conflict(new { error = $"Maximum number of revisions ({maxRevisions}) reached for this run." });
+
+    var operationName = run.ParentRunId is null
+        && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+            ? "orchestration"
+            : "agent_turn";
+    using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+        httpContext,
+        operationName,
+        run.ProjectId,
+        executionPlans,
+        executionPlanAccessor,
+        ct).ConfigureAwait(false);
+    execution.Activate();
+    if (execution.Error is not null)
+        return execution.Error;
+
+    try
+    {
+        await orchestrator.ValidateDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+    }
+    catch (AiExecutionPlanException ex)
+    {
+        return EndpointHelpers.AiExecutionError(ex);
+    }
+    catch (AgentProviderException ex)
+    {
+        AiOperationCatalog.TryGet(operationName, out var operation);
+        var replacement = await executionPlans
+            .PrepareAsync(operation, run.ProjectId, caller, ct)
+            .ConfigureAwait(false);
+        return EndpointHelpers.AiExecutionError(new AiExecutionPlanException(
+            ex.ErrorCode,
+            executionPlans.ToResponse(replacement, "prepared"),
+            ex.UserMessage));
+    }
 
     // Atomic transition: AwaitingReview -> InProgress. Only one of approve/decline/request-changes wins.
     bool transitioned;
@@ -1249,10 +1360,11 @@ app.MapPost("/api/runs/{id}/retry", async (
     CoordinatorRunService coordinator,
     CoordinatorSteeringService steering,
     RunGitHubCapabilitySnapshotLifecycle capabilitySnapshots,
-    IOptions<SandboxRuntimeOptions> sandboxRuntime,
     IRunOptionsStore runOptions,
     RunOrchestrator orchestrator,
     IProjectStore projectStore,
+    AiExecutionPlanService executionPlans,
+    AiExecutionPlanAccessor executionPlanAccessor,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -1305,7 +1417,16 @@ app.MapPost("/api/runs/{id}/retry", async (
 
     var isCoordinatorRun = run.ParentRunId is null
         && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
-
+    using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+        httpContext,
+        isCoordinatorRun ? "orchestration" : "agent_turn",
+        run.ProjectId,
+        executionPlans,
+        executionPlanAccessor,
+        ct).ConfigureAwait(false);
+    execution.Activate();
+    if (execution.Error is not null)
+        return execution.Error;
     // #332: a coordinator run that failed AFTER completing upstream planning/subtask work should
     // RESUME from its last failure point (re-run only the failed subtask, preserve completed work
     // and the confirmed outcome spec, keep the original run options like auto_approve_tools) rather
@@ -1315,16 +1436,6 @@ app.MapPost("/api/runs/{id}/retry", async (
     // fresh full-restart mint below.
     if (isCoordinatorRun)
     {
-        // An in-place retry only launches AgentHost in pod-per-run mode. Fence the AgentHost
-        // capability before the recovery service writes its synthetic directive or mutates work.
-        if (sandboxRuntime.Value.IsPodPerRun
-            && !await capabilitySnapshots.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
-        {
-            return Results.Json(
-                ModelProviderConnectionRequirement.ForProject(run.ProjectId!.Value),
-                statusCode: StatusCodes.Status409Conflict);
-        }
-
         bool resumed;
         try
         {
@@ -1332,12 +1443,33 @@ app.MapPost("/api/runs/{id}/retry", async (
                 .TryResumeFailedCoordinatorRunForRetryAsync(
                     run.Id.ToString(),
                     run.SubmittingUser,
-                    ct)
+                    ct,
+                    execution.Plan!.Provider,
+                    execution.Plan.ResolutionScope,
+                    beforeResume: async resumeCt =>
+                    {
+                        // The source snapshot fences only an in-place continuation. A retry that has
+                        // no recoverable source work falls through and mints a fresh run against the
+                        // accepted current provider instead of being rejected by stale source state.
+                        if (!await capabilitySnapshots.PrepareForUnattendedCopilotLaunchAsync(
+                                run,
+                                resumeCt,
+                                expectedCopilotBindingId: execution.Plan.Provider.ProviderId(),
+                                expectedCopilotCredentialVersion: execution.Plan.Provider.CredentialVersion())
+                            .ConfigureAwait(false))
+                        {
+                            throw execution.Plan.Provider.ToConnectionRequiredException(run.ProjectId);
+                        }
+                    })
                 .ConfigureAwait(false);
         }
         catch (ModelProviderConnectionRequiredException ex)
         {
             return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (AiExecutionPlanException ex)
+        {
+            return EndpointHelpers.AiExecutionError(ex);
         }
         catch (SteeringRecoveryExhaustedException ex)
         {
@@ -1410,7 +1542,7 @@ app.MapPost("/api/runs/{id}/retry", async (
                 Id = RunId.New(),
                 RepositoryPath = run.RepositoryPath,
                 OriginatingBranch = run.OriginatingBranch,
-                ModelSource = run.ModelSource,
+                ModelSource = execution.Plan!.Provider.ToModelSource(),
                 ModelId = run.ModelId,
                 Task = run.Task,
                 SubmittingUser = run.SubmittingUser,
@@ -1437,6 +1569,10 @@ app.MapPost("/api/runs/{id}/retry", async (
     catch (ModelProviderConnectionRequiredException ex)
     {
         return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
+    }
+    catch (AiExecutionPlanException ex)
+    {
+        return EndpointHelpers.AiExecutionError(ex);
     }
     catch (Exception ex)
     {

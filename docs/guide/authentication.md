@@ -54,6 +54,9 @@ Repository access is optional. Local agent work can continue without a GitHub re
 Pull-request publishing and GitHub repository operations require repository access. Authorize the Repo App when you start one of these actions.
 
 When you create a project from GitHub, authorize the Repo App. Then select a repository from the bounded list.
+The list is the intersection of repositories you can access and repositories granted to the
+Agentweaver GitHub App installation. Installation settings can grant all repositories or only
+selected repositories.
 
 Agentweaver verifies the repository selection on the server. It does not accept an unverified repository identifier.
 

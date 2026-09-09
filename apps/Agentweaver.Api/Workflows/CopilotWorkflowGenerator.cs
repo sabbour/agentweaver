@@ -435,6 +435,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
     {
         var modelSource = ModelSource.GitHubCopilot;
         CopilotOperationCapability? capability = null;
+        ByokProviderConfiguration? byokProviderConfiguration = null;
+        IModelInvocationGuard? modelInvocationGuard = null;
         if (_scopeFactory is not null)
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
@@ -444,6 +446,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                 parsedProjectId, userId, ProjectModelProviderCapabilityPurpose.WorkflowGeneration, ct).ConfigureAwait(false);
             modelSource = plan.ModelSource;
             capability = plan.Capability;
+            byokProviderConfiguration = plan.ByokProviderConfiguration;
+            modelInvocationGuard = plan.ModelInvocationGuard;
         }
 
         var scratch = Path.Combine(AppPaths.DataDirectory, "workflow-scratch", Guid.NewGuid().ToString("N"));
@@ -462,7 +466,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                 ct: ct,
                 userId: userId,
                 projectId: projectId,
-                copilotCapability: capability).ConfigureAwait(false);
+                copilotCapability: capability,
+                byokProviderConfiguration: byokProviderConfiguration,
+                modelInvocationGuard: modelInvocationGuard).ConfigureAwait(false);
         }
         finally
         {

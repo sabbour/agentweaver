@@ -13,14 +13,26 @@ namespace Agentweaver.Api.Infrastructure;
 /// transaction with the run store, so a real mutual-exclusion claim -- not another racy pre-read
 /// -- is required.
 ///
-/// Guarded methods are exactly those that can transition a run away from InProgress:
-/// <see cref="UpdateStatusAsync"/>, <see cref="UpdateResultAsync"/>,
-/// <see cref="UpdateReviewReadyAsync"/>, <see cref="TrySetTerminalStatusAsync"/>,
-/// <see cref="SetAssembleReadyAsync"/>, and <see cref="TryTransitionToIdleAsync"/>.
+/// Conditional preview batches also hold this claim. Guarded methods include every transition
+/// away from InProgress, terminal transitions from review/merging, and deletion.
 /// Every other member is a pure pass-through; this store introduces no other behavior change.
 /// </summary>
 public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClaimGuard guard) : IRunStore
 {
+    // SQLite's run and event databases are separate. Retain the existing lifecycle claim for the
+    // entire conditional append, including any wait for the event database's write transaction.
+    internal async Task<bool> TryWhileRunActiveAsync(
+        RunId runId, Func<Task> append, CancellationToken ct)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        var run = await inner.GetAsync(runId, ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        if (run is null || Endpoints.EndpointHelpers.IsTerminal(run.Status) || run.Status == RunStatus.AssembleReady)
+            return false;
+        await append().ConfigureAwait(false);
+        return true;
+    }
+
     public Task InsertAsync(Run run, CancellationToken ct = default) =>
         inner.InsertAsync(run, ct);
 
@@ -55,9 +67,12 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
 
-    public Task<bool> TryTransitionReviewAsync(
-        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default) =>
-        inner.TryTransitionReviewAsync(runId, toStatus, endedAt, result, reviewer, ct);
+    public async Task<bool> TryTransitionReviewAsync(
+        RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        return await inner.TryTransitionReviewAsync(runId, toStatus, endedAt, result, reviewer, ct).ConfigureAwait(false);
+    }
 
     public Task<bool> TryTransitionToCommittingAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
@@ -74,15 +89,19 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
     public Task<bool> RevertMergingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         inner.RevertMergingAsync(runId, ct, now);
 
-    public Task<bool> CompleteMergingAsync(
+    public async Task<bool> CompleteMergingAsync(
         RunId runId,
         RunStatus toStatus,
         DateTimeOffset endedAt,
         string? result,
         string? mergeConflicts = null,
         CancellationToken ct = default,
-        string? mergedCommitHash = null) =>
-        inner.CompleteMergingAsync(runId, toStatus, endedAt, result, mergeConflicts, ct, mergedCommitHash);
+        string? mergedCommitHash = null)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        return await inner.CompleteMergingAsync(
+            runId, toStatus, endedAt, result, mergeConflicts, ct, mergedCommitHash).ConfigureAwait(false);
+    }
 
     public Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default) =>
         inner.UpdateTreeHashAfterCommitAsync(runId, newTreeHash, ct);
@@ -122,8 +141,11 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         RunId runId, string worktreePath, string worktreeBranch, DateTimeOffset startedAt, CancellationToken ct = default) =>
         inner.UpdateToInProgressAsync(runId, worktreePath, worktreeBranch, startedAt, ct);
 
-    public Task DeleteAsync(RunId runId, CancellationToken ct = default) =>
-        inner.DeleteAsync(runId, ct);
+    public async Task DeleteAsync(RunId runId, CancellationToken ct = default)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        await inner.DeleteAsync(runId, ct).ConfigureAwait(false);
+    }
 
     public Task UpdateWorktreeAsync(
         RunId runId, string worktreePath, string worktreeBranch, CancellationToken ct = default) =>

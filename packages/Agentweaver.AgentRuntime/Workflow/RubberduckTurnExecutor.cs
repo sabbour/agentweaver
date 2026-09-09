@@ -130,6 +130,13 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
                     _approvalStore,
                     _toolApprovalGate,
                     _loggerFactory.CreateLogger<CopilotAIAgent>());
+            if (agent is IProviderBoundWorkflowTurnAgent providerBoundAgent
+                && !string.IsNullOrWhiteSpace(input.ModelSource))
+            {
+                providerBoundAgent.ConfigureProviderBoundary(
+                    ModelSourceExtensions.FromApiString(input.ModelSource),
+                    input.ByokProviderFingerprint);
+            }
 
             await agent.SetupAsync(
                 workingDirectory: reviewPath,
@@ -165,6 +172,14 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
                     "Rubberduck verdict could not be parsed for run {RunId} — defaulting to PASS. Raw response (truncated): {Raw}",
                     input.RunId, Truncate(response));
             }
+        }
+        catch (WorkflowAgentInfrastructureException ex) when (ex.IsModelProviderChanged)
+        {
+            throw ex.ToModelProviderChanged(input.ModelSource);
+        }
+        catch (AgentProviderException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
