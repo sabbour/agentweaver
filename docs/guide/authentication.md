@@ -60,6 +60,8 @@ selected repositories.
 
 Agentweaver verifies the repository selection on the server. It does not accept an unverified repository identifier.
 
+After you connect the Repo App, **Account settings → GitHub connections** shows a GitHub installation settings link for each installation available to your signed-in account. Use these GitHub-managed links to change repository grants. The connected GitHub login and the repository installation grants remain separate; if Agentweaver cannot retrieve an installation-management link, it keeps the connection status and does not show a link.
+
 A project can use a project GitHub Copilot account. Otherwise, project work inherits the active
 platform GitHub Copilot account or custom-key provider. This project hierarchy applies to
 orchestration and background work.

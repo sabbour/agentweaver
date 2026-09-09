@@ -11,6 +11,7 @@ vi.mock('../api/apiClient', () => ({
     getAuthSession: vi.fn(),
     beginRepoAppAuthorization: vi.fn(),
     getRepoAppConnectionStatus: vi.fn(),
+    listGitHubRepositorySelections: vi.fn(),
     getUserAiAccess: vi.fn(),
     setUserByokProvider: vi.fn(),
     removeUserByokProvider: vi.fn(),
@@ -47,6 +48,10 @@ beforeEach(() => {
   vi.mocked(apiClient.getRepoAppConnectionStatus).mockResolvedValue({
     connected: false,
     github_login: null,
+  } as never);
+  vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+    repositories: [],
+    installations: [],
   } as never);
   vi.mocked(apiClient.getUserAiAccess).mockResolvedValue({
     effective_source: 'none',
@@ -186,6 +191,15 @@ describe('SettingsPage', () => {
     vi.mocked(apiClient.getRepoAppConnectionStatus)
       .mockResolvedValueOnce({ connected: false, github_login: null } as never)
       .mockResolvedValueOnce({ connected: true, github_login: 'sabbour' } as never);
+    vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+      repositories: [],
+      installations: [{
+        account_login: 'sabbour',
+        account_type: 'user',
+        repository_selection: 'selected',
+        management_url: 'https://github.com/settings/installations/123',
+      }],
+    } as never);
 
     render(
       <MemoryRouter initialEntries={['/settings?repo_app_auth=success']}>
@@ -197,7 +211,56 @@ describe('SettingsPage', () => {
 
     expect(await screen.findByText(/Connected GitHub login: @sabbour/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Connect GitHub Repo App' })).toBeNull();
+    const managementLink = await screen.findByRole('link', { name: 'Open GitHub installation settings for sabbour' });
+    expect(managementLink.getAttribute('href')).toBe('https://github.com/settings/installations/123');
+    expect(managementLink.getAttribute('target')).toBe('_blank');
+    expect(managementLink.getAttribute('rel')).toBe('noopener noreferrer');
     await waitFor(() => expect(apiClient.getRepoAppConnectionStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps the connected Repo App status when installation management metadata is unavailable', async () => {
+    vi.mocked(apiClient.getRepoAppConnectionStatus).mockResolvedValue({
+      connected: true,
+      github_login: 'sabbour',
+    } as never);
+    vi.mocked(apiClient.listGitHubRepositorySelections).mockRejectedValue(new Error('Repository access unavailable'));
+
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider><SettingsPage /></AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/Connected GitHub login: @sabbour/)).toBeDefined();
+    await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: /Open GitHub installation settings/ })).toBeNull();
+    expect(screen.queryByText('Repository access unavailable')).toBeNull();
+  });
+
+  it('omits installation actions that have no management URL', async () => {
+    vi.mocked(apiClient.getRepoAppConnectionStatus).mockResolvedValue({
+      connected: true,
+      github_login: 'sabbour',
+    } as never);
+    vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
+      repositories: [],
+      installations: [{
+        account_login: 'sabbour',
+        account_type: 'user',
+        repository_selection: 'selected',
+        management_url: '',
+      }],
+    } as never);
+
+    render(
+      <MemoryRouter initialEntries={['/settings']}>
+        <AzureFluentProvider><SettingsPage /></AzureFluentProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/Connected GitHub login: @sabbour/)).toBeDefined();
+    await waitFor(() => expect(apiClient.listGitHubRepositorySelections).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: /Open GitHub installation settings/ })).toBeNull();
   });
 
   it('shows platform BYOK as automatically available for personal session chat', async () => {
