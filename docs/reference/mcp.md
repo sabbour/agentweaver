@@ -39,24 +39,31 @@ Optionally override the API base URL (defaults to `http://localhost:5000`):
 AGENTWEAVER_API_URL=http://localhost:5000
 ```
 
-The `.mcp.json` at the repository root registers the server automatically for MCP hosts that support auto-discovery (Copilot CLI ≥1.0.59 and equivalents). No manual registration is required beyond setting the environment variable.
+The `.mcp.json` at the repository root registers the `agentweaver` server as the
+**hosted** HTTP endpoint (the deployed `/mcp` URL), matching the hosted setup above, so
+that MCP hosts with auto-discovery (Copilot CLI ≥1.0.59 and equivalents) connect to the
+same deployment by default when working in this repo. To instead drive a **local**
+stdio server against a local `dotnet run --project apps/Agentweaver.Mcp -- --stdio`
+process, register it under a distinct server name (e.g. via
+`--additional-mcp-config` or your personal `~/.copilot/mcp-config.json`) — do not
+reuse the name `agentweaver`, which resolves to the repo's hosted entry first.
 
 ### Using with GitHub Copilot CLI
 
-**Local (stdio), working in this repo.** No setup beyond the environment variable above —
-`copilot` auto-discovers the workspace `.mcp.json` and starts
-`dotnet run --project apps/Agentweaver.Mcp -- --stdio` on demand. Confirm the tools are
-live with `copilot mcp list` or `/mcp` inside an interactive session.
+**Hosted (http), working in this repo.** No setup beyond OAuth sign-in — `copilot`
+auto-discovers the workspace `.mcp.json`, connects to the deployed `/mcp` endpoint, and
+opens a browser for Entra sign-in and consent on first use. Confirm the tools are live
+with `copilot mcp list` or `/mcp show agentweaver` inside an interactive session.
 
 ::: tip Server-name collisions
 Copilot CLI resolves MCP servers by **name**, merging `~/.copilot/mcp-config.json` (user),
 `.mcp.json`/`.github/mcp.json` (workspace), and `--additional-mcp-config` (session) in that
-order. If your personal `~/.copilot/settings.json` has `agentweaver` listed under
-`disabledMcpServers` (e.g. because you disabled the workspace stdio server), naming a
-session override `agentweaver` will be silently skipped — check
-`~/.copilot/logs/process-*.log` for `Skipping disabled MCP server: <name>` if a
-registered server discovers zero tools. Use a distinct name to
-avoid the collision.
+order — workspace config wins over user config for the same name. If your personal
+`~/.copilot/mcp-config.json` has its own `agentweaver` entry (e.g. pointing at a
+different deployment), it is shadowed by this repo's workspace `.mcp.json` whenever
+`copilot` runs from this repository. Use a distinct name for a personal override to
+avoid the collision; check `~/.copilot/logs/process-*.log` for
+`Skipping disabled MCP server: <name>` if a registered server discovers zero tools.
 :::
 
 ## Authentication
