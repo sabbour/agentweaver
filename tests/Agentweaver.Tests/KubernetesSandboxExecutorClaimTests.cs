@@ -480,6 +480,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("copilotCredential").ValueKind.Should().Be(JsonValueKind.Null);
         body.GetProperty("byokProviderConfiguration").GetProperty("apiKey").GetString()
             .Should().Be("router-byok-key");
+        body.GetProperty("modelProviderKey").GetString().Should().Be(
+            new EffectiveModelProviderResult.Byok(
+                byokConfiguration.Id, byokConfiguration.Type, byokConfiguration.ExecutionFingerprint()).ProviderKey());
     }
 
     [Fact]

@@ -106,22 +106,20 @@ public interface IOperatorAssistantAgent
 }
 
 /// <summary>
-/// Spike prototype of the operator assistant (Morpheus design, #346). It is the same in-API MAF
-/// GitHub Copilot chat loop as the retired legacy Console facade agent but with two changes:
+/// AgentHost-side operator assistant. It uses the MAF GitHub Copilot chat loop with two constraints:
 ///   1. Its tool set is sourced from the REAL AgentweaverMCP server via
 ///      <see cref="IAgentweaverMcpToolProvider"/> (all ~91 tools) instead of 15 hand-wrapped
 ///      read-only tools — one source of truth, no drift.
 ///   2. There is no regex pre-router: the LLM routes via MCP tool descriptions.
 ///
-/// The regex router and the existing facade are intentionally left untouched — this is an additive
-/// spike that proves the MCP tool-adapter path works end to end. The API-issued, short-lived broker
-/// token is forwarded to the MCP server on every tools/call.
+/// The API-issued, short-lived broker token is forwarded to the MCP server on every tools/call.
 /// </summary>
 public sealed class OperatorAssistantAgent(
     GitHubCopilotClientFactory factory,
     IAgentweaverMcpToolProvider mcpToolProvider,
     ILogger<OperatorAssistantAgent> logger,
-    IByokProviderConfigurationProvider? byokProviderConfiguration = null) : IOperatorAssistantAgent
+    IByokProviderConfigurationProvider? byokProviderConfiguration = null,
+    IModelInvocationGuard? modelInvocationGuard = null) : IOperatorAssistantAgent
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -148,6 +146,8 @@ public sealed class OperatorAssistantAgent(
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (modelInvocationGuard is not null)
+            await modelInvocationGuard.ValidateAsync(request.RunId ?? string.Empty, ct).ConfigureAwait(false);
         var byokProvider = byokProviderConfiguration is null
             ? null
             : await byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
@@ -224,6 +224,8 @@ public sealed class OperatorAssistantAgent(
 
             try
             {
+                if (modelInvocationGuard is not null)
+                    await modelInvocationGuard.ValidateAsync(request.RunId ?? string.Empty, ct).ConfigureAwait(false);
                 await foreach (var chunk in agent.RunStreamingAsync(messages, session, options: null, ct).WithCancellation(ct))
                 {
                     if (chunk is null) continue;

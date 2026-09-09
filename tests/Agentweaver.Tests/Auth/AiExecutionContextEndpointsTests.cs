@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
@@ -20,6 +21,66 @@ namespace Agentweaver.Tests.Auth;
 
 public sealed class AiExecutionContextEndpointsTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData("-coordinator-draft")]
+    public async Task AgentHost_callback_requires_run_capability_and_current_pinned_provider(string suffix)
+    {
+        await using var factory = new AgentweaverWebApplicationFactory(bypassAuthentication: false);
+        await SeedByokProviderAsync(factory);
+        using var scope = factory.Services.CreateScope();
+        var services = scope.ServiceProvider;
+        var run = new Run
+        {
+            Id = RunId.New(), RepositoryPath = ".", OriginatingBranch = "main",
+            ModelSource = ModelSource.Byok, Task = "guarded host turn", SubmittingUser = "owner",
+            Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow,
+        };
+        await services.GetRequiredService<IRunStore>().InsertAsync(run);
+        var provider = await services.GetRequiredService<EffectiveModelProviderResolver>()
+            .ResolveAsync(null, CancellationToken.None);
+        var events = services.GetRequiredService<IRunEventStream>();
+        await events.AppendAsync(run.Id.ToString(), new RunEvent(0, EventTypes.RunModelProviderResolved,
+            provider.ToProvenancePayload(run.Id.ToString(), null, EffectiveModelProviderProvenance.ScopeProject)));
+        var capabilities = services.GetRequiredService<IRunAuthorshipCapabilityStore>();
+        var hostRunId = run.Id + suffix;
+        await capabilities.RegisterAsync(hostRunId, "host-run-capability", DateTimeOffset.UtcNow.AddMinutes(5), CancellationToken.None);
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "host-run-capability");
+        client.DefaultRequestHeaders.Add(RunAuthorshipHeaders.RunId, hostRunId);
+        client.DefaultRequestHeaders.Add(RunAuthorshipHeaders.RunToken, "host-run-capability");
+        var path = $"/api/runs/{hostRunId}/model-provider/validate";
+        var body = new { expected_provider_key = provider.ProviderKey() };
+
+        (await client.PostAsJsonAsync(path, body)).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await events.GetPersistedEventsAsync(run.Id.ToString(), 0)).Should().HaveCount(2);
+        (await client.PostAsJsonAsync(path, new { expected_provider_key = "stale-pod-fingerprint" }))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await client.PostAsJsonAsync(path, new { })).StatusCode.Should().Be(HttpStatusCode.Conflict);
+        await SeedByokProviderAsync(factory);
+        var changed = await client.PostAsJsonAsync(path, body);
+        changed.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await changed.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString()
+            .Should().Be("model_provider_changed");
+        (await events.GetPersistedEventsAsync(run.Id.ToString(), 0)).Should().HaveCount(2);
+        (await client.PostAsJsonAsync($"/api/runs/{RunId.New()}/model-provider/validate", body))
+            .StatusCode.Should().BeOneOf(HttpStatusCode.Forbidden, HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Session_route_is_metadata_only_and_legacy_console_has_no_registered_route()
+    {
+        await using var factory = new AgentweaverWebApplicationFactory();
+        var client = AuthedClient(factory);
+        var session = await client.GetFromJsonAsync<JsonElement>("/api/auth/session");
+        session.GetProperty("authenticated").GetBoolean().Should().BeTrue();
+        session.TryGetProperty("ai_configured", out _).Should().BeTrue();
+        session.TryGetProperty("execution_key", out _).Should().BeFalse();
+        var endpoints = factory.Services.GetRequiredService<Microsoft.AspNetCore.Routing.EndpointDataSource>()
+            .Endpoints.OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>();
+        endpoints.Should().NotContain(endpoint => endpoint.RoutePattern.RawText == "/api/console/turn");
+    }
+
     [Fact]
     public async Task Run_call_guard_requires_durable_evidence_and_rejects_a_replaced_provider()
     {

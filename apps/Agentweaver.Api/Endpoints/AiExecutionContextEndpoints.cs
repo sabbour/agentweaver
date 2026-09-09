@@ -1,7 +1,10 @@
 using Agentweaver.Api.Auth;
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Security;
+using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Endpoints;
@@ -14,6 +17,44 @@ public static class AiExecutionContextEndpoints
             .WithName("ResolveAiExecutionContext")
             .WithTags("AI execution")
             .AuthenticatedSelfOrMcp();
+        app.MapPost("/api/runs/{id}/model-provider/validate", ValidateRunProviderAsync)
+            .WithName("ValidateRunModelProvider")
+            .WithTags("AI execution")
+            .RunCapability();
+    }
+
+    public sealed record ValidateRunProviderRequest(
+        [property: System.Text.Json.Serialization.JsonPropertyName("expected_provider_key")] string? ExpectedProviderKey);
+
+    private static async Task<IResult> ValidateRunProviderAsync(
+        HttpContext context, string id, ValidateRunProviderRequest request,
+        IRunAuthorshipCapabilityStore capabilities, IRunStore runs,
+        RunModelInvocationGuard guard, CancellationToken ct)
+    {
+        if (!RunId.TryParse(CoordinatorSubRunIds.StripSyntheticSuffix(id), out var runId))
+            return Results.BadRequest();
+        if (context.Request.Headers[RunAuthorshipHeaders.RunId].ToString() != id
+            || !await capabilities.ValidateAsync(
+                id, context.Request.Headers[RunAuthorshipHeaders.RunToken].ToString(), ct).ConfigureAwait(false))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        if (await runs.GetAsync(runId, ct).ConfigureAwait(false) is null)
+            return Results.NotFound();
+        if (string.IsNullOrWhiteSpace(request.ExpectedProviderKey))
+            return Results.Conflict(new { error = "model_provider_changed" });
+        try
+        {
+            await guard.PrepareAsync(id, ct, expectedProviderKey: request.ExpectedProviderKey).ConfigureAwait(false);
+            return Results.NoContent();
+        }
+        catch (Exception ex) when (ex is AiExecutionPlanException
+            || ex is AgentProviderException { ErrorCode: "model_provider_changed" })
+        {
+            return Results.Conflict(new
+            {
+                error = "model_provider_changed",
+                message = "The accepted model provider changed before invocation.",
+            });
+        }
     }
 
     private static async Task<IResult> ResolveAsync(

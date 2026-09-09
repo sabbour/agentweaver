@@ -202,6 +202,7 @@ POST /api/runs/{id}/auto-approve | PlatformOrMcp
 POST /api/runs/{id}/autopilot | PlatformOrMcp
 POST /api/runs/{id}/cancel | PlatformOrMcp
 POST /api/runs/{id}/commit | PlatformOrMcp
+POST /api/runs/{id}/model-provider/validate | RunCapability
 POST /api/runs/{id}/outcome-spec/confirm | PlatformOrMcp
 POST /api/runs/{id}/outcome-spec/revise | PlatformOrMcp
 POST /api/runs/{id}/questions/{requestId}/answer | PlatformOrMcp

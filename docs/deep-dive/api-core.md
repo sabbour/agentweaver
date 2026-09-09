@@ -39,16 +39,26 @@ The candidate covers these boundaries:
 | Generation, casting, backlog decomposition | Opaque admission, configuration fence, accepted configuration, pre-call provenance |
 | Coordinator selection, classifiers, preview command proposal | Copilot-only run fence and pre-call provenance |
 | Coordinator spec drafting and autopilot | Explicit Copilot selection and runtime invocation guard |
-| In-process worker and reviewer turns | Accepted provider context and guard before calls, re-asks, and SDK retries |
+| Worker and reviewer turns, including AgentHost | Accepted provider context and guard before application-issued calls, re-asks, and SDK retries |
 | Assistant and RemoteOperator dispatch | Opaque admission, platform scope, launch fence, pre-dispatch revalidation |
 | Retry, revision, restart, queued pickup | Current resolver comparison against accepted fingerprints |
 | MCP actions | API execution-key preparation and forwarding |
 | Web provider context | Accessible Expected/Using/Used labels and stable fingerprint comparison |
 
-This is not proof of coverage for every model call.
-AgentHost-internal SDK retries and remote reviewer re-asks retain pod configuration.
-These paths do not yet have complete per-call API revalidation.
-The legacy console facade and direct user-session model invocation do not have complete admission coverage.
+AgentHost revalidates before each application-issued model attempt through `POST /api/runs/{id}/model-provider/validate`.
+The callback requires the existing run capability and the immutable provider fingerprint from pod configuration.
+The API compares that fingerprint with the current resolver and accepted run provenance.
+It awaits provenance persistence before it permits the call.
+Provider changes return `409 model_provider_changed` without a model call.
+The pod callback has no independent selection authority.
+
+There is no registered `/api/console/turn` route in this host.
+`GET /api/auth/session` returns authentication metadata and `ai_configured`, not a model response.
+`ResolveForSessionAsync` supplies that metadata and execution-context preparation.
+It has no direct production model-call consumer.
+The production conversation routes use the guarded Assistant and AgentHost path.
+
+This is not proof of every request inside the external Copilot service.
 Focused tests use fake model providers.
 They do not prove live SDK, Kubernetes, or MCP process behavior.
 

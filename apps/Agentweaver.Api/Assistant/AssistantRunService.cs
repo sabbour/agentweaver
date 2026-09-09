@@ -142,7 +142,7 @@ public interface IAssistantRunService
 /// per-user concurrency bound (derived from run status, so the API's replicas agree) and an idle
 /// sweep keep the number of live Copilot/MCP sessions and held AgentHost pods bounded.
 ///
-/// This is additive: it does not touch the existing <c>/api/console/turn</c> facade path.
+/// Production operator turns use the run-bound AgentHost path.
 /// </summary>
 public sealed class AssistantRunService : IAssistantRunService, IDisposable
 {

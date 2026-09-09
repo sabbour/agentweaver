@@ -390,6 +390,7 @@ public sealed class RemoteOperatorAssistantAgent(
                 return true;
             case "github_copilot_model_unavailable":
             case "github_copilot_runtime_not_configured":
+            case "model_provider_changed":
                 failureKind = AgentProviderFailureKind.Configuration;
                 return true;
             case "github_copilot_rate_limited":
@@ -397,6 +398,7 @@ public sealed class RemoteOperatorAssistantAgent(
                 return true;
             case "github_copilot_models_unavailable":
             case "github_copilot_provider_unavailable":
+            case "model_provider_validation_unavailable":
                 failureKind = AgentProviderFailureKind.ProviderUnavailable;
                 return true;
             default:

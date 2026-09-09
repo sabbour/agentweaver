@@ -86,6 +86,7 @@ internal sealed class AgentHostRuntimeState
     /// </summary>
     public GitHubCapabilitySnapshotCredential? CopilotCredential { get; private set; }
     public ByokProviderConfiguration? ByokProviderConfiguration { get; private set; }
+    public string? ModelProviderKey { get; private set; }
 
     /// <summary>
     /// Short-lived installation credential for the configured run and repository. The shell tool
@@ -101,7 +102,7 @@ internal sealed class AgentHostRuntimeState
     public long McpBrokerTokenVersion => Interlocked.Read(ref _mcpBrokerTokenVersion);
 
     /// <summary>
-    /// API address and credential used only by the internal approval-policy reader. The run
+    /// API address and credential for approval-policy and model-provider callbacks. The run
     /// capability remains required by the API, so this configuration cannot read another run's
     /// policy.
     /// </summary>
@@ -167,6 +168,7 @@ internal sealed class AgentHostRuntimeState
         PreviewRunnerCredential = configuration.PreviewRunnerCredential ?? string.Empty;
         CopilotCredential = configuration.CopilotCredential;
         ByokProviderConfiguration = configuration.ByokProviderConfiguration;
+        ModelProviderKey = configuration.ModelProviderKey;
         RepositoryAccessToken = string.IsNullOrWhiteSpace(configuration.RepositoryAccessToken)
             ? null
             : configuration.RepositoryAccessToken;
@@ -272,4 +274,5 @@ internal sealed record AgentHostRunConfiguration(
     string? McpBrokerToken = null,
     string? RepositoryAccessToken = null,
     string? ToolApprovalApiBaseUrl = null,
-    ByokProviderConfiguration? ByokProviderConfiguration = null);
+    ByokProviderConfiguration? ByokProviderConfiguration = null,
+    string? ModelProviderKey = null);
