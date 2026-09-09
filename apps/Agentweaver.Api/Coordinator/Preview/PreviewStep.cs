@@ -277,15 +277,13 @@ public sealed class PreviewStep
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
-                if (!await SandboxEndpoints.ValidatePreviewPublicationAsync(
-                    registration.Session!, _previewService, _runStore, ct).ConfigureAwait(false))
+                if (!await EmitReadyAsync(request, registration.Session!, started.SessionId, ct).ConfigureAwait(false))
                 {
                     stopReason = "run_terminal";
                     EmitFailed(request, stopReason, "The run ended before preview publication completed.", started.SessionId);
                     return;
                 }
                 // SUCCESS: keep the process + forwarder alive to serve the preview.
-                EmitReady(request, registration.Session!, started.SessionId);
                 keepProcess = true;
                 return;
             }
@@ -461,7 +459,8 @@ public sealed class PreviewStep
         EmitWorkflowStep(r.RunId, "started", "Starting live preview.");
     }
 
-    private void EmitReady(PreviewStepRequest r, PreviewSession preview, string previewRunnerSessionId)
+    private async Task<bool> EmitReadyAsync(
+        PreviewStepRequest r, PreviewSession preview, string previewRunnerSessionId, CancellationToken ct)
     {
         var keepaliveUrl = $"/api/runs/{r.RunId}/sandbox/preview/{preview.Token}/keepalive";
         var payload = new
@@ -479,9 +478,11 @@ public sealed class PreviewStep
             started_at = preview.StartedAt,
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         };
-        Record(r.RunId, EventTypes.SandboxPreviewReady, payload);
-        Record(r.RunId, EventTypes.CoordinatorPreviewReady, payload);
+        if (!await SandboxEndpoints.PublishPreviewReadyAsync(
+            preview, payload, _previewService, _streamStore, _runStore, ct).ConfigureAwait(false))
+            return false;
         EmitWorkflowStep(r.RunId, "completed", "Preview is ready.");
+        return true;
     }
 
     private void EmitFailed(PreviewStepRequest r, string reason, string message, string? previewRunnerSessionId = null)

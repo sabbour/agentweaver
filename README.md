@@ -107,12 +107,19 @@ Add a new feature: <describe what you want>
 
 **Preview readiness.** Gateway previews report ready only after the generated HTTPS URL responds successfully, with normal TLS validation and no API credentials.
 Publication retries DNS and HTTP failures for up to 90 seconds (`Sandbox:Preview:PublicationTimeoutSeconds`).
-An expired window triggers publication cleanup and a failure event.
+An expired window triggers publication cleanup and a failure event after the pending request returns or cancels.
+The API rejects successful responses that arrive after this deadline.
 
 Approval retries retain the process-session ID and check process health again before publication.
-An accepted retry continues after its HTTP request ends, but stops when the run ends.
-Agent-initiated Gateway previews, approval retries, and deterministic coordinator previews stop publication when their run ends.
-The API removes resources from the interrupted attempt and does not report ready.
+An accepted retry continues after its HTTP request ends.
+
+Agent-initiated previews, approval retries, and deterministic coordinator previews persist ready events only while the durable run remains non-terminal.
+PostgreSQL serializes this decision and both ready events with run termination in one transaction.
+Local SQLite uses the existing process-wide run claim and an event transaction. This protection requires one API process per SQLite database.
+
+If run termination wins, the API attempts publication cleanup and does not persist ready events.
+If publication wins, the preview can remain available after the run ends under its normal retention policy.
+
 Operator previews through `/api/runs/{runId}/sandbox/port-forward` remain available after a run ends.
 Keepalive success does not establish preview health.
 

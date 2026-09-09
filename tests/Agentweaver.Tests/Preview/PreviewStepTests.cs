@@ -11,6 +11,8 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator.Preview;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
+using Microsoft.EntityFrameworkCore;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
@@ -34,7 +36,7 @@ public sealed class PreviewStepTests : IDisposable
 
     public PreviewStepTests()
     {
-        _worktree = Path.Combine(Path.GetTempPath(), "aw-step-" + Guid.NewGuid().ToString("n"));
+        _worktree = Path.Combine(Environment.CurrentDirectory, ".test-artifacts", "aw-step-" + Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(_worktree);
         // A resolvable Vite app (forces --host 0.0.0.0).
         File.WriteAllText(Path.Combine(_worktree, "package.json"), """{ "scripts": { "dev": "vite" } }""");
@@ -549,16 +551,19 @@ public sealed class PreviewStepTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task RunEndsDuringHttpsWait_LateSuccessCannotPublish(bool completeLocalStream)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task RunEndsDuringHttpsOrPersistenceWait_CannotPublish(bool completeLocalStream, bool pauseAtPersistence)
     {
         var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
         var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var publication = new HttpClient(new PreviewPublicationHandler(async (_, ct) =>
         {
             entered.SetResult(ct);
-            await resume.Task;
+            if (!pauseAtPersistence)
+                await resume.Task;
             return new HttpResponseMessage(HttpStatusCode.OK);
         }));
         var kube = new FakeKubeHandler();
@@ -574,10 +579,12 @@ public sealed class PreviewStepTests : IDisposable
             Enabled = true,
             ZoneSuffix = "preview.example.test",
         }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
-        var h = new Harness(_worktree, previewService: preview);
+        var h = new Harness(_worktree, previewService: preview, pauseAtPersistence: pauseAtPersistence);
         using var appLifetime = new CancellationTokenSource();
-        var step = h.Step.RunAsync(Request(), appLifetime.Token);
+        var step = Task.Run(() => h.Step.RunAsync(Request(), appLifetime.Token));
         var publicationCt = await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (h.Persistence is not null)
+            await h.Persistence.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var route = kube.Requests.Single(r => r.Method == "POST" && r.Path == routes);
         using var routeDocument = JsonDocument.Parse(route.Body!);
         var routeName = routeDocument.RootElement.GetProperty("metadata").GetProperty("name").GetString();
@@ -589,10 +596,12 @@ public sealed class PreviewStepTests : IDisposable
             h.Streams.Complete(RunId);
         var publicationCancelled = publicationCt.IsCancellationRequested;
         resume.SetResult();
+        h.Persistence?.Resume.TrySetResult();
         await step.WaitAsync(TimeSpan.FromSeconds(5));
 
         appLifetime.IsCancellationRequested.Should().BeFalse();
-        publicationCancelled.Should().Be(completeLocalStream);
+        if (!pauseAtPersistence)
+            publicationCancelled.Should().Be(completeLocalStream);
         h.Types().Should().NotContain(EventTypes.SandboxPreviewReady).And.NotContain(EventTypes.CoordinatorPreviewReady);
         h.PreviewRunner.StopCalls.Should().Be(1);
         h.PreviewRunner.StopCancellationToken.IsCancellationRequested.Should().BeFalse();
@@ -607,6 +616,9 @@ public sealed class PreviewStepTests : IDisposable
             r.Method == "PATCH" && r.Path.EndsWith($"/sandboxclaims/{claim}")).Body!);
         retention.RootElement.GetProperty("spec").GetProperty("lifecycle")
             .GetProperty("ttlSecondsAfterFinished").GetInt32().Should().Be(600);
+        if (h.Persistence is not null)
+            (await h.Persistence.GetPersistedEventsAsync(RunId)).Should().NotContain(e =>
+                e.Type == EventTypes.SandboxPreviewReady || e.Type == EventTypes.CoordinatorPreviewReady);
     }
 
     [Theory]
@@ -689,7 +701,8 @@ public sealed class PreviewStepTests : IDisposable
 
     private sealed class Harness
     {
-        public readonly RunStreamStore Streams = new();
+        public readonly RunStreamStore Streams;
+        public readonly PausingPreviewEventStream? Persistence;
         public readonly FakePreviewRunnerClient PreviewRunner = new();
         public readonly FakePreviewService PreviewService = new();
         public readonly InMemoryToolApprovalGate ApprovalGate = new();
@@ -703,13 +716,23 @@ public sealed class PreviewStepTests : IDisposable
             IPodNameRegistry? podRegistry = null,
             IPreviewCommandModel? commandModel = null,
             TimeSpan? approvalTimeout = null,
-            ISandboxPreviewService? previewService = null)
+            ISandboxPreviewService? previewService = null,
+            bool pauseAtPersistence = false)
         {
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+                new Dictionary<string, string?> { ["Database:Path"] = Path.Combine(worktree, "runs.db") }).Build();
+            if (pauseAtPersistence)
+            {
+                using var memory = new MemoryDbContext(new DbContextOptionsBuilder<MemoryDbContext>()
+                    .UseSqlite($"Data Source={SqliteMemoryDbPathResolver.Resolve(configuration)}").Options);
+                memory.Database.EnsureCreated();
+                Persistence = new PausingPreviewEventStream(new SqliteRunEventStream(configuration));
+            }
+            Streams = new RunStreamStore(Persistence);
             Streams.Create(RunId, "owner");
-            var db = new SqliteDb(new ConfigurationBuilder().AddInMemoryCollection(
-                new Dictionary<string, string?> { ["Database:Path"] = Path.Combine(worktree, "runs.db") }).Build());
+            var db = new SqliteDb(configuration);
             db.EnsureCreatedAsync().GetAwaiter().GetResult();
-            RunStore = new SqliteRunStore(db);
+            RunStore = new RunActiveClaimGuardedRunStore(new SqliteRunStore(db), new RunActiveClaimGuard());
             if (RunStore.GetAsync(Domain.RunId.Parse(RunId)).GetAwaiter().GetResult() is null)
                 RunStore.InsertAsync(new Run
                 {

@@ -23,6 +23,16 @@ public interface IRunEventStream
     ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
 
     /// <summary>
+    /// Appends a batch with assigned sequences only if the durable run is still non-terminal.
+    /// The status decision and the entire batch are protected against run-store transitions.
+    /// Returns the committed events, or an empty list if terminalization won. Unsupported stores
+    /// fail closed; callers must not fall back to a status read followed by ordinary appends.
+    /// </summary>
+    Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
+        string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support conditional event batches.");
+
+    /// <summary>
     /// Subscribes to a run's event stream. Replays persisted events from <paramref name="fromSequence"/>,
     /// then tails the live channel for new events. Handoff is gapless and duplicate-free at the
     /// cursor boundary. Returns an <see cref="IAsyncEnumerable{T}"/> that completes when a terminal
