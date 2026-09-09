@@ -546,13 +546,13 @@ public static class SandboxEndpoints
         try
         {
             ct.ThrowIfCancellationRequested();
-            var entry = streams.Get(preview.RunId);
             if (runStore is not null)
-                published = entry is not null
-                    && await entry.TryRecordPreviewReadyAsync(payload, runStore, ct).ConfigureAwait(false);
+                published = await streams.TryRecordPreviewReadyAsync(
+                    preview.RunId, payload, runStore, ct).ConfigureAwait(false);
             else
             {
                 // Intentional operator publication may start after the run has ended.
+                var entry = streams.Get(preview.RunId);
                 entry?.RecordNext(EventTypes.SandboxPreviewReady, payload);
                 entry?.RecordNext(EventTypes.CoordinatorPreviewReady, payload);
                 published = true;
@@ -802,6 +802,9 @@ public static class SandboxEndpoints
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Preview approval retry failed for run {RunId}", runId);
+            await TryStopRetainedProcessAsync(
+                runId, retry.PreviewRunnerSessionId, "registration_failed",
+                previewRunnerClient, turnTokens, secretStore, logger).ConfigureAwait(false);
             EmitPreviewFailure(
                 streamStore,
                 runId,
@@ -822,17 +825,18 @@ public static class SandboxEndpoints
     {
         if (string.IsNullOrWhiteSpace(previewRunnerSessionId)) return;
 
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         try
         {
             var bearer = await ResolveRetainedProcessBearerAsync(
-                runId, turnTokens, secretStore).ConfigureAwait(false);
+                runId, turnTokens, secretStore, cleanup.Token).WaitAsync(cleanup.Token).ConfigureAwait(false);
 
             await previewRunnerClient.StopProcessAsync(
                 runId,
                 bearer,
                 previewRunnerSessionId,
                 reason,
-                CancellationToken.None).ConfigureAwait(false);
+                cleanup.Token).WaitAsync(cleanup.Token).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -847,12 +851,13 @@ public static class SandboxEndpoints
     private static async Task<string?> ResolveRetainedProcessBearerAsync(
         string runId,
         Agentweaver.AgentRuntime.Workflow.IAgentHostTurnTokenRegistry turnTokens,
-        Agentweaver.Api.Auth.ISecretStore secretStore)
+        Agentweaver.Api.Auth.ISecretStore secretStore,
+        CancellationToken ct = default)
     {
         var bearer = turnTokens.TryGetTurnToken(runId);
         if (!string.IsNullOrWhiteSpace(bearer)) return bearer;
         var secret = await secretStore.GetSecretAsync(
-            PreviewRunnerCredential.SecretKey(runId), CancellationToken.None).ConfigureAwait(false);
+            PreviewRunnerCredential.SecretKey(runId), ct).ConfigureAwait(false);
         return secret.Found ? secret.Value : null;
     }
 

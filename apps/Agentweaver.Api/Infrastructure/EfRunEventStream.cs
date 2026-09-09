@@ -88,7 +88,8 @@ public sealed class EfRunEventStream : IRunEventStream
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
     {
-        var terminalStatuses = Endpoints.EndpointHelpers.TerminalRunStatuses.Select(s => s.ToApiString()).ToArray();
+        var terminalStatuses = Endpoints.EndpointHelpers.TerminalRunStatuses
+            .Append(RunStatus.AssembleReady).Select(s => s.ToApiString()).ToArray();
         for (var attempt = 1; attempt <= MaxWriteAttempts; attempt++)
         {
             await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);

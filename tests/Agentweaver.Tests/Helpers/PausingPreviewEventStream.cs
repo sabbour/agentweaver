@@ -9,6 +9,7 @@ internal sealed class PausingPreviewEventStream(IRunEventStream inner) : IRunEve
 {
     public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource Resume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public Exception? ConditionalFailure { get; set; }
 
     public async ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
     {
@@ -21,6 +22,8 @@ internal sealed class PausingPreviewEventStream(IRunEventStream inner) : IRunEve
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
     {
         await PauseAsync();
+        if (ConditionalFailure is not null)
+            throw ConditionalFailure;
         return await inner.AppendWhileRunActiveAsync(runId, events, runStore, ct);
     }
 

@@ -1,11 +1,16 @@
 using System.Data.Common;
+using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.PostgresIntegration;
 
@@ -14,18 +19,36 @@ namespace Agentweaver.Tests.PostgresIntegration;
 public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
 {
     [PostgresRequiredFact]
-    public async Task TerminalizationWinsDuringConditionalUpdate_NoReadyEvents()
+    public Task TerminalizationWinsDuringConditionalUpdate_NoReadyEvents() =>
+        AssertTerminalizationWinsAsync(RunStatus.Failed, hasLocalEntry: true);
+
+    [PostgresRequiredFact]
+    public Task AssembleReadyWinsDuringConditionalUpdate_NoReadyEvents() =>
+        AssertTerminalizationWinsAsync(RunStatus.AssembleReady, hasLocalEntry: true);
+
+    [PostgresRequiredFact]
+    public async Task TerminalizationWithoutLocalEntry_NoReadyEventsAndCleansPublication()
+    {
+        await AssertTerminalizationWinsAsync(RunStatus.Failed, hasLocalEntry: false);
+        await AssertTerminalizationWinsAsync(RunStatus.AssembleReady, hasLocalEntry: false);
+    }
+
+    private async Task AssertTerminalizationWinsAsync(RunStatus status, bool hasLocalEntry)
     {
         var run = await CreateRunAsync();
         await using var terminalDb = await pg.CreateDbContextAsync();
         await using var terminalTx = await terminalDb.Database.BeginTransactionAsync();
         await terminalDb.Runs.Where(r => r.RunId == run.Id.ToString())
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "failed"));
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, status.ToApiString()));
         var observer = new UpdateObserver();
         var stream = new EfRunEventStream(Factory(observer));
-        var entry = new RunStreamStore(stream).Create(run.Id.ToString(), run.SubmittingUser);
+        var streams = new RunStreamStore(stream);
+        var entry = hasLocalEntry ? streams.Create(run.Id.ToString(), run.SubmittingUser) : null;
+        var preview = new RecordingPreviewService();
 
-        var append = entry.TryRecordPreviewReadyAsync(new { }, new EfRunStore(pg.Factory), CancellationToken.None);
+        var append = SandboxEndpoints.PublishPreviewReadyAsync(
+            preview.Session(run.Id.ToString(), 5173), new { }, preview, streams,
+            new EfRunStore(pg.Factory), CancellationToken.None);
         await observer.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         try
         {
@@ -38,8 +61,34 @@ public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
         }
 
         (await append.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeFalse();
-        entry.GetSnapshotSince(0).Events.Should().BeEmpty();
+        entry?.GetSnapshotSince(0).Events.Should().BeEmpty();
         (await stream.GetPersistedEventsAsync(run.Id.ToString())).Should().BeEmpty();
+        preview.StopCalls.Should().Be(1);
+        if (!hasLocalEntry)
+            streams.Get(run.Id.ToString()).Should().BeNull();
+    }
+
+    [PostgresRequiredFact]
+    public async Task ActiveRunWithoutLocalEntry_PersistsOneReadyPairAndPreservesHistory()
+    {
+        var run = await CreateRunAsync();
+        var stream = new EfRunEventStream(pg.Factory);
+        await stream.AppendAsync(run.Id.ToString(),
+            new RunEvent(0, EventTypes.RunStarted, new { run_id = run.Id.ToString() }, DateTimeOffset.UtcNow));
+        var streams = new RunStreamStore(stream);
+        var preview = new RecordingPreviewService();
+
+        var result = await SandboxEndpoints.StartPreviewForRunAsync(
+            run.Id.ToString(), 5173, run, preview, null!, streams, NullLogger.Instance,
+            CancellationToken.None, runStore: new EfRunStore(pg.Factory));
+
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(200);
+        var events = await stream.GetPersistedEventsAsync(run.Id.ToString());
+        events.Select(e => e.Type).Should().Equal(
+            EventTypes.RunStarted, EventTypes.SandboxPreviewReady, EventTypes.CoordinatorPreviewReady);
+        events.Select(e => e.Sequence).Should().Equal(1, 2, 3);
+        streams.Get(run.Id.ToString()).Should().BeNull("publication must not create an incomplete local history");
+        preview.StopCalls.Should().Be(0);
     }
 
     [PostgresRequiredFact]
@@ -112,6 +161,32 @@ public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
     private sealed class ContextFactory(DbContextOptions<MemoryDbContext> options) : IDbContextFactory<MemoryDbContext>
     {
         public MemoryDbContext CreateDbContext() => new(options);
+    }
+
+    private sealed class RecordingPreviewService : ISandboxPreviewService
+    {
+        public int StopCalls;
+        public bool Enabled => true;
+        public int AllowedPortMin => 3000;
+        public int AllowedPortMax => 9000;
+        public PreviewSession Session(string runId, int port) =>
+            new("preview-token", runId, "preview-pod", port, "https://preview.example.test", DateTimeOffset.UtcNow);
+        public Task<PreviewSession> StartPreviewAsync(
+            string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
+            string? previewRunnerSessionId = null) => Task.FromResult(Session(runId, targetPort));
+        public Task StopPreviewAsync(string token, CancellationToken ct = default)
+        {
+            StopCalls++;
+            return Task.CompletedTask;
+        }
+        public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<PreviewSession>>([]);
+        public Task KeepAliveAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(PreviewLifecycleState.Previewable);
+        public Task<bool> VerifyTokenForRunAsync(string token, string runId, CancellationToken ct = default) =>
+            Task.FromResult(false);
+        public Task<int> ReapAsync(CancellationToken ct = default) => Task.FromResult(0);
     }
 
     private sealed class UpdateObserver : DbCommandInterceptor

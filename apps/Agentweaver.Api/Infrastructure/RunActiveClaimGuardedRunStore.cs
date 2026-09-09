@@ -27,7 +27,7 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
         var run = await inner.GetAsync(runId, ct).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
-        if (run is null || Endpoints.EndpointHelpers.IsTerminal(run.Status))
+        if (run is null || Endpoints.EndpointHelpers.IsTerminal(run.Status) || run.Status == RunStatus.AssembleReady)
             return false;
         await append().ConfigureAwait(false);
         return true;

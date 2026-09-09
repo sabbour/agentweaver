@@ -14,25 +14,36 @@ public sealed class ConditionalRunEventBatchTests : IDisposable
         Environment.CurrentDirectory, ".test-artifacts", "conditional-events-" + Guid.NewGuid().ToString("N"));
 
     [Theory]
-    [InlineData(RunStatus.Completed)]
-    [InlineData(RunStatus.Failed)]
-    [InlineData(RunStatus.Declined)]
-    [InlineData(RunStatus.Merged)]
-    [InlineData(RunStatus.MergeFailed)]
-    public async Task TerminalizationWinsAtPersistenceBoundary_RejectsBothEvents(RunStatus status)
+    [InlineData(RunStatus.Completed, true)]
+    [InlineData(RunStatus.Failed, true)]
+    [InlineData(RunStatus.Declined, true)]
+    [InlineData(RunStatus.Merged, true)]
+    [InlineData(RunStatus.MergeFailed, true)]
+    [InlineData(RunStatus.AssembleReady, true)]
+    [InlineData(RunStatus.Completed, false)]
+    [InlineData(RunStatus.Failed, false)]
+    [InlineData(RunStatus.Declined, false)]
+    [InlineData(RunStatus.Merged, false)]
+    [InlineData(RunStatus.MergeFailed, false)]
+    [InlineData(RunStatus.AssembleReady, false)]
+    public async Task TerminalizationWinsAtPersistenceBoundary_RejectsBothEvents(RunStatus status, bool hasLocalEntry)
     {
         var (run, store, stream) = await CreateAsync();
         var paused = new PausingPreviewEventStream(stream);
-        var entry = new RunStreamStore(paused).Create(run.Id.ToString(), run.SubmittingUser);
-        var append = entry.TryRecordPreviewReadyAsync(new { ready = true }, store, CancellationToken.None);
+        var streams = new RunStreamStore(paused);
+        var entry = hasLocalEntry ? streams.Create(run.Id.ToString(), run.SubmittingUser) : null;
+        var append = streams.TryRecordPreviewReadyAsync(
+            run.Id.ToString(), new { ready = true }, store, CancellationToken.None);
         await paused.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         await store.UpdateStatusAsync(run.Id, status, DateTimeOffset.UtcNow);
         paused.Resume.SetResult();
 
         (await append.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeFalse();
-        entry.GetSnapshotSince(0).Events.Should().BeEmpty();
+        entry?.GetSnapshotSince(0).Events.Should().BeEmpty();
         (await stream.GetPersistedEventsAsync(run.Id.ToString())).Should().BeEmpty();
+        if (!hasLocalEntry)
+            streams.Get(run.Id.ToString()).Should().BeNull();
     }
 
     [Fact]
@@ -55,11 +66,13 @@ public sealed class ConditionalRunEventBatchTests : IDisposable
     [InlineData("review")]
     [InlineData("merge")]
     [InlineData("delete")]
+    [InlineData("assemble")]
     public async Task SqlitePublicationClaim_BlocksEveryTerminalTransition(string transition)
     {
         var (run, store, stream) = await CreateAsync();
         await store.UpdateStatusAsync(run.Id,
-            transition == "merge" ? RunStatus.Merging : RunStatus.AwaitingReview, null);
+            transition == "assemble" ? RunStatus.InProgress
+                : transition == "merge" ? RunStatus.Merging : RunStatus.AwaitingReview, null);
         var guarded = (RunActiveClaimGuardedRunStore)store;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -73,6 +86,8 @@ public sealed class ConditionalRunEventBatchTests : IDisposable
         {
             "review" => store.TryTransitionReviewAsync(run.Id, RunStatus.Declined, DateTimeOffset.UtcNow, "declined"),
             "merge" => store.CompleteMergingAsync(run.Id, RunStatus.Merged, DateTimeOffset.UtcNow, "merged"),
+            "assemble" => store.SetAssembleReadyAsync(
+                run.Id, "tree", "worktree", "diff", 1, DateTimeOffset.UtcNow),
             _ => store.DeleteAsync(run.Id),
         };
         try
