@@ -87,4 +87,42 @@ public sealed class RubberduckTurnExecutorTests
 
         await act.Should().ThrowAsync<AgentProviderException>();
     }
+
+    [Fact]
+    public async Task HandleAsync_RemoteProviderChange_IsProjectedAsProviderFailure()
+    {
+        var agentFactory = new FakeWorkflowAgentFactory(new TestFileEditAgentRunner())
+        {
+            InfrastructureProviderFailureRole = FakeAgentRole.Rubberduck,
+        };
+        var executor = new RubberduckTurnExecutor(
+            new GitHubCopilotClientFactory(
+                new ConfigurationBuilder().Build(),
+                new FixedGitHubCopilotCapabilityCredentialProvider()),
+            new PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLoggerFactory.Instance,
+            agentFactory: agentFactory);
+
+        var act = () => executor.HandleAsync(new AgentTurnOutput(
+            RunId: "rubberduck-remote-provider-change",
+            TreeHash: "tree",
+            Diff: "diff",
+            StepCount: 1,
+            WorktreePath: AppContext.BaseDirectory,
+            WorktreeBranch: "agent/run",
+            RepositoryPath: AppContext.BaseDirectory,
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false,
+            ModelSource: ModelSource.Byok.ToApiString(),
+            ByokProviderFingerprint: "byok-fingerprint"),
+            context: null!,
+            CancellationToken.None).AsTask();
+
+        var failure = (await act.Should().ThrowAsync<AgentProviderException>()).Which;
+        failure.ErrorCode.Should().Be("model_provider_changed");
+        failure.ModelSource.Should().Be(ModelSource.Byok);
+    }
 }

@@ -17,6 +17,7 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
     private readonly ModelSource _modelSource;
     private readonly CopilotOperationCapability? _copilotCapability;
     private readonly ByokProviderConfiguration? _byokProviderConfiguration;
+    private readonly IModelInvocationGuard? _modelInvocationGuard;
     private bool _disposed;
 
     public AgentweaverAgentRuntime(
@@ -26,7 +27,8 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
         string? projectId = null,
         ModelSource modelSource = ModelSource.GitHubCopilot,
         CopilotOperationCapability? copilotCapability = null,
-        ByokProviderConfiguration? byokProviderConfiguration = null)
+        ByokProviderConfiguration? byokProviderConfiguration = null,
+        IModelInvocationGuard? modelInvocationGuard = null)
     {
         _agentRunner = agentRunner ?? throw new ArgumentNullException(nameof(agentRunner));
         _workingDirectory = workingDirectory ?? throw new ArgumentNullException(nameof(workingDirectory));
@@ -35,6 +37,7 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
         _modelSource = modelSource;
         _copilotCapability = copilotCapability;
         _byokProviderConfiguration = byokProviderConfiguration;
+        _modelInvocationGuard = modelInvocationGuard;
     }
 
     /// <summary>
@@ -57,7 +60,8 @@ public sealed class AgentweaverAgentRuntime : IAsyncDisposable
             userId: userId,
             projectId: _projectId,
             copilotCapability: _copilotCapability,
-            byokProviderConfiguration: _byokProviderConfiguration).ConfigureAwait(false);
+            byokProviderConfiguration: _byokProviderConfiguration,
+            modelInvocationGuard: _modelInvocationGuard).ConfigureAwait(false);
     }
 
     /// <summary>

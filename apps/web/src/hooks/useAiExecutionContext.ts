@@ -32,6 +32,9 @@ export function useAiExecutionContext(
   const [error, setError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const previousIdentity = useRef('');
+  const requestSequence = useRef(0);
+  const displayContextRef = useRef<AiExecutionContext | null>(null);
+  const scopeKey = `${operation}\u0000${projectId ?? ''}\u0000${runId ?? ''}`;
 
   const applyDisplayContext = useCallback((next: AiExecutionContext) => {
     const nextIdentity = providerIdentity(next);
@@ -39,41 +42,54 @@ export function useAiExecutionContext(
       setAnnouncement(`AI provider changed. ${aiExecutionProviderLabel(next)}`);
     }
     previousIdentity.current = nextIdentity;
+    displayContextRef.current = next;
     setDisplayContext(next);
   }, []);
 
   const refresh = useCallback(async () => {
+    const requestId = ++requestSequence.current;
     setLoading(true);
     setError(null);
     try {
       const next = await apiClient.prepareAiExecutionContext(operation, projectId, runId);
+      if (requestId !== requestSequence.current) return null;
       setPreparedContext(next);
-      applyDisplayContext(next);
+      if (displayContextRef.current?.phase !== 'active'
+          && displayContextRef.current?.phase !== 'completed') {
+        applyDisplayContext(next);
+      }
       return next;
     } catch (err) {
+      if (requestId !== requestSequence.current) return null;
       setError(err instanceof Error ? err.message : 'AI provider information is unavailable.');
       return null;
     } finally {
-      setLoading(false);
+      if (requestId === requestSequence.current) setLoading(false);
     }
   }, [applyDisplayContext, operation, projectId, runId]);
 
   useEffect(() => {
-    if (!enabled) {
+    const sequence = requestSequence;
+    const scopeRequestId = ++requestSequence.current;
+    queueMicrotask(() => {
+      if (scopeRequestId !== sequence.current) return;
+      previousIdentity.current = '';
+      displayContextRef.current = null;
       setPreparedContext(null);
       setDisplayContext(null);
+      setAnnouncement('');
       setError(null);
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (!cancelled) void refresh();
+      if (!enabled) {
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      void refresh();
     });
     return () => {
-      cancelled = true;
+      ++sequence.current;
     };
-  }, [enabled, refresh]);
+  }, [enabled, refresh, scopeKey]);
 
   useEffect(() => {
     if (!preparedContext?.expires_at) return;
@@ -131,8 +147,16 @@ export function useAiExecutionContext(
   }, [applyDisplayContext, operation]);
 
   const setPhase = useCallback((phase: AiExecutionContext['phase']) => {
-    setDisplayContext((current) => current ? { ...current, phase } : current);
+    setDisplayContext((current) => {
+      const next = current ? { ...current, phase } : current;
+      displayContextRef.current = next;
+      return next;
+    });
   }, []);
+
+  const restorePreparedContext = useCallback(() => {
+    if (preparedContext) applyDisplayContext(preparedContext);
+  }, [applyDisplayContext, preparedContext]);
 
   const providerKey = preparedContext?.execution_key ?? undefined;
   const available = preparedContext?.ai_required === false
@@ -150,6 +174,7 @@ export function useAiExecutionContext(
     applyCompletedContext,
     applyProvider,
     setPhase,
+    restorePreparedContext,
   }), [
     announcement,
     applyCompletedContext,
@@ -161,6 +186,7 @@ export function useAiExecutionContext(
     loading,
     providerKey,
     refresh,
+    restorePreparedContext,
     setPhase,
   ]);
 }

@@ -243,6 +243,10 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
 
             EmitVerdict(writer, subWriter, input.RunId, verdict, response);
         }
+        catch (WorkflowAgentInfrastructureException ex) when (ex.IsModelProviderChanged)
+        {
+            throw ex.ToModelProviderChanged(input.ModelSource);
+        }
         catch (AgentProviderException)
         {
             throw;

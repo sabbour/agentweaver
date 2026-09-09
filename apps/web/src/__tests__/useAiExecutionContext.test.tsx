@@ -40,7 +40,17 @@ function Harness() {
       <span data-testid="label">{execution.context?.effective_model_provider?.provider_kind}</span>
       <span data-testid="announcement">{execution.announcement}</span>
       <span data-testid="error">{execution.error}</span>
+      <span data-testid="provider-key">{execution.providerKey}</span>
+      <span data-testid="phase">{execution.context?.phase}</span>
+      <span data-testid="loading">{String(execution.loading)}</span>
       <button onClick={() => void execution.refresh()}>Refresh</button>
+      <button onClick={() => execution.setPhase('active')}>Use</button>
+      <button onClick={() => execution.applyCompletedContext({
+        ...prepared('platform_github_copilot', ''),
+        phase: 'completed',
+        execution_key: null,
+        expires_at: null,
+      })}>Complete</button>
       <button onClick={() => execution.handleInvocationError(new ApiError(
         409,
         JSON.stringify({ error: 'model_provider_changed', context: prepared('platform_github_copilot', 'key-2') }),
@@ -49,6 +59,20 @@ function Harness() {
         409,
         JSON.stringify({ error: 'ai_execution_context_expired', context: prepared('platform_github_copilot', 'key-2') }),
       ))}>Expire</button>
+    </>
+  );
+}
+
+function ScopedHarness({ operation, projectId }: { operation: string; projectId: string }) {
+  const execution = useAiExecutionContext(operation, projectId);
+  return (
+    <>
+      <span data-testid="scoped-provider-key">{execution.providerKey}</span>
+      <span data-testid="scoped-provider">
+        {execution.context?.effective_model_provider?.provider_kind}
+      </span>
+      <span data-testid="scoped-error">{execution.error}</span>
+      <span data-testid="scoped-loading">{String(execution.loading)}</span>
     </>
   );
 }
@@ -83,6 +107,42 @@ afterEach(() => {
 });
 
 describe('useAiExecutionContext', () => {
+  it('ignores stale preparation results, errors, and loading from a previous scope', async () => {
+    let rejectA!: (reason: Error) => void;
+    let resolveB!: (value: AiExecutionContext) => void;
+    const requestA = new Promise<AiExecutionContext>((_, reject) => {
+      rejectA = reject;
+    });
+    const requestB = new Promise<AiExecutionContext>((resolve) => {
+      resolveB = resolve;
+    });
+    vi.mocked(apiClient.prepareAiExecutionContext).mockImplementation(
+      (operation) => operation === 'operation-a' ? requestA : requestB,
+    );
+
+    const view = render(<ScopedHarness operation="operation-a" projectId="project-a" />);
+    await waitFor(() => expect(apiClient.prepareAiExecutionContext).toHaveBeenCalledTimes(1));
+    view.rerender(<ScopedHarness operation="operation-b" projectId="project-b" />);
+    await waitFor(() => expect(apiClient.prepareAiExecutionContext).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolveB(prepared('byok', 'key-b'));
+      await requestB;
+    });
+    expect(screen.getByTestId('scoped-provider-key').textContent).toBe('key-b');
+    expect(screen.getByTestId('scoped-provider').textContent).toBe('byok');
+    expect(screen.getByTestId('scoped-loading').textContent).toBe('false');
+
+    await act(async () => {
+      rejectA(new Error('stale A failure'));
+      await requestA.catch(() => undefined);
+    });
+    expect(screen.getByTestId('scoped-provider-key').textContent).toBe('key-b');
+    expect(screen.getByTestId('scoped-provider').textContent).toBe('byok');
+    expect(screen.getByTestId('scoped-error').textContent).toBe('');
+    expect(screen.getByTestId('scoped-loading').textContent).toBe('false');
+  });
+
   it('announces a same-kind provider replacement detected during refresh', async () => {
     const replacement = prepared('byok', 'new-execution-key');
     replacement.effective_model_provider!.provider_key = 'replacement-fingerprint';
@@ -194,5 +254,28 @@ describe('useAiExecutionContext', () => {
     });
 
     expect(apiClient.prepareAiExecutionContext).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['active', 'Use'],
+    ['completed', 'Complete'],
+  ] as const)('renews the prepared key without replacing %s provider provenance', async (
+    phase,
+    action,
+  ) => {
+    vi.mocked(apiClient.prepareAiExecutionContext)
+      .mockResolvedValueOnce(prepared('platform_github_copilot', 'key-1'))
+      .mockResolvedValueOnce(prepared('byok', 'key-2'));
+
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByTestId('provider-key').textContent).toBe('key-1'));
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    expect(screen.getByTestId('phase').textContent).toBe(phase);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.getByTestId('provider-key').textContent).toBe('key-2'));
+
+    expect(screen.getByTestId('phase').textContent).toBe(phase);
+    expect(screen.getByTestId('label').textContent).toBe('platform_github_copilot');
   });
 });

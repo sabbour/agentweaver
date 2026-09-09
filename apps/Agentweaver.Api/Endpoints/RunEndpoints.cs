@@ -1436,18 +1436,6 @@ app.MapPost("/api/runs/{id}/retry", async (
     // fresh full-restart mint below.
     if (isCoordinatorRun)
     {
-        // Fence the immutable Copilot snapshot in every execution mode before recovery mutates
-        // the run or re-arms work. In-process execution redeems the same run snapshot too.
-        if (!await capabilitySnapshots.PrepareForUnattendedCopilotLaunchAsync(
-                run,
-                ct,
-                expectedCopilotBindingId: execution.Plan!.Provider.ProviderId(),
-                expectedCopilotCredentialVersion: execution.Plan.Provider.CredentialVersion()).ConfigureAwait(false))
-        {
-            var requirement = execution.Plan.Provider.ToConnectionRequiredException(run.ProjectId);
-            return Results.Json(requirement.Requirement, statusCode: StatusCodes.Status409Conflict);
-        }
-
         bool resumed;
         try
         {
@@ -1457,7 +1445,22 @@ app.MapPost("/api/runs/{id}/retry", async (
                     run.SubmittingUser,
                     ct,
                     execution.Plan!.Provider,
-                    execution.Plan.ResolutionScope)
+                    execution.Plan.ResolutionScope,
+                    beforeResume: async resumeCt =>
+                    {
+                        // The source snapshot fences only an in-place continuation. A retry that has
+                        // no recoverable source work falls through and mints a fresh run against the
+                        // accepted current provider instead of being rejected by stale source state.
+                        if (!await capabilitySnapshots.PrepareForUnattendedCopilotLaunchAsync(
+                                run,
+                                resumeCt,
+                                expectedCopilotBindingId: execution.Plan.Provider.ProviderId(),
+                                expectedCopilotCredentialVersion: execution.Plan.Provider.CredentialVersion())
+                            .ConfigureAwait(false))
+                        {
+                            throw execution.Plan.Provider.ToConnectionRequiredException(run.ProjectId);
+                        }
+                    })
                 .ConfigureAwait(false);
         }
         catch (ModelProviderConnectionRequiredException ex)
