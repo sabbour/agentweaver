@@ -173,6 +173,10 @@ public sealed class RubberduckTurnExecutor : Executor<AgentTurnOutput, WorkflowR
                     input.RunId, Truncate(response));
             }
         }
+        catch (WorkflowAgentInfrastructureException ex) when (ex.IsModelProviderChanged)
+        {
+            throw ex.ToModelProviderChanged(input.ModelSource);
+        }
         catch (AgentProviderException)
         {
             throw;

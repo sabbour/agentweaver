@@ -598,7 +598,8 @@ public sealed class CastingService
             project.Id.ToString(),
             executionPlan.ModelSource,
             executionPlan.Capability,
-            executionPlan.ByokProviderConfiguration);
+            executionPlan.ByokProviderConfiguration,
+            executionPlan.ModelInvocationGuard);
         try
         {
             result = await runtime.RunAsync(prompt, ct, userId: owner).ConfigureAwait(false);

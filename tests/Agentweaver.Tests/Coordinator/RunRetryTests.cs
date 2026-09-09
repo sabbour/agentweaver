@@ -207,6 +207,60 @@ public sealed class RunRetryTests : IDisposable
     }
 
     [Fact]
+    public async Task FreshCoordinatorRetry_IgnoresStaleSourceSnapshotAndUsesAcceptedCurrentProvider()
+    {
+        using var factory = CoordinatorWebApplicationFactory.CreatePodPerRun();
+        using var owner = factory.CreateOwnerClient();
+        var projectId = ProjectId.Parse(await CreateProjectAsync(factory, owner));
+        var source = await SeedRunAsync(
+            RunStatus.Failed,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            agentName: "Coordinator",
+            origin: RunOrigin.Interactive,
+            projectId: projectId,
+            factory: factory);
+        await SeedUnattendedCopilotSnapshotAsync(
+            source,
+            expiredSnapshot: false,
+            revokeBinding: true,
+            factory: factory);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+            {
+                Id = SnapshotRef.Create().Value,
+                ProjectId = projectId.ToString(),
+                EntraObjectId = CoordinatorWebApplicationFactory.OwnerUser,
+                CredentialReference = "copilot-app-project-retry-replacement",
+                CredentialVersion = "replacement-version",
+                GrantDigest = "replacement-digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            await scope.ServiceProvider.GetRequiredService<ISecretStore>().SetSecretAsync(
+                "copilot-app-project-retry-replacement",
+                """{"status":"signed-in","accessToken":"replacement-token","expiresAt":"2099-01-01T00:00:00Z","githubLogin":"replacement-bot"}""");
+            await db.SaveChangesAsync();
+        }
+        await factory.PrepareAiExecutionAsync(
+            owner,
+            "orchestration",
+            projectId.ToString(),
+            source.Id.ToString());
+
+        var resp = await owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+
+        var responseBody = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(HttpStatusCode.Created, responseBody);
+        var body = JsonSerializer.Deserialize<JsonElement>(responseBody);
+        body.GetProperty("run_id").GetString().Should().NotBe(source.Id.ToString());
+        body.GetProperty("retried_from").GetString().Should().Be(source.Id.ToString());
+        (await factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(source.Id))!.Status
+            .Should().Be(RunStatus.Failed);
+    }
+
+    [Fact]
     public async Task InPlaceCoordinatorRetry_InApiBlankProject_ResumesWithoutAgentHostCapability()
     {
         var projectId = ProjectId.Parse(await CreateProjectAsync());

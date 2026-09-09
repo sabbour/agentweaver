@@ -432,7 +432,12 @@ public sealed class CoordinatorRunService
 
         await using var scope = _scopeFactory.CreateAsyncScope();
         var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
-        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(run, ct).ConfigureAwait(false))
+        if (!await lifecycle.PrepareForUnattendedCopilotLaunchAsync(
+                run,
+                ct,
+                expectedCopilotBindingId: effectiveProvider.ProviderId(),
+                expectedCopilotCredentialVersion: effectiveProvider.CredentialVersion())
+            .ConfigureAwait(false))
             throw effectiveProvider.ToConnectionRequiredException(run.ProjectId);
     }
 

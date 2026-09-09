@@ -25,6 +25,7 @@ public sealed class FakeWorkflowAgentFactory : IWorkflowAgentFactory
     internal FakeWorkflowTurnAgent? LastBuildTestAgent { get; private set; }
     internal FakeWorkflowTurnAgent? LastScribeAgent { get; private set; }
     internal FakeAgentRole? ProviderFailureRole { get; set; }
+    internal FakeAgentRole? InfrastructureProviderFailureRole { get; set; }
 
     public IWorkflowTurnAgent CreateWorkerAgent() =>
         LastWorkerAgent = Create(FakeAgentRole.Worker);
@@ -42,7 +43,11 @@ public sealed class FakeWorkflowAgentFactory : IWorkflowAgentFactory
         LastScribeAgent = Create(FakeAgentRole.Scribe);
 
     private FakeWorkflowTurnAgent Create(FakeAgentRole role) =>
-        new(role, _runner, ProviderFailureRole == role);
+        new(
+            role,
+            _runner,
+            ProviderFailureRole == role,
+            InfrastructureProviderFailureRole == role);
 }
 
 internal enum FakeAgentRole
@@ -71,6 +76,7 @@ internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent, IProviderBound
     private string? _systemPromptContext;
     private ChannelWriter<RunEvent>? _stream;
     private readonly bool _throwProviderFailure;
+    private readonly bool _throwInfrastructureProviderFailure;
 
     internal ModelSource? ProviderModelSource { get; private set; }
     internal string? ByokProviderFingerprint { get; private set; }
@@ -78,11 +84,13 @@ internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent, IProviderBound
     public FakeWorkflowTurnAgent(
         FakeAgentRole role,
         TestFileEditAgentRunner runner,
-        bool throwProviderFailure = false)
+        bool throwProviderFailure = false,
+        bool throwInfrastructureProviderFailure = false)
     {
         _role = role;
         _runner = runner;
         _throwProviderFailure = throwProviderFailure;
+        _throwInfrastructureProviderFailure = throwInfrastructureProviderFailure;
     }
 
     public Task SetupAsync(
@@ -118,6 +126,13 @@ internal sealed class FakeWorkflowTurnAgent : IWorkflowTurnAgent, IProviderBound
                 "byok_provider_configuration_mismatch",
                 "The accepted BYOK provider configuration changed.",
                 isRetryable: false);
+        }
+        if (_throwInfrastructureProviderFailure)
+        {
+            throw new WorkflowAgentInfrastructureException(
+                "model_provider_changed",
+                "The accepted model provider changed before invocation.",
+                isRetryable: true);
         }
 
         return _role switch

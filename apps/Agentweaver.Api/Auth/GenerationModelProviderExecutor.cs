@@ -2,6 +2,7 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -24,7 +25,8 @@ public sealed class GenerationModelProviderExecutor(
     ByokProviderConfigurationService? byokSettings = null,
     AiExecutionPlanAccessor? executionPlanAccessor = null,
     AiExecutionPlanService? executionPlans = null,
-    IRunEventStream? eventStream = null)
+    IRunEventStream? eventStream = null,
+    IServiceScopeFactory? scopeFactory = null)
 {
     private static readonly TimeSpan CapabilityLifetime = TimeSpan.FromMinutes(10);
 
@@ -83,7 +85,8 @@ public sealed class GenerationModelProviderExecutor(
             return new GenerationExecutionPlan(
                 ModelSource.Byok,
                 Capability: null,
-                ByokProviderConfiguration: configuration);
+                ByokProviderConfiguration: configuration,
+                ModelInvocationGuard: CreateInvocationGuard(acceptedPlan));
         }
 
         if (effective is not (EffectiveModelProviderResult.ProjectGitHubCopilot or EffectiveModelProviderResult.PlatformGitHubCopilot))
@@ -126,7 +129,18 @@ public sealed class GenerationModelProviderExecutor(
         return new GenerationExecutionPlan(
             ModelSource.GitHubCopilot,
             new CopilotOperationCapability(capability.Value, scopeProjectId, entraObjectId, purpose),
-            ByokProviderConfiguration: null);
+            ByokProviderConfiguration: null,
+            ModelInvocationGuard: CreateInvocationGuard(acceptedPlan));
+    }
+
+    private IModelInvocationGuard? CreateInvocationGuard(AiExecutionPlan? acceptedPlan)
+    {
+        if (acceptedPlan is null)
+            return null;
+        if (executionPlans is null)
+            throw new InvalidOperationException(
+                "Accepted non-run AI execution plans require a revalidation service.");
+        return new AcceptedPlanInvocationGuard(acceptedPlan, executionPlans, scopeFactory);
     }
 
     internal static async Task RecordProviderProvenanceAsync(
@@ -163,6 +177,27 @@ public sealed class GenerationModelProviderExecutor(
             configuration.ExecutionFingerprint(),
             expected.ConfigurationFingerprint,
             StringComparison.Ordinal);
+
+    private sealed class AcceptedPlanInvocationGuard(
+        AiExecutionPlan acceptedPlan,
+        AiExecutionPlanService executionPlans,
+        IServiceScopeFactory? scopeFactory) : IModelInvocationGuard
+    {
+        public async Task ValidateAsync(string runId, CancellationToken ct)
+        {
+            if (scopeFactory is null)
+            {
+                await executionPlans.RevalidateAcceptedAsync(acceptedPlan, ct).ConfigureAwait(false);
+                return;
+            }
+
+            using var scope = scopeFactory.CreateScope();
+            await scope.ServiceProvider
+                .GetRequiredService<AiExecutionPlanService>()
+                .RevalidateAcceptedAsync(acceptedPlan, ct)
+                .ConfigureAwait(false);
+        }
+    }
 }
 
 /// <summary>
@@ -172,4 +207,5 @@ public sealed class GenerationModelProviderExecutor(
 public sealed record GenerationExecutionPlan(
     ModelSource ModelSource,
     CopilotOperationCapability? Capability,
-    ByokProviderConfiguration? ByokProviderConfiguration);
+    ByokProviderConfiguration? ByokProviderConfiguration,
+    IModelInvocationGuard? ModelInvocationGuard);

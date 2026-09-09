@@ -35,6 +35,8 @@ vi.mock('../hooks/useAiExecutionContext', () => ({
     handleInvocationError: vi.fn(() => false),
     applyCompletedContext: vi.fn(),
     applyProvider: vi.fn(),
+    setPhase: vi.fn(),
+    restorePreparedContext: vi.fn(),
   }),
 }));
 

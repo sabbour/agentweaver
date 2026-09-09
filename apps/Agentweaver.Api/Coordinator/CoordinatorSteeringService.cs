@@ -640,7 +640,8 @@ public sealed class CoordinatorSteeringService
         string createdBy,
         CancellationToken ct,
         EffectiveModelProviderResult? effectiveProvider = null,
-        string? resolutionScope = null)
+        string? resolutionScope = null,
+        Func<CancellationToken, Task>? beforeResume = null)
     {
         const string kind = SteeringKind.Redirect;
         const string instruction =
@@ -682,7 +683,8 @@ public sealed class CoordinatorSteeringService
                 createdAt,
                 ct,
                 effectiveProvider,
-                resolutionScope)
+                resolutionScope,
+                beforeResume)
                 .ConfigureAwait(false);
         }
         catch
@@ -1430,7 +1432,8 @@ public sealed class CoordinatorSteeringService
         DateTimeOffset createdAt,
         CancellationToken ct,
         EffectiveModelProviderResult? effectiveProvider = null,
-        string? resolutionScope = null)
+        string? resolutionScope = null,
+        Func<CancellationToken, Task>? beforeResume = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;
@@ -1510,13 +1513,14 @@ public sealed class CoordinatorSteeringService
         var now = DateTimeOffset.UtcNow;
         var resetIds = new List<int>();
         var reArmAssemblyOnly = false;
+        List<Subtask>? affectedForRedispatch = null;
 
         if (kind == SteeringKind.Amend)
         {
             var flagged = subtasks.Where(s => s.Status == SubtaskStatus.RaiFlagged).ToList();
             if (flagged.Count == 0)
                 return null; // amend never discards completed/failed work; fall through to queue
-            ResetSubtasksForRedispatch(flagged, instruction, now, resetIds);
+            affectedForRedispatch = flagged;
         }
         else // redirect (and any future override verbs)
         {
@@ -1532,7 +1536,7 @@ public sealed class CoordinatorSteeringService
             {
                 // Scoped retry: reset only the failed/flagged/blocked children (e.g. Skyler+Hank),
                 // leaving already-successful ones (Walt+Jesse) untouched.
-                ResetSubtasksForRedispatch(terminalUnsatisfied, instruction, now, resetIds);
+                affectedForRedispatch = terminalUnsatisfied;
             }
             else if (allSatisfied
                 && (AssemblyPlanning.IsRetryableBuildTestInfraReason(plan.AssemblyStatusReason)
@@ -1557,13 +1561,21 @@ public sealed class CoordinatorSteeringService
                 // assemble_ready children are reset; a completed no-change subtask is left intact.
                 var ready = subtasks.Where(s => s.Status == SubtaskStatus.AssembleReady).ToList();
                 if (ready.Count > 0)
-                    ResetSubtasksForRedispatch(ready, instruction, now, resetIds);
+                    affectedForRedispatch = ready;
                 else
                     reArmAssemblyOnly = true; // every child completed no-change — nothing to regenerate
             }
             // else: only pending / in-flight children remain (no terminal failure) — reset nothing and
             // just re-arm dispatch below so the loop picks up the existing frontier.
         }
+
+        var eligibleForRedispatch = affectedForRedispatch is null
+            ? null
+            : GetEligibleSubtasksForRedispatch(affectedForRedispatch);
+        if (beforeResume is not null)
+            await beforeResume(ct).ConfigureAwait(false);
+        if (eligibleForRedispatch is not null)
+            ResetSubtasksForRedispatch(eligibleForRedispatch, instruction, now, resetIds);
 
         // Move the plan to the correct phase before the loop spins up (single-writer safe: dispatch is
         // confirmed not running above). A scoped re-dispatch returns to dispatching; an assembly-only
@@ -1642,15 +1654,11 @@ public sealed class CoordinatorSteeringService
     }
 
     /// <summary>
-    /// Resets the given genuinely-incomplete subtasks to <c>pending</c> for a scoped re-dispatch:
-    /// stamps recovery guidance, bumps each subtask's recovery-attempt counter, clears its child-run
-    /// id, and records the reset id. Enforces the per-subtask <see cref="MaxRecoveryAttempts"/> cap —
-    /// throws <see cref="SteeringRecoveryExhaustedException"/> when EVERY affected subtask is already
-    /// over the cap so the coordinator stays parked rather than looping forever. Only subtasks under
-    /// the cap are reset; already-satisfied subtasks are never passed here (caller filters them out).
+    /// Selects the genuinely-incomplete subtasks still under the recovery-attempt cap. This check
+    /// runs before the provider fence so an exhausted in-place recovery can fall back to a fresh run
+    /// without consulting the stale source snapshot.
     /// </summary>
-    private static void ResetSubtasksForRedispatch(
-        List<Subtask> affected, string instruction, DateTimeOffset now, List<int> resetIds)
+    private static List<Subtask> GetEligibleSubtasksForRedispatch(List<Subtask> affected)
     {
         var eligible = affected.Where(s => s.RecoveryAttempts < MaxRecoveryAttempts).ToList();
         if (eligible.Count == 0)
@@ -1658,7 +1666,12 @@ public sealed class CoordinatorSteeringService
                 $"Recovery attempt cap ({MaxRecoveryAttempts}) reached for every affected subtask " +
                 $"[{string.Join(", ", affected.Select(s => s.Id))}]; the coordinator stays parked. " +
                 "Use run retry to re-run the whole coordinator.");
+        return eligible;
+    }
 
+    private static void ResetSubtasksForRedispatch(
+        List<Subtask> eligible, string instruction, DateTimeOffset now, List<int> resetIds)
+    {
         foreach (var subtask in eligible)
         {
             subtask.RecoveryGuidance = BuildRecoveryGuidance(subtask.Status, instruction, subtask.RecoveryAttempts + 1);

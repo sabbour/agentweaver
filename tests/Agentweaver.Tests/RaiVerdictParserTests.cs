@@ -296,6 +296,37 @@ public sealed class RaiVerdictParserTests
     }
 
     [Fact]
+    public async Task HandleAsync_RemoteProviderChange_IsNotConvertedToAdvisoryVerdict()
+    {
+        var parent = Channel.CreateUnbounded<RunEvent>();
+        var sub = Channel.CreateUnbounded<RunEvent>();
+        var agentFactory = new FakeWorkflowAgentFactory(new TestFileEditAgentRunner())
+        {
+            InfrastructureProviderFailureRole = FakeAgentRole.Rai,
+        };
+        var executor = BuildExecutor(parent, sub, agentFactory);
+
+        var act = () => executor.HandleAsync(new AgentTurnOutput(
+            RunId: "rai-remote-provider-change",
+            TreeHash: "tree",
+            Diff: "diff",
+            StepCount: 1,
+            WorktreePath: AppContext.BaseDirectory,
+            WorktreeBranch: "agent/run",
+            RepositoryPath: AppContext.BaseDirectory,
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false,
+            ModelSource: ModelSource.GitHubCopilot.ToApiString()),
+            context: null!,
+            CancellationToken.None).AsTask();
+
+        var failure = (await act.Should().ThrowAsync<AgentProviderException>()).Which;
+        failure.ErrorCode.Should().Be("model_provider_changed");
+        failure.ModelSource.Should().Be(ModelSource.GitHubCopilot);
+        Drain(parent.Reader).Should().NotContain(e => e.Type == EventTypes.RaiVerdict);
+    }
+
+    [Fact]
     public async Task HandleAsync_EmitsVerdictPayload_ToParentRunAndRaiSubStream()
     {
         var parent = Channel.CreateUnbounded<RunEvent>();

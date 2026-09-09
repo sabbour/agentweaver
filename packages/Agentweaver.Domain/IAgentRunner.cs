@@ -49,7 +49,8 @@ public interface IAgentRunner
         string? userId = null,
         string? projectId = null,
         CopilotOperationCapability? copilotCapability = null,
-        ByokProviderConfiguration? byokProviderConfiguration = null) =>
+        ByokProviderConfiguration? byokProviderConfiguration = null,
+        IModelInvocationGuard? modelInvocationGuard = null) =>
         ExecuteAsync(
             task, workingDirectory, repositoryPath, modelSource, runId, modelId, stream, ct,
             systemPromptContext, userId);

@@ -752,7 +752,8 @@ public sealed class WorkflowGeneratorTests
             string? userId = null,
             string? projectId = null,
             CopilotOperationCapability? copilotCapability = null,
-            ByokProviderConfiguration? byokProviderConfiguration = null)
+            ByokProviderConfiguration? byokProviderConfiguration = null,
+            IModelInvocationGuard? modelInvocationGuard = null)
         {
             LastProjectId = projectId;
             LastCopilotCapability = copilotCapability;

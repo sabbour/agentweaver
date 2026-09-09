@@ -217,6 +217,99 @@ public sealed class GenerationModelProviderExecutorTests
         GenerationModelProviderExecutor.Matches(edited, expected).Should().BeFalse();
     }
 
+    [Fact]
+    public async Task InvocationGuard_RejectsCopilotCredentialDriftAfterPreparation()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = await SeedProjectBindingAsync(db);
+        var secrets = new InMemorySecretStore();
+        await SetCredentialAsync(secrets, ProjectCredentialReference, githubLogin: "project-user");
+        var persistence = new GitHubConnectionsPersistenceStore(db);
+        var byok = new ByokProviderConfigurationService(secrets);
+        var resolver = new EffectiveModelProviderResolver(persistence, byok, secrets);
+        var plans = CreatePlans(resolver);
+        var accessor = new AiExecutionPlanAccessor();
+        AiOperationCatalog.TryGet("blueprint_generation", out var operation).Should().BeTrue();
+        var accepted = await plans.PrepareAsync(
+            operation,
+            projectId,
+            new CallerContext { User = "entra-user", EntraObjectId = "entra-user" },
+            CancellationToken.None);
+        using var activation = accessor.Push(accepted);
+        var executor = new GenerationModelProviderExecutor(
+            resolver,
+            persistence,
+            byok,
+            accessor,
+            plans);
+        var generation = await executor.PrepareAsync(
+            projectId,
+            "entra-user",
+            ProjectModelProviderCapabilityPurpose.BlueprintGeneration,
+            CancellationToken.None);
+
+        (await db.ProjectCopilotBindings.SingleAsync()).CredentialVersion = "replacement-version";
+        await db.SaveChangesAsync();
+
+        var act = () => generation.ModelInvocationGuard!.ValidateAsync(
+            "non-run-blueprint",
+            CancellationToken.None);
+        (await act.Should().ThrowAsync<AiExecutionPlanException>())
+            .Which.ErrorCode.Should().Be("model_provider_changed");
+    }
+
+    [Fact]
+    public async Task InvocationGuard_PreservesFrozenByokConfigurationWhenProviderIsUnchanged()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        db.Projects.Add(Project(projectId));
+        await db.SaveChangesAsync();
+        var secrets = new InMemorySecretStore();
+        var byok = new ByokProviderConfigurationService(secrets);
+        var provider = await byok.AddAsync(new ByokProviderConfiguration(
+            string.Empty,
+            "Azure",
+            "azure",
+            "https://provider.example.test",
+            "gpt-5",
+            "secret"), CancellationToken.None);
+        await byok.SetActiveAsync(provider.Id, CancellationToken.None);
+        var persistence = new GitHubConnectionsPersistenceStore(db, byokSettings: byok);
+        var resolver = new EffectiveModelProviderResolver(persistence, byok, secrets);
+        var plans = CreatePlans(resolver);
+        var accessor = new AiExecutionPlanAccessor();
+        AiOperationCatalog.TryGet("blueprint_generation", out var operation).Should().BeTrue();
+        var accepted = await plans.PrepareAsync(
+            operation,
+            projectId,
+            new CallerContext { User = "entra-user", EntraObjectId = "entra-user" },
+            CancellationToken.None);
+        using var activation = accessor.Push(accepted);
+        var executor = new GenerationModelProviderExecutor(
+            resolver,
+            persistence,
+            byok,
+            accessor,
+            plans);
+
+        var generation = await executor.PrepareAsync(
+            projectId,
+            "entra-user",
+            ProjectModelProviderCapabilityPurpose.BlueprintGeneration,
+            CancellationToken.None);
+        var frozen = generation.ByokProviderConfiguration;
+        await generation.ModelInvocationGuard!.ValidateAsync(
+            "non-run-blueprint",
+            CancellationToken.None);
+
+        generation.ModelSource.Should().Be(ModelSource.Byok);
+        accessor.FrozenByokConfiguration.Should().BeSameAs(frozen);
+        generation.ByokProviderConfiguration.Should().BeSameAs(frozen);
+    }
+
     private static GenerationModelProviderExecutor CreateExecutor(
         MemoryDbContext db,
         ISecretStore secrets,
@@ -231,6 +324,16 @@ public sealed class GenerationModelProviderExecutorTests
             persistence,
             eventStream: eventStream);
     }
+
+    private static AiExecutionPlanService CreatePlans(EffectiveModelProviderResolver resolver) =>
+        new(
+            resolver,
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["AiExecution:ProviderKeySigningKey"] = "test-provider-signing-key",
+                })
+                .Build());
 
     private static async Task<ProjectId> SeedProjectBindingAsync(MemoryDbContext db)
     {

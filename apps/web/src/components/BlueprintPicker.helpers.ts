@@ -22,6 +22,7 @@ export function useBlueprintGeneration(onChange: (selection: BlueprintSelection)
     if (!description.trim()) return;
     setGenerating(true);
     setError(null);
+    providerContext.setPhase('active');
     try {
       const res = targetRepository
         ? await apiClient.generateBlueprint(
@@ -37,7 +38,9 @@ export function useBlueprintGeneration(onChange: (selection: BlueprintSelection)
       setGenerated(next);
       onChange({ kind: 'generated', blueprint: next.blueprint, generatedWorkflowYaml: next.generatedWorkflowYaml });
     } catch (err) {
-      setError(providerContext.handleInvocationError(err)
+      const providerChanged = providerContext.handleInvocationError(err);
+      if (!providerChanged) providerContext.restorePreparedContext();
+      setError(providerChanged
         ? 'The AI provider changed. Review the updated provider and generate again.'
         : err instanceof Error ? err.message : String(err));
     } finally {

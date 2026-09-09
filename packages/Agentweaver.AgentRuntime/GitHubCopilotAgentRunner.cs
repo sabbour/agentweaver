@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
 using GitHub.Copilot;
@@ -112,7 +113,8 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         string? userId = null,
         string? projectId = null,
         CopilotOperationCapability? copilotCapability = null,
-        ByokProviderConfiguration? byokProviderConfiguration = null)
+        ByokProviderConfiguration? byokProviderConfiguration = null,
+        IModelInvocationGuard? modelInvocationGuard = null)
     {
         var byokProvider = modelSource == ModelSource.Byok
             ? byokProviderConfiguration ?? (_byokProviderConfiguration is not null
@@ -444,7 +446,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         {
         try
         {
-            await foreach (var chunk in agent.RunStreamingAsync(task, session, options: null, ct).WithCancellation(ct))
+            await foreach (var chunk in RunAfterValidationAsync(
+                modelInvocationGuard,
+                runId,
+                () => agent.RunStreamingAsync(task, session, options: null, ct),
+                ct))
             {
                 if (chunk is null) continue;
 
@@ -541,6 +547,19 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             if (agent is IAsyncDisposable disposableAgent)
                 await disposableAgent.DisposeAsync();
         }
+    }
+
+    internal static async IAsyncEnumerable<T> RunAfterValidationAsync<T>(
+        IModelInvocationGuard? modelInvocationGuard,
+        string runId,
+        Func<IAsyncEnumerable<T>> streamFactory,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        if (modelInvocationGuard is not null)
+            await modelInvocationGuard.ValidateAsync(runId, ct).ConfigureAwait(false);
+
+        await foreach (var item in streamFactory().WithCancellation(ct).ConfigureAwait(false))
+            yield return item;
     }
 
     /// <summary>
