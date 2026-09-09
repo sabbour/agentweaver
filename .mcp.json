@@ -1,11 +1,17 @@
 {
   "mcpServers": {
-    "agentweaver": {
-      "type": "http",
-      "url": "https://agentweaver.6a6f0602b81a5700010708e7.eastus2euap.aksapp.io/mcp",
-      "tools": [
-        "*"
-      ]
+    "agentweaver_local": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "apps/Agentweaver.Mcp",
+        "--",
+        "--stdio"
+      ],
+      "env": {
+        "AGENTWEAVER_API_URL": "http://localhost:5000"
+      }
     },
     "squad_state": {
       "command": "npx",
