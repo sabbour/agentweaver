@@ -160,12 +160,13 @@ export function useAiExecutionContext(
   }, [applyDisplayContext, operation]);
 
   const setPhase = useCallback((phase: AiExecutionContext['phase']) => {
+    if (!isActiveActionScope()) return;
     setDisplayContext((current) => {
       const next = current ? { ...current, phase } : current;
       displayContextRef.current = next;
       return next;
     });
-  }, []);
+  }, [isActiveActionScope]);
 
   const restorePreparedContext = useCallback(() => {
     if (preparedContext) applyDisplayContext(preparedContext);
