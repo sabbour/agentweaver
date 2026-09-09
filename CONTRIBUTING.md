@@ -335,17 +335,20 @@ handle P0 reports the same business day and route other new Squad issues within 
 business days.
 
 The assigned agent branches as `squad/{issue-number}-{slug}`, commits with a
-conventional-commit message that references the issue (`Closes #{number}`, including the
-`Co-authored-by: Copilot` trailer), pushes, and opens a PR with `gh pr create` against
-`dev`. The full lifecycle, spawn context, and merge commands live in
+conventional-commit message that references the issue and includes the
+`Co-authored-by: Copilot` trailer. Use `Closes #{number}` only when merge satisfies the
+issue's acceptance criteria. The agent pushes and opens a PR against `dev` when authorized.
+The lifecycle and tracker context live in
 [`.squad/templates/issue-lifecycle.md`](.squad/templates/issue-lifecycle.md); the
 orchestration rules live in [`.github/agents/squad.agent.md`](.github/agents/squad.agent.md).
 Agent PRs are gated by the same [CI](#continuous-integration) as everyone else's.
 
 **Branches vs. worktrees.** A **locally run** Squad agent (including a Copilot CLI agent)
-must use one dedicated git worktree per issue under [`.worktrees/`](.worktrees/), reusing it
-when collaborating on that issue. This prevents concurrent local agents from sharing a
-working tree or index. A **hosted** agent (such as GitHub's `@copilot` coding agent) uses the
+must use a dedicated git worktree under [`.worktrees/`](.worktrees/) for every mutating assignment.
+Reuse an issue worktree only after the previous writer stops and returns a checkpoint.
+Parallel writers require separate worktrees, branches, and authorized write scopes.
+Disjoint files in one worktree do not provide isolation.
+A **hosted** agent (such as GitHub's `@copilot` coding agent) uses the
 platform's isolated branch and environment instead — no local worktree applies. **Human
 contributors** may use a worktree as a convenience, but a plain short-lived branch in the
 main checkout is supported. The creation, reuse, dependency, team-root, and cleanup
@@ -378,16 +381,15 @@ mechanically blocks a spec-less feature PR. Reviewers are responsible for catchi
    actual behavior. Don't file untracked fixes for anything beyond a trivial/obvious
    one-liner (typo, broken link, obviously-wrong constant) — anything with behavioral
    nuance or a risk of regression gets an issue.
-2. **Reference the issue in the commit/PR** with `Closes #N` (see [Commit
-   messages](#commit-messages)) so it auto-closes on merge.
+2. **Reference the issue in the commit/PR.** Use `Closes #N` only when merge satisfies
+   acceptance criteria. Otherwise, use a non-closing reference until required delivery gates pass.
 3. **Include a regression test** that fails before the fix and passes after, whenever the
    bug is in code with a test suite — this is the existing "[add or update tests for any
    behavior change](#making-a-change)" rule applied to fixes, and it is what QA
    (Smith's charter) means by preventing regressions. A fix with no test should say why one
    isn't feasible.
-4. **After merge**, the same lifecycle applies: CI-gated, and the issue closes
-   automatically via `Closes #N` (or close it manually if the fix only partially addresses
-   the issue).
+4. **After merge**, verify the remaining delivery gates before issue closure.
+   A partial fix or unmet deployment/live-validation requirement leaves the objective open.
 
 **Peer review and the reviewer-rejection protocol.** **Changes requested** is ordinary
 review feedback: the original author may revise the same PR normally, with no lockout.
@@ -401,14 +403,40 @@ without Coordinator session history; a `status:locked-out` PR label may addition
 used when the repository creates it. The full rules are in the "Reviewer Rejection Protocol"
 section of `squad.agent.md`.
 
+**Bounded review.** Only demonstrated bugs, security defects, regressions, or explicit
+acceptance mismatches block delivery. Each finding must include evidence and the exact
+reviewed SHA. Style preferences, new abstractions, configurability, and redesigns are
+advisory unless the accepted scope requires them.
+
+Consolidate findings once. Use one bounded correction pass, then one final review of the
+exact corrected SHA. Do not repeat full design ceremonies after corrections.
+If final verification fails, reconcile the remaining finding with acceptance criteria
+before another correction. After two failed correction rounds, reconcile findings and
+acceptance criteria and escalate. Do not rotate authors automatically.
+
+**Delivery evidence.** Report committed, reviewed, CI passed, merged, released, deployed,
+and scenario/live-validated as separate gates. Each status needs an evidence source,
+observation time, and exact revision. CI must pass at the current head. Deployment
+evidence must identify the environment and source SHA or image digest provenance.
+Files, branches, assignments, and closed tracker items do not prove completion.
+Completion requires the requested deliverable and its validation evidence.
+
+Merge does not close a deploy-required objective. For those objectives, use a non-closing
+issue reference until deployment and required live validation pass.
+Use [RELEASING.md](RELEASING.md) for release and deployment requirements.
+
 **Rubber-ducking.** Before a non-trivial or risky change ships, the Coordinator can invoke a
 `rubber-duck` review pass — a dedicated critical-feedback agent whose only job is to hunt for
 bugs, logic errors, and design flaws before anything is committed. It is invoked at the
 Coordinator's discretion for higher-risk work, not automatically on every change.
 
 **Auditable decisions.** Meaningful design decisions are recorded to the decisions inbox
-(`.squad/decisions/inbox/`); Scribe periodically merges routine operational decisions into
-the canonical `.squad/decisions.md`. Cross-cutting architecture or technical decisions that
+(`.squad/decisions/inbox/`). The Coordinator accepts decisions.
+Scribe persists and consolidates accepted records through the configured state bridge.
+Resolve active governed POLICY/DECISION records before relevant dispatch, and pass their
+IDs and constraints to workers. Durable records need a source, scope, and supersession
+or expiry terms. Keep worker IDs, CI states, and temporary blockers in operational logs,
+not durable policy. Cross-cutting architecture or technical decisions that
 should survive that ledger's compaction are promoted to numbered
 [ADRs](docs/architecture/decisions/README.md). This keeps agent-driven changes traceable back
 to the reasoning behind them.
