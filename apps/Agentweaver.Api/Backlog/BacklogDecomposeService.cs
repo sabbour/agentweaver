@@ -176,12 +176,15 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
             try
             {
                 await using var byokClient = _copilotClientFactory.CreateByokClient();
-                var byokResponse = await _agentRunner.RunAsync(
-                    byokClient,
-                    task,
-                    project.ProviderSettings.GitHubCopilotModel,
-                    ct,
-                    executionPlan.ByokProviderConfiguration).ConfigureAwait(false);
+                var byokResponse = await RunAfterValidationAsync(
+                    executionPlan.ModelInvocationGuard,
+                    () => _agentRunner.RunAsync(
+                        byokClient,
+                        task,
+                        project.ProviderSettings.GitHubCopilotModel,
+                        ct,
+                        executionPlan.ByokProviderConfiguration),
+                    ct).ConfigureAwait(false);
                 return ParseItems(byokResponse);
             }
             catch (GitHubCopilotUnauthorizedException)
@@ -202,14 +205,27 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
                 ProjectModelProviderCapabilityPurpose.BacklogDecomposition,
                 project.ProviderSettings.GitHubCopilotModel,
                 ct).ConfigureAwait(false);
-            var response = await _agentRunner.RunAsync(
-                client, task, project.ProviderSettings.GitHubCopilotModel, ct).ConfigureAwait(false);
+            var response = await RunAfterValidationAsync(
+                executionPlan.ModelInvocationGuard,
+                () => _agentRunner.RunAsync(
+                    client, task, project.ProviderSettings.GitHubCopilotModel, ct),
+                ct).ConfigureAwait(false);
             return ParseItems(response);
         }
         catch (GitHubCopilotUnauthorizedException)
         {
             return new([], false, 0, ModelProviderConnectionRequirement.ForProject(project.Id));
         }
+    }
+
+    internal static async Task<T> RunAfterValidationAsync<T>(
+        IModelInvocationGuard? modelInvocationGuard,
+        Func<Task<T>> runAsync,
+        CancellationToken ct)
+    {
+        if (modelInvocationGuard is not null)
+            await modelInvocationGuard.ValidateAsync("backlog_decomposition", ct).ConfigureAwait(false);
+        return await runAsync().ConfigureAwait(false);
     }
 
 

@@ -1,6 +1,7 @@
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Skills;
 using Agentweaver.AgentRuntime.Providers;
@@ -8,6 +9,7 @@ using Agentweaver.Domain;
 using Agentweaver.Domain.Skills;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -357,6 +359,38 @@ public sealed class SkillMarketplaceCatalogTests
         parsed![0].Description!.Length.Should().Be(CopilotMarketplaceCatalogClassifier.MaxDescriptionLength);
     }
 
+    [Fact]
+    public async Task Classifier_propagates_accepted_plan_rejection_before_starting_model_stream()
+    {
+        var classifier = new CopilotMarketplaceCatalogClassifier(
+            null!,
+            NullLogger<CopilotMarketplaceCatalogClassifier>.Instance,
+            new ConfigurationBuilder().Build());
+        var guard = new RejectingAcceptedPlanGuard("marketplace_catalog_classification");
+        var streamStarted = false;
+
+        var act = () => classifier.RunClassificationAsync(
+            "acme",
+            "skills",
+            "main",
+            ["skills/a/SKILL.md"],
+            _ => CopilotMarketplaceCatalogClassifier.RunAfterValidationAsync(
+                guard,
+                () =>
+                {
+                    streamStarted = true;
+                    return Task.FromResult<string?>("""{"skills":[]}""");
+                },
+                CancellationToken.None),
+            CancellationToken.None);
+
+        var exception = (await act.Should().ThrowAsync<AiExecutionPlanException>()).Which;
+        exception.ErrorCode.Should().Be("model_provider_changed");
+        exception.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        guard.Invocations.Should().Be(1);
+        streamStarted.Should().BeFalse("the accepted plan must be revalidated immediately before SDK streaming");
+    }
+
     // ── Auto-detected browse (URL source): pagination + no bulk download ────────────────
 
     [Fact]
@@ -654,6 +688,25 @@ public sealed class SkillMarketplaceCatalogTests
         public Task<IReadOnlyList<MarketplaceCatalogEntry>?> ClassifyAsync(
             string owner, string repo, string branch, IReadOnlyList<string> treePaths, string? capabilityRunId, CancellationToken ct) =>
             throw new GitHubCopilotUnauthorizedException("Connect a GitHub account with GitHub Copilot access.");
+    }
+
+    private sealed class RejectingAcceptedPlanGuard(string operation) : IModelInvocationGuard
+    {
+        public int Invocations { get; private set; }
+
+        public Task ValidateAsync(string runId, CancellationToken ct)
+        {
+            Invocations++;
+            throw new AiExecutionPlanException(
+                "model_provider_changed",
+                new AiExecutionContextResponse
+                {
+                    AiRequired = true,
+                    Operation = operation,
+                    Phase = "prepared",
+                },
+                "The accepted model provider changed.");
+        }
     }
 
     private sealed class FakeByokClassifier(IReadOnlyList<MarketplaceCatalogEntry> result) : IMarketplaceCatalogClassifier

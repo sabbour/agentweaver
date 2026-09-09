@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { aiExecutionProviderLabel, providerIdentity } from '../components/aiExecutionContext';
@@ -35,6 +35,17 @@ export function useAiExecutionContext(
   const requestSequence = useRef(0);
   const displayContextRef = useRef<AiExecutionContext | null>(null);
   const scopeKey = `${operation}\u0000${projectId ?? ''}\u0000${runId ?? ''}`;
+  const actionScope = useMemo(() => ({ key: scopeKey }), [scopeKey]);
+  const activeScope = useRef(actionScope);
+
+  useLayoutEffect(() => {
+    activeScope.current = actionScope;
+  }, [actionScope]);
+
+  const isActiveActionScope = useCallback(
+    () => activeScope.current === actionScope,
+    [actionScope],
+  );
 
   const applyDisplayContext = useCallback((next: AiExecutionContext) => {
     const nextIdentity = providerIdentity(next);
@@ -103,6 +114,7 @@ export function useAiExecutionContext(
   }, [preparedContext?.expires_at, refresh]);
 
   const handleInvocationError = useCallback((err: unknown): boolean => {
+    if (!isActiveActionScope()) return false;
     const replacement = replacementContext(err);
     if (!replacement) return false;
     const errorCode = replacementErrorCode(err);
@@ -125,11 +137,12 @@ export function useAiExecutionContext(
           : 'The AI provider changed. Review the updated provider and retry the action.',
     );
     return true;
-  }, [applyDisplayContext]);
+  }, [applyDisplayContext, isActiveActionScope]);
 
   const applyCompletedContext = useCallback((next: AiExecutionContext | null | undefined) => {
+    if (!isActiveActionScope()) return;
     if (next) applyDisplayContext(next);
-  }, [applyDisplayContext]);
+  }, [applyDisplayContext, isActiveActionScope]);
 
   const applyProvider = useCallback((
     provider: EffectiveModelProvider | null | undefined,
