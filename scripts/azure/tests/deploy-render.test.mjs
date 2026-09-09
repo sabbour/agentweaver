@@ -85,6 +85,17 @@ test("buildImageEntries() derives the 4 images: entries from ACR_LOGIN_SERVER/IM
   );
 });
 
+test("buildImageEntries() pins only AgentHost to its optional promoted ACR digest", () => {
+  const digest = `sha256:${"a".repeat(64)}`;
+  const entries = buildImageEntries({ ...VARS, AGENTHOST_IMAGE_DIGEST: digest });
+  assert.deepEqual(entries.at(-1), {
+    name: IMAGE_NAMES.agentHost,
+    newName: "agentweaverregistry.azurecr.io/agentweaver-agent-host",
+    digest,
+  });
+  assert.deepEqual(entries.slice(0, 3).map((entry) => entry.newTag), ["v0.9.71", "v0.9.71", "v0.9.71"]);
+});
+
 test("buildRuntimeConfigLiterals() wires canonical OpenIddict and Key Vault certificate settings", () => {
   const literals = buildRuntimeConfigLiterals(VARS);
   assert.equal(literals.KEYVAULT_URI, "https://test-kv-fixture.vault.azure.net");
@@ -234,6 +245,22 @@ test("rewriteOverlayKustomization() rewrites every images: entry and configMapGe
   assert.match(rewritten, /replacements:/);
   // No leftover "latest"/"changeme" placeholders for the fields we targeted.
   assert.doesNotMatch(rewritten, /newTag: "latest"/);
+});
+
+test("rewriteOverlayKustomization() emits AgentHost's digest instead of its tag when supplied", () => {
+  const overlayPath = path.join(DEFAULT_REPO_ROOT, "k8s", "overlays", "production", "kustomization.yaml");
+  const digest = `sha256:${"b".repeat(64)}`;
+  const rewritten = rewriteOverlayKustomization(
+    fs.readFileSync(overlayPath, "utf8"),
+    { ...VARS, AGENTHOST_IMAGE_DIGEST: digest },
+  );
+
+  assert.match(
+    rewritten,
+    new RegExp(`newName: agentweaverregistry\\.azurecr\\.io/agentweaver-agent-host\\s*\\n\\s*digest: "${digest}"`),
+  );
+  assert.doesNotMatch(rewritten, /agentweaver-agent-host\s*\n\s*newName: [^\n]+\s*\n\s*newTag:/);
+  assert.match(rewritten, /newName: agentweaverregistry\.azurecr\.io\/agentweaver-api\s*\n\s*newTag: "v0\.9\.71"/);
 });
 
 test("rewriteOverlayKustomization() rejects a partial runtime-config rewrite", () => {
