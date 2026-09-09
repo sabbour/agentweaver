@@ -25,14 +25,14 @@ BYOK configuration fingerprints include execution parameters.
 Copilot identity includes the binding credential version.
 The public provider fingerprint does not grant execution authority.
 
-Covered synchronous actions reject changed provider configuration with `409 model_provider_changed`.
+Covered synchronous actions reject changed provider configuration with `409 model_provider_changed` before model invocation.
 Run continuations compare current resolver output with durable provenance.
 They never reconstruct provider authority from event identifiers.
 The runtime guard awaits provenance persistence before the next covered model call.
 Multi-pass generators retain the accepted BYOK configuration rather than select another ambient provider.
 Repository-only retry inheritance does not carry stale Copilot credentials into a newly accepted retry.
 
-The candidate covers these boundaries:
+The admission contract covers these boundaries:
 
 | Path | Boundary |
 | --- | --- |
@@ -51,6 +51,10 @@ The API compares that fingerprint with the current resolver and accepted run pro
 It awaits provenance persistence before it permits the call.
 Provider changes return `409 model_provider_changed` without a model call.
 The pod callback has no independent selection authority.
+
+Public provider context contains redacted provider kind, scope, type, model, availability, and an opaque comparison fingerprint.
+It does not contain credentials, account names, or provider-binding identities.
+The UI maps `prepared`, `active`, and `completed` phases to **Expected provider**, **Using**, and **Used**.
 
 There is no registered `/api/console/turn` route in this host.
 `GET /api/auth/session` returns authentication metadata and `ai_configured`, not a model response.
