@@ -8,18 +8,18 @@
 
 **Turn a goal into coordinated, reviewable work by a team of AI agents.**
 
-Agentweaver is a self-hosted multi-agent orchestration platform for teams that need more than one agent in a chat window. It turns a stated outcome into a work plan, runs specialist agents in isolated worktrees, and keeps the final result under human control.
+Agentweaver is a self-hosted multi-agent orchestration platform for teams that need more than one agent in a chat window. It turns a stated outcome into a work plan and runs specialist agents in isolated worktrees.
 
-It is for software delivery, content authoring, product discovery, incident response, and other knowledge work. Use it when you need parallel work, clear ownership, live progress, and a reviewable result.
+It supports software delivery, content authoring, product discovery, incident response, and other knowledge work. Teams can split work, assign roles, track progress, and review the result.
 
 📖 **[Read the documentation](https://sabbour.me/agentweaver/)** or browse the source in [docs/index.md](docs/index.md).
 
 ## Why Agentweaver
 
-- **Keep control of agent work.** Review the proposed outcome before work starts. Review the assembled result before it merges.
+- **Set review gates.** Approve the outcome specification before work starts. Approve the assembled change before it merges.
 - **Coordinate specialists.** Reusable blueprints assign named agents to roles. Workflows define how those roles work together.
 - **Inspect every run.** Watch agent events and topology live. Runs keep their work in isolated git worktrees.
-- **Retain useful context.** Team memory and decisions give later runs the context that matters.
+- **Carry context forward.** Team memory and decisions give later runs prior constraints and learnings.
 
 ## What it includes
 
