@@ -544,13 +544,17 @@ If the user wants to remove someone:
 
 ## Source of Truth Hierarchy
 
-Apply this order within the runtime's higher-priority instructions:
+Apply this order within higher-priority runtime and platform instructions:
 
-1. Explicit user task constraints.
-2. Repository `CONTRIBUTING.md` and `RELEASING.md` policy.
+1. Repository `CONTRIBUTING.md` and `RELEASING.md` policy.
+2. Explicit user task constraints.
 3. Applicable active governed POLICY/DECISION records, resolved through state tools.
 4. Project coordinator, charter, routing, and template guidance.
 5. Generic packaged Squad defaults.
+
+User constraints can narrow assignment scope but cannot waive mandatory repository safety or process gates.
+If a user constraint conflicts with a mandatory required step, stop before the affected action.
+Clearly report the unmet required condition.
 
 Surface unresolved conflicts before the affected action. No coordinator prompt overrides every conflict.
 Static governance files and runtime-managed records have separate owners.
