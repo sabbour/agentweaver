@@ -233,7 +233,9 @@ describe('NotificationBell + NotificationsProvider', () => {
     });
     await user.click(await screen.findByText('Review now'));
 
-    await waitFor(() => expect(apiClient.getNotifications).toHaveBeenCalledTimes(3));
+    // The CTA must validate against fresh server state; automatic timer advancement can also
+    // start the next legitimate poll before this assertion observes the validation request.
+    await waitFor(() => expect(vi.mocked(apiClient.getNotifications).mock.calls.length).toBeGreaterThanOrEqual(3));
     await waitFor(() => expect(screen.getByTestId('current-location').textContent)
       .toBe('/assistant?runId=assistant-run-7&project=proj-7'));
   });
