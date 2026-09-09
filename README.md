@@ -119,6 +119,8 @@ Local SQLite uses the existing process-wide run claim and an event transaction. 
 
 If run termination wins, the API attempts publication cleanup and does not persist ready events.
 If publication wins, the preview can remain available after the run ends under its normal retention policy.
+If a later workflow-step diagnostic fails, the API logs a warning without changing the preview outcome or stopping the process.
+If the workflow-step diagnostic fails after an approval timeout, the retry context and private process remain available.
 
 Operator previews through `/api/runs/{runId}/sandbox/port-forward` remain available after a run ends.
 Keepalive success does not establish preview health.

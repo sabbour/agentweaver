@@ -243,6 +243,7 @@ public sealed class PreviewStep
                         approval.RequestId!,
                         approval.ExpiresAt);
                     keepProcess = true;
+                    EmitWorkflowStep(runId, "failed", "Preview approval expired. Retry is available.");
                     return;
                 }
 
@@ -285,6 +286,7 @@ public sealed class PreviewStep
                 }
                 // SUCCESS: keep the process + forwarder alive to serve the preview.
                 keepProcess = true;
+                EmitWorkflowStep(runId, "completed", "Preview is ready.");
                 return;
             }
 
@@ -478,11 +480,8 @@ public sealed class PreviewStep
             started_at = preview.StartedAt,
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         };
-        if (!await SandboxEndpoints.PublishPreviewReadyAsync(
-            preview, payload, _previewService, _streamStore, _runStore, ct).ConfigureAwait(false))
-            return false;
-        EmitWorkflowStep(r.RunId, "completed", "Preview is ready.");
-        return true;
+        return await SandboxEndpoints.PublishPreviewReadyAsync(
+            preview, payload, _previewService, _streamStore, _runStore, ct).ConfigureAwait(false);
     }
 
     private void EmitFailed(PreviewStepRequest r, string reason, string message, string? previewRunnerSessionId = null)
@@ -523,7 +522,6 @@ public sealed class PreviewStep
             expired_at = expiredAt?.ToString("O"),
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         });
-        EmitWorkflowStep(r.RunId, "failed", "Preview approval expired. Retry is available.");
     }
 
     private void EmitSkipped(PreviewStepRequest r, string reason, string message)
@@ -542,14 +540,7 @@ public sealed class PreviewStep
     }
 
     private void EmitWorkflowStep(string runId, string status, string message) =>
-        Record(runId, EventTypes.WorkflowStep, new
-        {
-            step = "preview",
-            status,
-            label = "Preview",
-            message,
-            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
-        });
+        SandboxEndpoints.EmitPreviewWorkflowStep(_streamStore, runId, status, message, _logger);
 
     private void Record(string runId, string type, object payload) =>
         _streamStore.Get(runId)?.RecordNext(type, payload);
