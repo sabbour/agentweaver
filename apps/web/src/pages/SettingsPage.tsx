@@ -17,7 +17,12 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { getLastActiveProjectId } from '../components/shell/projectContext';
-import type { AuthConfigResponse, AuthSessionResponse, RepoAppConnectionStatus } from '../api/types';
+import type {
+  AuthConfigResponse,
+  AuthSessionResponse,
+  GitHubRepositoryInstallation,
+  RepoAppConnectionStatus,
+} from '../api/types';
 import { CopyButton } from '../copilot-fluent-system';
 import {
   AGENTWEAVER_AGENT_URL,
@@ -97,6 +102,7 @@ export function SettingsPage() {
   const [repoAppError, setRepoAppError] = useState<string | null>(null);
   const [repoAppConnection, setRepoAppConnection] = useState<RepoAppConnectionStatus | null>(null);
   const [repoAppStatusLoading, setRepoAppStatusLoading] = useState(true);
+  const [repoAppInstallations, setRepoAppInstallations] = useState<GitHubRepositoryInstallation[] | null>(null);
   const [mcpClientId, setMcpClientId] = useState<McpClientId>('copilot-cli');
   const mcpClient = MCP_CLIENT_GUIDANCE[mcpClientId];
 
@@ -150,6 +156,22 @@ export function SettingsPage() {
   }, [loadRepoAppConnection]);
 
   useEffect(() => {
+    if (!repoAppConnection?.connected) return;
+
+    let cancelled = false;
+    void apiClient.listGitHubRepositorySelections()
+      .then(({ installations }) => {
+        if (!cancelled) setRepoAppInstallations(installations);
+      })
+      .catch(() => {
+        // Installation-management metadata is optional; preserve the connected OAuth status.
+        if (!cancelled) setRepoAppInstallations(null);
+      });
+
+    return () => { cancelled = true; };
+  }, [repoAppConnection?.connected]);
+
+  useEffect(() => {
     const repoAppAuth = searchParams.get('repo_app_auth');
     if (!repoAppAuth) return;
 
@@ -179,6 +201,10 @@ export function SettingsPage() {
       setRepoAppConnecting(false);
     }
   };
+
+  const repoAppInstallationsWithManagementUrl = repoAppInstallations?.filter(
+    (installation) => typeof installation.management_url === 'string' && installation.management_url.trim().length > 0,
+  ) ?? [];
 
   return (
     <PageContainer width="readable">
@@ -280,11 +306,36 @@ export function SettingsPage() {
             {repoAppStatusLoading ? (
               <Spinner size="tiny" label="Checking GitHub Repo App connection" />
             ) : repoAppConnection?.connected ? (
-              <MessageBar intent="success">
-                <MessageBarBody>
-                  Connected GitHub login: @{repoAppConnection.github_login ?? 'unknown'}
-                </MessageBarBody>
-              </MessageBar>
+              <>
+                <MessageBar intent="success">
+                  <MessageBarBody>
+                    Connected GitHub login: @{repoAppConnection.github_login ?? 'unknown'}
+                  </MessageBarBody>
+                </MessageBar>
+                {repoAppInstallationsWithManagementUrl.length > 0 && (
+                  <div className={styles.subBlock}>
+                    <Body tone="muted">
+                      GitHub App installation settings control repository access separately from this GitHub login.
+                    </Body>
+                    <div className={styles.subBlock} role="list" aria-label="GitHub App installations">
+                      {repoAppInstallationsWithManagementUrl.map((installation) => (
+                        <div key={`${installation.account_type}:${installation.account_login}`} role="listitem">
+                          <Button
+                            as="a"
+                            href={installation.management_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            appearance="subtle"
+                            aria-label={`Open GitHub installation settings for ${installation.account_login}`}
+                          >
+                            Open GitHub installation settings for {installation.account_login}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             ) : (
               <div className={styles.formActions}>
                 <Button appearance="primary" disabled={repoAppConnecting} onClick={() => void connectRepoApp()}>
