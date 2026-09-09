@@ -75,8 +75,12 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
         try
         {
             var body = new { description };
-            var result = await api.PostAsync<GenerateWorkflowResponse>(
-                $"/api/projects/{Uri.EscapeDataString(project_id)}/workflows/generate", body, ct);
+            var result = await api.PostAiAsync<GenerateWorkflowResponse>(
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/workflows/generate",
+                body,
+                "workflow_generation",
+                project_id,
+                ct: ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException ex) when (ex.StatusCode == 404)

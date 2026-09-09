@@ -51,8 +51,17 @@ public sealed class TeamTools(AgentweaverApiClient api)
                 throw new McpApiException(400, "Either goal or confirm_proposal_id must be provided.");
 
             var body = new { goal, mode };
-            var proposal = await api.PostAsync<JsonElement>(
-                $"/api/projects/{Uri.EscapeDataString(project_id)}/casting/proposals", body, ct);
+            var proposal = mode is "free_text" or "analysis"
+                ? await api.PostAiAsync<JsonElement>(
+                    $"/api/projects/{Uri.EscapeDataString(project_id)}/casting/proposals",
+                    body,
+                    "casting_generation",
+                    project_id,
+                    ct: ct)
+                : await api.PostAsync<JsonElement>(
+                    $"/api/projects/{Uri.EscapeDataString(project_id)}/casting/proposals",
+                    body,
+                    ct);
 
             if (!confirm)
                 return JsonSerializer.Serialize(proposal, JsonOpts);

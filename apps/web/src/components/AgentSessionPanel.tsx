@@ -28,6 +28,7 @@ import type { EventType, RunStreamEvent } from '../api/sse';
 import type { RaiVerdictEventPayload, RaiVerdictToken } from '../api/types';
 import { useArtifactBrowser } from '../hooks/useArtifactBrowser';
 import type { ArtifactBrowserAdapter } from '../hooks/useArtifactBrowser';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { mergeRunEvents as sharedMergeRunEvents } from '../timeline/mergeRunEvents';
 import { isSerializedWorkPlan, parseOutcomeSpecMessage, formatOutcomeSpecMessage } from '../timeline/coordinatorPlanFilter';
 import { deriveHumanTitle } from '../timeline/reducer';
@@ -36,6 +37,8 @@ import type { RunTimelineModel, RunTimelineStep } from '../timeline/runTimelineS
 import { formatModelLabel } from '../utils/agentIdentity';
 import { isTerminalRunStatus } from '../utils/runStatus';
 import { AgentAvatar } from './AgentAvatar';
+import { AiExecutionProviderStatus, AiProviderChangeAnnouncement } from './AiExecutionProviderHint';
+import { aiExecutionProviderLabel } from './aiExecutionContext';
 import { AiCredits } from './AiCredits';
 import { AutomationToggle } from './AutomationToggle';
 import { AUTOMATION_HELP } from './automationHelp';
@@ -1860,9 +1863,7 @@ export function AgentSessionPanel({
   selectedNodeId,
   onSelectNode,
   coordinatorRunId,
-  // Retained for prop-contract compatibility with existing callers/tests; no longer read internally.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  projectId: _projectId,
+  projectId,
   onCoordinatorFollowUp,
   coordinatorActive = false,
   automation,
@@ -1875,6 +1876,12 @@ export function AgentSessionPanel({
   workPlanTopologyThumbnail,
 }: AgentSessionPanelProps) {
   const styles = useStyles();
+  const providerContext = useAiExecutionContext(
+    'orchestration',
+    projectId,
+    coordinatorRunId,
+    Boolean(projectId && coordinatorRunId && coordinatorActive),
+  );
   const composerRef = useRef<HTMLDivElement>(null);
   const focusComposer = useCallback(() => {
     composerRef.current?.querySelector('textarea')?.focus();
@@ -2229,6 +2236,7 @@ export function AgentSessionPanel({
     setFollowUpBusy(true);
     setFollowUpError(null);
     setFollowUpNotice(isOutcomePlanClarification ? 'Sending clarification to coordinator…' : null);
+    providerContext.setPhase('active');
     try {
       await apiClient.steerCoordinator(coordinatorRunId, {
         kind: 'send',
@@ -2236,7 +2244,8 @@ export function AgentSessionPanel({
         ...(selectedItem && !selectedItem.isCoordinator && selectedItem.childRunId
           ? { target_child_run_id: selectedItem.childRunId }
           : {}),
-      });
+      }, providerContext.providerKey);
+      providerContext.setPhase('completed');
       if (isOutcomePlanClarification) {
         onOutcomePlanClarificationPendingChange?.(true, preSubmitPlanSequence);
       }
@@ -2258,12 +2267,14 @@ export function AgentSessionPanel({
       onCoordinatorFollowUp?.();
     } catch (err: unknown) {
       setFollowUpNotice(null);
-      setFollowUpError(formatApiErrorMessage(err, 'Could not send the coordinator message.'));
+      setFollowUpError(providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and send again.'
+        : formatApiErrorMessage(err, 'Could not send the coordinator message.'));
     } finally {
       followUpInFlightRef.current = false;
       setFollowUpBusy(false);
     }
-  }, [coordinatorRunId, events, followUp, onCoordinatorFollowUp, onOutcomePlanClarificationPendingChange, selectedItem, selectedRunId]);
+  }, [coordinatorRunId, events, followUp, onCoordinatorFollowUp, onOutcomePlanClarificationPendingChange, providerContext, selectedItem, selectedRunId]);
 
   if (!selectedItem || !isVisible) return null;
 
@@ -2560,9 +2571,12 @@ export function AgentSessionPanel({
                   onSubmit={(_, data) => {
                     if (data.value.trim()) void handleSendFollowUp();
                   }}
-                  disabled={!coordinatorActive || followUpBusy || outcomePlanClarificationPending}
-                  disableSend={!coordinatorActive || followUpBusy || outcomePlanClarificationPending || !followUp.trim()}
+                  disabled={!coordinatorActive || followUpBusy || outcomePlanClarificationPending
+                    || providerContext.loading || !providerContext.available}
+                  disableSend={!coordinatorActive || followUpBusy || outcomePlanClarificationPending
+                    || !followUp.trim() || providerContext.loading || !providerContext.available}
                   contentBefore={null}
+                  sendTooltip={aiExecutionProviderLabel(providerContext.context)}
                   actions={credits ? (
                     <AiCredits
                       totalNanoAiu={credits.totalNanoAiu}
@@ -2571,7 +2585,13 @@ export function AgentSessionPanel({
                       data-testid="composer-credits"
                     />
                   ) : null}
+                  contentBelow={(
+                    <AiExecutionProviderStatus context={providerContext.context}>
+                      <span aria-hidden="true" />
+                    </AiExecutionProviderStatus>
+                  )}
                 />
+                <AiProviderChangeAnnouncement message={providerContext.announcement} />
               </div>
               {automation && !isNonCoordinatorAgentScope && (
                 <div className={styles.composerUtilityRow} data-testid="composer-automation-toggles">

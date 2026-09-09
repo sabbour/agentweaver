@@ -8,6 +8,27 @@ A **Run** is a unit of work that Agentweaver executes on your behalf. You descri
 
 ## Starting a run
 
+### Model provider context
+
+Supported AI actions show **Expected provider** before submission, **Using** during work, and **Used** after completion.
+The labels include the provider kind and available model name.
+Screen readers announce provider changes, including replacement by another provider of the same kind.
+The interface does not show provider identifiers, credentials, or account names.
+
+The API binds a prepared execution key to the caller, operation, project, and provider configuration.
+The key expires after five minutes.
+If the provider changes before admission, the API returns `409 model_provider_changed` instead of starting the action.
+The interface shows replacement context for another submission.
+Missing and expired keys also require fresh context.
+
+Coordinator orchestration and its classifier actions currently require GitHub Copilot.
+A configured BYOK provider does not imply support for these operations.
+Queued work retains its accepted provider fingerprint and stops if the provider changes before pickup.
+
+Custom API clients must prepare context through `POST /api/ai/execution-context`.
+Send the returned `execution_key` in `If-Model-Provider-Key` for the corresponding action.
+The public `provider_key` is a comparison fingerprint, not an execution key.
+
 ### Coordinator orchestration
 
 From inside a project, open the **Board** page and click **Start task** (or use the **Start task** button from the runs list or Flow page).

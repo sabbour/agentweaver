@@ -111,10 +111,13 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         string? systemPromptContext = null,
         string? userId = null,
         string? projectId = null,
-        CopilotOperationCapability? copilotCapability = null)
+        CopilotOperationCapability? copilotCapability = null,
+        ByokProviderConfiguration? byokProviderConfiguration = null)
     {
-        var byokProvider = _byokProviderConfiguration is not null
-            ? await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false)
+        var byokProvider = modelSource == ModelSource.Byok
+            ? byokProviderConfiguration ?? (_byokProviderConfiguration is not null
+                ? await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false)
+                : null)
             : null;
 
         if (modelSource == ModelSource.Byok && byokProvider is null)
@@ -154,16 +157,16 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
                 copilotCapability.Purpose,
                 modelId,
                 ct).ConfigureAwait(false)
-            : byokProvider is null
-                ? await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false)
-                : _factory.CreateByokClient();
+            : modelSource == ModelSource.Byok
+                ? _factory.CreateByokClient()
+                : await _factory.CreateClientAsync(runId, modelId, ct).ConfigureAwait(false);
         try
         {
             await client.StartAsync(ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            var providerFailure = AgentProviderException.Classify(ModelSource.GitHubCopilot, ex, runId);
+            var providerFailure = AgentProviderException.Classify(modelSource, ex, runId);
             if (providerFailure is not null)
             {
                 _logger.LogWarning(

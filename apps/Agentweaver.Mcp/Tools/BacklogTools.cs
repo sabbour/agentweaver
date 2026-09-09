@@ -263,8 +263,12 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         try
         {
             var body = new { file_path, confirm };
-            var result = await api.PostAsync<DecomposeResponse>(
-                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/decompose", body, ct);
+            var result = await api.PostAiAsync<DecomposeResponse>(
+                $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/decompose",
+                body,
+                "backlog_decomposition",
+                project_id,
+                ct: ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException ex) when (ex.StatusCode == 404)

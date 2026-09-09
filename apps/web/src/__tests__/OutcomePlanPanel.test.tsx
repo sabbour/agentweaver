@@ -19,6 +19,7 @@ vi.mock('../api/apiClient', () => ({
     getOutcomeSpec: vi.fn(),
     confirmOutcomeSpec: vi.fn(),
     reviseOutcomeSpec: vi.fn(),
+    prepareAiExecutionContext: vi.fn(),
   },
 }));
 
@@ -58,6 +59,23 @@ const gateArmingError = () =>
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(apiClient.getOutcomeSpec).mockResolvedValue(awaitingSpec);
+  vi.mocked(apiClient.prepareAiExecutionContext).mockResolvedValue({
+    ai_required: true,
+    operation: 'orchestration',
+    phase: 'prepared',
+    execution_key: 'signed-provider-key',
+    expires_at: '2099-01-01T00:00:00Z',
+    effective_model_provider: {
+      state: 'resolved',
+      provider_kind: 'platform_github_copilot',
+      resolution_scope: 'project',
+      provider_scope: 'platform',
+      provider_type: null,
+      model_id: 'gpt-5',
+      provider_key: 'provider-fingerprint',
+      unavailable_reason: null,
+    },
+  });
 });
 
 afterEach(() => {
@@ -88,6 +106,11 @@ describe('OutcomePlanPanel confirm retry', () => {
     );
 
     expect(vi.mocked(apiClient.confirmOutcomeSpec)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(apiClient.confirmOutcomeSpec)).toHaveBeenLastCalledWith(
+      'run-1',
+      false,
+      'signed-provider-key',
+    );
     expect(document.body.textContent).not.toContain('no_pending_gate');
     expect(document.body.textContent).not.toContain('API error 409');
   });
@@ -131,6 +154,51 @@ describe('OutcomePlanPanel confirm retry', () => {
     await waitFor(() => expect(screen.getByText(/API error 500: server exploded/i)).toBeTruthy());
     expect((screen.getByRole('button', { name: /confirm plan/i }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole('button', { name: /Clarify plan/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('shows and announces a replacement provider after a 409 without retrying automatically', async () => {
+    vi.mocked(apiClient.confirmOutcomeSpec).mockRejectedValue(new ApiError(
+      409,
+      JSON.stringify({
+        error: 'model_provider_changed',
+        context: {
+          ai_required: true,
+          operation: 'orchestration',
+          phase: 'prepared',
+          execution_key: 'replacement-key',
+          expires_at: '2099-01-01T00:00:00Z',
+          effective_model_provider: {
+            state: 'resolved',
+            provider_kind: 'byok',
+            resolution_scope: 'project',
+            provider_scope: 'platform',
+            provider_type: 'azure',
+            model_id: 'gpt-5',
+            provider_key: 'replacement-fingerprint',
+            unavailable_reason: null,
+          },
+        },
+      }),
+    ));
+
+    render(
+      <Wrapper>
+        <OutcomePlanPanel runId="run-1" events={[]} streamStatus="streaming" />
+      </Wrapper>,
+    );
+
+    const confirmButton = await screen.findByRole('button', { name: /confirm plan/i });
+    await waitFor(() => expect((confirmButton as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(confirmButton);
+
+    expect(await screen.findByText(
+      'The AI provider changed. Review the updated provider and confirm again.',
+    )).toBeTruthy();
+    expect(document.body.textContent).toContain('Expected provider: Azure BYOK. Model: gpt-5.');
+    expect(screen.getByText(
+      'AI provider changed. Expected provider: Azure BYOK. Model: gpt-5.',
+    )).toBeTruthy();
+    expect(apiClient.confirmOutcomeSpec).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the REST confirmed status when stale SSE still says awaiting confirmation after confirm', async () => {

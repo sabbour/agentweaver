@@ -447,6 +447,9 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
       generationError={generation.error}
       generateDescription={goal}
       onGenerateDescriptionChange={setGoal}
+      executionContext={generation.providerContext.context}
+      providerLoading={generation.providerContext.loading || !generation.providerContext.available}
+      providerAnnouncement={generation.providerContext.announcement}
     />
   );
 
@@ -749,6 +752,9 @@ function CreateFromGitHubDialog({
       generationError={generation.error}
       generateDescription={generateDescription}
       onGenerateDescriptionChange={setGenerateDescription}
+      executionContext={generation.providerContext.context}
+      providerLoading={generation.providerContext.loading || !generation.providerContext.available}
+      providerAnnouncement={generation.providerContext.announcement}
     />
   );
 

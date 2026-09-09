@@ -1372,6 +1372,8 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         IProjectStore projectStore,
         IProjectWorkspaceProvider workspaceProvider,
         CoordinatorRunService coordinator,
+        AiExecutionPlanService executionPlans,
+        AiExecutionPlanAccessor executionPlanAccessor,
         ILogger<Program> logger,
         CancellationToken ct)
     {
@@ -1405,6 +1407,16 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         RunId runId;
         try
         {
+            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "orchestration",
+                projectId,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+            execution.Activate();
+            if (execution.Error is not null)
+                return execution.Error;
             runId = await coordinator.StartCoordinatorRunAsync(
                 projectId,
                 request.Goal!,
@@ -1431,6 +1443,22 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         catch (ModelProviderConnectionRequiredException ex)
         {
             return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (AgentProviderException ex)
+        {
+            return Results.Json(
+                new
+                {
+                    error = ex.ErrorCode,
+                    message = ex.UserMessage,
+                    kind = ex.FailureKind.ToString(),
+                    retryable = ex.IsRetryable,
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (AiExecutionPlanException ex)
+        {
+            return EndpointHelpers.AiExecutionError(ex);
         }
 
         return Results.Created(

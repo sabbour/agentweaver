@@ -19,6 +19,15 @@ import { buildRunTimeline } from '../timeline/runTimelineSteps';
 import { RunTimeline } from '../components/RunTimeline';
 import { Composer } from '../components/ui/copilot';
 import { ApprovalGate } from '../components/ui/agentic';
+import {
+  AiExecutionProviderStatus,
+  AiProviderChangeAnnouncement,
+} from '../components/AiExecutionProviderHint';
+import {
+  aiExecutionContextFromEvents,
+  aiExecutionProviderLabel,
+} from '../components/aiExecutionContext';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 
 const useStyles = makeStyles({
   page: {
@@ -302,6 +311,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const effectiveProjectId = projectId ?? params.projectId;
   const [searchParams, setSearchParams] = useSearchParams();
   const routeRunId = searchParams.get('runId') ?? '';
+  const providerContext = useAiExecutionContext('assistant_turn');
 
   // The URL is the conversation source of truth. AssistantRoute preserves this page while
   // assigning a newly-created session's first run id, then resets it when navigation moves
@@ -462,6 +472,14 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     () => (runId ? derivePendingApprovals(events, runId) : []),
     [events, runId],
   );
+  const activeProviderContext = useMemo(
+    () => aiExecutionContextFromEvents(
+      events,
+      'assistant_turn',
+      busy ? 'active' : 'completed',
+    ) ?? providerContext.context,
+    [busy, events, providerContext.context],
+  );
 
   const reconcileDurableHistory = useCallback(async () => {
     setReconciliationError(null);
@@ -588,7 +606,8 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
           defer_first_turn: true,
           project_id: effectiveProjectId,
           resume_from_run_id: pendingResumeFromRunIdRef.current ?? undefined,
-        });
+        }, providerContext.providerKey);
+        providerContext.applyProvider(created.effective_model_provider, 'active');
         // Consumed (or not needed) — clear so it never leaks into a later, unrelated new
         // conversation (e.g. one started via "New Session" from the Sessions page).
         pendingResumeFromRunIdRef.current = null;
@@ -603,9 +622,19 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
         // Create the conversation first so React can bind its SSE stream while this request is
         // still running. Supplying the opening message to createAssistantRun would keep the run id
         // hidden until the entire model turn completed, making the first reply impossible to stream.
-        await apiClient.sendAssistantMessage(created.run_id, { message });
+        const response = await apiClient.sendAssistantMessage(
+          created.run_id,
+          { message },
+          providerContext.providerKey,
+        );
+        providerContext.applyProvider(response.effective_model_provider, 'completed');
       } else {
-        await apiClient.sendAssistantMessage(runId, { message });
+        const response = await apiClient.sendAssistantMessage(
+          runId,
+          { message },
+          providerContext.providerKey,
+        );
+        providerContext.applyProvider(response.effective_model_provider, 'completed');
       }
       setOptimisticMessages((current) => current.map((candidate) => (
         candidate.id === optimisticMessage.id
@@ -616,7 +645,9 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
       setOptimisticMessages((current) => current.filter(
         (candidate) => candidate.id !== optimisticMessage.id,
       ));
-      if (
+      if (providerContext.handleInvocationError(err)) {
+        setError('The AI provider changed. Review the updated provider and send again.');
+      } else if (
         isNewRun &&
         err instanceof ApiError &&
         err.status === 429 &&
@@ -670,6 +701,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     input,
     location.state,
     optimisticMessages,
+    providerContext,
     baselineReady,
     runId,
     searchParams,
@@ -791,13 +823,17 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
           // itself is gated via disableSend, so the user can keep typing (and even queue
           // up their next message) while the previous one is still in flight; handleSubmit
           // already guards against a duplicate dispatch via `busy`/`sendingRef`.
-          disableSend={busy || !input.trim()}
+          disableSend={busy || providerContext.loading || !providerContext.available || !input.trim()}
+          sendTooltip={aiExecutionProviderLabel(providerContext.context)}
         />
-        <Text className={styles.composerStatus} aria-live="polite">
-          {runId
-            ? `Connected to operator run ${runId} · stream ${streamStatus}`
-            : 'Your first message creates an operator run.'}
-        </Text>
+        <AiExecutionProviderStatus context={activeProviderContext}>
+          <Text className={styles.composerStatus}>
+            {runId
+              ? `Connected to operator run ${runId} · stream ${streamStatus}`
+              : 'Your first message creates an operator run.'}
+          </Text>
+        </AiExecutionProviderStatus>
+        <AiProviderChangeAnnouncement message={providerContext.announcement} />
       </div>
     </div>
   );

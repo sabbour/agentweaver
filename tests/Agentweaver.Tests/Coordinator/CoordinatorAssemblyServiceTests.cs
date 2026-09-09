@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Agentweaver.Api.Auth;
 using Microsoft.AspNetCore.Http;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Contracts;
@@ -51,6 +52,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     private readonly ConfigurableRotationSelector _rotation = new();
     private readonly FakeChildRevisionHandoff _handoff;
     private readonly FakePreviewClassifier _previewClassifier = new();
+    private readonly FakeProviderBoundaryResolver _providerBoundary = new();
     private readonly CoordinatorAssemblyService _sut;
     private readonly CoordinatorSteeringService _steering;
 
@@ -115,7 +117,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             new TestHostApplicationLifetime(),
             NullLogger<CoordinatorAssemblyService>.Instance,
             steeringWaits: _steeringWaits,
-            previewClassifier: _previewClassifier);
+            previewClassifier: _previewClassifier,
+            providerBoundaryResolver: _providerBoundary);
         _steering = new CoordinatorSteeringService(
             _streamStore,
             new RunWorkflowRegistry(),
@@ -1500,7 +1503,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             new TestHostApplicationLifetime(),
             NullLogger<CoordinatorAssemblyService>.Instance,
             configuration: shortSteeringWaitConfig,
-            steeringWaits: _steeringWaits);
+            steeringWaits: _steeringWaits,
+            providerBoundaryResolver: _providerBoundary);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var run = sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
@@ -1963,6 +1967,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     public async Task RunAssembly_WithChanges_PreparesReviewerWorktreeOnce_AndPropagatesPathToReviewers()
     {
         var coordinatorRunId = RunId.New().ToString();
+        _providerBoundary.Provider = new EffectiveModelProviderResult.Byok(
+            "provider-1",
+            "azure",
+            "configuration-fingerprint");
         var (_, _) = await SeedPlanAsync(coordinatorRunId,
             new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         await SeedCoordinatorRunAsync(coordinatorRunId);
@@ -1987,6 +1995,11 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _pipeline.LastRaiRequest.Should().NotBeNull();
         _pipeline.LastRaiRequest!.WorktreePath.Should().Be(expectedPath,
             "the RAI reviewer request must carry the checked-out worktree path, not an empty string");
+        _pipeline.LastRaiRequest.ModelSource.Should().Be("byok");
+        _pipeline.LastRaiRequest.ByokProviderFingerprint.Should().Be("configuration-fingerprint");
+        _pipeline.LastScribeRequest.Should().NotBeNull();
+        _pipeline.LastScribeRequest!.ModelSource.Should().Be("byok");
+        _pipeline.LastScribeRequest.ByokProviderFingerprint.Should().Be("configuration-fingerprint");
     }
 
     // #236: an EMPTY-diff assembly early-returns approved in the reviewers, so no worktree is needed —
@@ -2737,7 +2750,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         persisted!.Status.Should().Be(RunStatus.Declined);
         persisted.Result.Should().Be("assembly_declined");
         (await _runStore.GetRunsByParentAsync(coordinatorRunId))
-            .Should().ContainSingle(r => r.AgentName == "Scribe" && r.SubtaskId == "assembly-scribe");
+            .Should().NotContain(r => r.AgentName == "Scribe" && r.SubtaskId == "assembly-scribe");
+        _pipeline.Scribes.Should().Be(0, "decline is a deterministic control and must not invoke a model");
+        _pipeline.CleanupBuildTestResourcesCalls.Should().Be(1);
     }
 
     [Fact]
@@ -2836,7 +2851,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             NullLogger<CoordinatorAssemblyService>.Instance,
             configuration,
             steeringWaits: _steeringWaits,
-            previewClassifier: _previewClassifier);
+            previewClassifier: _previewClassifier,
+            providerBoundaryResolver: _providerBoundary);
 
         var run = sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
@@ -3789,6 +3805,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public Action<CollectiveBuildTestRequest>? OnBuildTest;
         public Action? OnCleanupBuildTestResources;
         public Func<CollectiveScribeRequest, CancellationToken, Task>? OnScribe;
+        public CollectiveScribeRequest? LastScribeRequest;
 
         /// <summary>When set, <see cref="MergeAsync"/> returns this result instead of a clean merge.</summary>
         public CollectiveMergeResult? MergeOverride;
@@ -3804,6 +3821,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                 IntegrationBuildThrowsRemaining--;
                 throw new InvalidOperationException("boom in integration");
             }
+
             return IntegrationResult
                 ?? IntegrationBranchResult.Success(request.IntegrationBranch, "agg-tree", "aggregate diff");
         }
@@ -3869,8 +3887,25 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct)
         {
             Scribes++;
+            LastScribeRequest = request;
             return OnScribe?.Invoke(request, ct) ?? Task.CompletedTask;
         }
+    }
+
+    private sealed class FakeProviderBoundaryResolver : IRunModelProviderBoundaryResolver
+    {
+        public EffectiveModelProviderResult Provider { get; set; } =
+            new EffectiveModelProviderResult.PlatformGitHubCopilot(
+                "test-binding",
+                GitHubLogin: null,
+                CredentialVersion: "test-version");
+
+        public Task<ResolvedRunModelProviderBoundary> ResolveDurableProviderBoundaryAsync(
+            Run run,
+            CancellationToken ct) =>
+            Task.FromResult(new ResolvedRunModelProviderBoundary(
+                Provider,
+                (Provider as EffectiveModelProviderResult.Byok)?.ConfigurationFingerprint));
     }
 
     private sealed class ThrowingLaunchPodLifecycle(Exception exception) : IAgentHostPodLifecycle

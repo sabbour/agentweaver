@@ -273,7 +273,20 @@ public sealed class RunTools(AgentweaverApiClient api)
         try
         {
             var body = new { approved };
-            var result = await api.PostAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(run_id)}/review", body, ct);
+            var path = $"/api/runs/{Uri.EscapeDataString(run_id)}/review";
+            JsonElement result;
+            if (approved)
+            {
+                result = await api.PostAiForRunOnDemandAsync<JsonElement>(
+                    path,
+                    body,
+                    run_id,
+                    ct).ConfigureAwait(false);
+            }
+            else
+            {
+                result = await api.PostAsync<JsonElement>(path, body, ct).ConfigureAwait(false);
+            }
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException) { throw; }
@@ -333,8 +346,12 @@ public sealed class RunTools(AgentweaverApiClient api)
     {
         try
         {
-            var result = await api.PostAsync<RetryRunResponse>(
-                $"/api/runs/{Uri.EscapeDataString(run_id)}/retry", body: null, ct);
+            var result = await api.PostAiForRunAsync<RetryRunResponse>(
+                $"/api/runs/{Uri.EscapeDataString(run_id)}/retry",
+                body: null,
+                operation: "retry",
+                runId: run_id,
+                ct: ct);
             return $"Retried run {Uri.EscapeDataString(run_id)} -> new run {result.RunId}.";
         }
         catch (McpApiException) { throw; }
@@ -374,10 +391,12 @@ public sealed class RunTools(AgentweaverApiClient api)
         if (!string.IsNullOrWhiteSpace(workflow_id))
             body["workflow_override_id"] = workflow_id;
 
-        var result = await api.PostAsync<StartCoordinatorRunResponse>(
+        var result = await api.PostAiAsync<StartCoordinatorRunResponse>(
             $"/api/projects/{Uri.EscapeDataString(project_id)}/orchestrations",
             body,
-            ct);
+            "orchestration",
+            project_id,
+            ct: ct);
 
         return result.RunId;
     }
@@ -435,4 +454,3 @@ public sealed class RunTools(AgentweaverApiClient api)
             _ => "Call run_status for details before retrying."
         };
 }
-

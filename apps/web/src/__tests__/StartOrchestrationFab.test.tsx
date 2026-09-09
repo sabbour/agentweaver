@@ -27,6 +27,21 @@ vi.mock('../api/apiClient', () => ({
   },
 }));
 
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: null,
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+  }),
+}));
+
 import { ApiError } from '../api/client';
 
 // Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `listProjects`
@@ -114,7 +129,13 @@ describe('StartOrchestrationFab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
 
     await waitFor(() =>
-      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-b', 'Ship the thing', null, 'direct'),
+      expect(apiClient.startOrchestration).toHaveBeenCalledWith(
+        'proj-b',
+        'Ship the thing',
+        null,
+        'direct',
+        'signed-provider-key',
+      ),
     );
     expect(navigateMock).toHaveBeenCalledWith('/projects/proj-b/orchestrations/run-77');
   });
@@ -143,7 +164,13 @@ describe('StartOrchestrationFab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
 
     await waitFor(() =>
-      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-a', 'Default project goal', null, 'direct'),
+      expect(apiClient.startOrchestration).toHaveBeenCalledWith(
+        'proj-a',
+        'Default project goal',
+        null,
+        'direct',
+        'signed-provider-key',
+      ),
     );
   });
 
@@ -177,7 +204,13 @@ describe('StartOrchestrationFab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
 
     await waitFor(() =>
-      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-b', 'Resolved project goal', null, 'direct'),
+      expect(apiClient.startOrchestration).toHaveBeenCalledWith(
+        'proj-b',
+        'Resolved project goal',
+        null,
+        'direct',
+        'signed-provider-key',
+      ),
     );
   });
 
@@ -245,7 +278,13 @@ describe('StartOrchestrationFab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Define Outcome' }));
 
     await waitFor(() =>
-      expect(apiClient.startOrchestration).toHaveBeenCalledWith('proj-a', 'Ship a feature', 'software-delivery'),
+      expect(apiClient.startOrchestration).toHaveBeenCalledWith(
+        'proj-a',
+        'Ship a feature',
+        'software-delivery',
+        undefined,
+        'signed-provider-key',
+      ),
     );
   });
 

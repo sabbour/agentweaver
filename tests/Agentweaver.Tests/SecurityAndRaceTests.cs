@@ -5,6 +5,8 @@ using FluentAssertions;
 using LibGit2Sharp;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Auth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
@@ -51,11 +53,12 @@ public sealed class SecurityAndRaceTests
         var beforeInvocation = _factory.TestAgentRunner.InvocationCount;
         var (run, _) = await SetupRunAwaitingReviewAsync();
 
-        var response = await _ownerClient.PostAsJsonAsync(
-            $"/api/runs/{run.Id}/request-changes",
-            new { comment = maliciousPayload });
+        var response = await PostRequestChangesAsync(run, maliciousPayload);
 
-        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.StatusCode.Should().Be(
+            HttpStatusCode.Accepted,
+            "the fenced revision should start; body: {0}",
+            await response.Content.ReadAsStringAsync());
 
         var revisedTask = await WaitForLatestTaskAsync(beforeInvocation);
         revisedTask.Should().NotBeNull();
@@ -91,9 +94,7 @@ public sealed class SecurityAndRaceTests
         var beforeInvocation = _factory.TestAgentRunner.InvocationCount;
         var (run, _) = await SetupRunAwaitingReviewAsync();
 
-        var response = await _ownerClient.PostAsJsonAsync(
-            $"/api/runs/{run.Id}/request-changes",
-            new { comment = mixedCasePayload });
+        var response = await PostRequestChangesAsync(run, mixedCasePayload);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
 
@@ -184,6 +185,25 @@ public sealed class SecurityAndRaceTests
         return _factory.TestAgentRunner.LastTask;
     }
 
+    private async Task<HttpResponseMessage> PostRequestChangesAsync(Run run, string comment)
+    {
+        var preflight = await _ownerClient.PostAsJsonAsync(
+            "/api/ai/execution-context",
+            new { operation = "agent_turn", project_id = run.ProjectId?.ToString(), run_id = run.Id.ToString() });
+        preflight.EnsureSuccessStatusCode();
+        var context = await preflight.Content.ReadFromJsonAsync<AiExecutionContextResponse>();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/runs/{run.Id}/request-changes")
+        {
+            Content = JsonContent.Create(new { comment }),
+        };
+        request.Headers.Add(
+            AiExecutionPlanHeaders.ProviderKey,
+            context!.EffectiveModelProvider!.ProviderKey);
+        return await _ownerClient.SendAsync(request);
+    }
+
     private async Task<(Run Run, string RepoPath)> SetupRunAwaitingReviewAsync()
     {
         var repoPath = CreateTempGitRepo();
@@ -205,7 +225,7 @@ public sealed class SecurityAndRaceTests
             Id = runId,
             RepositoryPath = repoPath,
             OriginatingBranch = "main",
-            ModelSource = ModelSource.GitHubCopilot,
+            ModelSource = ModelSource.Byok,
             Task = "original task description",
             SubmittingUser = RequestChangesWebApplicationFactory.OwnerUser,
             ProjectId = projectId,

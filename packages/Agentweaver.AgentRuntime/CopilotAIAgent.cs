@@ -40,7 +40,7 @@ namespace Agentweaver.AgentRuntime;
 /// disposes them via <see cref="DisposeAsync"/>.
 /// </para>
 /// </summary>
-public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnAgent
+public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnAgent, Workflow.IProviderBoundWorkflowTurnAgent
 {
     private static readonly ActivitySource ActivitySource = new("Agentweaver");
     private static readonly Meter Meter = new("Agentweaver", "1.0.0");
@@ -75,7 +75,12 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly IEnumerable<IAgentRuntimeToolProvider> _toolProviders;
     private readonly ISandboxRepositoryCredentialProvider? _repositoryCredentialProvider;
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
+    private readonly IModelInvocationGuard? _modelInvocationGuard;
     private ByokProviderConfiguration? _activeByokProviderConfiguration;
+    private ModelSource? _acceptedModelSource;
+    private string? _acceptedByokProviderFingerprint;
+    private ModelSource? _pendingModelSource;
+    private string? _pendingByokProviderFingerprint;
 
     /// <summary>
     /// True once the active BYOK provider configuration has been resolved for the current run, so
@@ -272,7 +277,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         IRunOptionsStore? runOptions = null,
         IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
         ISandboxRepositoryCredentialProvider? repositoryCredentialProvider = null,
-        IByokProviderConfigurationProvider? byokProviderConfiguration = null)
+        IByokProviderConfigurationProvider? byokProviderConfiguration = null,
+        IModelInvocationGuard? modelInvocationGuard = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
@@ -285,6 +291,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _toolProviders = toolProviders ?? [];
         _repositoryCredentialProvider = repositoryCredentialProvider;
         _byokProviderConfiguration = byokProviderConfiguration;
+        _modelInvocationGuard = modelInvocationGuard;
     }
 
     /// <summary>
@@ -320,6 +327,18 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             userId,
             AgentHostPurpose.Default);
 
+    public void ConfigureProviderBoundary(
+        ModelSource modelSource,
+        string? byokProviderFingerprint)
+    {
+        _acceptedModelSource = modelSource;
+        _acceptedByokProviderFingerprint = byokProviderFingerprint;
+        _pendingModelSource = modelSource;
+        _pendingByokProviderFingerprint = byokProviderFingerprint;
+        _byokProviderConfigurationResolved = false;
+        _activeByokProviderConfiguration = null;
+    }
+
     public async Task SetupAsync(
         string workingDirectory,
         string repositoryPath,
@@ -336,6 +355,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         AgentHostPurpose purpose = AgentHostPurpose.Default,
         string? apiCapabilityToken = null)
     {
+        _acceptedModelSource = _pendingModelSource;
+        _acceptedByokProviderFingerprint = _pendingByokProviderFingerprint;
+        _pendingModelSource = null;
+        _pendingByokProviderFingerprint = null;
         _workingDirectory = workingDirectory;
         _repositoryPath = repositoryPath;
         _runId = runId;
@@ -876,6 +899,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 try
                 {
                     session = await EnsureFreshClientForAiCallAsync(session, turnCt).ConfigureAwait(false);
+                    if (_modelInvocationGuard is not null)
+                        await _modelInvocationGuard.ValidateAsync(_runId, turnCt).ConfigureAwait(false);
                     await StreamTurnOnceAsync(task, session, turnStarted, turnStartedAt, turnCt).ConfigureAwait(false);
                     break;
                 }
@@ -1238,9 +1263,40 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (_byokProviderConfigurationResolved)
             return _activeByokProviderConfiguration;
 
-        _activeByokProviderConfiguration = _byokProviderConfiguration is null
-            ? null
-            : await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
+        if (_acceptedModelSource == ModelSource.GitHubCopilot)
+        {
+            _activeByokProviderConfiguration = null;
+        }
+        else
+        {
+            _activeByokProviderConfiguration = _byokProviderConfiguration is null
+                ? null
+                : await _byokProviderConfiguration.GetAsync(ct).ConfigureAwait(false);
+            if (_acceptedModelSource == ModelSource.Byok
+                && _activeByokProviderConfiguration is null)
+            {
+                throw new AgentProviderException(
+                    ModelSource.Byok,
+                    AgentProviderFailureKind.Configuration,
+                    "model_provider_changed",
+                    "The accepted BYOK provider configuration is unavailable.",
+                    isRetryable: true);
+            }
+            if (_acceptedModelSource == ModelSource.Byok
+                && !string.IsNullOrWhiteSpace(_acceptedByokProviderFingerprint)
+                && !string.Equals(
+                    _activeByokProviderConfiguration!.ExecutionFingerprint(),
+                    _acceptedByokProviderFingerprint,
+                    StringComparison.Ordinal))
+            {
+                throw new AgentProviderException(
+                    ModelSource.Byok,
+                    AgentProviderFailureKind.Configuration,
+                    "model_provider_changed",
+                    "The accepted BYOK provider configuration changed before model invocation.",
+                    isRetryable: true);
+            }
+        }
         _byokProviderConfigurationResolved = true;
         return _activeByokProviderConfiguration;
     }

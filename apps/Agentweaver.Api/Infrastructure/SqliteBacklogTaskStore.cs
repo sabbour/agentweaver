@@ -29,11 +29,13 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             INSERT INTO backlog_tasks (task_id, project_id, title, description, state, order_key,
                                        captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                                        workflow_override_id, archived_at, source_file_path,
-                                       parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending)
+                                       parent_prd_run_id, promotion_key, promotion_reason,
+                                       automation_invocation_pending, ai_execution_provider_key)
             VALUES ($taskId, $projectId, $title, $description, $state, $orderKey,
                     $capturedBy, $capturedByUserId, $createdAt, $committedAt, $claimedAt, $runId,
                     $workflowOverrideId, $archivedAt, $sourceFilePath,
-                    $parentPrdRunId, $promotionKey, $promotionReason, $automationInvocationPending);
+                    $parentPrdRunId, $promotionKey, $promotionReason,
+                    $automationInvocationPending, $aiExecutionProviderKey);
             """;
         BindFullRow(command, task);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -739,18 +741,21 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$promotionKey", (object?)task.PromotionKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$promotionReason", (object?)task.PromotionReason ?? DBNull.Value);
         command.Parameters.AddWithValue("$automationInvocationPending", task.IsAutomationInvocationPending ? 1 : 0);
+        command.Parameters.AddWithValue("$aiExecutionProviderKey", (object?)task.AiExecutionProviderKey ?? DBNull.Value);
     }
 
     // Ordinals: 0=task_id 1=project_id 2=title 3=description 4=state 5=order_key
     //           6=captured_by 7=captured_by_user_id 8=created_at 9=committed_at 10=claimed_at
     //           11=run_id 12=workflow_override_id 13=archived_at 14=source_file_path
     //           15=parent_prd_run_id 16=promotion_key 17=promotion_reason 18=automation_invocation_pending
+    //           19=ai_execution_provider_key
     private const string SelectSql =
         """
         SELECT task_id, project_id, title, description, state, order_key,
               captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
               workflow_override_id, archived_at, source_file_path,
-              parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending
+              parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending,
+              ai_execution_provider_key
           FROM backlog_tasks
         """;
 
@@ -775,6 +780,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         PromotionKey = r.IsDBNull(16) ? null : r.GetString(16),
         PromotionReason = r.IsDBNull(17) ? null : r.GetString(17),
         IsAutomationInvocationPending = r.GetInt64(18) != 0,
+        AiExecutionProviderKey = r.IsDBNull(19) ? null : r.GetString(19),
     };
 
     private static string AddTaskIdParameters(SqliteCommand command, IReadOnlyCollection<BacklogTaskId> taskIds)

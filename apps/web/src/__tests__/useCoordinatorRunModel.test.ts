@@ -1,5 +1,6 @@
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { apiClient } from '../api/apiClient';
 import type { RunStreamEvent } from '../api/sse';
 
 const streamState = vi.hoisted(() => ({
@@ -23,6 +24,22 @@ vi.mock('../api/apiClient', () => ({
     reviseOutcomeSpec: vi.fn(),
     reviewAssembly: vi.fn(),
   },
+}));
+
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: null,
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+    setPhase: vi.fn(),
+  }),
 }));
 
 import { useCoordinatorRunModel } from '../hooks/useCoordinatorRunModel';
@@ -78,5 +95,58 @@ describe('useCoordinatorRunModel gate derivation', () => {
     ];
     const { result } = renderHook(() => useCoordinatorRunModel('run-1'));
     expect(result.current.gates.assemblyReviewPending).toBe(true);
+  });
+
+  it('forwards the prepared provider key only for actions that continue AI execution', async () => {
+    vi.mocked(apiClient.steerCoordinator).mockResolvedValue({ status: 'applied' });
+    vi.mocked(apiClient.confirmOutcomeSpec).mockResolvedValue(null);
+    vi.mocked(apiClient.reviseOutcomeSpec).mockResolvedValue(null);
+    vi.mocked(apiClient.reviewAssembly).mockResolvedValue(undefined);
+    const { result } = renderHook(() => useCoordinatorRunModel('run-1'));
+
+    await act(async () => {
+      await result.current.sendMessage('continue');
+      await result.current.confirmOutcomeSpec();
+      await result.current.reviseOutcomeSpec('revise');
+      await result.current.reviewAssembly('approve');
+      await result.current.stop();
+      await result.current.reviewAssembly('decline');
+    });
+
+    expect(apiClient.steerCoordinator).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      { kind: 'send', instruction: 'continue' },
+      'signed-provider-key',
+    );
+    expect(apiClient.confirmOutcomeSpec).toHaveBeenCalledWith(
+      'run-1',
+      false,
+      'signed-provider-key',
+    );
+    expect(apiClient.reviseOutcomeSpec).toHaveBeenCalledWith(
+      'run-1',
+      'revise',
+      'signed-provider-key',
+    );
+    expect(apiClient.reviewAssembly).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      'approve',
+      undefined,
+      'signed-provider-key',
+    );
+    expect(apiClient.steerCoordinator).toHaveBeenNthCalledWith(
+      2,
+      'run-1',
+      { kind: 'stop' },
+    );
+    expect(apiClient.reviewAssembly).toHaveBeenNthCalledWith(
+      2,
+      'run-1',
+      'decline',
+      undefined,
+      undefined,
+    );
   });
 });

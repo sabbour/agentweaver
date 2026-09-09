@@ -24,6 +24,8 @@ import { DismissRegular } from '@fluentui/react-icons';
 import { CheckmarkCircleRegular, InfoRegular } from '@fluentui/react-icons';
 import { EmptyState } from './ui';
 import type { ProposedBacklogItem } from '../api/types';
+import { AiExecutionProviderHint } from './AiExecutionProviderHint';
+import type { AiExecutionContext } from '../api/types';
 
 const useStyles = makeStyles({
   grid: {
@@ -74,6 +76,8 @@ export interface DecomposePreviewDialogProps {
   totalFound: number;
   isLoading: boolean;
   error?: string | null;
+  executionContext?: AiExecutionContext | null;
+  providerLoading?: boolean;
 }
 
 export function DecomposePreviewDialog({
@@ -85,6 +89,8 @@ export function DecomposePreviewDialog({
   totalFound,
   isLoading,
   error,
+  executionContext = null,
+  providerLoading = false,
 }: DecomposePreviewDialogProps) {
   const styles = useStyles();
 
@@ -164,13 +170,15 @@ export function DecomposePreviewDialog({
             <Button appearance="secondary" onClick={onClose} disabled={isLoading}>
               Cancel
             </Button>
-            <Button
-              appearance="primary"
-              disabled={isLoading || !!error || proposedItems.length === 0}
-              onClick={() => void onConfirm()}
-            >
-              {isLoading ? 'Loading...' : 'Create tasks'}
-            </Button>
+            <AiExecutionProviderHint context={executionContext}>
+              <Button
+                appearance="primary"
+                disabled={isLoading || providerLoading || !!error || proposedItems.length === 0}
+                onClick={() => void onConfirm()}
+              >
+                {isLoading ? 'Loading...' : 'Create tasks'}
+              </Button>
+            </AiExecutionProviderHint>
           </DialogActions>
         </DialogBody>
       </DialogSurface>

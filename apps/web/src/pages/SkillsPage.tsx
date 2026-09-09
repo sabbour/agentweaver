@@ -53,6 +53,8 @@ import {
   TitleText,
 } from '../components/ui';
 import { collectFilesFromDataTransfer, supportsEntryApi } from '../utils/skillDrop';
+import { AiExecutionProviderHint, AiExecutionProviderStatus, AiProviderChangeAnnouncement } from '../components/AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type {
@@ -280,6 +282,13 @@ function defaultsUnsupportedReason(project: Project | null): string | null {
 export function SkillsPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
+  const generationContext = useAiExecutionContext('skill_generation', projectId);
+  const marketplaceContext = useAiExecutionContext(
+    'marketplace_catalog_classification',
+    projectId,
+    undefined,
+    false,
+  );
 
   const [selectedTab, setSelectedTab] = useState<'catalog' | 'assignments'>('catalog');
   const [skills, setSkills] = useState<SkillDto[] | null>(null);
@@ -304,6 +313,8 @@ export function SkillsPage() {
   const [marketplacePage, setMarketplacePage] = useState(1);
   const [marketplaceTotal, setMarketplaceTotal] = useState(0);
   const [marketplaceHasMore, setMarketplaceHasMore] = useState(false);
+  const [marketplacesRequiringAi, setMarketplacesRequiringAi] = useState<Set<string>>(new Set());
+  const [lastAiMarketplace, setLastAiMarketplace] = useState<string | null>(null);
   const [newSourceRepo, setNewSourceRepo] = useState('');
   const [newSourceName, setNewSourceName] = useState('');
   const [newSourceBranch, setNewSourceBranch] = useState('');
@@ -610,20 +621,61 @@ export function SkillsPage() {
     }
   };
 
-  const browseMarketplace = async (marketplace: string, query = '', page = 1, append = false) => {
+  const browseMarketplace = async (
+    marketplace: string,
+    query = '',
+    page = 1,
+    append = false,
+  ) => {
     if (!projectId) return;
+    const aiBacked = marketplacesRequiringAi.has(marketplace);
+    if (!aiBacked) setLastAiMarketplace(null);
+    setSelectedMarketplace(marketplace);
     setBusy(append ? 'marketplace-more' : 'marketplace-browse');
     setMutationError(null);
     setMarketplaceError(null);
     try {
-      const result = await apiClient.browseSkillMarketplace(projectId, marketplace, query || undefined, page, MARKETPLACE_PAGE_SIZE);
+      if (aiBacked) marketplaceContext.setPhase('active');
+      const result = aiBacked
+        ? await apiClient.browseSkillMarketplace(
+            projectId,
+            marketplace,
+            query || undefined,
+            page,
+            MARKETPLACE_PAGE_SIZE,
+            marketplaceContext.providerKey,
+          )
+        : await apiClient.browseSkillMarketplace(
+            projectId,
+            marketplace,
+            query || undefined,
+            page,
+            MARKETPLACE_PAGE_SIZE,
+          );
       setSelectedMarketplace(result.marketplace);
       setMarketplacePage(result.page);
       setMarketplaceTotal(result.total);
       setMarketplaceHasMore(result.has_more);
       setMarketplaceCandidates((previous) => (append && previous ? [...previous, ...result.candidates] : result.candidates));
+      marketplaceContext.applyCompletedContext(result.ai_execution_context);
+      if (result.ai_execution_context) {
+        setLastAiMarketplace(marketplace);
+        setMarketplacesRequiringAi((current) => {
+          const next = new Set(current);
+          next.delete(marketplace);
+          return next;
+        });
+      }
       if (!append) setSelectedLocations(new Set());
-    } catch (err) { setMarketplaceError(formatApiError(err)); } finally { setBusy(null); }
+    } catch (err) {
+      if (marketplaceContext.handleInvocationError(err)) {
+        setMarketplacesRequiringAi((current) => new Set(current).add(marketplace));
+        setMarketplaceError('Review the AI provider and browse again.');
+      } else {
+        if (aiBacked) marketplaceContext.setPhase('prepared');
+        setMarketplaceError(formatApiError(err));
+      }
+    } finally { setBusy(null); }
   };
 
   const refreshMarketplaces = async () => {
@@ -777,13 +829,20 @@ export function SkillsPage() {
     setBusy('Generate skill');
     setMutationError(null);
     try {
-      const draft = await apiClient.generateSkill(projectId, generatePrompt.trim());
+      const draft = await apiClient.generateSkill(
+        projectId,
+        generatePrompt.trim(),
+        generationContext.providerKey,
+      );
+      generationContext.applyCompletedContext(draft.ai_execution_context);
       setSkillName(draft.name);
       setSkillDisplayName(draft.display_name ?? '');
       setSkillDescription(draft.description);
       setSkillInstructions(draft.instructions);
     } catch (err) {
-      setMutationError(formatApiError(err));
+      setMutationError(generationContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and generate again.'
+        : formatApiError(err));
     } finally {
       setBusy(null);
     }
@@ -836,6 +895,11 @@ export function SkillsPage() {
   const assignedSkillCount = skillRows.filter((s) => s.assigned_agents.length > 0).length;
   const repositorySkillCount = skillRows.filter((s) => s.provenance === 'connected-repo-sync' || s.provenance === 'repo-import').length;
   const defaultsUnavailableReason = defaultsUnsupportedReason(defaultsProject);
+  const selectedMarketplaceRequiresAi = marketplaces
+    .some((marketplace) => marketplace.name === selectedMarketplace
+      && marketplacesRequiringAi.has(marketplace.name));
+  const selectedMarketplaceUsedAi = selectedMarketplace !== null
+    && lastAiMarketplace === selectedMarketplace;
 
   const roleByName = new Map(members.map((m) => [m.name, m.role_title]));
   const labelForAgent = (name: string): string => {
@@ -1160,9 +1224,12 @@ export function SkillsPage() {
               <Field label="Describe the skill to generate" required>
                 <Textarea value={generatePrompt} onChange={(_, data) => setGeneratePrompt(data.value)} disabled={isBusy} rows={4} resize="vertical" />
               </Field>
-              <Button appearance="secondary" disabled={isBusy || !generatePrompt.trim()} onClick={() => void onGenerateSkill()}>
-                {busy === 'Generate skill' ? 'Generating…' : 'Generate'}
-              </Button>
+              <AiExecutionProviderHint context={generationContext.context}>
+                <Button appearance="secondary" disabled={isBusy || !generatePrompt.trim() || generationContext.loading || !generationContext.available} onClick={() => void onGenerateSkill()}>
+                  {busy === 'Generate skill' ? 'Generating…' : 'Generate'}
+                </Button>
+              </AiExecutionProviderHint>
+              <AiProviderChangeAnnouncement message={generationContext.announcement} />
               {(skillName || skillInstructions) && (
                 <>
                   <Field label="Name" required hint="Review and edit before creating.">
@@ -1232,8 +1299,8 @@ export function SkillsPage() {
             {busy === 'marketplace-add-source' ? 'Adding source…' : 'Add source'}
           </Button>
           <div className={styles.actions}>
-            {marketplaces.map((marketplace) => (
-              <div key={marketplace.name} className={styles.sourceRow}>
+            {marketplaces.map((marketplace) => {
+              const browseButton = (
                 <Button
                   appearance={selectedMarketplace === marketplace.name ? 'primary' : 'secondary'}
                   disabled={isBusy}
@@ -1241,6 +1308,12 @@ export function SkillsPage() {
                 >
                   {marketplace.name}
                 </Button>
+              );
+              return (
+              <div key={marketplace.name} className={styles.sourceRow}>
+                {marketplacesRequiringAi.has(marketplace.name)
+                  ? <AiExecutionProviderHint context={marketplaceContext.context}>{browseButton}</AiExecutionProviderHint>
+                  : browseButton}
                 {marketplace.project_source && (
                   <Button
                     appearance="subtle"
@@ -1251,16 +1324,44 @@ export function SkillsPage() {
                   />
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
           {selectedMarketplace && <Field label="Search this marketplace"><Input value={marketplaceQuery} onChange={(_, data) => setMarketplaceQuery(data.value)} onKeyDown={(event) => { if (event.key === 'Enter') void browseMarketplace(selectedMarketplace, marketplaceQuery); }} /></Field>}
           {marketplaceError && <MessageBar intent="error"><MessageBarBody>{marketplaceError}</MessageBarBody></MessageBar>}
-          {busy === 'marketplace-browse' && <LoadingState rows={3} />}
+          {busy === 'marketplace-browse' && (
+            selectedMarketplaceRequiresAi
+              ? <AiExecutionProviderStatus context={marketplaceContext.context}><LoadingState rows={3} /></AiExecutionProviderStatus>
+              : <LoadingState rows={3} />
+          )}
           {busy !== 'marketplace-browse' && !marketplaceError && selectedMarketplace && marketplaceCandidates?.length === 0 && <Text className={styles.itemMeta}>No skills matched. Try a different search or marketplace.</Text>}
           {busy !== 'marketplace-browse' && marketplaceCandidates?.map((candidate) => <div key={candidate.location} className={styles.candidate}><Checkbox label={candidate.name ?? candidate.location} checked={selectedLocations.has(candidate.location)} disabled={!candidate.valid || isBusy} onChange={(_, data) => setSelectedLocations((previous) => { const next = new Set(previous); if (data.checked) next.add(candidate.location); else next.delete(candidate.location); return next; })} />{candidate.description && <Text className={styles.itemMeta}>{candidate.description}</Text>}</div>)}
           {busy !== 'marketplace-browse' && selectedMarketplace && marketplaceCandidates && marketplaceCandidates.length > 0 && <Text className={styles.itemMeta}>Showing {marketplaceCandidates.length} of {marketplaceTotal}</Text>}
-          {selectedMarketplace && marketplaceHasMore && <Button appearance="secondary" disabled={isBusy} onClick={() => void browseMarketplace(selectedMarketplace, marketplaceQuery, marketplacePage + 1, true)}>{busy === 'marketplace-more' ? 'Loading...' : 'Load more'}</Button>}
-        </DialogContent><DialogActions><Button appearance="secondary" disabled={isBusy || !selectedMarketplace} onClick={() => selectedMarketplace && void browseMarketplace(selectedMarketplace, marketplaceQuery)}>Search</Button><Button appearance="primary" disabled={isBusy || selectedLocations.size === 0} onClick={() => void importMarketplace()}>{busy === 'marketplace-import' ? 'Importing...' : 'Import selected'}</Button></DialogActions></DialogBody></DialogSurface>
+          {busy !== 'marketplace-browse' && selectedMarketplaceUsedAi && (
+            <AiExecutionProviderStatus context={marketplaceContext.context}>
+              <Text className={styles.itemMeta}>Marketplace classification completed.</Text>
+            </AiExecutionProviderStatus>
+          )}
+          {selectedMarketplace && marketplaceHasMore && (
+            selectedMarketplaceRequiresAi ? (
+              <AiExecutionProviderHint context={marketplaceContext.context}>
+                <Button appearance="secondary" disabled={isBusy} onClick={() => void browseMarketplace(selectedMarketplace, marketplaceQuery, marketplacePage + 1, true)}>{busy === 'marketplace-more' ? 'Loading...' : 'Load more'}</Button>
+              </AiExecutionProviderHint>
+            ) : (
+              <Button appearance="secondary" disabled={isBusy} onClick={() => void browseMarketplace(selectedMarketplace, marketplaceQuery, marketplacePage + 1, true)}>{busy === 'marketplace-more' ? 'Loading...' : 'Load more'}</Button>
+            )
+          )}
+          <AiProviderChangeAnnouncement message={marketplaceContext.announcement} />
+        </DialogContent><DialogActions>
+          {selectedMarketplaceRequiresAi ? (
+            <AiExecutionProviderHint context={marketplaceContext.context}>
+              <Button appearance="secondary" disabled={isBusy || !selectedMarketplace} onClick={() => selectedMarketplace && void browseMarketplace(selectedMarketplace, marketplaceQuery)}>Search</Button>
+            </AiExecutionProviderHint>
+          ) : (
+            <Button appearance="secondary" disabled={isBusy || !selectedMarketplace} onClick={() => selectedMarketplace && void browseMarketplace(selectedMarketplace, marketplaceQuery)}>Search</Button>
+          )}
+          <Button appearance="primary" disabled={isBusy || selectedLocations.size === 0} onClick={() => void importMarketplace()}>{busy === 'marketplace-import' ? 'Importing...' : 'Import selected'}</Button>
+        </DialogActions></DialogBody></DialogSurface>
       </Dialog>
 
       <Dialog open={importOpen} onOpenChange={(_, d) => { setImportOpen(d.open); if (!d.open) { setCandidates(null); setSourceUrl(''); } }}>

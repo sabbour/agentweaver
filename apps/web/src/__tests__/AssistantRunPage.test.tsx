@@ -43,6 +43,21 @@ vi.mock('../api/sse', () => ({
   useRunStream: () => mockRunStreamState.current,
 }));
 
+vi.mock('../hooks/useAiExecutionContext', () => ({
+  useAiExecutionContext: () => ({
+    context: null,
+    providerKey: 'signed-provider-key',
+    available: true,
+    loading: false,
+    error: null,
+    announcement: '',
+    refresh: vi.fn(),
+    handleInvocationError: vi.fn(() => false),
+    applyCompletedContext: vi.fn(),
+    applyProvider: vi.fn(),
+  }),
+}));
+
 function Wrapper({ children }: { children: ReactNode }) {
   return (
     <AzureFluentProvider density="compact">
@@ -142,6 +157,25 @@ describe('AssistantRunPage', () => {
     expect(screen.getByTestId('assistant-run-page')).toBeTruthy();
     expect(screen.getByTestId('assistant-empty-state')).toBeTruthy();
     expect(screen.getByPlaceholderText('Message the assistant...')).toBeTruthy();
+  });
+
+  it('shows a completed assistant provider as Used when no turn is active', () => {
+    mockRunStreamState.current.events = [{
+      sequence: 1,
+      type: 'run.model_provider_resolved',
+      payload: {
+        providerKind: 'platform_github_copilot',
+        resolutionScope: 'project',
+        providerScope: 'platform',
+        modelId: 'gpt-5',
+        providerKey: 'provider-fingerprint',
+      },
+    }];
+
+    render(<Wrapper><AssistantRunPage /></Wrapper>);
+
+    expect(screen.getByText('Used GitHub Copilot. Model: gpt-5.')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('provider-fingerprint');
   });
 
   it('shows suggested prompt buttons on the empty state and hides them once a run exists', async () => {
@@ -281,6 +315,7 @@ describe('AssistantRunPage', () => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         { message: 'what projects exist?' },
+        'signed-provider-key',
       );
     });
   });
@@ -307,11 +342,13 @@ describe('AssistantRunPage', () => {
         defer_first_turn: true,
         project_id: 'proj-7',
       }),
+      'signed-provider-key',
     );
     await waitFor(() => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         { message: 'project-scoped request' },
+        'signed-provider-key',
       );
     });
   });
@@ -332,6 +369,7 @@ describe('AssistantRunPage', () => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         { message: 'what projects exist?' },
+        'signed-provider-key',
       );
     });
     // Once the run exists the empty state is replaced by the transcript.
@@ -355,6 +393,7 @@ describe('AssistantRunPage', () => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         { message: 'stream the first reply' },
+        'signed-provider-key',
       );
       expect(screen.queryByTestId('assistant-empty-state')).toBeNull();
       expect(screen.getByText(/Connected to operator run assistant-run-1/)).toBeTruthy();
@@ -754,6 +793,7 @@ describe('AssistantRunPage', () => {
           message: 'what projects exist?',
           defer_first_turn: true,
         }),
+        'signed-provider-key',
       );
       expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
     });
@@ -799,6 +839,7 @@ describe('AssistantRunPage', () => {
     expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
       'assistant-run-1',
       expect.objectContaining({ message: 'second message' }),
+      'signed-provider-key',
     );
     // The create call is not made again for follow-ups.
     expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1);
@@ -817,6 +858,7 @@ describe('AssistantRunPage', () => {
       expect(apiClient.sendAssistantMessage).toHaveBeenCalledWith(
         'assistant-run-1',
         expect.objectContaining({ message: 'second message' }),
+        'signed-provider-key',
       );
       expect((screen.getByPlaceholderText('Message the assistant...') as HTMLTextAreaElement).value).toBe('');
     });
@@ -1039,11 +1081,13 @@ describe('AssistantRunPage', () => {
       expect.objectContaining({
         resume_from_run_id: 'assistant-run-1',
       }),
+      'signed-provider-key',
     );
     await waitFor(() => {
       expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
         'assistant-run-1',
         { message: 'continuing message' },
+        'signed-provider-key',
       );
     });
   });
@@ -1082,10 +1126,12 @@ describe('AssistantRunPage', () => {
     await waitFor(() => {
       expect(apiClient.createAssistantRun).toHaveBeenLastCalledWith(
         expect.objectContaining({ resume_from_run_id: 'assistant-run-1' }),
+        'signed-provider-key',
       );
       expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
         'assistant-run-2',
         { message: 'continue in the replacement run' },
+        'signed-provider-key',
       );
       expect(screen.getByTestId('assistant-pending-message').textContent).toContain(
         'continue in the replacement run',
@@ -1126,6 +1172,7 @@ describe('AssistantRunPage', () => {
     await waitFor(() => expect(apiClient.createAssistantRun).toHaveBeenCalledTimes(1));
     expect(apiClient.createAssistantRun).toHaveBeenCalledWith(
       expect.objectContaining({ resume_from_run_id: undefined }),
+      'signed-provider-key',
     );
   });
 
@@ -1218,11 +1265,13 @@ describe('AssistantRunPage', () => {
       expect.objectContaining({
         resume_from_run_id: 'assistant-run-1',
       }),
+      'signed-provider-key',
     );
     await waitFor(() => {
       expect(apiClient.sendAssistantMessage).toHaveBeenLastCalledWith(
         'assistant-run-1',
         { message: 'continuing message' },
+        'signed-provider-key',
       );
     });
   });

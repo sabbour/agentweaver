@@ -6,6 +6,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
@@ -453,6 +454,68 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         spec!.AllowTaskPromotion.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData("confirm")]
+    [InlineData("revise")]
+    public async Task OutcomeDecision_MissingProviderKey_Returns409_WithoutConsumingGate(string action)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Provider fencing must precede gate mutation");
+        await WaitForGateAsync(runId);
+        _owner.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
+
+        var response = action == "confirm"
+            ? await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", content: null)
+            : await _owner.PostAsJsonAsync(
+                $"/api/runs/{runId}/outcome-spec/revise",
+                new { feedback = "Keep the original gate pending." });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("ai_execution_context_required");
+        body.GetProperty("context").GetProperty("phase").GetString().Should().Be("prepared");
+
+        var spec = await GetOutcomeSpecAsync(_owner, runId);
+        spec!.Status.Should().Be("awaiting_confirmation");
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        (await pendingStore.GetAsync(runId)).Should().NotBeNull(
+            "provider rejection must happen before the confirmation gate is consumed");
+    }
+
+    [Fact]
+    public async Task Confirm_FreshKeyForChangedProvider_Returns409_WithoutConsumingGate()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Durable provider provenance must not drift");
+        await WaitForGateAsync(runId);
+
+        await _factory.ChangePlatformProviderIdentityAsync("replacement-account");
+        await _factory.PrepareAiExecutionAsync(
+            _owner,
+            "orchestration",
+            projectId,
+            runId,
+            ensureProvider: false);
+
+        var response = await _owner.PostAsync(
+            $"/api/runs/{runId}/outcome-spec/confirm",
+            content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var responseBody = await response.Content.ReadAsStringAsync();
+        using var body = JsonDocument.Parse(responseBody);
+        body.RootElement.GetProperty("error").GetString().Should().Be("model_provider_changed");
+        body.RootElement.GetProperty("context").GetProperty("phase").GetString().Should().Be("prepared");
+        responseBody.Should().NotContain("replacement-account");
+        responseBody.Should().NotContain("coordinator-test-bot");
+
+        var spec = await GetOutcomeSpecAsync(_owner, runId);
+        spec!.Status.Should().Be("awaiting_confirmation");
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        (await pendingStore.GetAsync(runId)).Should().NotBeNull(
+            "durable provider rejection must happen before the confirmation gate is consumed");
+    }
+
     // =========================================================================
     // Autopilot: define-outcome runs auto-confirm the spec unattended, with no manual
     // confirm POST, and record the submitting user as ConfirmedBy (#228). Off-by-default
@@ -800,6 +863,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var pid = ProjectId.Parse(projectId);
         var runStore = _factory.Services.GetRequiredService<IRunStore>();
         (await runStore.GetRunsByProjectAsync(pid)).Should().BeEmpty("precondition: project starts with no runs");
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId);
 
         var resp = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations", new { goal = "build without a team" });
@@ -827,6 +891,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(squadDir, "casting-registry.json"), "{\"members\":{\"x\":{}}}");
 
         var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId);
         var resp = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations", new { goal = "build with a corrupt team layout" });
 
@@ -843,6 +908,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     public async Task StartOrchestration_WithDispatchableTeam_Returns201()
     {
         var projectId = await CreateProjectAsync(seedTeam: true);
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId);
 
         var resp = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations", new { goal = "build with a cast team" });
@@ -875,6 +941,8 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     private async Task<string> StartOrchestrationAsync(
         string projectId, string goal, string? startMode = null, bool autopilot = false)
     {
+        await _factory.PrepareAiExecutionAsync(
+            _owner, "orchestration", projectId);
         object request = (startMode, autopilot) switch
         {
             (null, false) => new { goal },
@@ -883,8 +951,12 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             (_, true) => new { goal, start_mode = startMode, autopilot },
         };
         var resp = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations", request);
-        resp.StatusCode.Should().Be(HttpStatusCode.Created, "starting a coordinator run must return 201");
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        var responseBody = await resp.Content.ReadAsStringAsync();
+        resp.StatusCode.Should().Be(
+            HttpStatusCode.Created,
+            "starting a coordinator run must return 201, but returned {0}",
+            responseBody);
+        var body = JsonSerializer.Deserialize<JsonElement>(responseBody);
         return body.GetProperty("runId").GetString()!;
     }
 
@@ -982,6 +1054,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     /// </summary>
     private async Task<string> InsertInactiveCoordinatorRunAsync(string ownerUser)
     {
+        var projectId = await CreateProjectAsync();
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         var runId = RunId.New();
         var run = new Run
@@ -995,10 +1068,13 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             Status = RunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
+            ProjectId = ProjectId.Parse(projectId),
             ParentRunId = null,
             SubtaskId = null,
         };
         await runStore.InsertAsync(run, CancellationToken.None);
+        await _factory.PrepareAiExecutionAsync(
+            _owner, "orchestration", projectId, runId.ToString());
         return runId.ToString();
     }
 }

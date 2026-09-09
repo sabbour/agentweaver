@@ -44,7 +44,8 @@ internal static class AgentweaverAuthentication
             && FixedTimeEquals(token, internalKey))
             return AgentweaverAuthenticationSchemes.InternalServiceKey;
 
-        if (authorization?.Kind == EndpointAuthorizationKind.PlatformOrMcp
+        if ((authorization?.Kind is EndpointAuthorizationKind.PlatformOrMcp
+                or EndpointAuthorizationKind.AuthenticatedSelfOrMcp)
             && token is not null
             && IsBrokerToken(token, context.RequestServices.GetRequiredService<OAuthServerConfiguration>()))
             return AgentweaverAuthenticationSchemes.BrokerBearer;

@@ -1,4 +1,5 @@
 using Agentweaver.Domain;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Api.Auth;
 
@@ -30,10 +31,12 @@ public sealed class EffectiveModelProviderResolver(
     GitHubConnectionsPersistenceStore persistence,
     ByokProviderConfigurationService byokSettings,
     ISecretStore secretStore,
-    UserModelProviderSettingsService? userSettings = null)
+    UserModelProviderSettingsService? userSettings = null,
+    IServiceProvider? services = null)
 {
     private readonly IGitHubConnectionsCredentialVault _credentialVault =
-        new GitHubConnectionsCredentialVault(secretStore);
+        services?.GetService<IGitHubConnectionsCredentialVault>()
+        ?? new GitHubConnectionsCredentialVault(secretStore);
 
     public async Task<EffectiveModelProviderResult> ResolveAsync(ProjectId? projectId, CancellationToken ct)
     {
@@ -48,7 +51,8 @@ public sealed class EffectiveModelProviderResolver(
                 return credential is not null
                     ? new EffectiveModelProviderResult.ProjectGitHubCopilot(
                         projectBinding.Id,
-                        credential.GitHubLogin)
+                        credential.GitHubLogin,
+                        projectBinding.CredentialVersion)
                     : new EffectiveModelProviderResult.Unavailable(
                         EffectiveModelProviderUnavailableReason.ProjectBindingRequiresReauthorization,
                         "The project's active GitHub Copilot binding credential is unavailable. Reconnect the project's GitHub Copilot App.");
@@ -58,7 +62,7 @@ public sealed class EffectiveModelProviderResolver(
 
         var byok = await byokSettings.GetAsync(ct).ConfigureAwait(false);
         if (byok is not null)
-            return new EffectiveModelProviderResult.Byok(byok.Id, byok.Type);
+            return new EffectiveModelProviderResult.Byok(byok.Id, byok.Type, byok.ExecutionFingerprint());
 
         var platformBinding = await persistence.GetActivePlatformDefaultCopilotBindingAsync(ct).ConfigureAwait(false);
         if (platformBinding is not null)
@@ -68,7 +72,8 @@ public sealed class EffectiveModelProviderResolver(
             if (credential is not null)
                 return new EffectiveModelProviderResult.PlatformGitHubCopilot(
                     platformBinding.Id,
-                    credential.GitHubLogin);
+                    credential.GitHubLogin,
+                    platformBinding.CredentialVersion);
         }
 
         return new EffectiveModelProviderResult.Unavailable(
@@ -84,14 +89,20 @@ public sealed class EffectiveModelProviderResolver(
     {
         var platformByok = await byokSettings.GetAsync(ct).ConfigureAwait(false);
         if (platformByok is not null)
-            return new EffectiveModelProviderResult.Byok(platformByok.Id, platformByok.Type);
+            return new EffectiveModelProviderResult.Byok(
+                platformByok.Id,
+                platformByok.Type,
+                platformByok.ExecutionFingerprint());
 
         if (userSettings is not null)
         {
             var personalByok = await userSettings.GetActiveByokAsync(entraObjectId, ct).ConfigureAwait(false);
             if (personalByok is not null)
                 return new EffectiveModelProviderResult.UserByok(
-                    personalByok.Id, personalByok.Type, entraObjectId);
+                    personalByok.Id,
+                    personalByok.Type,
+                    entraObjectId,
+                    personalByok.ExecutionFingerprint());
         }
 
         var userBinding = await persistence.GetActiveUserCopilotBindingAsync(entraObjectId, ct)
@@ -102,7 +113,10 @@ public sealed class EffectiveModelProviderResolver(
                 .ConfigureAwait(false);
             return credential is not null
                 ? new EffectiveModelProviderResult.UserGitHubCopilot(
-                    userBinding.Id, credential.GitHubLogin, entraObjectId)
+                    userBinding.Id,
+                    credential.GitHubLogin,
+                    entraObjectId,
+                    userBinding.CredentialVersion)
                 : new EffectiveModelProviderResult.Unavailable(
                     EffectiveModelProviderUnavailableReason.UserBindingRequiresReauthorization,
                     "Your GitHub Copilot connection is unavailable. Reconnect it in Account settings.");
@@ -136,6 +150,7 @@ public sealed class EffectiveModelProviderResolver(
             ? credential
             : null;
     }
+
 }
 
 /// <summary>
@@ -155,8 +170,8 @@ public abstract record EffectiveModelProviderResult
     ///
     /// <para>
     /// The two-value <see cref="Agentweaver.Domain.ModelSource"/> label is not sufficient for that:
-    /// switching the active BYOK provider from one configuration to another, or rebinding the
-    /// platform GitHub Copilot connection to a different account, leaves <c>ModelSource</c>
+    /// switching the active BYOK provider from one configuration to another, or replacing a
+    /// GitHub Copilot binding credential, leaves <c>ModelSource</c>
     /// completely unchanged — so anything that compares only <c>ModelSource</c> concludes "nothing
     /// changed" and keeps serving from the stale provider. Long-lived interactive sessions, which
     /// re-resolve their provider on every turn and cache provider-bound state (an already-configured
@@ -164,38 +179,50 @@ public abstract record EffectiveModelProviderResult
     /// </para>
     ///
     /// <para>
-    /// Deliberately built from identity fields only, never from credential material.
+    /// Deliberately built from binding/configuration identity and credential version metadata,
+    /// never from credential material or GitHub account names.
     /// </para>
     /// </summary>
     public string ProviderIdentity => this switch
     {
-        Byok byok => $"byok:{byok.ProviderType}:{byok.ProviderId}",
-        UserByok byok => $"byok-user:{byok.UserId}:{byok.ProviderType}:{byok.ProviderId}",
-        ProjectGitHubCopilot project => $"copilot-project:{project.BindingId}:{project.GitHubLogin}",
-        PlatformGitHubCopilot platform => $"copilot-platform:{platform.BindingId}:{platform.GitHubLogin}",
-        UserGitHubCopilot user => $"copilot-user:{user.BindingId}:{user.GitHubLogin}",
+        Byok byok => $"byok:{byok.ProviderType}:{byok.ProviderId}:{byok.ConfigurationFingerprint}",
+        UserByok byok => $"byok-user:{byok.UserId}:{byok.ProviderType}:{byok.ProviderId}:{byok.ConfigurationFingerprint}",
+        ProjectGitHubCopilot project => $"copilot-project:{project.BindingId}:{project.CredentialVersion}",
+        PlatformGitHubCopilot platform => $"copilot-platform:{platform.BindingId}:{platform.CredentialVersion}",
+        UserGitHubCopilot user => $"copilot-user:{user.UserId}:{user.BindingId}:{user.CredentialVersion}",
         Unavailable unavailable => $"unavailable:{unavailable.UnavailableReason}",
         _ => "unknown",
     };
 
     /// <summary>The deployment-wide "bring your own key" provider is active.</summary>
-    public sealed record Byok(string ProviderId, string ProviderType) : EffectiveModelProviderResult;
+    public sealed record Byok(
+        string ProviderId,
+        string ProviderType,
+        string? ConfigurationFingerprint = null) : EffectiveModelProviderResult;
 
     public sealed record UserByok(
         string ProviderId,
         string ProviderType,
-        string UserId) : EffectiveModelProviderResult;
+        string UserId,
+        string? ConfigurationFingerprint = null) : EffectiveModelProviderResult;
 
     /// <summary>The project's own GitHub Copilot binding overrides the platform default.</summary>
-    public sealed record ProjectGitHubCopilot(string BindingId, string? GitHubLogin) : EffectiveModelProviderResult;
+    public sealed record ProjectGitHubCopilot(
+        string BindingId,
+        string? GitHubLogin,
+        string? CredentialVersion = null) : EffectiveModelProviderResult;
 
     /// <summary>The deployment-wide platform-default GitHub Copilot binding is in effect.</summary>
-    public sealed record PlatformGitHubCopilot(string BindingId, string? GitHubLogin) : EffectiveModelProviderResult;
+    public sealed record PlatformGitHubCopilot(
+        string BindingId,
+        string? GitHubLogin,
+        string? CredentialVersion = null) : EffectiveModelProviderResult;
 
     public sealed record UserGitHubCopilot(
         string BindingId,
         string? GitHubLogin,
-        string UserId) : EffectiveModelProviderResult;
+        string UserId,
+        string? CredentialVersion = null) : EffectiveModelProviderResult;
 
     /// <summary>No usable model provider is configured for this scope.</summary>
     public sealed record Unavailable(
@@ -209,4 +236,5 @@ public enum EffectiveModelProviderUnavailableReason
     ProjectBindingRequiresReauthorization,
     UserProviderRequired,
     UserBindingRequiresReauthorization,
+    OperationRequiresGitHubCopilot,
 }

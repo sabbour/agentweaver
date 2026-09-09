@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Agentweaver.Api.Assistant;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Security;
@@ -103,6 +104,61 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         (await GetRunAsync(runId)).ArchivedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ProjectViewer_CannotIssueOrReplaySkillGenerationProviderKey()
+    {
+        var projectId = await CreateProjectAsync(
+            LinkedOwnerOid,
+            (ContributorOid, ProjectRole.Contributor),
+            (ViewerOid, ProjectRole.Viewer));
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            var provider = await settings.AddAsync(
+                new ByokProviderConfiguration(
+                    string.Empty,
+                    "Skill generation test provider",
+                    "azure",
+                    "https://provider.example.test",
+                    "gpt-4.1",
+                    "test-key"),
+                CancellationToken.None);
+            await settings.SetActiveAsync(provider.Id, CancellationToken.None);
+        }
+
+        using var viewer = CreateEntraClient(ViewerOid, PlatformRoles.Viewer);
+        var viewerPreflight = await viewer.PostAsJsonAsync(
+            "/api/ai/execution-context",
+            new { operation = "skill_generation", project_id = projectId.ToString() });
+        viewerPreflight.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        using var contributor = CreateEntraClient(ContributorOid, PlatformRoles.Contributor);
+        var contributorPreflight = await contributor.PostAsJsonAsync(
+            "/api/ai/execution-context",
+            new { operation = "skill_generation", project_id = projectId.ToString() });
+        contributorPreflight.StatusCode.Should().Be(HttpStatusCode.OK);
+        var context = await contributorPreflight.Content.ReadFromJsonAsync<AiExecutionContextResponse>();
+        var providerKey = context!.EffectiveModelProvider!.ProviderKey;
+        providerKey.Should().NotBeNullOrWhiteSpace();
+
+        var assignments = _factory.Services.GetRequiredService<IProjectRoleAssignmentStore>();
+        await assignments.UpsertAsync(new ProjectRoleAssignment
+        {
+            ProjectId = projectId,
+            PrincipalId = ContributorOid,
+            Role = ProjectRole.Viewer,
+            GrantedBy = LinkedOwnerOid,
+            GrantedAt = DateTimeOffset.UtcNow,
+        });
+        contributor.DefaultRequestHeaders.Add(AiExecutionPlanHeaders.ProviderKey, providerKey);
+
+        var invocation = await contributor.PostAsJsonAsync(
+            $"/api/projects/{projectId}/skills/generate",
+            new { description = "Create a safe test skill." });
+
+        invocation.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     [Fact]

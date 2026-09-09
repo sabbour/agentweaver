@@ -289,6 +289,7 @@ public sealed class McpBrokerRealProcessTests : IAsyncLifetime
         }
         await StopMcpProcessAsync();
         await StartMcpProcessAsync();
+        await factory.PrepareAiExecutionAsync(apiClient);
         using var response = await apiClient.PostAsJsonAsync(
             "/api/assistant/runs",
             new { message = "list projects through MCP" });

@@ -125,7 +125,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             RepositoryPath: request.RepositoryPath,
             OriginatingBranch: string.Empty,
             ContentSafetyFlagged: false,
-            SubmittingUser: request.SubmittingUser);
+            SubmittingUser: request.SubmittingUser,
+            ModelSource: request.ModelSource,
+            ByokProviderFingerprint: request.ByokProviderFingerprint);
 
         var output = await rai.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
         return new CollectiveRaiResult(
@@ -160,7 +162,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             RepositoryPath: request.RepositoryPath,
             OriginatingBranch: string.Empty,
             ContentSafetyFlagged: false,
-            SubmittingUser: request.SubmittingUser);
+            SubmittingUser: request.SubmittingUser,
+            ModelSource: request.ModelSource,
+            ByokProviderFingerprint: request.ByokProviderFingerprint);
 
         var decision = await rubberduck.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
         return new CollectiveGateDecision(decision.Approved, decision.RequestChanges, decision.Feedback, decision.TargetFiles);
@@ -316,7 +320,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                 ContentSafetyFlagged: false,
                 SubmittingUser: request.SubmittingUser,
                 ProjectId: request.ProjectId,
-                AgentName: request.AgentId);
+                AgentName: request.AgentId,
+                ModelSource: request.ModelSource,
+                ByokProviderFingerprint: request.ByokProviderFingerprint);
 
             var decision = await buildTest.HandleAsync(input, NoOpWorkflowContext.Instance, gateCt).ConfigureAwait(false);
             // spec-006 §3.3: do NOT remove the worktree here — the deterministic PreviewStep needs it as
@@ -487,7 +493,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             ModelId: request.ModelId,
             TerminalStatus: request.TerminalStatus,
             MergeResult: request.MergeResult,
-            SubmittingUser: request.SubmittingUser);
+            SubmittingUser: request.SubmittingUser,
+            ByokProviderFingerprint: request.ByokProviderFingerprint);
 
         await scribe.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
     }

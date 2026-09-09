@@ -267,13 +267,43 @@ public sealed class RaiVerdictParserTests
     // ---- HandleAsync integration: happy-path verdict payload ------------------------------
 
     [Fact]
+    public async Task HandleAsync_ProviderFailure_IsNotConvertedToAdvisoryVerdict()
+    {
+        var parent = Channel.CreateUnbounded<RunEvent>();
+        var sub = Channel.CreateUnbounded<RunEvent>();
+        var agentFactory = new FakeWorkflowAgentFactory(new TestFileEditAgentRunner())
+        {
+            ProviderFailureRole = FakeAgentRole.Rai,
+        };
+        var executor = BuildExecutor(parent, sub, agentFactory);
+
+        var act = () => executor.HandleAsync(new AgentTurnOutput(
+            RunId: "rai-provider-failure",
+            TreeHash: "tree",
+            Diff: "diff",
+            StepCount: 1,
+            WorktreePath: AppContext.BaseDirectory,
+            WorktreeBranch: "agent/run",
+            RepositoryPath: AppContext.BaseDirectory,
+            OriginatingBranch: "main",
+            ContentSafetyFlagged: false,
+            ModelSource: ModelSource.Byok.ToApiString(),
+            ByokProviderFingerprint: "byok-fingerprint"),
+            context: null!,
+            CancellationToken.None).AsTask();
+
+        await act.Should().ThrowAsync<AgentProviderException>();
+    }
+
+    [Fact]
     public async Task HandleAsync_EmitsVerdictPayload_ToParentRunAndRaiSubStream()
     {
         var parent = Channel.CreateUnbounded<RunEvent>();
         var sub = Channel.CreateUnbounded<RunEvent>();
+        var agentFactory = new FakeWorkflowAgentFactory(new TestFileEditAgentRunner());
         var executor = BuildExecutor(
             parent, sub,
-            new FakeWorkflowAgentFactory(new TestFileEditAgentRunner()));
+            agentFactory);
 
         await executor.HandleAsync(new AgentTurnOutput(
             RunId: "rai-verdict-run",
@@ -284,7 +314,10 @@ public sealed class RaiVerdictParserTests
             WorktreeBranch: "agent/rai-verdict-run",
             RepositoryPath: AppContext.BaseDirectory,
             OriginatingBranch: "main",
-            ContentSafetyFlagged: false),
+            ContentSafetyFlagged: false,
+            ModelSource: ModelSource.Byok.ToApiString(),
+            ModelId: "byok-model",
+            ByokProviderFingerprint: "byok-fingerprint"),
             context: null!,
             CancellationToken.None);
 
@@ -293,6 +326,8 @@ public sealed class RaiVerdictParserTests
 
         AssertGreenVerdictPayload(parentVerdict.Payload);
         AssertGreenVerdictPayload(subVerdict.Payload);
+        agentFactory.LastRaiAgent!.ProviderModelSource.Should().Be(ModelSource.Byok);
+        agentFactory.LastRaiAgent.ByokProviderFingerprint.Should().Be("byok-fingerprint");
     }
 
     // ---- HandleAsync integration: bounded re-ask + fail-safe (INV-3) ----------------------

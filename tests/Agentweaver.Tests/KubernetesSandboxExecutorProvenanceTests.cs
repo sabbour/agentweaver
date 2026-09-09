@@ -154,6 +154,13 @@ public sealed class KubernetesSandboxExecutorProvenanceTests
     {
         var runId = RunId.New().ToString();
         var events = new RecordingRunEventStream();
+        var byok = new ByokProviderConfiguration(
+            Id: "provider-1",
+            Name: "Test Azure provider",
+            Type: "azure",
+            BaseUrl: "https://byok-resource.openai.azure.com",
+            Model: "gpt-4.1",
+            ApiKey: "test-byok-key");
 
         var executor = new KubernetesSandboxExecutor(
             ClientFor(BoundClusterFor(runId)),
@@ -164,16 +171,12 @@ public sealed class KubernetesSandboxExecutorProvenanceTests
             httpClientFactory: new StubConfigureHttpClientFactory(),
             runEventStream: events,
             copilotCredentials: new UnredeemableCopilotCredentialProvider(),
-            byokProviderConfiguration: new StubByokProviderConfigurationProvider(
-                new ByokProviderConfiguration(
-                    Id: "provider-1",
-                    Name: "Test Azure provider",
-                    Type: "azure",
-                    BaseUrl: "https://byok-resource.openai.azure.com",
-                    Model: "gpt-4.1",
-                    ApiKey: "test-byok-key")),
+            byokProviderConfiguration: new StubByokProviderConfigurationProvider(byok),
             effectiveProviderResolver: (_, _) => Task.FromResult<EffectiveModelProviderResult>(
-                new EffectiveModelProviderResult.Byok("provider-1", "azure")));
+                new EffectiveModelProviderResult.Byok(
+                    "provider-1",
+                    "azure",
+                    byok.ExecutionFingerprint())));
 
         await executor.LaunchAgentHostPodAsync(runId);
 
@@ -183,14 +186,14 @@ public sealed class KubernetesSandboxExecutorProvenanceTests
         payload.GetProperty("runId").GetString().Should().Be(runId);
         payload.GetProperty("providerKind").GetString()
             .Should().Be(EffectiveModelProviderProvenance.KindByok);
-        payload.GetProperty("providerId").GetString().Should().Be("provider-1");
+        payload.TryGetProperty("providerId", out _).Should().BeFalse();
         payload.GetProperty("providerType").GetString().Should().Be("azure");
         payload.GetProperty("modelSource").GetString().Should().Be("byok");
         payload.GetProperty("modelId").GetString().Should().Be("gpt-4.1");
     }
 
     [Fact]
-    public async Task Configured_pod_emits_platform_copilot_provenance_with_the_account_login()
+    public async Task Configured_pod_emits_redacted_platform_copilot_provenance()
     {
         var runId = RunId.New().ToString();
         var events = new RecordingRunEventStream();
@@ -214,8 +217,8 @@ public sealed class KubernetesSandboxExecutorProvenanceTests
         var payload = JsonSerializer.SerializeToElement(provenance.Payload);
         payload.GetProperty("providerKind").GetString()
             .Should().Be(EffectiveModelProviderProvenance.KindPlatformGitHubCopilot);
-        payload.GetProperty("providerId").GetString().Should().Be("platform-binding");
-        payload.GetProperty("githubLogin").GetString().Should().Be("platform-bot");
+        payload.TryGetProperty("providerId", out _).Should().BeFalse();
+        payload.TryGetProperty("githubLogin", out _).Should().BeFalse();
         payload.GetProperty("modelSource").GetString().Should().Be("github-copilot");
     }
 
@@ -270,13 +273,21 @@ public sealed class KubernetesSandboxExecutorProvenanceTests
 
         public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
         {
-            Events.Add(evt);
-            return ValueTask.FromResult(Events.Count);
+            var sequence = evt.Sequence > 0 ? evt.Sequence : Events.Count + 1;
+            Events.Add(evt with { Sequence = sequence });
+            return ValueTask.FromResult(sequence);
         }
 
         public IAsyncEnumerable<RunEvent> SubscribeAsync(
             string runId, int fromSequence = 0, CancellationToken ct = default) =>
             throw new NotImplementedException();
+
+        public Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(
+            string runId,
+            int fromSequence = 0,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<RunEvent>>(
+                Events.Where(evt => evt.Sequence > fromSequence).ToArray());
 
         public ValueTask CompleteAsync(string runId, CancellationToken ct = default) => ValueTask.CompletedTask;
     }

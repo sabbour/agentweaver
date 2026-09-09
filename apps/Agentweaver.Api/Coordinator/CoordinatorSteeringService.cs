@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -527,6 +528,20 @@ public sealed class CoordinatorSteeringService
             throw new SteeringValidationException(
                 $"A '{normalized}' directive requires a non-empty instruction.");
 
+        if (normalized != SteeringKind.Stop
+            && _runStore is not null
+            && RunId.TryParse(coordinatorRunId, out var parsedRunId))
+        {
+            var persistedRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (persistedRun is not null)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var orchestrator = scope.ServiceProvider.GetService<RunOrchestrator>();
+                if (orchestrator is not null)
+                    await orchestrator.ValidateDurableProviderBoundaryAsync(persistedRun, ct).ConfigureAwait(false);
+            }
+        }
+
         var resolvedInstruction = instruction ?? string.Empty;
         var createdAt = DateTimeOffset.UtcNow;
 
@@ -623,7 +638,9 @@ public sealed class CoordinatorSteeringService
     public async Task<bool> TryResumeFailedCoordinatorRunForRetryAsync(
         string coordinatorRunId,
         string createdBy,
-        CancellationToken ct)
+        CancellationToken ct,
+        EffectiveModelProviderResult? effectiveProvider = null,
+        string? resolutionScope = null)
     {
         const string kind = SteeringKind.Redirect;
         const string instruction =
@@ -657,7 +674,15 @@ public sealed class CoordinatorSteeringService
         try
         {
             resumed = await TryResumeParkedCoordinatorAsync(
-                coordinatorRunId, directiveId, kind, instruction, createdBy, createdAt, ct)
+                coordinatorRunId,
+                directiveId,
+                kind,
+                instruction,
+                createdBy,
+                createdAt,
+                ct,
+                effectiveProvider,
+                resolutionScope)
                 .ConfigureAwait(false);
         }
         catch
@@ -1401,7 +1426,11 @@ public sealed class CoordinatorSteeringService
     /// <exception cref="SteeringRecoveryExhaustedException">Every affected subtask is over the attempt cap.</exception>
     private async Task<SteeringDirectiveView?> TryResumeParkedCoordinatorAsync(
         string coordinatorRunId, int directiveId, string kind, string instruction,
-        string createdBy, DateTimeOffset createdAt, CancellationToken ct)
+        string createdBy,
+        DateTimeOffset createdAt,
+        CancellationToken ct,
+        EffectiveModelProviderResult? effectiveProvider = null,
+        string? resolutionScope = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;
@@ -1557,6 +1586,15 @@ public sealed class CoordinatorSteeringService
         // (removing + recreating the entry would have started a blank history).
         var entry = _streamStore.Reopen(coordinatorRunId)
             ?? _streamStore.Create(coordinatorRunId, run.SubmittingUser);
+        if (effectiveProvider is not null)
+        {
+            entry.RecordNext(
+                EventTypes.RunModelProviderResolved,
+                effectiveProvider.ToProvenancePayload(
+                    coordinatorRunId,
+                    run.ModelId,
+                    resolutionScope ?? EffectiveModelProviderProvenance.ScopeProject));
+        }
         entry.RecordNext(EventTypes.CoordinatorRecovered, new
         {
             reason = reArmAssemblyOnly ? "steering_resume_assembly" : "steering_resume",

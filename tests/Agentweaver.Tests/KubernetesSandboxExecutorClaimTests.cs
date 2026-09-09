@@ -442,14 +442,14 @@ public sealed class KubernetesSandboxExecutorClaimTests
             """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
 
         var configureHandler = new RecordingConfigureHandler();
-        var byokProvider = new FixedByokProviderConfigurationProvider(
-            new ByokProviderConfiguration(
-                Id: "router-provider",
-                Name: "Router BYOK provider",
-                Type: "openai",
-                BaseUrl: "https://models.example.com",
-                Model: "gpt-5",
-                ApiKey: "router-byok-key"));
+        var byokConfiguration = new ByokProviderConfiguration(
+            Id: "router-provider",
+            Name: "Router BYOK provider",
+            Type: "openai",
+            BaseUrl: "https://models.example.com",
+            Model: "gpt-5",
+            ApiKey: "router-byok-key");
+        var byokProvider = new FixedByokProviderConfigurationProvider(byokConfiguration);
         var scopeProvider = new ServiceCollection().BuildServiceProvider();
         var router = new SandboxExecutorRouter(
             new ConfigurationBuilder()
@@ -465,7 +465,10 @@ public sealed class KubernetesSandboxExecutorClaimTests
             httpClientFactory: new StubHttpClientFactory(configureHandler),
             copilotCredentials: new UnexpectedGitHubCopilotCapabilityCredentialProvider(),
             effectiveProviderResolver: (_, _) => Task.FromResult<EffectiveModelProviderResult>(
-                new EffectiveModelProviderResult.Byok("router-provider", "openai")),
+                new EffectiveModelProviderResult.Byok(
+                    "router-provider",
+                    "openai",
+                    byokConfiguration.ExecutionFingerprint())),
             isInCluster: () => false,
             kubernetesClientFactory: () => ClientFor(handler));
         var executor = router.Resolve().Should().BeOfType<KubernetesSandboxExecutor>().Subject;
@@ -531,24 +534,27 @@ public sealed class KubernetesSandboxExecutorClaimTests
 
         var configureHandler = new RecordingConfigureHandler();
         var observedScopes = new List<ProjectId?>();
+        var byokConfiguration = new ByokProviderConfiguration(
+            Id: "platform-provider",
+            Name: "Platform BYOK provider",
+            Type: "openai",
+            BaseUrl: "https://models.example.com",
+            Model: "gpt-5",
+            ApiKey: "platform-key");
         var executor = NewExecutor(
             handler,
             new StubSubmittingUserResolver("entra-object-id", projectId.ToString()),
             httpClientFactory: new StubHttpClientFactory(configureHandler),
             copilotCredentials: new UnexpectedGitHubCopilotCapabilityCredentialProvider(),
-            byokProviderConfiguration: new FixedByokProviderConfigurationProvider(
-                new ByokProviderConfiguration(
-                    Id: "platform-provider",
-                    Name: "Platform BYOK provider",
-                    Type: "openai",
-                    BaseUrl: "https://models.example.com",
-                    Model: "gpt-5",
-                    ApiKey: "platform-key")),
+            byokProviderConfiguration: new FixedByokProviderConfigurationProvider(byokConfiguration),
             effectiveProviderResolver: (scope, _) =>
             {
                 observedScopes.Add(scope);
                 return Task.FromResult<EffectiveModelProviderResult>(scope is null
-                    ? new EffectiveModelProviderResult.Byok("platform-provider", "openai")
+                    ? new EffectiveModelProviderResult.Byok(
+                        "platform-provider",
+                        "openai",
+                        byokConfiguration.ExecutionFingerprint())
                     : new EffectiveModelProviderResult.ProjectGitHubCopilot($"binding-{scope}", "project-bot"));
             });
 

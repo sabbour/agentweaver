@@ -109,8 +109,24 @@ public sealed class McpCoordinatorErrorsTests
         // is not specific to coordinator_start.
         var tools = CreateCoordinatorTools((request, _) =>
         {
+            if (request.Method == HttpMethod.Get
+                && request.RequestUri!.AbsolutePath == "/api/runs/run-1")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        run_id = "run-1",
+                        project_id = "proj-1",
+                        parent_run_id = (string?)null,
+                        agent_name = "Coordinator",
+                    }),
+                });
+            }
             request.Method.Should().Be(HttpMethod.Post);
             request.RequestUri!.AbsolutePath.Should().Be("/api/runs/run-1/steer");
+            request.Headers.GetValues("If-Model-Provider-Key").Should().ContainSingle()
+                .Which.Should().Be("signed-provider-key");
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
             {
                 Content = JsonContent.Create(new { error = "Run is not in a steerable state (current state: 'completed')." })
@@ -127,14 +143,195 @@ public sealed class McpCoordinatorErrorsTests
         ex.Which.Message.Should().NotBe("An error occurred invoking 'coordinator_steer'.");
     }
 
+    [Fact]
+    public async Task CoordinatorStart_CopilotOnlyProviderFailure_IsActionable()
+    {
+        var tools = new CoordinatorTools(CreateApiClient((request, _) =>
+        {
+            request.RequestUri!.AbsolutePath.Should().Be("/api/ai/execution-context");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new
+                {
+                    ai_required = true,
+                    operation = "orchestration",
+                    phase = "prepared",
+                    execution_key = (string?)null,
+                    expires_at = (DateTimeOffset?)null,
+                    effective_model_provider = new
+                    {
+                        state = "unavailable",
+                        provider_kind = "unavailable",
+                        resolution_scope = "project",
+                        provider_scope = "none",
+                        provider_type = (string?)null,
+                        model_id = (string?)null,
+                        provider_key = (string?)null,
+                        unavailable_reason = "operation_requires_github_copilot",
+                    },
+                }),
+            });
+        }, bypassPreflight: true));
+
+        var act = () => tools.CoordinatorStartAsync(
+            "proj-1", "Ship it", model_id: null, ct: CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<McpApiException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Error.Should().Contain("requires GitHub Copilot");
+        ex.Which.Hint.Should().Contain("GitHub Copilot");
+        ex.Which.Message.Should().NotBe(OpaqueWrapperMessage);
+    }
+
+    [Fact]
+    public async Task MarketplaceBrowse_AutoDetectCacheHit_DoesNotPrepareProvider()
+    {
+        var preflightCount = 0;
+        var browseCount = 0;
+        var tools = new SkillTools(CreateApiClient((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/projects/proj-1/skill-marketplaces")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new[] { new { name = "catalog", auto_detect = true } }),
+                });
+            }
+            if (request.RequestUri.AbsolutePath == "/api/ai/execution-context")
+            {
+                preflightCount++;
+                throw new InvalidOperationException("A cached marketplace browse must not prepare a provider.");
+            }
+
+            browseCount++;
+            request.Headers.Contains("If-Model-Provider-Key").Should().BeFalse();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new { marketplace = "catalog", candidates = Array.Empty<object>() }),
+            });
+        }, bypassPreflight: true));
+
+        var result = await tools.SkillMarketplaceBrowseAsync("proj-1", "catalog");
+
+        using (var json = JsonDocument.Parse(result))
+            json.RootElement.GetProperty("marketplace").GetString().Should().Be("catalog");
+        browseCount.Should().Be(1);
+        preflightCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task MarketplaceBrowse_AutoDetectClassifierNeed_PreparesAndRetriesWithProviderKey()
+    {
+        var browseCount = 0;
+        var preflightCount = 0;
+        var tools = new SkillTools(CreateApiClient((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/projects/proj-1/skill-marketplaces")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new[] { new { name = "catalog", auto_detect = true } }),
+                });
+            }
+            if (request.RequestUri.AbsolutePath == "/api/ai/execution-context")
+            {
+                preflightCount++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        ai_required = true,
+                        operation = "marketplace_catalog_classification",
+                        phase = "prepared",
+                        execution_key = "signed-provider-key",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(5),
+                        effective_model_provider = new
+                        {
+                            state = "resolved",
+                            provider_kind = "platform_github_copilot",
+                            resolution_scope = "project",
+                            provider_scope = "platform",
+                            provider_type = (string?)null,
+                            model_id = "gpt-5",
+                            provider_key = "provider-fingerprint",
+                            unavailable_reason = (string?)null,
+                        },
+                    }),
+                });
+            }
+
+            browseCount++;
+            if (browseCount == 1)
+            {
+                request.Headers.Contains("If-Model-Provider-Key").Should().BeFalse();
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        error = "ai_execution_context_required",
+                        message = "Prepare the AI execution context before starting this operation.",
+                    }),
+                });
+            }
+
+            request.Headers.GetValues("If-Model-Provider-Key").Should().ContainSingle()
+                .Which.Should().Be("signed-provider-key");
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new { marketplace = "catalog", candidates = Array.Empty<object>() }),
+            });
+        }, bypassPreflight: true));
+
+        var result = await tools.SkillMarketplaceBrowseAsync("proj-1", "catalog");
+
+        using (var json = JsonDocument.Parse(result))
+            json.RootElement.GetProperty("marketplace").GetString().Should().Be("catalog");
+        browseCount.Should().Be(2);
+        preflightCount.Should().Be(1);
+    }
+
     private static CoordinatorTools CreateCoordinatorTools(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
         new(CreateApiClient(handler));
 
     private static AgentweaverApiClient CreateApiClient(
-        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler)
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler,
+        bool bypassPreflight = false)
     {
-        var httpClient = new HttpClient(new DelegatingHandlerStub(handler))
+        var httpClient = new HttpClient(new DelegatingHandlerStub((request, ct) =>
+        {
+            if (!bypassPreflight && request.RequestUri!.AbsolutePath == "/api/ai/execution-context")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        ai_required = true,
+                        operation = "orchestration",
+                        phase = "prepared",
+                        execution_key = "signed-provider-key",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(5),
+                        effective_model_provider = new
+                        {
+                            state = "resolved",
+                            provider_kind = "platform_github_copilot",
+                            resolution_scope = "project",
+                            provider_scope = "platform",
+                            provider_type = (string?)null,
+                            model_id = "gpt-5",
+                            provider_key = "provider-fingerprint",
+                            unavailable_reason = (string?)null,
+                        },
+                    }),
+                });
+            }
+            if (request.RequestUri!.AbsolutePath.EndsWith("/orchestrations", StringComparison.Ordinal))
+            {
+                request.Headers.GetValues("If-Model-Provider-Key").Should().ContainSingle()
+                    .Which.Should().Be("signed-provider-key");
+            }
+            return handler(request, ct);
+        }))
         {
             BaseAddress = new Uri("http://localhost/")
         };

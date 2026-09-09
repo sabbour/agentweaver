@@ -7,6 +7,8 @@ import { DismissRegular } from '@fluentui/react-icons';
 import { ArrowImportRegular } from '@fluentui/react-icons';
 import { EmptyState } from '../ui';
 import { DecomposePreviewDialog } from '../DecomposePreviewDialog';
+import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from '../AiExecutionProviderHint';
+import { useAiExecutionContext } from '../../hooks/useAiExecutionContext';
 import { WorkspaceFilePicker } from '../WorkspaceFilePicker';
 import { CaptureTaskForm } from './CaptureTaskForm';
 import { columnAccentColor,
@@ -249,6 +251,7 @@ export interface KanbanBoardProps {
 // by the column drop handlers and the server (workflow columns never accept a task move).
 export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   const styles = useStyles();
+  const providerContext = useAiExecutionContext('backlog_decomposition', projectId);
   const [includeTerminalHistory, setIncludeTerminalHistory] = useState(false);
   const { board, status, error, refetch } = useBoard(projectId, {
     intervalMs: pollIntervalMs,
@@ -347,12 +350,22 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     setImportSuccess(false);
     setDecomposePreviewOpen(true);
     try {
-      const result = await apiClient.decomposeSpec(projectId, importSelectedPath, false, null, undefined);
+      const result = await apiClient.decomposeSpec(
+        projectId,
+        importSelectedPath,
+        false,
+        null,
+        undefined,
+        providerContext.providerKey,
+      );
+      providerContext.applyCompletedContext(result.ai_execution_context);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);
     } catch (err) {
-      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+      setDecomposeError(providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and preview again.'
+        : err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
     } finally {
       setDecomposeLoading(false);
     }
@@ -363,7 +376,15 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
     setDecomposeLoading(true);
     setDecomposeError(null);
     try {
-      const result = await apiClient.decomposeSpec(projectId, importSelectedPath, true, null, undefined);
+      const result = await apiClient.decomposeSpec(
+        projectId,
+        importSelectedPath,
+        true,
+        null,
+        undefined,
+        providerContext.providerKey,
+      );
+      providerContext.applyCompletedContext(result.ai_execution_context);
       setDecomposeItems(result.proposed_items);
       setDecomposeWasCapped(result.was_capped);
       setDecomposeTotal(result.total_found);
@@ -372,7 +393,9 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
       setImportSelectedPath(null);
       await refetch();
     } catch (err) {
-      setDecomposeError(err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+      setDecomposeError(providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and create tasks again.'
+        : err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
     } finally {
       setDecomposeLoading(false);
     }
@@ -583,13 +606,15 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
               <Button appearance="secondary" onClick={() => setImportPickerOpen(false)}>
                 Cancel
               </Button>
-              <Button
-                appearance="primary"
-                disabled={!importSelectedPath}
-                onClick={() => void handleImportPickerConfirm()}
-              >
-                Preview tasks
-              </Button>
+              <AiExecutionProviderHint context={providerContext.context}>
+                <Button
+                  appearance="primary"
+                  disabled={!importSelectedPath || providerContext.loading || !providerContext.available}
+                  onClick={() => void handleImportPickerConfirm()}
+                >
+                  Preview tasks
+                </Button>
+              </AiExecutionProviderHint>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
@@ -604,7 +629,10 @@ export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
         totalFound={decomposeTotal}
         isLoading={decomposeLoading}
         error={decomposeError}
+        executionContext={providerContext.context}
+        providerLoading={providerContext.loading || !providerContext.available}
       />
+      <AiProviderChangeAnnouncement message={providerContext.announcement} />
     </div>
   );
 }

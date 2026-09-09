@@ -10,6 +10,7 @@ public enum EndpointAuthorizationKind
     ProtocolManaged,
     WebhookHmac,
     AuthenticatedSelf,
+    AuthenticatedSelfOrMcp,
     AuthenticatedPlatform,
     PlatformOrMcp,
     InternalService,
@@ -33,6 +34,7 @@ public sealed record EndpointAuthorizationMetadata(EndpointAuthorizationKind Kin
 public static class EndpointAuthorizationPolicies
 {
     public const string AuthenticatedSelf = nameof(AuthenticatedSelf);
+    public const string AuthenticatedSelfOrMcp = nameof(AuthenticatedSelfOrMcp);
     public const string AuthenticatedPlatform = nameof(AuthenticatedPlatform);
     public const string PlatformOrMcp = nameof(PlatformOrMcp);
     public const string InternalService = nameof(InternalService);
@@ -41,6 +43,7 @@ public static class EndpointAuthorizationPolicies
     public static string For(EndpointAuthorizationKind kind) => kind switch
     {
         EndpointAuthorizationKind.AuthenticatedSelf => AuthenticatedSelf,
+        EndpointAuthorizationKind.AuthenticatedSelfOrMcp => AuthenticatedSelfOrMcp,
         EndpointAuthorizationKind.AuthenticatedPlatform => AuthenticatedPlatform,
         EndpointAuthorizationKind.PlatformOrMcp => PlatformOrMcp,
         EndpointAuthorizationKind.InternalService => InternalService,
@@ -85,6 +88,10 @@ public static class EndpointAuthorizationExtensions
     public static TBuilder AuthenticatedSelf<TBuilder>(this TBuilder builder)
         where TBuilder : IEndpointConventionBuilder =>
         builder.WithAuthorizationClassification(EndpointAuthorizationKind.AuthenticatedSelf);
+
+    public static TBuilder AuthenticatedSelfOrMcp<TBuilder>(this TBuilder builder)
+        where TBuilder : IEndpointConventionBuilder =>
+        builder.WithAuthorizationClassification(EndpointAuthorizationKind.AuthenticatedSelfOrMcp);
 
     public static TBuilder AuthenticatedPlatform<TBuilder>(this TBuilder builder)
         where TBuilder : IEndpointConventionBuilder =>

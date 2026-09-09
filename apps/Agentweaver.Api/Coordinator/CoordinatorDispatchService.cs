@@ -1720,6 +1720,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             return false;
         }
 
+        await _orchestrator.ValidateDurableProviderBoundaryAsync(childRun, ct).ConfigureAwait(false);
+
         // queued -> relayed: the directive is handed to the child's control seam.
         await UpdateDirectiveStatusAsync(directive.DirectiveId, SteeringStatus.Relayed, DateTimeOffset.UtcNow, ct)
             .ConfigureAwait(false);

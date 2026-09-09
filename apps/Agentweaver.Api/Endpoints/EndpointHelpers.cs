@@ -28,6 +28,90 @@ namespace Agentweaver.Api.Endpoints;
 
 internal static class EndpointHelpers
 {
+internal sealed class AiExecutionLease(
+    AiExecutionPlan? plan,
+    AiExecutionPlanAccessor? accessor,
+    IResult? error) : IDisposable
+{
+    private IDisposable? _scope;
+
+    internal AiExecutionPlan? Plan { get; } = plan;
+    internal IResult? Error { get; } = error;
+
+    internal void Activate()
+    {
+        if (Plan is not null && _scope is null)
+            _scope = accessor!.Push(Plan);
+    }
+
+    public void Dispose() => Interlocked.Exchange(ref _scope, null)?.Dispose();
+}
+
+internal static async Task<AiExecutionLease> BeginAiExecutionAsync(
+    HttpContext context,
+    string operationName,
+    ProjectId? projectId,
+    AiExecutionPlanService plans,
+    AiExecutionPlanAccessor accessor,
+    CancellationToken ct)
+{
+    if (!AiOperationCatalog.TryGet(operationName, out var operation))
+        throw new InvalidOperationException($"Unknown AI operation '{operationName}'.");
+    try
+    {
+        var plan = await plans.AcceptAsync(
+            context.Request.Headers[AiExecutionPlanHeaders.ProviderKey].ToString(),
+            operation,
+            projectId,
+            context.GetCaller(),
+            ct).ConfigureAwait(false);
+        return new AiExecutionLease(plan, accessor, null);
+    }
+    catch (AiExecutionPlanException ex)
+    {
+        return new AiExecutionLease(
+            null,
+            null,
+            Results.Json(
+                new
+                {
+                    error = ex.ErrorCode,
+                    message = ex.Message,
+                    context = ex.ReplacementContext,
+                },
+                statusCode: ex.StatusCode));
+    }
+}
+
+internal static IResult AiExecutionError(AiExecutionPlanException exception) =>
+    Results.Json(
+        new
+        {
+            error = exception.ErrorCode,
+            message = exception.Message,
+            context = exception.ReplacementContext,
+        },
+        statusCode: exception.StatusCode);
+
+internal static async Task<IResult> DurableProviderBoundaryErrorAsync(
+    AgentProviderException exception,
+    string operationName,
+    Run run,
+    CallerContext caller,
+    AiExecutionPlanService plans,
+    CancellationToken ct)
+{
+    if (!AiOperationCatalog.TryGet(operationName, out var operation))
+        throw new InvalidOperationException($"Unknown AI operation '{operationName}'.");
+    var replacement = await plans
+        .PrepareAsync(operation, run.ProjectId, caller, ct)
+        .ConfigureAwait(false);
+    return AiExecutionError(new AiExecutionPlanException(
+        exception.ErrorCode,
+        plans.ToResponse(replacement, "prepared"),
+        exception.UserMessage));
+}
+
 /// <summary>
 /// Authorizes access to a persisted run without trusting caller-supplied project context. Project-scoped
 /// runs inherit the authorization rules of the project identified by <see cref="Run.ProjectId"/>.
@@ -391,8 +475,10 @@ internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent ev
 /// </summary>
 internal static System.Text.Json.Nodes.JsonObject StampTimestamp(RunEvent evt)
 {
-    var node = System.Text.Json.JsonSerializer.SerializeToNode(evt.Payload) as System.Text.Json.Nodes.JsonObject
-        ?? new System.Text.Json.Nodes.JsonObject();
+    var node = evt.Type == EventTypes.RunModelProviderResolved
+        ? EffectiveModelProviderProvenance.RedactPublicPayload(evt.Payload)
+        : System.Text.Json.JsonSerializer.SerializeToNode(evt.Payload) as System.Text.Json.Nodes.JsonObject
+            ?? new System.Text.Json.Nodes.JsonObject();
     if (!node.ContainsKey("timestamp_utc") && !node.ContainsKey("timestampUtc") && !node.ContainsKey("timestamp"))
         node["timestamp_utc"] = evt.TimestampUtc == default
             ? DateTimeOffset.UtcNow.ToString("O")

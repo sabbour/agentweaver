@@ -56,8 +56,27 @@ public sealed class RequestChangesWebApplicationFactory : WebApplicationFactory<
             CreatedAt = now,
             UpdatedAt = now,
         });
+        await EnsureByokProviderAsync();
 
         return projectId;
+    }
+
+    private async Task EnsureByokProviderAsync()
+    {
+        await using var scope = Services.CreateAsyncScope();
+        var settings = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+        if (await settings.GetAsync(CancellationToken.None) is not null)
+            return;
+        var provider = await settings.AddAsync(
+            new ByokProviderConfiguration(
+                string.Empty,
+                "Request changes test provider",
+                "openai",
+                "https://provider.example.test",
+                "test-model",
+                "test-key"),
+            CancellationToken.None);
+        await settings.SetActiveAsync(provider.Id, CancellationToken.None);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)

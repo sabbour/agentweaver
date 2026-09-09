@@ -17,6 +17,55 @@ The API core architecture centers on:
 
 Domain internals are covered by the focused deep dives for [Auth & security](./auth-security.md), [orchestration](./orchestration.md), [sandboxing](./sandbox.md), [memory and decisions](./memory-decisions.md), [data persistence](./data-persistence.md), and [Git integration](./git-integration.md). The API core composes those domains rather than reimplementing their internal logic.
 
+## Effective model provider admission
+
+`EffectiveModelProviderResolver` remains the selection authority.
+`AiExecutionPlanService` encrypts caller-, project-, and operation-bound acceptance with an authenticated execution key.
+BYOK configuration fingerprints include execution parameters.
+Copilot identity includes the binding credential version.
+The public provider fingerprint does not grant execution authority.
+
+Covered synchronous actions reject changed provider configuration with `409 model_provider_changed`.
+Run continuations compare current resolver output with durable provenance.
+They never reconstruct provider authority from event identifiers.
+The runtime guard awaits provenance persistence before the next covered model call.
+Multi-pass generators retain the accepted BYOK configuration rather than select another ambient provider.
+Repository-only retry inheritance does not carry stale Copilot credentials into a newly accepted retry.
+
+The candidate covers these boundaries:
+
+| Path | Boundary |
+| --- | --- |
+| Generation, casting, backlog decomposition | Opaque admission, configuration fence, accepted configuration, pre-call provenance |
+| Coordinator selection, classifiers, preview command proposal | Copilot-only run fence and pre-call provenance |
+| Coordinator spec drafting and autopilot | Explicit Copilot selection and runtime invocation guard |
+| In-process worker and reviewer turns | Accepted provider context and guard before calls, re-asks, and SDK retries |
+| Assistant and RemoteOperator dispatch | Opaque admission, platform scope, launch fence, pre-dispatch revalidation |
+| Retry, revision, restart, queued pickup | Current resolver comparison against accepted fingerprints |
+| MCP actions | API execution-key preparation and forwarding |
+| Web provider context | Accessible Expected/Using/Used labels and stable fingerprint comparison |
+
+This is not proof of coverage for every model call.
+AgentHost-internal SDK retries and remote reviewer re-asks retain pod configuration.
+These paths do not yet have complete per-call API revalidation.
+The legacy console facade and direct user-session model invocation do not have complete admission coverage.
+Focused tests use fake model providers.
+They do not prove live SDK, Kubernetes, or MCP process behavior.
+
+### Execution-key configuration
+
+`AiExecution:ProviderKeySigningKey` takes precedence when configured.
+Otherwise, the service derives a purpose-specific key from the existing server-only `Auth:CopilotApp:ClientSecret`.
+`Auth:RepoApp:ClientSecret` is the next fallback.
+Existing Kubernetes deployments already provision these App secrets.
+This change does not add a required mounted secret.
+Production deployments without either App secret require an explicit execution signing key.
+Development and test environments also permit `Auth:ApiKey` as a fallback.
+
+All API and worker replicas must use the same secret.
+Secret rotation invalidates prepared and queued execution keys.
+Queued work then requires fresh submission.
+
 ## The Host in One Picture
 
 Agentweaver uses a **minimal API + endpoint modules + stores/services** architecture. The host is a thin, explicit composition root; endpoint modules are thin adapters; services and stores contain the actual behavior.

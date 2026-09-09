@@ -672,6 +672,12 @@ public sealed class CoordinatorOrchestratorExecutor
             // (pod-per-run). The coordinator's decompose turn uses the same IWorkflowTurnAgent seam
             // as any worker agent turn — identical mechanism to RunWorkflowFactory (§4.6).
             agent = _agentFactory.CreateWorkerAgent();
+            if (agent is IProviderBoundWorkflowTurnAgent providerBoundAgent)
+            {
+                providerBoundAgent.ConfigureProviderBoundary(
+                    ModelSourceExtensions.FromApiString(input.ModelSource),
+                    input.ByokProviderFingerprint);
+            }
 
             var coordEntry = _streamStore.Get(input.RunId);
             var streamWriter = coordEntry is null ? null : new RecordingChannelWriter(coordEntry);

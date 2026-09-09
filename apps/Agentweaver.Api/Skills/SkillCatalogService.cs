@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Security;
@@ -90,7 +91,8 @@ public sealed record MarketplaceBrowsePage(
     int Total,
     int Page,
     int PageSize,
-    bool HasMore);
+    bool HasMore,
+    bool AiUsed = false);
 
 /// <summary>A marketplace candidate's stable identity (import location + display name) before its
 /// short definition is fetched for the current page.</summary>
@@ -128,7 +130,8 @@ public sealed record GeneratedSkillDraft(
     [property: JsonPropertyName("display_name")] string? DisplayName,
     [property: JsonPropertyName("description")] string Description,
     [property: JsonPropertyName("instructions")] string Instructions,
-    [property: JsonPropertyName("skill_markdown")] string SkillMarkdown);
+    [property: JsonPropertyName("skill_markdown")] string SkillMarkdown,
+    [property: JsonPropertyName("ai_execution_context")] AiExecutionContextResponse? AiExecutionContext = null);
 
 /// <summary>
 /// Acquisition + assignment application service for the per-project skill catalog. Reuses the git
@@ -191,6 +194,7 @@ public sealed class SkillCatalogService
     private readonly IMarketplaceCatalogIndexer? _catalogIndexer;
     private readonly MarketplaceCopilotCapabilityIssuer? _marketplaceCapabilityIssuer;
     private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
     private readonly ILogger<SkillCatalogService> _logger;
     private readonly ConcurrentDictionary<string, PreviewCloneCacheEntry> _previewCloneCache = new(StringComparer.Ordinal);
 
@@ -208,7 +212,8 @@ public sealed class SkillCatalogService
         IProjectRoleAuthorizationService? projectRoles = null,
         IConfiguration? configuration = null,
         MarketplaceCopilotCapabilityIssuer? marketplaceCapabilityIssuer = null,
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        AiExecutionPlanAccessor? executionPlanAccessor = null)
     {
         _skills = skills;
         _projects = projects;
@@ -222,6 +227,7 @@ public sealed class SkillCatalogService
         _catalogIndexer = catalogIndexer;
         _marketplaceCapabilityIssuer = marketplaceCapabilityIssuer;
         _scopeFactory = scopeFactory;
+        _executionPlanAccessor = executionPlanAccessor;
         _logger = logger;
     }
 
@@ -239,7 +245,8 @@ public sealed class SkillCatalogService
         IGitHubSkillTreeClient? treeClient = null,
         IMarketplaceCatalogIndexer? catalogIndexer = null,
         MarketplaceCopilotCapabilityIssuer? marketplaceCapabilityIssuer = null,
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        AiExecutionPlanAccessor? executionPlanAccessor = null)
         : this(
             skills,
             projects,
@@ -254,7 +261,8 @@ public sealed class SkillCatalogService
             projectRoles,
             configuration,
             marketplaceCapabilityIssuer,
-            scopeFactory)
+            scopeFactory,
+            executionPlanAccessor)
     {
     }
 
@@ -569,7 +577,8 @@ public sealed class SkillCatalogService
             var candidates = pageItems.Select(c => BuildPagedCandidate(c, descriptions)).ToList();
 
             var hasMore = (long)normalizedPage * normalizedSize < total;
-            return (SkillOutcome.Ok, null, new MarketplaceBrowsePage(candidates, total, normalizedPage, normalizedSize, hasMore));
+            return (SkillOutcome.Ok, null, new MarketplaceBrowsePage(
+                candidates, total, normalizedPage, normalizedSize, hasMore));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -599,7 +608,9 @@ public sealed class SkillCatalogService
     // of a selected candidate needs no change (its location is passed as the import subpath).
     public async Task<(SkillOutcome Outcome, string? Error, MarketplaceBrowsePage? Page)> BrowseMarketplaceAutoAsync(
         ProjectId projectId, string owner, string repo, string branch,
-        string? query, int page, int pageSize, CallerContext caller, CancellationToken ct, string? parseStrategy = null)
+        string? query, int page, int pageSize, CallerContext caller, CancellationToken ct,
+        string? parseStrategy = null,
+        Func<CancellationToken, Task<MarketplaceModelExecution>>? beginModelExecutionAsync = null)
     {
         // Ownership is enforced by the endpoint via ProjectAuthorization (owner OR the trusted
         // agentweaver-internal loopback identity); keep only a project-existence guard here.
@@ -622,8 +633,10 @@ public sealed class SkillCatalogService
 
             // Same precedence as every other model-provider consumer: deployment BYOK bypasses
             // Copilot capability issuance entirely for the LLM classifier fallback.
-            var useByok = false;
-            if (_scopeFactory is not null)
+            var useByok = _executionPlanAccessor?.Current?.Provider is EffectiveModelProviderResult.Byok;
+            if (_executionPlanAccessor?.Current is null
+                && beginModelExecutionAsync is null
+                && _scopeFactory is not null)
             {
                 await using var scope = _scopeFactory.CreateAsyncScope();
                 var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
@@ -650,7 +663,8 @@ public sealed class SkillCatalogService
                 hasCapabilityAsync: _marketplaceCapabilityIssuer is null
                     ? null
                     : checkCt => _marketplaceCapabilityIssuer.HasActiveBindingAsync(project.Id, caller, checkCt),
-                useByok: useByok)
+                useByok: useByok,
+                beginModelExecutionAsync: beginModelExecutionAsync)
                 .ConfigureAwait(false);
 
             if (index.RequiresGitHubConnection)
@@ -680,12 +694,22 @@ public sealed class SkillCatalogService
 
             var candidates = pageEntries.Select(e => BuildAutoCandidate(e, descriptions)).ToList();
             var hasMore = (long)normalizedPage * normalizedSize < total;
-            return (SkillOutcome.Ok, null, new MarketplaceBrowsePage(candidates, total, normalizedPage, normalizedSize, hasMore));
+            return (SkillOutcome.Ok, null, new MarketplaceBrowsePage(
+                candidates,
+                total,
+                normalizedPage,
+                normalizedSize,
+                hasMore,
+                AiUsed: index.ModelInvoked));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             _logger.LogWarning("Marketplace auto-browse timed out reading {Owner}/{Repo}", owner, repo);
             return (SkillOutcome.SourceUnavailable, MarketplaceTimeoutMessage, null);
+        }
+        catch (AiExecutionPlanException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

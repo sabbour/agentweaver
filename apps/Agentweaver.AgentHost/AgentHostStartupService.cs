@@ -214,6 +214,11 @@ internal sealed class AgentHostStartupService : IHostedService
             "AgentHostStartupService: calling SetupAsync for run {RunId}, workingDir={WorkingDir}, agentScratchDir={AgentScratchDir} (override={HasOverride}), manifestAttached={ManifestAttached}",
             runId, workingDirectory, agentScratchDirectory, !string.IsNullOrWhiteSpace(workingDirectoryOverride), SandboxManifestJson is not null);
 
+        _agent.ConfigureProviderBoundary(
+            configuration.ByokProviderConfiguration is null
+                ? ModelSource.GitHubCopilot
+                : ModelSource.Byok,
+            configuration.ByokProviderConfiguration?.ExecutionFingerprint());
         await _agent.SetupAsync(
             workingDirectory: workingDirectory,
             repositoryPath: repositoryPath,

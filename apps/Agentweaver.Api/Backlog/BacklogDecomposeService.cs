@@ -37,7 +37,12 @@ public interface IBacklogDecomposeService
 /// </summary>
 public interface IBacklogDecomposeAgentRunner
 {
-    Task<string?> RunAsync(CopilotClient client, string prompt, string? modelId, CancellationToken ct);
+    Task<string?> RunAsync(
+        CopilotClient client,
+        string prompt,
+        string? modelId,
+        CancellationToken ct,
+        ByokProviderConfiguration? byokProviderConfiguration = null);
 }
 
 public sealed class CopilotBacklogDecomposeAgentRunner : IBacklogDecomposeAgentRunner
@@ -51,7 +56,12 @@ public sealed class CopilotBacklogDecomposeAgentRunner : IBacklogDecomposeAgentR
         Do not add commentary. Extract only items that represent distinct units of work.
         """;
 
-    public async Task<string?> RunAsync(CopilotClient client, string prompt, string? modelId, CancellationToken ct)
+    public async Task<string?> RunAsync(
+        CopilotClient client,
+        string prompt,
+        string? modelId,
+        CancellationToken ct,
+        ByokProviderConfiguration? byokProviderConfiguration = null)
     {
         AIAgent? agent = null;
         try
@@ -65,7 +75,16 @@ public sealed class CopilotBacklogDecomposeAgentRunner : IBacklogDecomposeAgentR
                     Content = SystemPrompt,
                 },
                 Tools = [],
-                Model = modelId,
+                Model = byokProviderConfiguration?.Model ?? modelId,
+                Provider = byokProviderConfiguration is null ? null : new ProviderConfig
+                {
+                    Type = byokProviderConfiguration.Type,
+                    BaseUrl = byokProviderConfiguration.BaseUrl,
+                    ApiKey = byokProviderConfiguration.ApiKey,
+                    WireApi = byokProviderConfiguration.WireApi ?? "responses",
+                    Headers = ByokProviderConfigMapper.ToHeaderDictionary(byokProviderConfiguration.Headers),
+                    Azure = ByokProviderConfigMapper.ToAzureOptions(byokProviderConfiguration),
+                },
                 EnableConfigDiscovery = false,
                 Streaming = true,
                 EnableSessionStore = false,
@@ -95,7 +114,6 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
     private const int ItemCap = 50;
 
     private readonly GitHubCopilotClientFactory _copilotClientFactory;
-    private readonly BacklogDecomposeCopilotCapabilityIssuer _capabilityIssuer;
     private readonly IBacklogDecomposeAgentRunner _agentRunner;
     private readonly IServiceScopeFactory _scopeFactory;
 
@@ -105,12 +123,10 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
     /// </summary>
     public BacklogDecomposeService(
         GitHubCopilotClientFactory copilotClientFactory,
-        BacklogDecomposeCopilotCapabilityIssuer capabilityIssuer,
         IBacklogDecomposeAgentRunner agentRunner,
         IServiceScopeFactory scopeFactory)
     {
         _copilotClientFactory = copilotClientFactory;
-        _capabilityIssuer = capabilityIssuer;
         _agentRunner = agentRunner;
         _scopeFactory = scopeFactory;
     }
@@ -139,23 +155,33 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
             <<<END_DOCUMENT>>>
             """;
 
-        // Uses the same precedence as every other model-provider consumer: deployment BYOK bypasses
-        // Copilot capability issuance entirely; otherwise the project's own Copilot binding (any
-        // authorized project member, not only the exact binding owner) or the platform default is
-        // redeemed through the existing non-run capability mechanism.
-        EffectiveModelProviderResult effectiveProvider;
-        await using (var scope = _scopeFactory.CreateAsyncScope())
+        GenerationExecutionPlan executionPlan;
+        try
         {
-            var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
-            effectiveProvider = await resolver.ResolveAsync(project.Id, ct).ConfigureAwait(false);
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var executor = scope.ServiceProvider.GetRequiredService<GenerationModelProviderExecutor>();
+            executionPlan = await executor.PrepareAsync(
+                    project.Id,
+                    caller.EntraObjectId ?? caller.User,
+                    ProjectModelProviderCapabilityPurpose.BacklogDecomposition,
+                    ct)
+                .ConfigureAwait(false);
         }
-        if (effectiveProvider is EffectiveModelProviderResult.Byok)
+        catch (GitHubCopilotUnauthorizedException)
+        {
+            return new([], false, 0, ModelProviderConnectionRequirement.ForProject(project.Id));
+        }
+        if (executionPlan.ModelSource == ModelSource.Byok)
         {
             try
             {
                 await using var byokClient = _copilotClientFactory.CreateByokClient();
                 var byokResponse = await _agentRunner.RunAsync(
-                    byokClient, task, project.ProviderSettings.GitHubCopilotModel, ct).ConfigureAwait(false);
+                    byokClient,
+                    task,
+                    project.ProviderSettings.GitHubCopilotModel,
+                    ct,
+                    executionPlan.ByokProviderConfiguration).ConfigureAwait(false);
                 return ParseItems(byokResponse);
             }
             catch (GitHubCopilotUnauthorizedException)
@@ -164,17 +190,15 @@ public sealed class BacklogDecomposeService : IBacklogDecomposeService
             }
         }
 
-        var capabilityReference = await _capabilityIssuer.TryIssueAsync(project.Id, caller, ct)
-            .ConfigureAwait(false);
-        if (capabilityReference is null)
+        if (executionPlan.Capability is null)
             return new([], false, 0, ModelProviderConnectionRequirement.ForProject(project.Id));
 
         try
         {
             await using var client = await _copilotClientFactory.CreateProjectOperationClientAsync(
-                capabilityReference,
+                executionPlan.Capability.CapabilityReference,
                 project.Id.ToString(),
-                caller.EntraObjectId!,
+                executionPlan.Capability.EntraObjectId,
                 ProjectModelProviderCapabilityPurpose.BacklogDecomposition,
                 project.ProviderSettings.GitHubCopilotModel,
                 ct).ConfigureAwait(false);

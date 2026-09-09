@@ -514,6 +514,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         PromotionKey = t.PromotionKey,
         PromotionReason = t.PromotionReason,
         IsAutomationInvocationPending = t.IsAutomationInvocationPending,
+        AiExecutionProviderKey = t.AiExecutionProviderKey,
     };
 
     private static BacklogTask FromRecord(BacklogTaskRecord r) => new()
@@ -537,5 +538,6 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         PromotionKey = r.PromotionKey,
         PromotionReason = r.PromotionReason,
         IsAutomationInvocationPending = r.IsAutomationInvocationPending,
+        AiExecutionProviderKey = r.AiExecutionProviderKey,
     };
 }
